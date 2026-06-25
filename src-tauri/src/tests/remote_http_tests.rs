@@ -560,7 +560,8 @@ async fn test_auth_with_empty_password_string() {
 
     assert_eq!(response.status(), 401);
 
-    // With empty string header - should succeed
+    // With empty string header - still rejected: an empty configured password is
+    // treated as fail-closed (no usable secret), so no key can authenticate.
     let response = warp::test::request()
         .method("GET")
         .path("/api/v1/status")
@@ -568,7 +569,7 @@ async fn test_auth_with_empty_password_string() {
         .reply(&routes)
         .await;
 
-    assert_eq!(response.status(), 200);
+    assert_eq!(response.status(), 401);
 }
 
 /// Test that password is case-sensitive

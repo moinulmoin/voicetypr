@@ -10,8 +10,12 @@
 //!   single egress chokepoint.
 //! - No breadcrumbs, no PII, `traces_sample_rate = 0`.
 //! - `before_send` REBUILDS every event from a tiny allowlist (allowlist by
-//!   construction) and scrubs free text, so transcripts, audio, file paths, URLs,
-//!   IPs, emails, keys, and target app/window names never leave the device.
+//!   construction) and scrubs structured secret runs (file paths, URLs, IPs,
+//!   emails, keys, target app/window names), so those never leave the device.
+//!   Raw audio is never captured. A frontend-reported error keeps its type and
+//!   (length-capped) message for debuggability: the regex scrub strips
+//!   structured secrets from the message but not arbitrary prose, so an opted-in
+//!   error report can contain free-form frontend error text.
 
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -241,22 +245,39 @@ pub fn init(enabled: bool, install_id: Option<String>) -> Option<ClientInitGuard
 /// Captures a frontend-reported error as a Sentry event. Gated on consent and
 /// routed through `capture_event` so `before_send` scrubs it. No-op when
 /// telemetry is disabled or no client was initialized.
+///
+/// Privacy: the frontend `message` is untrusted free-form text, so `before_send`
+/// (`scrub_exception` -> `scrub_text`) redacts *structured* secret runs
+/// (paths/URLs/IPs/emails/tokens) from the value before it leaves the process,
+/// and the message is length-capped here to bound payload size. Telemetry is
+/// opt-in and off by default.
 pub fn capture_frontend_error(name: Option<&str>, message: &str) {
     if !is_enabled() {
         return;
     }
-    let event = Event {
+    let event = build_frontend_error_event(name, message);
+    sentry::capture_event(event);
+}
+
+/// Max characters of a frontend error message forwarded to telemetry.
+const FRONTEND_ERROR_MAX_LEN: usize = 2000;
+
+/// Constructs the event for a frontend-reported error: the stable error
+/// type/category plus the length-capped message. Pure (no Sentry client needed)
+/// so it is unit-testable; structured-secret redaction runs in `before_send`.
+fn build_frontend_error_event(name: Option<&str>, message: &str) -> Event<'static> {
+    let value: String = message.chars().take(FRONTEND_ERROR_MAX_LEN).collect();
+    Event {
         level: Level::Error,
         exception: Values {
             values: vec![Exception {
                 ty: name.unwrap_or("FrontendError").to_string(),
-                value: Some(message.to_string()),
+                value: Some(value),
                 ..Default::default()
             }],
         },
         ..Default::default()
-    };
-    sentry::capture_event(event);
+    }
 }
 
 #[cfg(test)]
@@ -368,5 +389,30 @@ mod tests {
         let off = dir.path().join("off");
         std::fs::write(&off, br#"{"telemetry_enabled": false}"#).unwrap();
         assert_eq!(read_consent_from_path(&off), (false, None));
+    }
+    #[test]
+    fn frontend_error_event_keeps_type_and_message() {
+        // An error message is diagnostic and is kept; `before_send` scrubs
+        // structured secrets from it, and it is length-capped here.
+        let event = build_frontend_error_event(Some("TypeError"), "kaboom");
+        let ex = &event.exception.values[0];
+        assert_eq!(ex.ty, "TypeError", "stable error type must be kept");
+        assert_eq!(ex.value.as_deref(), Some("kaboom"), "message must be kept");
+
+        // Over-long messages are length-capped.
+        let long = "x".repeat(FRONTEND_ERROR_MAX_LEN + 500);
+        let capped = build_frontend_error_event(None, &long);
+        assert_eq!(
+            capped.exception.values[0].value.as_deref().map(str::len),
+            Some(FRONTEND_ERROR_MAX_LEN),
+            "message must be length-capped"
+        );
+    }
+
+    #[test]
+    fn frontend_error_event_defaults_type_when_name_absent() {
+        let event = build_frontend_error_event(None, "boom");
+        assert_eq!(event.exception.values[0].ty, "FrontendError");
+        assert_eq!(event.level, Level::Error);
     }
 }

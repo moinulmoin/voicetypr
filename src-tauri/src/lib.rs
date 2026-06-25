@@ -432,7 +432,13 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
                 ("component", "panic_handler")
             ]);
 
-            std::panic::set_hook(Box::new(|panic_info| {
+            // Chain the previous panic hook instead of replacing it. Telemetry
+            // init installed sentry's panic hook (via the `panic` feature) to
+            // capture release panics as events; overwriting it here would
+            // silently drop panic capture. Run our local diagnostics first, then
+            // forward to the prior hook so Sentry still records the event.
+            let prev_hook = std::panic::take_hook();
+            std::panic::set_hook(Box::new(move |panic_info| {
                 let location = panic_info.location()
                     .map(|l| format!("{}:{}:{}", l.file(), l.line(), l.column()))
                     .unwrap_or_else(|| "unknown location".to_string());
@@ -462,6 +468,8 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
                         location, message, panic_info, chrono::Local::now()
                     ));
                 }
+                // Forward to the prior (Sentry) hook so panics are still captured.
+                prev_hook(panic_info);
             }));
 
             log::info!("✅ Panic handler configured");

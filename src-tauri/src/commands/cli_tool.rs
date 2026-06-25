@@ -99,6 +99,35 @@ mod macos {
     use std::path::Path;
     use std::process::Command;
 
+    /// Substring embedded in every shim we write. This token alone is NOT sufficient
+    /// to claim ownership — `classify` matches the shim's full structural shape — but it
+    /// is the human-readable anchor the marker line is built from.
+    const SHIM_MARKER: &str = "managed by Voicetypr";
+
+    /// First line of every shim we emit.
+    const SHIM_SHEBANG: &str = "#!/bin/sh";
+
+    /// Exact second line of every shim, carrying the ownership marker on its OWN
+    /// dedicated line. Built from `SHIM_MARKER` so the two cannot drift apart;
+    /// `build_shim` writes this verbatim and `classify` requires it verbatim, so a
+    /// foreign file that merely *contains* the marker phrase (a comment, an `echo`, …)
+    /// never classifies as Managed.
+    fn shim_comment_line() -> String {
+        format!(
+            "# Voicetypr CLI launcher ({marker}; reinstall from Settings). Do not edit.",
+            marker = SHIM_MARKER,
+        )
+    }
+
+    /// Whether a path is safe for us to (over)write or remove: absent, already our
+    /// managed shim, or something foreign we must leave untouched.
+    #[derive(Debug)]
+    enum Ownership {
+        Absent,
+        Managed,
+        Foreign,
+    }
+
     pub fn status() -> CliToolStatus {
         let installed = Path::new(MACOS_SHIM_PATH).exists();
         CliToolStatus {
@@ -109,6 +138,12 @@ mod macos {
     }
 
     pub fn install() -> Result<(), String> {
+        // Never clobber an unrelated `voicetypr` command the user installed themselves:
+        // only (over)write the path if it is absent or already our managed shim.
+        match classify_path() {
+            Ownership::Foreign => return Err(foreign_error()),
+            Ownership::Managed | Ownership::Absent => {}
+        }
         let exe =
             std::env::current_exe().map_err(|e| format!("Cannot resolve app executable: {e}"))?;
         let exe = std::fs::canonicalize(&exe).unwrap_or(exe);
@@ -154,8 +189,11 @@ mod macos {
     }
 
     pub fn uninstall() -> Result<(), String> {
-        if !Path::new(MACOS_SHIM_PATH).exists() {
-            return Ok(());
+        // Only remove a path we actually own; leave a foreign `voicetypr` untouched.
+        match classify_path() {
+            Ownership::Absent => return Ok(()),
+            Ownership::Foreign => return Err(foreign_error()),
+            Ownership::Managed => {}
         }
         if std::fs::remove_file(MACOS_SHIM_PATH).is_ok() {
             return Ok(());
@@ -205,8 +243,78 @@ mod macos {
 
     fn build_shim(exe: &str) -> String {
         format!(
-            "#!/bin/sh\n# Voicetypr CLI launcher (managed by Voicetypr; reinstall from Settings). Do not edit.\nexec \"{}\" \"$@\"\n",
-            sh_double_quote_escape(exe)
+            "{shebang}\n{comment}\nexec \"{exe}\" \"$@\"\n",
+            shebang = SHIM_SHEBANG,
+            comment = shim_comment_line(),
+            exe = sh_double_quote_escape(exe),
+        )
+    }
+
+    /// Classify an arbitrary path by the same rules as the real shim path. Kept
+    /// path-parameterized so the ownership logic can be unit-tested on temp files.
+    fn classify(path: &Path) -> Ownership {
+        // `symlink_metadata` (not `Path::exists`) so a dangling symlink is detected as
+        // "present" and treated as foreign, rather than being silently written through.
+        if std::fs::symlink_metadata(path).is_err() {
+            return Ownership::Absent;
+        }
+        // `read_to_string` follows symlinks, so a symlink pointing at our shim still
+        // reads as ours. A directory, unreadable file, or dangling symlink fails to read
+        // and is conservatively classified foreign.
+        match std::fs::read_to_string(path) {
+            Ok(content) if is_managed_shim(&content) => Ownership::Managed,
+            Ok(_) | Err(_) => Ownership::Foreign,
+        }
+    }
+
+    /// Recognize the *exact shape* `build_shim` emits — not a bare substring. A foreign
+    /// command that merely happens to contain the phrase "managed by Voicetypr" (e.g. a
+    /// personal wrapper with the comment `# not managed by Voicetypr`, or a script that
+    /// echoes it) must classify as Foreign, otherwise install/uninstall would clobber or
+    /// remove a command the user placed there themselves despite the fail-closed check.
+    fn is_managed_shim(content: &str) -> bool {
+        // The managed shim is exactly three lines (plus a single trailing newline):
+        //   #!/bin/sh
+        //   # Voicetypr CLI launcher (managed by Voicetypr; reinstall from Settings). Do not edit.
+        //   exec "<escaped absolute exe path>" "$@"
+        // `lines()` yields exactly those three for that output and no fourth element, so
+        // anything with extra/missing lines is foreign.
+        let mut lines = content.lines();
+        let (shebang, comment, exec, extra) =
+            (lines.next(), lines.next(), lines.next(), lines.next());
+        matches!(
+            (shebang, comment, exec, extra),
+            (Some(s), Some(c), Some(e), None)
+                if s == SHIM_SHEBANG && c == shim_comment_line() && is_managed_exec_line(e)
+        )
+    }
+
+    /// The shim's `exec "<exe>" "$@"` line. The exe path is arbitrary (it is the running
+    /// app's absolute path), so we match its *shape* — `exec "<non-empty>" "$@"` — rather
+    /// than a fixed string. `sh_double_quote_escape` escapes every `"` inside the path, so
+    /// the only unescaped quotes are the delimiters we split on.
+    fn is_managed_exec_line(line: &str) -> bool {
+        let path = line
+            .strip_prefix("exec \"")
+            .and_then(|rest| rest.strip_suffix("\" \"$@\""));
+        match path {
+            Some(p) => !p.is_empty(),
+            None => false,
+        }
+    }
+
+    fn classify_path() -> Ownership {
+        classify(Path::new(MACOS_SHIM_PATH))
+    }
+
+    /// Error returned when install/uninstall would touch an unmanaged `voicetypr`.
+    /// Actionable, and deliberately does not echo the foreign file's contents.
+    fn foreign_error() -> String {
+        format!(
+            "'{p}' already exists but is not the command managed by Voicetypr, so it was left \
+             untouched. To let Voicetypr manage it, remove or rename it first (for example \
+             `mv {p} {p}.bak`) and try again.",
+            p = MACOS_SHIM_PATH
         )
     }
 
@@ -227,6 +335,101 @@ mod macos {
     /// for a path interpolated into a `do shell script` command.
     fn sh_single_quote(s: &str) -> String {
         format!("'{}'", s.replace('\'', "'\\''"))
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+        use std::os::unix::fs::symlink;
+
+        #[test]
+        fn classifies_absent_managed_and_foreign_targets() {
+            let dir = tempfile::tempdir().unwrap();
+
+            // Absent: safe to install.
+            assert!(matches!(
+                classify(&dir.path().join("missing")),
+                Ownership::Absent
+            ));
+
+            // Our own shim is recognized as managed (safe to reinstall/remove).
+            let managed = dir.path().join("voicetypr");
+            std::fs::write(
+                &managed,
+                build_shim("/Applications/Voicetypr.app/Contents/MacOS/voicetypr"),
+            )
+            .unwrap();
+            assert!(matches!(classify(&managed), Ownership::Managed));
+
+            // A foreign command without the marker is left untouched.
+            let foreign = dir.path().join("foreign");
+            std::fs::write(&foreign, "#!/bin/sh\necho hello\n").unwrap();
+            assert!(matches!(classify(&foreign), Ownership::Foreign));
+
+            // A symlink to an unrelated file is foreign.
+            let link = dir.path().join("link-foreign");
+            symlink(&foreign, &link).unwrap();
+            assert!(matches!(classify(&link), Ownership::Foreign));
+
+            // A symlink pointing at our shim reads as managed.
+            let link_ours = dir.path().join("link-ours");
+            symlink(&managed, &link_ours).unwrap();
+            assert!(matches!(classify(&link_ours), Ownership::Managed));
+
+            // A dangling symlink must NOT be silently written through -> foreign.
+            let dangling = dir.path().join("dangling");
+            symlink(dir.path().join("does-not-exist"), &dangling).unwrap();
+            assert!(matches!(classify(&dangling), Ownership::Foreign));
+
+            // A directory is foreign (we must not `cp` a file over it).
+            let subdir = dir.path().join("subdir");
+            std::fs::create_dir(&subdir).unwrap();
+            assert!(matches!(classify(&subdir), Ownership::Foreign));
+        }
+
+        #[test]
+        fn foreign_file_merely_containing_the_marker_phrase_is_foreign() {
+            let dir = tempfile::tempdir().unwrap();
+
+            // Regression for the original bare-`contains` ownership check, which misclassified
+            // any readable file mentioning the phrase as Managed and would thus have let
+            // install/uninstall clobber or delete a command the user placed there themselves.
+            // Only our shim's *exact* shape may classify as Managed.
+            let cases: &[(&str, &str)] = &[
+                // A personal wrapper whose comment incidentally contains the phrase.
+                (
+                    "comment",
+                    "#!/bin/sh\n# not managed by Voicetypr — my wrapper\necho hi\n",
+                ),
+                // A script that merely echoes the phrase at runtime.
+                ("echo", "#!/bin/sh\necho \"managed by Voicetypr\"\n"),
+                // Our exact marker comment, but a foreign (non-exec) body.
+                (
+                    "right-comment-wrong-body",
+                    "#!/bin/sh\n# Voicetypr CLI launcher (managed by Voicetypr; reinstall from Settings). Do not edit.\nrm -rf ~\n",
+                ),
+                // The phrase embedded mid-line rather than on the dedicated marker line.
+                ("mid-line", "#!/bin/sh\n# notmanaged by Voicetyprx\necho hi\n"),
+            ];
+            for &(name, body) in cases {
+                let f = dir.path().join(name);
+                std::fs::write(&f, body).unwrap();
+                assert!(
+                    matches!(classify(&f), Ownership::Foreign),
+                    "case `{name}` must classify as Foreign, not Managed"
+                );
+            }
+        }
+
+        #[test]
+        fn build_shim_carries_the_marker() {
+            let shim = build_shim("/some/exe");
+            assert!(shim.starts_with("#!/bin/sh\n"));
+            assert!(
+                shim.contains(SHIM_MARKER),
+                "shim must embed the managed marker so ownership can be verified"
+            );
+        }
     }
 }
 

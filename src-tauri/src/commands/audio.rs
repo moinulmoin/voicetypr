@@ -59,6 +59,138 @@ static TOAST_ID_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 /// Global media pause controller for pausing/resuming system media during recording
 static MEDIA_CONTROLLER: Lazy<MediaPauseController> = Lazy::new(MediaPauseController::new);
+
+/// Monotonically increasing recording-generation counter. `start_recording`
+/// bumps it to open a new generation; a transcription task captures the value
+/// at spawn time and rejects its own result when the generation has advanced
+/// beneath it (a newer recording started). This is the backbone that prevents
+/// a prior generation's cancelled/stale transcription from being delivered
+/// under a newer recording, even after `start_recording` clears the global
+/// cancellation flag for its own attempt. SeqCst keeps the bump (start),
+/// capture (stop/spawn) and check (deliver) linearizable.
+static RECORDING_GENERATION: AtomicU64 = AtomicU64::new(0);
+
+/// Open a new recording generation. Called at the top of `start_recording`
+/// before `Starting` is published, so every stop/cancel and spawned
+/// transcription task within this attempt observes the same generation.
+pub(crate) fn begin_recording_generation() -> u64 {
+    RECORDING_GENERATION.fetch_add(1, AtomicOrdering::SeqCst) + 1
+}
+
+/// The generation of the most recently begun recording.
+pub(crate) fn current_recording_generation() -> u64 {
+    RECORDING_GENERATION.load(AtomicOrdering::SeqCst)
+}
+
+/// True when `captured` belongs to a recording generation that is no longer
+/// current — i.e. a newer recording started while this result was in flight.
+pub(crate) fn recording_generation_is_stale(captured: u64) -> bool {
+    captured != current_recording_generation()
+}
+
+/// Audio file owned by the currently in-flight transcription task, keyed by
+/// the recording generation that owns it. `cancel_recording` takes the current
+/// slot and deletes that file; a task's own cleanup only clears the slot when
+/// its captured generation still owns it, so a stale task can never erase a
+/// newer recording's tracker.
+static IN_FLIGHT_TRANSCRIPTION_AUDIO: Lazy<Mutex<Option<(u64, PathBuf)>>> =
+    Lazy::new(|| Mutex::new(None));
+
+/// Record the audio path the in-flight transcription task owns for this
+/// generation, so a `cancel_recording` that aborts that task can still delete
+/// the file.
+pub(crate) fn set_in_flight_transcription_audio(generation: u64, path: PathBuf) {
+    if let Ok(mut guard) = IN_FLIGHT_TRANSCRIPTION_AUDIO.lock() {
+        *guard = Some((generation, path));
+    }
+}
+
+/// Remove and return the currently tracked in-flight transcription path. Used
+/// by `cancel_recording`, which always cancels the current recording attempt.
+pub(crate) fn take_in_flight_transcription_audio() -> Option<PathBuf> {
+    IN_FLIGHT_TRANSCRIPTION_AUDIO
+        .lock()
+        .ok()
+        .and_then(|mut guard| guard.take().map(|(_, path)| path))
+}
+
+fn clear_in_flight_transcription_audio_for_generation(generation: u64) {
+    if let Ok(mut guard) = IN_FLIGHT_TRANSCRIPTION_AUDIO.lock() {
+        if guard
+            .as_ref()
+            .map(|(tracked_generation, _)| *tracked_generation == generation)
+            .unwrap_or(false)
+        {
+            *guard = None;
+        }
+    }
+}
+
+/// Remove the task-owned temp recording and release the in-flight tracker slot
+/// only if this task's generation still owns that slot. The file removal is
+/// path-specific, but the tracker clear is generation-checked so a stale task
+/// cannot clear a newer recording's cancellation handle.
+pub(crate) fn finalize_in_flight_audio(generation: u64, audio_path: &Path) {
+    if let Err(e) = std::fs::remove_file(audio_path) {
+        log::warn!("Failed to remove temporary audio file: {}", e);
+    }
+    clear_in_flight_transcription_audio_for_generation(generation);
+}
+
+/// Single post-transcription side-effect chokepoint. The generation/cancel
+/// snapshot and the synchronous irreversible commit happen in one call with no
+/// `.await` between them. Any post-transcription audio persistence, text
+/// delivery, or history write must enter here at its true write/call site.
+pub(crate) fn persist_if_current<R>(
+    app_state: &AppState,
+    generation: u64,
+    commit: impl FnOnce() -> R,
+) -> Option<R> {
+    if delivery_aborted(app_state.is_cancellation_requested(), generation) {
+        None
+    } else {
+        Some(commit())
+    }
+}
+
+/// True when delivery of a `captured_generation` result must be aborted: the
+/// user cancelled, or a newer recording started beneath this task (its
+/// generation advanced). The generation arm is load-bearing because
+/// `start_recording` clears the cancellation flag for its own attempt, so the
+/// flag alone would let a stale prior-generation result be delivered during a
+/// newer recording. Used at every delivery checkpoint so a cancel/stale that
+/// arrives AFTER the outer task's pre-delivery gate is still caught.
+pub(crate) fn delivery_aborted(cancelled: bool, captured_generation: u64) -> bool {
+    cancelled || recording_generation_is_stale(captured_generation)
+}
+
+/// Delete a recording file previously persisted into `recordings_dir`. Used to
+/// REVOKE a save that a cancel/staleness arriving during (or just after) the
+/// synchronous copy turned into a privacy leak: the pre-copy snapshot let the
+/// copy through, but the dictation is now cancelled/stale and must not persist.
+/// A NotFound result means the file was never saved (or already revoked).
+pub(crate) fn delete_persisted_recording(recordings_dir: &Path, filename: &str) {
+    let target = recordings_dir.join(filename);
+    match std::fs::remove_file(&target) {
+        Ok(()) => log::info!(
+            "Revoked saved recording after late cancel/stale: {}",
+            filename
+        ),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+        Err(e) => log::warn!("Failed to revoke saved recording '{}': {}", filename, e),
+    }
+}
+
+/// Resolve the app's recordings directory and delete a previously-saved
+/// recording there. Thin AppHandle-backed wrapper over
+/// `delete_persisted_recording` for the spawn-internal recheck sites, where
+/// only the saved filename (not the dir) is in scope.
+async fn revoke_saved_recording(app: &AppHandle, filename: &str) {
+    let Ok(dir) = app.path().app_data_dir() else {
+        return;
+    };
+    delete_persisted_recording(&dir.join("recordings"), filename);
+}
 struct StopInFlightGuard(Arc<AtomicBool>);
 
 impl StopInFlightGuard {
@@ -586,7 +718,7 @@ pub(crate) fn is_duplicate_transcription(
 }
 
 #[derive(Debug, Clone)]
-enum TranscriptionFailure {
+pub(crate) enum TranscriptionFailure {
     Local(String),
     Remote(RemoteClientError),
 }
@@ -1335,25 +1467,26 @@ fn transcription_task_header_value(task: crate::transcription::TranscriptionTask
 #[cfg(test)]
 mod tests {
     use super::{
-        ai_failure_category, ai_failure_notice, ai_failure_payload, build_failed_transcription_row,
-        build_remote_server_error_payload, build_remote_transcription_result,
-        build_remote_upload_transcription_request, build_transcription_job,
-        build_translation_failed_history_metadata, build_writing_history_metadata,
-        classify_local_failure, is_ai_auth_error, is_non_speech_transcript,
+        ai_failure_category, ai_failure_notice, ai_failure_payload, begin_recording_generation,
+        build_failed_transcription_row, build_remote_server_error_payload,
+        build_remote_transcription_result, build_remote_upload_transcription_request,
+        build_transcription_job, build_translation_failed_history_metadata,
+        build_writing_history_metadata, classify_local_failure, finalize_in_flight_audio,
+        is_ai_auth_error, is_non_speech_transcript, persist_if_current,
         plan_desktop_writing_success, recording_license_state, remote_server_error_pill_message,
-        should_hide_pill_when_idle, should_use_active_remote, silence_event_runs_in_state,
-        silence_timeout_disposition, stop_should_reset_to_idle,
-        sync_retranscription_failure_metadata, toast_clear_is_current,
-        transcription_watchdog_budget, LocalFailureKind, NormalizedTempFile, PillToastEventPayload,
-        RecordingLicenseState, SilenceDetectorEvent, SilenceTimeoutDisposition, StopInFlightGuard,
-        TranscriptionFailure, TranscriptionStatus,
+        set_in_flight_transcription_audio, should_hide_pill_when_idle, should_use_active_remote,
+        silence_event_runs_in_state, silence_timeout_disposition, stop_should_reset_to_idle,
+        sync_retranscription_failure_metadata, take_in_flight_transcription_audio,
+        toast_clear_is_current, transcription_watchdog_budget, LocalFailureKind,
+        NormalizedTempFile, PillToastEventPayload, RecordingLicenseState, SilenceDetectorEvent,
+        SilenceTimeoutDisposition, StopInFlightGuard, TranscriptionFailure, TranscriptionStatus,
     };
     use crate::commands::license::CachedLicense;
     use crate::license::{LicenseState, LicenseStatus};
     use crate::remote::client::{
         calculate_timeout_ms, RemoteClientError, RemoteEndpoint, TranscriptionSource,
     };
-    use crate::RecordingState;
+    use crate::{AppState, RecordingState};
     use reqwest::StatusCode;
     use std::fs;
     use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -2336,6 +2469,192 @@ mod tests {
             LocalFailureKind::Generic
         );
     }
+
+    static POST_TRANSCRIPTION_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    fn unique_side_effect_path(label: &str) -> std::path::PathBuf {
+        static COUNTER: AtomicU64 = AtomicU64::new(0);
+        let n = COUNTER.fetch_add(1, Ordering::SeqCst);
+        std::env::temp_dir().join(format!("voicetypr-{label}-{}-{n}.json", std::process::id()))
+    }
+
+    #[test]
+    fn persist_if_current_skips_stale_generation_and_cancel() {
+        let _guard = POST_TRANSCRIPTION_TEST_LOCK.lock().unwrap();
+        let app_state = AppState::new();
+        let generation = begin_recording_generation();
+        let mut commits = 0;
+
+        let committed = persist_if_current(&app_state, generation, || {
+            commits += 1;
+            "committed"
+        });
+        assert_eq!(committed, Some("committed"));
+        assert_eq!(commits, 1);
+
+        let stale_generation = generation;
+        let _new_generation = begin_recording_generation();
+        let skipped_stale = persist_if_current(&app_state, stale_generation, || {
+            commits += 1;
+            "stale"
+        });
+        assert_eq!(skipped_stale, None);
+        assert_eq!(commits, 1, "stale generation must not run commit");
+
+        let current_generation = begin_recording_generation();
+        app_state.request_cancellation();
+        let skipped_cancel = persist_if_current(&app_state, current_generation, || {
+            commits += 1;
+            "cancelled"
+        });
+        assert_eq!(skipped_cancel, None);
+        assert_eq!(commits, 1, "cancelled generation must not run commit");
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    #[allow(clippy::await_holding_lock)] // process-wide test serialization lock; current-thread runtime
+    async fn stale_task_cannot_clear_newer_in_flight_tracker() {
+        let _guard = POST_TRANSCRIPTION_TEST_LOCK.lock().unwrap();
+        let stale_generation = begin_recording_generation();
+        let stale_path = unique_side_effect_path("stale-audio");
+        fs::write(&stale_path, b"stale audio").unwrap();
+        set_in_flight_transcription_audio(stale_generation, stale_path.clone());
+
+        let newer_generation = begin_recording_generation();
+        let newer_path = unique_side_effect_path("newer-audio");
+        fs::write(&newer_path, b"newer audio").unwrap();
+        set_in_flight_transcription_audio(newer_generation, newer_path.clone());
+
+        let stale_path_for_task = stale_path.clone();
+        tokio::spawn(async move {
+            finalize_in_flight_audio(stale_generation, &stale_path_for_task);
+        })
+        .await
+        .unwrap();
+
+        assert!(
+            !stale_path.exists(),
+            "stale task still removes its own temp file"
+        );
+        let tracked = take_in_flight_transcription_audio();
+        assert_eq!(
+            tracked.as_ref(),
+            Some(&newer_path),
+            "stale finalization must not clear the newer generation tracker"
+        );
+        if let Some(path) = tracked {
+            let _ = fs::remove_file(path);
+        }
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    #[allow(clippy::await_holding_lock)] // process-wide test serialization lock; current-thread runtime
+    async fn failed_history_after_late_cancel_is_skipped_at_commit_site() {
+        let _guard = POST_TRANSCRIPTION_TEST_LOCK.lock().unwrap();
+        let generation = begin_recording_generation();
+        let app_state = Arc::new(AppState::new());
+        let history_path = unique_side_effect_path("failed-history");
+        let row = build_failed_transcription_row(
+            &TranscriptionFailure::Local("Transcription timed out".to_string()),
+            "base.en",
+            "recording.wav",
+        );
+        let (ready_tx, ready_rx) = tokio::sync::oneshot::channel();
+        let (go_tx, go_rx) = tokio::sync::oneshot::channel();
+        let state_for_task = app_state.clone();
+        let path_for_task = history_path.clone();
+
+        let task = tokio::spawn(async move {
+            ready_tx.send(()).unwrap();
+            go_rx.await.unwrap();
+            persist_if_current(state_for_task.as_ref(), generation, || {
+                fs::write(&path_for_task, row.to_string()).unwrap();
+            })
+        });
+
+        ready_rx.await.unwrap();
+        app_state.request_cancellation();
+        go_tx.send(()).unwrap();
+
+        assert_eq!(task.await.unwrap(), None);
+        assert!(
+            !history_path.exists(),
+            "late cancel must skip the failed-history write"
+        );
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    #[allow(clippy::await_holding_lock)] // process-wide test serialization lock; current-thread runtime
+    async fn translation_failed_history_after_late_cancel_is_skipped_at_commit_site() {
+        let _guard = POST_TRANSCRIPTION_TEST_LOCK.lock().unwrap();
+        let generation = begin_recording_generation();
+        let app_state = Arc::new(AppState::new());
+        let history_path = unique_side_effect_path("translation-history");
+        let row = serde_json::json!({
+            "text": "raw transcript",
+            "model": "base.en",
+            "timestamp": chrono::Utc::now().to_rfc3339(),
+            "writing": build_translation_failed_history_metadata("es"),
+        });
+        let (ready_tx, ready_rx) = tokio::sync::oneshot::channel();
+        let (go_tx, go_rx) = tokio::sync::oneshot::channel();
+        let state_for_task = app_state.clone();
+        let path_for_task = history_path.clone();
+
+        let task = tokio::spawn(async move {
+            ready_tx.send(()).unwrap();
+            go_rx.await.unwrap();
+            persist_if_current(state_for_task.as_ref(), generation, || {
+                fs::write(&path_for_task, row.to_string()).unwrap();
+            })
+        });
+
+        ready_rx.await.unwrap();
+        app_state.request_cancellation();
+        go_tx.send(()).unwrap();
+
+        assert_eq!(task.await.unwrap(), None);
+        assert!(
+            !history_path.exists(),
+            "late cancel must skip the translation-failed history write"
+        );
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    #[allow(clippy::await_holding_lock)] // process-wide test serialization lock; current-thread runtime
+    async fn cancel_between_gate_and_spawned_history_save_is_rechecked_inside_task() {
+        let _guard = POST_TRANSCRIPTION_TEST_LOCK.lock().unwrap();
+        let generation = begin_recording_generation();
+        let app_state = Arc::new(AppState::new());
+        let history_path = unique_side_effect_path("spawned-history");
+        assert!(
+            !super::delivery_aborted(app_state.is_cancellation_requested(), generation),
+            "outer delivery gate passes before the spawned save is queued"
+        );
+
+        let (ready_tx, ready_rx) = tokio::sync::oneshot::channel();
+        let (go_tx, go_rx) = tokio::sync::oneshot::channel();
+        let state_for_task = app_state.clone();
+        let path_for_task = history_path.clone();
+
+        let save_task = tokio::spawn(async move {
+            ready_tx.send(()).unwrap();
+            go_rx.await.unwrap();
+            persist_if_current(state_for_task.as_ref(), generation, || {
+                fs::write(&path_for_task, "history row").unwrap();
+            })
+        });
+
+        ready_rx.await.unwrap();
+        app_state.request_cancellation();
+        go_tx.send(()).unwrap();
+
+        assert_eq!(save_task.await.unwrap(), None);
+        assert!(
+            !history_path.exists(),
+            "spawned history task must recheck cancellation at the write site"
+        );
+    }
 }
 
 /// Play a system sound to confirm recording start (macOS only)
@@ -2526,10 +2845,37 @@ impl RecordingConfig {
 impl UnwindSafe for RecordingConfig {}
 impl RefUnwindSafe for RecordingConfig {}
 
-/// Save a recording file to persistent storage if save_recordings is enabled
-/// Returns the saved filename (not full path) if saved, None otherwise
-pub async fn maybe_save_recording(app: &AppHandle, audio_path: &Path) -> Option<String> {
-    save_recording_internal(app, audio_path, true).await
+/// Decide whether the audio for a just-finished transcription should be
+/// persisted to the recordings directory.
+///
+/// `discard` is true when the result must NOT reach the user — either because
+/// they cancelled, or because a newer recording started beneath this task
+/// (stale generation). PRIVACY: discarded audio is never written to disk, even
+/// on a success or a normally-saveable (retryable) failure.
+///
+/// - `discard == true`           ⇒ never save.
+/// - `Ok` (failure is `None`)    ⇒ save (preserves re-transcribable speech).
+/// - retryable failure           ⇒ save (preserves the clip for History retry).
+/// - non-retryable failure       ⇒ don't save (too-short clip, cancelled engine…).
+pub(crate) fn should_save_recording_audio(
+    discard: bool,
+    failure: Option<&TranscriptionFailure>,
+) -> bool {
+    if discard {
+        return false;
+    }
+    match failure {
+        None => true,
+        Some(failure) => failure.is_retryable_failure(),
+    }
+}
+
+async fn maybe_save_recording_if_current(
+    app: &AppHandle,
+    generation: u64,
+    audio_path: &Path,
+) -> Option<String> {
+    save_recording_internal(app, audio_path, true, Some(generation)).await
 }
 
 /// Internal function to save recording with optional settings check
@@ -2537,6 +2883,7 @@ async fn save_recording_internal(
     app: &AppHandle,
     audio_path: &Path,
     check_settings: bool,
+    generation: Option<u64>,
 ) -> Option<String> {
     // Get settings store for retention policy and save_recordings check.
     let store = match app.store("settings") {
@@ -2549,7 +2896,7 @@ async fn save_recording_internal(
             }
             // For forced saves (preserve on failure), continue without store
             // We'll skip retention cleanup in this case
-            return save_recording_without_cleanup(app, audio_path).await;
+            return save_recording_without_cleanup(app, audio_path, generation).await;
         }
     };
 
@@ -2586,9 +2933,27 @@ async fn save_recording_internal(
     let filename = format!("{}_{}.wav", timestamp, uuid_part);
     let dest_path = recordings_dir.join(&filename);
 
-    // Copy the file to persistent storage
-    match std::fs::copy(audio_path, &dest_path) {
-        Ok(_) => {
+    // Copy the file to persistent storage. The gated production path enters the
+    // chokepoint immediately before the synchronous copy.
+    let copy_result = match generation {
+        Some(generation) => {
+            let app_state = app.state::<AppState>();
+            persist_if_current(&app_state, generation, || {
+                std::fs::copy(audio_path, &dest_path)
+            })
+        }
+        None => Some(std::fs::copy(audio_path, &dest_path)),
+    };
+
+    match copy_result {
+        None => {
+            log::info!(
+                "Skipped recording persistence for stale/cancelled generation {}",
+                generation.unwrap_or_default()
+            );
+            None
+        }
+        Some(Ok(_)) => {
             log::info!("Saved recording to: {:?}", dest_path);
 
             // Cleanup old recordings by retention period.
@@ -2600,7 +2965,7 @@ async fn save_recording_internal(
 
             Some(filename)
         }
-        Err(e) => {
+        Some(Err(e)) => {
             log::error!("Failed to save recording: {}", e);
             None
         }
@@ -2608,7 +2973,11 @@ async fn save_recording_internal(
 }
 
 /// Save recording without cleanup (fallback when store is unavailable)
-async fn save_recording_without_cleanup(app: &AppHandle, audio_path: &Path) -> Option<String> {
+async fn save_recording_without_cleanup(
+    app: &AppHandle,
+    audio_path: &Path,
+    generation: Option<u64>,
+) -> Option<String> {
     let recordings_dir = match app.path().app_data_dir() {
         Ok(dir) => dir.join("recordings"),
         Err(e) => {
@@ -2627,12 +2996,29 @@ async fn save_recording_without_cleanup(app: &AppHandle, audio_path: &Path) -> O
     let filename = format!("{}_{}.wav", timestamp, uuid_part);
     let dest_path = recordings_dir.join(&filename);
 
-    match std::fs::copy(audio_path, &dest_path) {
-        Ok(_) => {
+    let copy_result = match generation {
+        Some(generation) => {
+            let app_state = app.state::<AppState>();
+            persist_if_current(&app_state, generation, || {
+                std::fs::copy(audio_path, &dest_path)
+            })
+        }
+        None => Some(std::fs::copy(audio_path, &dest_path)),
+    };
+
+    match copy_result {
+        None => {
+            log::info!(
+                "Skipped recording persistence fallback for stale/cancelled generation {}",
+                generation.unwrap_or_default()
+            );
+            None
+        }
+        Some(Ok(_)) => {
             log::info!("Saved recording (no cleanup) to: {:?}", dest_path);
             Some(filename)
         }
-        Err(e) => {
+        Some(Err(e)) => {
             log::error!("Failed to save recording: {}", e);
             None
         }
@@ -3394,11 +3780,17 @@ pub async fn start_recording(
         recording_start.elapsed().as_millis()
     );
     log_state_transition("RECORDING", "idle", "starting", true, None);
-    // Clear any stale cancellation from a previous attempt. From this point
-    // on, a cancellation request targets THIS start attempt and must win.
+    // Open a new recording generation and clear stale flags from a previous
+    // attempt BEFORE publishing `Starting`. Clearing `pending_stop_after_start`
+    // after `Starting` is published would erase a stop that arrived during the
+    // Starting window (PTT key-up while Starting sets the flag) — so the clear
+    // must happen first. From this point on, any stop/cancel observed after
+    // `Starting` targets THIS attempt and must win.
     {
         let app_state = app.state::<AppState>();
+        begin_recording_generation();
         app_state.clear_cancellation();
+        clear_pending_stop_after_start(&app_state);
     }
     update_recording_state(&app, RecordingState::Starting, None);
     // Ensure transition actually happened; if blocked, abort early
@@ -3494,10 +3886,10 @@ pub async fn start_recording(
     };
     let audio_path = recordings_dir.join(format!("recording_{}.wav", timestamp));
 
-    // Store path for later use and reset any leftover pending-toggle flag
+    // Store path for later use. The stale `pending_stop_after_start` flag is
+    // cleared before `Starting` is published (above), so a stop arriving
+    // during the Starting window survives to the Recording-commit check.
     let app_state = app.state::<AppState>();
-    clear_pending_stop_after_start(&app_state);
-
     // Save current recording path
     match app_state.current_recording_path.lock() {
         Ok(mut guard) => {
@@ -4181,6 +4573,18 @@ pub async fn stop_recording(
             return Ok("".to_string());
         }
     };
+    let task_generation = current_recording_generation();
+    // Register the file the upcoming transcription task will own as EARLY as
+    // possible — the moment `stop_recording` takes ownership of the recording
+    // path, before model selection / normalization. A `cancel_recording` that
+    // arrives in this pre-spawn window (recorder already stopped, task not yet
+    // spawned) can otherwise find no task to abort and no tracked path, leaving
+    // the cancelled dictation's audio on disk. The slot is re-set just before
+    // the spawn below (to the final, possibly-normalized, path), and the task's
+    // own early-cancel finalize also removes the file — so a stale slot left by
+    // an early-return path that removed the file itself is harmless (a later
+    // cancel hits NotFound, the next registration overwrites it).
+    set_in_flight_transcription_audio(task_generation, audio_path.clone());
 
     // Fast-path: handle header-only/empty WAV files before normalization
     if let Ok(meta) = std::fs::metadata(&audio_path) {
@@ -4619,6 +5023,10 @@ pub async fn stop_recording(
         translate_to_english,
     );
     let audio_path_clone = audio_path.clone();
+    // Use the generation captured when stop_recording took ownership of this
+    // audio path, before any model-selection/normalization awaits. Capturing
+    // here would let a stale stop adopt a newer recording's generation.
+    set_in_flight_transcription_audio(task_generation, audio_path_clone.clone());
     let engine_selection_for_task = engine_selection;
     let language_for_task = language.clone();
     let selected_model_name_for_task = selected_model_name.clone();
@@ -4639,6 +5047,13 @@ pub async fn stop_recording(
         let app_state = app_for_task.state::<AppState>();
         if app_state.is_cancellation_requested() {
             log::info!("Transcription cancelled before model loading");
+            // The task observed cancellation itself (cancel set the flag but
+            // either did not, or could not, abort this handle in time). Remove
+            // the task-owned temp recording and release the tracker so the
+            // cancelled dictation's audio is never left on disk. This is the
+            // SAME cleanup the normal completion path runs below; the old
+            // early-cancel branch returned here without it, orphaning the file.
+            finalize_in_flight_audio(task_generation, &audio_path_clone);
 
             // Hide pill window since we're cancelling (only if show_pill_indicator is false)
             if should_hide_pill(&app_for_task).await {
@@ -4756,36 +5171,74 @@ pub async fn stop_recording(
                 }
             };
 
-        // Save the recording to persistent storage BEFORE cleanup. A successful
-        // transcription and a genuine (retryable) failure both respect the
-        // `save_recordings` setting via `maybe_save_recording`; user cancellation
-        // and too-short clips are never preserved. The recording is what makes a
-        // failed row re-transcribable from History.
-        let recording_file = match &transcription_result {
-            Ok(_) => maybe_save_recording(&app_for_task, &audio_path_clone).await,
-            Err(failure) if failure.is_retryable_failure() => {
-                maybe_save_recording(&app_for_task, &audio_path_clone).await
-            }
-            Err(_) => None,
-        };
+        // Decide persistence BEFORE touching the file. PRIVACY: a cancelled
+        // dictation — or one whose recording generation has gone stale (a newer
+        // recording started beneath this task) — is never written to disk, even
+        // when the transcription succeeded or failed with a normally-saveable
+        // (retryable) failure. This is the PRE-copy snapshot: it reads the
+        // flags before the (synchronous) copy so a cancel already in effect
+        // skips the write.
+        let pre_discard =
+            app_state.is_cancellation_requested() || recording_generation_is_stale(task_generation);
+        let mut recording_file =
+            if should_save_recording_audio(pre_discard, transcription_result.as_ref().err()) {
+                maybe_save_recording_if_current(&app_for_task, task_generation, &audio_path_clone)
+                    .await
+            } else {
+                None
+            };
 
-        // Clean up temp file regardless of outcome
-        if let Err(e) = std::fs::remove_file(&audio_path_clone) {
-            log::warn!("Failed to remove temporary audio file: {}", e);
+        // POST-COPY RECHECK (Race 2): a cancel/newer-generation arriving
+        // DURING the copy slipped past the `pre_discard` snapshot. The delivery
+        // gate below catches it and discards the text, but the audio was
+        // already persisted — revoke it now so a cancelled dictation is never
+        // left on disk, and drop the filename so history does not reference a
+        // file we just deleted.
+        if delivery_aborted(app_state.is_cancellation_requested(), task_generation) && !pre_discard
+        {
+            if let Some(ref saved) = recording_file {
+                revoke_saved_recording(&app_for_task, saved).await;
+            }
+            recording_file = None;
         }
+
+        // Clean up the task-owned temp recording and release the in-flight
+        // tracker slot regardless of outcome (so a concurrent cancel cannot
+        // resurrect a removed path). Shared with the early-cancel branch.
+        finalize_in_flight_audio(task_generation, &audio_path_clone);
 
         match transcription_result {
             Ok(transcription) => {
-                // Final cancellation check before processing result
-                if app_state.is_cancellation_requested() {
-                    log::info!("Transcription completed but was cancelled, discarding result");
+                // Final gate before delivering a result: reject if the user
+                // cancelled, OR if a newer recording started beneath this task
+                // (its generation advanced). The generation check is load-
+                // bearing: `start_recording` clears the cancellation flag for
+                // its own attempt, so the flag alone would let a stale prior-
+                // generation result slip through and paste during a newer
+                // recording.
+                let cancelled = app_state.is_cancellation_requested();
+                let stale = recording_generation_is_stale(task_generation);
+                if cancelled || stale {
+                    log::info!(
+                        "Transcription result discarded (cancelled={}, stale_generation={})",
+                        cancelled,
+                        stale
+                    );
+                    // Revoke any audio saved for this result. The post-copy
+                    // recheck above already handles a cancel that arrived DURING
+                    // the copy; this closes the residual window where a cancel
+                    // arrives between that recheck and this gate (the audio was
+                    // persisted and would otherwise be left on disk).
+                    if let Some(ref saved) = recording_file {
+                        revoke_saved_recording(&app_for_task, saved).await;
+                    }
 
-                    // Hide pill window since we're cancelling (only if show_pill_indicator is false)
+                    // Hide pill window since we're discarding (only if show_pill_indicator is false)
                     if should_hide_pill(&app_for_task).await {
                         if let Err(e) =
                             crate::commands::window::hide_pill_widget(app_for_task.clone()).await
                         {
-                            log::error!("Failed to hide pill window on cancellation: {}", e);
+                            log::error!("Failed to hide pill window on discard: {}", e);
                         }
                     }
 
@@ -4917,8 +5370,9 @@ pub async fn stop_recording(
                                     let _ = app_for_process.emit("enhancing-failed", ());
                                 }
 
-                                let saved = save_transcription_with_recording(
+                                let saved = save_transcription_with_recording_if_current(
                                     app_for_process.clone(),
+                                    task_generation,
                                     transcription_for_process.raw_text.clone(),
                                     model_for_process.clone(),
                                     recording_file_for_task.clone(),
@@ -4928,35 +5382,51 @@ pub async fn stop_recording(
                                 )
                                 .await;
 
-                                if let Err(save_err) = saved {
-                                    // History save failed: fall back to clipboard so the
-                                    // transcript is never lost (the old path always pasted).
-                                    log::error!(
-                                        "Failed to save raw transcript after translation failure: {}; copying to clipboard",
-                                        save_err
-                                    );
-                                    let message =
-                                        match crate::commands::text::copy_text_to_clipboard(
-                                            transcription_for_process.raw_text.clone(),
-                                        )
-                                        .await
-                                        {
-                                            Ok(_) => "Translation failed - copied to clipboard",
-                                            Err(copy_err) => {
-                                                log::error!(
-                                                "Clipboard fallback also failed after translation failure: {}",
-                                                copy_err
-                                            );
-                                                "Translation failed - transcript could not be saved"
+                                match saved {
+                                    None => {
+                                        log::info!(
+                                            "Skipped translation-failed history for stale/cancelled generation {}",
+                                            task_generation
+                                        );
+                                    }
+                                    Some(Err(save_err)) => {
+                                        // History save failed: fall back to clipboard so the
+                                        // transcript is never lost (the old path always pasted).
+                                        log::error!(
+                                            "Failed to save raw transcript after translation failure: {}; copying to clipboard",
+                                            save_err
+                                        );
+                                        let app_state = app_for_process.state::<AppState>();
+                                        let copy_result =
+                                            persist_if_current(&app_state, task_generation, || {
+                                                crate::commands::text::copy_text_to_clipboard(
+                                                    transcription_for_process.raw_text.clone(),
+                                                )
+                                            });
+                                        let message = match copy_result {
+                                            None => {
+                                                "Translation failed - cancelled before clipboard fallback"
                                             }
+                                            Some(copy_future) => match copy_future.await {
+                                                Ok(_) => "Translation failed - copied to clipboard",
+                                                Err(copy_err) => {
+                                                    log::error!(
+                                                        "Clipboard fallback also failed after translation failure: {}",
+                                                        copy_err
+                                                    );
+                                                    "Translation failed - transcript could not be saved"
+                                                }
+                                            },
                                         };
-                                    pill_toast(&app_for_process, message, 6000);
-                                } else {
-                                    pill_toast(
-                                        &app_for_process,
-                                        "Translation failed - saved to history, not pasted",
-                                        6000,
-                                    );
+                                        pill_toast(&app_for_process, message, 6000);
+                                    }
+                                    Some(Ok(())) => {
+                                        pill_toast(
+                                            &app_for_process,
+                                            "Translation failed - saved to history, not pasted",
+                                            6000,
+                                        );
+                                    }
                                 }
 
                                 (text_for_process.clone(), None, false)
@@ -4989,6 +5459,33 @@ pub async fn stop_recording(
 
                     // 2. Hide pill window first, then insert text with reduced delay
                     let app_state = app_for_process.state::<AppState>();
+                    // Recheck (Race 3) after process_transcription: a cancel /
+                    // newer-generation arriving during the (long) AI-polish
+                    // await is invisible to the outer task's pre-delivery gate,
+                    // which already passed. Abort before ANY side effect: no
+                    // pill toast, no text insertion, no history; revoke audio.
+                    if delivery_aborted(app_state.is_cancellation_requested(), task_generation) {
+                        log::info!(
+                            "Delivery discarded after enhancement (cancelled/stale gen={})",
+                            task_generation
+                        );
+                        if let Some(ref saved) = recording_file_for_task {
+                            revoke_saved_recording(&app_for_process, saved).await;
+                        }
+                        if should_hide_pill(&app_for_process).await {
+                            if let Err(e) =
+                                crate::commands::window::hide_pill_widget(app_for_process.clone())
+                                    .await
+                            {
+                                log::error!(
+                                    "Failed to hide pill window on discarded delivery: {}",
+                                    e
+                                );
+                            }
+                        }
+                        update_recording_state(&app_for_process, RecordingState::Idle, None);
+                        return;
+                    }
 
                     // Hide pill window first (only if show_pill_indicator is false)
                     if should_hide_pill(&app_for_process).await {
@@ -5019,15 +5516,41 @@ pub async fn stop_recording(
                             false
                         }
                     };
+                    // Recheck (Race 3) IMMEDIATELY before text insertion: a
+                    // cancel arriving during the pill-hide / sleep / settings-
+                    // read window above must not paste stale/cancelled text.
+                    if delivery_aborted(app_state.is_cancellation_requested(), task_generation) {
+                        log::info!(
+                            "Delivery discarded before insertion (cancelled/stale gen={})",
+                            task_generation
+                        );
+                        if let Some(ref saved) = recording_file_for_task {
+                            revoke_saved_recording(&app_for_process, saved).await;
+                        }
+                        update_recording_state(&app_for_process, RecordingState::Idle, None);
+                        return;
+                    }
 
                     if auto_paste {
                         // Auto-paste enabled: insert text at cursor
-                        match crate::commands::text::insert_text(
-                            app_for_process.clone(),
-                            final_text.clone(),
-                        )
-                        .await
-                        {
+                        let insert_result = persist_if_current(&app_state, task_generation, || {
+                            crate::commands::text::insert_text(
+                                app_for_process.clone(),
+                                final_text.clone(),
+                            )
+                        });
+                        let Some(insert_future) = insert_result else {
+                            log::info!(
+                                "Skipped text insertion for stale/cancelled generation {}",
+                                task_generation
+                            );
+                            if let Some(ref saved) = recording_file_for_task {
+                                revoke_saved_recording(&app_for_process, saved).await;
+                            }
+                            update_recording_state(&app_for_process, RecordingState::Idle, None);
+                            return;
+                        };
+                        match insert_future.await {
                             Ok(_) => log::debug!("Text inserted at cursor successfully"),
                             Err(e) => {
                                 log::error!("Failed to insert text: {}", e);
@@ -5056,9 +5579,21 @@ pub async fn stop_recording(
                         }
                     } else {
                         // Auto-paste disabled: copy to clipboard and notify
-                        match crate::commands::text::copy_text_to_clipboard(final_text.clone())
-                            .await
-                        {
+                        let copy_result = persist_if_current(&app_state, task_generation, || {
+                            crate::commands::text::copy_text_to_clipboard(final_text.clone())
+                        });
+                        let Some(copy_future) = copy_result else {
+                            log::info!(
+                                "Skipped clipboard copy for stale/cancelled generation {}",
+                                task_generation
+                            );
+                            if let Some(ref saved) = recording_file_for_task {
+                                revoke_saved_recording(&app_for_process, saved).await;
+                            }
+                            update_recording_state(&app_for_process, RecordingState::Idle, None);
+                            return;
+                        };
+                        match copy_future.await {
                             Ok(_) => {
                                 log::debug!("Text copied to clipboard (auto-paste disabled)");
                                 pill_toast(&app_for_process, "Transcription copied", 1500);
@@ -5070,15 +5605,33 @@ pub async fn stop_recording(
                         }
                     }
 
+                    // Recheck (Race 3) IMMEDIATELY before history save: a cancel
+                    // arriving during text insertion must not persist a history
+                    // row (or reference a recording) for the cancelled/stale
+                    // dictation. Revoke any saved audio too.
+                    if delivery_aborted(app_state.is_cancellation_requested(), task_generation) {
+                        log::info!(
+                            "Delivery discarded before history save (cancelled/stale gen={})",
+                            task_generation
+                        );
+                        if let Some(ref saved) = recording_file_for_task {
+                            revoke_saved_recording(&app_for_process, saved).await;
+                        }
+                        update_recording_state(&app_for_process, RecordingState::Idle, None);
+                        return;
+                    }
+
                     // 5. Save transcription to history (async, non-blocking)
                     let app_for_history = app_for_process.clone();
                     let history_text = final_text.clone();
                     let history_model = model_for_process.clone();
                     let recording_file_for_history = recording_file_for_task.clone();
                     let writing_metadata_for_history = writing_metadata.clone();
+                    let generation_for_history = task_generation;
                     tokio::spawn(async move {
-                        match save_transcription_with_recording(
+                        match save_transcription_with_recording_if_current(
                             app_for_history.clone(),
+                            generation_for_history,
                             history_text,
                             history_model,
                             recording_file_for_history,
@@ -5086,13 +5639,19 @@ pub async fn stop_recording(
                         )
                         .await
                         {
-                            Ok(_) => {
+                            Some(Ok(())) => {
                                 // Emit history-updated event to refresh UI
                                 let _ =
                                     emit_to_window(&app_for_history, "main", "history-updated", ());
                                 log::debug!("Transcription saved to history successfully");
                             }
-                            Err(e) => log::error!("Failed to save transcription to history: {}", e),
+                            Some(Err(e)) => {
+                                log::error!("Failed to save transcription to history: {}", e)
+                            }
+                            None => log::info!(
+                                "Skipped spawned history save for stale/cancelled generation {}",
+                                generation_for_history
+                            ),
                         }
                     });
 
@@ -5159,22 +5718,24 @@ pub async fn stop_recording(
                                 let app_for_history = app_for_task.clone();
                                 let model_name = selected_model_name_for_task.clone();
                                 let recording_filename = saved_recording.clone();
-                                match save_failed_transcription(
+                                match save_failed_transcription_if_current(
                                     &app_for_history,
+                                    task_generation,
                                     &failure,
                                     model_name,
                                     recording_filename,
                                 )
                                 .await
                                 {
-                                    Ok(_) => true,
-                                    Err(save_err) => {
+                                    Some(Ok(())) => true,
+                                    Some(Err(save_err)) => {
                                         log::error!(
                                             "Failed to save failed transcription: {}",
                                             save_err
                                         );
                                         false
                                     }
+                                    None => false,
                                 }
                             } else {
                                 false
@@ -5220,22 +5781,24 @@ pub async fn stop_recording(
                         // can re-transcribe from History instead of losing the dictation.
                         let can_retry_from_history =
                             if let Some(ref saved_recording) = recording_file {
-                                match save_failed_transcription(
+                                match save_failed_transcription_if_current(
                                     &app_for_task,
+                                    task_generation,
                                     &failure,
                                     selected_model_name_for_task.clone(),
                                     saved_recording.clone(),
                                 )
                                 .await
                                 {
-                                    Ok(_) => true,
-                                    Err(save_err) => {
+                                    Some(Ok(())) => true,
+                                    Some(Err(save_err)) => {
                                         log::error!(
                                             "Failed to save failed transcription: {}",
                                             save_err
                                         );
                                         false
                                     }
+                                    None => false,
                                 }
                             } else {
                                 false
@@ -5416,6 +5979,45 @@ pub async fn save_transcription_with_recording(
     recording_file: Option<String>,
     writing_metadata: Option<serde_json::Value>,
 ) -> Result<(), String> {
+    save_transcription_with_recording_internal(
+        app,
+        text,
+        model,
+        recording_file,
+        writing_metadata,
+        None,
+    )
+    .await
+    .unwrap_or(Ok(()))
+}
+
+async fn save_transcription_with_recording_if_current(
+    app: AppHandle,
+    generation: u64,
+    text: String,
+    model: String,
+    recording_file: Option<String>,
+    writing_metadata: Option<serde_json::Value>,
+) -> Option<Result<(), String>> {
+    save_transcription_with_recording_internal(
+        app,
+        text,
+        model,
+        recording_file,
+        writing_metadata,
+        Some(generation),
+    )
+    .await
+}
+
+async fn save_transcription_with_recording_internal(
+    app: AppHandle,
+    text: String,
+    model: String,
+    recording_file: Option<String>,
+    writing_metadata: Option<serde_json::Value>,
+    generation: Option<u64>,
+) -> Option<Result<(), String>> {
     // De-dup guard: skip saving if the most recent entry matches the same text & model within a short window
     if let Ok(store) = app.store("transcriptions") {
         let latest_key = page_history_keys(store.keys(), 1).into_iter().next();
@@ -5424,16 +6026,17 @@ pub async fn save_transcription_with_recording(
             if let Some(value) = store.get(&key) {
                 if is_duplicate_transcription(&key, &value, &text, &model, chrono::Utc::now()) {
                     log::info!("Skipping duplicate transcription save (same text/model within 2s)");
-                    return Ok(());
+                    return Some(Ok(()));
                 }
             }
         }
     }
 
     // Save transcription to store with current timestamp
-    let store = app
-        .store("transcriptions")
-        .map_err(|e| format!("Failed to get transcriptions store: {}", e))?;
+    let store = match app.store("transcriptions") {
+        Ok(store) => store,
+        Err(e) => return Some(Err(format!("Failed to get transcriptions store: {}", e))),
+    };
 
     let timestamp = chrono::Utc::now().to_rfc3339();
     let mut transcription_data = serde_json::json!({
@@ -5451,66 +6054,129 @@ pub async fn save_transcription_with_recording(
         transcription_data["writing"] = metadata;
     }
 
-    store.set(&timestamp, transcription_data.clone());
+    let commit_result = match generation {
+        Some(generation) => {
+            let app_state = app.state::<AppState>();
+            persist_if_current(&app_state, generation, || {
+                store.set(&timestamp, transcription_data.clone());
+                store
+                    .save()
+                    .map_err(|e| format!("Failed to save transcription: {}", e))
+            })
+        }
+        None => Some({
+            store.set(&timestamp, transcription_data.clone());
+            store
+                .save()
+                .map_err(|e| format!("Failed to save transcription: {}", e))
+        }),
+    };
 
-    store
-        .save()
-        .map_err(|e| format!("Failed to save transcription: {}", e))?;
+    match commit_result {
+        None => {
+            log::info!(
+                "Skipped transcription history save for stale/cancelled generation {}",
+                generation.unwrap_or_default()
+            );
+            None
+        }
+        Some(Err(e)) => Some(Err(e)),
+        Some(Ok(())) => {
+            // Emit the new transcription data to frontend for append-only update
+            let _ = emit_to_window(&app, "main", "transcription-added", transcription_data);
 
-    // Emit the new transcription data to frontend for append-only update
-    let _ = emit_to_window(&app, "main", "transcription-added", transcription_data);
+            // Refresh tray menu (best-effort) so Recent Transcriptions stays updated
+            if let Err(e) = crate::commands::settings::update_tray_menu(app.clone()).await {
+                log::warn!(
+                    "Failed to update tray menu after saving transcription: {}",
+                    e
+                );
+            }
 
-    // Refresh tray menu (best-effort) so Recent Transcriptions stays updated
-    if let Err(e) = crate::commands::settings::update_tray_menu(app.clone()).await {
-        log::warn!(
-            "Failed to update tray menu after saving transcription: {}",
-            e
-        );
+            log::info!("Saved transcription with {} characters", text.len());
+            Some(Ok(()))
+        }
     }
-
-    log::info!("Saved transcription with {} characters", text.len());
-    Ok(())
 }
 
-/// Save a failed transcription to history with recording file preserved for re-transcription
-async fn save_failed_transcription(
+async fn save_failed_transcription_if_current(
     app: &AppHandle,
+    generation: u64,
     failure: &TranscriptionFailure,
     model: String,
     recording_file: String,
-) -> Result<(), String> {
-    let store = app
-        .store("transcriptions")
-        .map_err(|e| format!("Failed to get transcriptions store: {}", e))?;
+) -> Option<Result<(), String>> {
+    save_failed_transcription_internal(app, Some(generation), failure, model, recording_file).await
+}
+
+async fn save_failed_transcription_internal(
+    app: &AppHandle,
+    generation: Option<u64>,
+    failure: &TranscriptionFailure,
+    model: String,
+    recording_file: String,
+) -> Option<Result<(), String>> {
+    let store = match app.store("transcriptions") {
+        Ok(store) => store,
+        Err(e) => return Some(Err(format!("Failed to get transcriptions store: {}", e))),
+    };
 
     let transcription_data = build_failed_transcription_row(failure, &model, &recording_file);
-    let timestamp = transcription_data["timestamp"]
-        .as_str()
-        .ok_or_else(|| "Failed to build failed transcription timestamp".to_string())?
-        .to_string();
+    let timestamp = match transcription_data["timestamp"].as_str() {
+        Some(timestamp) => timestamp.to_string(),
+        None => {
+            return Some(Err(
+                "Failed to build failed transcription timestamp".to_string()
+            ))
+        }
+    };
 
-    store.set(&timestamp, transcription_data.clone());
+    let commit_result = match generation {
+        Some(generation) => {
+            let app_state = app.state::<AppState>();
+            persist_if_current(&app_state, generation, || {
+                store.set(&timestamp, transcription_data.clone());
+                store
+                    .save()
+                    .map_err(|e| format!("Failed to save failed transcription: {}", e))
+            })
+        }
+        None => Some({
+            store.set(&timestamp, transcription_data.clone());
+            store
+                .save()
+                .map_err(|e| format!("Failed to save failed transcription: {}", e))
+        }),
+    };
 
-    store
-        .save()
-        .map_err(|e| format!("Failed to save failed transcription: {}", e))?;
+    match commit_result {
+        None => {
+            log::info!(
+                "Skipped failed-transcription history save for stale/cancelled generation {}",
+                generation.unwrap_or_default()
+            );
+            None
+        }
+        Some(Err(e)) => Some(Err(e)),
+        Some(Ok(())) => {
+            // Emit the new transcription data to frontend
+            let _ = emit_to_window(app, "main", "transcription-added", transcription_data);
 
-    // Emit the new transcription data to frontend
-    let _ = emit_to_window(app, "main", "transcription-added", transcription_data);
+            // Refresh tray menu
+            if let Err(e) = crate::commands::settings::update_tray_menu(app.clone()).await {
+                log::warn!(
+                    "Failed to update tray menu after saving failed transcription: {}",
+                    e
+                );
+            }
 
-    // Refresh tray menu
-    if let Err(e) = crate::commands::settings::update_tray_menu(app.clone()).await {
-        log::warn!(
-            "Failed to update tray menu after saving failed transcription: {}",
-            e
-        );
+            log::info!(
+                "Saved failed transcription with recording file: {}",
+                recording_file
+            );
+            Some(Ok(()))
+        }
     }
-
-    log::info!(
-        "Saved failed transcription with recording file: {}",
-        recording_file
-    );
-    Ok(())
 }
 
 #[tauri::command]
@@ -6223,6 +6889,18 @@ pub async fn cancel_recording(app: AppHandle) -> Result<(), String> {
         if let Some(task) = task_guard.take() {
             log::info!("Aborting transcription task");
             task.abort();
+        }
+    }
+    // JoinHandle::abort preempts the task at its next await and skips the
+    // task's own remove_file cleanup, so explicitly delete the temp recording
+    // the aborted task owned. Without this the cancelled dictation's audio is
+    // left on disk. A NotFound result means the task already cleaned up.
+    if let Some(cancelled_audio) = take_in_flight_transcription_audio() {
+        log::info!("Removing transcription task's temp recording after abort");
+        if let Err(e) = std::fs::remove_file(&cancelled_audio) {
+            if e.kind() != std::io::ErrorKind::NotFound {
+                log::warn!("Failed to remove cancelled transcription audio: {}", e);
+            }
         }
     }
 

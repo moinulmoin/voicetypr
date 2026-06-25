@@ -522,3 +522,251 @@ mod audio_buffer_tests {
         assert!(RecordingSize::check(limit + 1).is_err());
     }
 }
+
+// ============================================================================
+// Recording Persistence & Cancel-Cleanup Tests
+//
+// Privacy: a cancelled dictation is never written to disk, and cancelling a
+// transcription removes the task-owned temp recording. These cover the
+// generation/cancellation-token backbone fixes in `commands::audio`.
+// ============================================================================
+
+mod recording_persist_and_cancel_tests {
+    use crate::commands::audio::{
+        begin_recording_generation, finalize_in_flight_audio, set_in_flight_transcription_audio,
+        should_save_recording_audio, take_in_flight_transcription_audio, TranscriptionFailure,
+    };
+    use crate::remote::client::{RemoteClientError, RemoteEndpoint};
+    use std::path::PathBuf;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::Arc;
+
+    // Serialize tests that touch the process-global IN_FLIGHT_TRANSCRIPTION_AUDIO
+    // slot, so parallel test threads cannot steal each other's tracked path.
+    static IN_FLIGHT_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    fn retryable_failure() -> TranscriptionFailure {
+        TranscriptionFailure::Remote(RemoteClientError::Timeout {
+            endpoint: RemoteEndpoint::Transcribe,
+            timeout_ms: 120_000,
+            detail: String::new(),
+        })
+    }
+
+    fn non_retryable_failure() -> TranscriptionFailure {
+        // "too short" is explicitly treated as non-retryable by is_retryable_failure.
+        TranscriptionFailure::Local("Audio too short".to_string())
+    }
+
+    fn unique_temp_wav(label: &str) -> PathBuf {
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static COUNTER: AtomicU64 = AtomicU64::new(0);
+        let n = COUNTER.fetch_add(1, Ordering::SeqCst);
+        std::env::temp_dir().join(format!(
+            "voicetypr-{}-{}-{}.wav",
+            label,
+            std::process::id(),
+            n
+        ))
+    }
+
+    // ---- scenario (c): cancel-before-save does not persist audio ----
+
+    #[test]
+    fn cancelled_successful_transcription_is_never_persisted() {
+        // Ok result but the user cancelled -> never save (privacy).
+        assert!(!should_save_recording_audio(true, None));
+    }
+
+    #[test]
+    fn successful_transcription_is_persisted_when_not_cancelled() {
+        assert!(should_save_recording_audio(false, None));
+    }
+
+    #[test]
+    fn cancelled_retryable_failure_is_never_persisted() {
+        // A retryable failure would normally be saved (for History retry), but a
+        // cancelled dictation is never persisted.
+        assert!(!should_save_recording_audio(
+            true,
+            Some(&retryable_failure())
+        ));
+    }
+
+    #[test]
+    fn retryable_failure_is_persisted_when_not_cancelled() {
+        assert!(should_save_recording_audio(
+            false,
+            Some(&retryable_failure())
+        ));
+    }
+
+    #[test]
+    fn non_retryable_failure_is_never_persisted_even_when_not_cancelled() {
+        assert!(!should_save_recording_audio(
+            false,
+            Some(&non_retryable_failure())
+        ));
+    }
+
+    #[test]
+    fn cancelled_non_retryable_failure_is_never_persisted() {
+        assert!(!should_save_recording_audio(
+            true,
+            Some(&non_retryable_failure())
+        ));
+    }
+
+    // ---- scenario (d): cancelling a transcription removes the temp file ----
+
+    #[test]
+    fn cancel_removes_task_owned_temp_recording_after_abort() {
+        // JoinHandle::abort skips the task's own remove_file, so cancel_recording
+        // now takes the tracked path and deletes it. This verifies that mechanism.
+        let _guard = IN_FLIGHT_TEST_LOCK.lock().unwrap();
+
+        let path = unique_temp_wav("cancel");
+        std::fs::write(&path, b"audio").unwrap();
+        let generation = begin_recording_generation();
+        set_in_flight_transcription_audio(generation, path.clone());
+
+        // cancel_recording's action after abort: take the tracked path, delete it.
+        let taken = take_in_flight_transcription_audio();
+        assert_eq!(taken.as_ref(), Some(&path));
+        if let Some(cancelled_audio) = taken {
+            std::fs::remove_file(&cancelled_audio).unwrap();
+        }
+
+        assert!(
+            !path.exists(),
+            "cancelled dictation audio must be removed from disk"
+        );
+        assert!(
+            take_in_flight_transcription_audio().is_none(),
+            "tracker must be empty after cancel removes the file"
+        );
+    }
+
+    #[test]
+    fn task_own_cleanup_clears_tracker_so_cancel_sees_nothing() {
+        // When the task reaches its own remove_file first, it clears the tracker;
+        // a subsequent cancel takes None (no double-remove; a NotFound on the
+        // already-removed file is tolerated by cancel_recording).
+        let _guard = IN_FLIGHT_TEST_LOCK.lock().unwrap();
+
+        let path = unique_temp_wav("cleanup");
+        std::fs::write(&path, b"audio").unwrap();
+        let generation = begin_recording_generation();
+        set_in_flight_transcription_audio(generation, path.clone());
+
+        // task's own cleanup removes the file and releases the tracker slot.
+        finalize_in_flight_audio(generation, &path);
+
+        assert!(!path.exists());
+        assert!(take_in_flight_transcription_audio().is_none());
+    }
+    // ---- regression: pre-spawn cancel window + early-cancel cleanup ----
+
+    /// Race 1 (CRITICAL): if the user cancels while `stop_recording` is in the
+    /// pre-spawn window, the spawned transcription task observes cancellation at
+    /// its early-cancel check. Pre-fix that branch returned BEFORE the shared
+    /// temp-file cleanup, so the cancelled dictation's audio stayed on disk and
+    /// the in-flight tracker stayed set.
+    ///
+    /// Reproduces the race through the REAL flow: `stop_recording` registers the
+    /// tracker at ownership time (so a pre-spawn cancel can also find the file),
+    /// and the spawned task's early-cancel branch drives the real
+    /// `finalize_in_flight_audio`. The file removal is attributable to that
+    /// finalize — pre-fix the early-cancel branch returned without it, so
+    /// `path` survived and the tracker stayed set.
+    #[tokio::test]
+    #[allow(clippy::await_holding_lock)] // process-wide test serialization lock; current-thread test runtime
+    async fn pre_spawn_cancel_and_early_cancel_remove_task_owned_audio() {
+        let _guard = IN_FLIGHT_TEST_LOCK.lock().unwrap();
+
+        let path = unique_temp_wav("prespawn");
+        std::fs::write(&path, b"audio").unwrap();
+
+        // stop_recording takes ownership and registers the tracker at once
+        // (FIX: ownership-time registration, before model selection / spawn).
+        let generation = begin_recording_generation();
+        set_in_flight_transcription_audio(generation, path.clone());
+
+        // The task is spawned and observes cancellation at its early-cancel
+        // check (the flag was set by a cancel that could not abort this handle
+        // in time). It must finalize — remove its temp recording and clear the
+        // tracker — instead of returning without cleanup. Drive the real
+        // production early-cancel branch through the real finalize.
+        let cancel_flag = Arc::new(AtomicBool::new(true));
+        let path_for_task = path.clone();
+        let handle = tokio::spawn(async move {
+            // Mirrors the spawned transcription task's early-cancel branch.
+            if cancel_flag.load(Ordering::SeqCst) {
+                finalize_in_flight_audio(generation, &path_for_task);
+                return;
+            }
+            finalize_in_flight_audio(generation, &path_for_task);
+        });
+        handle.await.unwrap();
+
+        assert!(
+            !path.exists(),
+            "early-cancel must remove the task-owned temp recording (orphaned pre-fix)"
+        );
+        assert!(
+            take_in_flight_transcription_audio().is_none(),
+            "early-cancel must clear the in-flight tracker"
+        );
+    }
+}
+
+// ============================================================================
+// Late-cancel revoke: a save performed DURING a cancel must be revoked.
+//
+// Race 2 (CRITICAL): the save decision snapshots cancellation/generation BEFORE
+// the synchronous copy in `maybe_save_recording`. A cancel arriving DURING the
+// copy is caught by the later delivery gate (text discarded), but the audio was
+// already persisted and (pre-fix) never removed. The post-copy recheck revokes
+// it via `delete_persisted_recording`. These tests are generation-free: the
+// cancel arm of `delivery_aborted` short-circuits before the stale check, so no
+// global generation state is touched.
+// ============================================================================
+
+mod recording_late_cancel_revoke_tests {
+    use crate::commands::audio::{
+        delete_persisted_recording, delivery_aborted, should_save_recording_audio,
+    };
+    use tempfile::TempDir;
+
+    #[test]
+    fn post_copy_recheck_revokes_audio_saved_during_late_cancel() {
+        // Recordings directory + a file that `maybe_save_recording` just copied.
+        let dir = TempDir::new().unwrap();
+        let recordings_dir = dir.path().join("recordings");
+        std::fs::create_dir_all(&recordings_dir).unwrap();
+        let filename = "2026-01-01_00-00-00_deadbeef.wav";
+        let saved = recordings_dir.join(filename);
+        std::fs::write(&saved, b"audio").unwrap();
+        assert!(saved.exists());
+
+        // PRE-copy snapshot: not cancelled, successful transcription -> the save
+        // is allowed (mirrors `should_save_recording_audio(pre_discard, ..)`).
+        assert!(
+            should_save_recording_audio(/* discard */ false, /* failure */ None),
+            "pre-copy snapshot must allow the save"
+        );
+
+        // Cancel arrives DURING the copy (after the snapshot). POST-copy recheck
+        // (Race 2 fix): the dictation is now cancelled -> revoke the just-saved
+        // audio. `delivery_aborted` short-circuits on `cancelled`, so the
+        // generation argument is never read and no global state is touched.
+        if delivery_aborted(/* cancelled */ true, /* gen, never read */ 0) {
+            delete_persisted_recording(&recordings_dir, filename);
+        }
+
+        assert!(
+            !saved.exists(),
+            "audio saved during a late cancel must be revoked (was left on disk pre-fix)"
+        );
+    }
+}

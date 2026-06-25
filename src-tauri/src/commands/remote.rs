@@ -530,15 +530,26 @@ pub async fn remove_remote_server(
         }
 
         let was_active = settings.active_connection_id.as_deref() == Some(server_id.as_str());
-        delete_connection_password(&app, &server_id)?;
         settings.remove_connection(&server_id)?;
 
         log::info!("Removed remote server: {}", server_id);
 
-        // Save settings
+        // Persist the connection removal FIRST. Only once that succeeds do we
+        // drop the secret from the secure store, so a save failure can never
+        // strand the connection without its password (unresolvable marker).
         save_remote_settings(&app, &settings)?;
         was_active
     };
+    // Settings persisted — safe to forget the secret now. A failure here only
+    // leaves an orphaned keychain entry (no connection references it), so warn
+    // rather than fail the already-completed removal.
+    if let Err(e) = delete_connection_password(&app, &server_id) {
+        log::warn!(
+            "Failed to delete remote connection password for '{}' from secure store: {}",
+            server_id,
+            e
+        );
+    }
 
     if was_active {
         return set_active_remote_server(app, None, remote_settings, server_manager).await;
@@ -624,6 +635,16 @@ pub async fn update_remote_server(
     };
 
     let preserve_password = preserve_password.unwrap_or(false);
+
+    // Snapshot the current secure-store secret so we can restore it if persisting
+    // the updated connection fails below (mirrors `start_sharing`'s rollback).
+    // Without this, a save failure would leave the persisted connection pointing
+    // at the old marker while the secret has already been replaced/removed.
+    let previous_password = if preserve_password {
+        None
+    } else {
+        get_connection_password(&app, &server_id)?
+    };
     let resolved_password = if preserve_password {
         get_connection_password(&app, &server_id)?.or(existing.password.clone())
     } else {
@@ -641,6 +662,9 @@ pub async fn update_remote_server(
     };
 
     let mut settings = remote_settings.lock().await;
+    // Snapshot in-memory state so a failed save restores it symmetrically with
+    // the keychain rollback below.
+    let settings_snapshot = settings.clone();
     let connection = apply_server_update(
         &mut settings,
         &server_id,
@@ -653,10 +677,28 @@ pub async fn update_remote_server(
 
     log::info!("Updated remote server: {}", connection.display_name());
 
-    // Save settings
-    save_remote_settings(&app, &settings)?;
-
-    Ok(connection)
+    match save_remote_settings(&app, &settings) {
+        Ok(()) => Ok(connection),
+        Err(error) => {
+            // Roll back the in-memory mutation so later reads don't observe the
+            // half-applied update.
+            *settings = settings_snapshot;
+            if !preserve_password {
+                if let Err(rollback_error) = secure_set_optional(
+                    &app,
+                    &remote_connection_password_key(&server_id),
+                    previous_password.as_deref(),
+                ) {
+                    log::warn!(
+                        "Failed to roll back remote connection password after save failure for '{}': {}",
+                        server_id,
+                        rollback_error
+                    );
+                }
+            }
+            Err(error)
+        }
+    }
 }
 
 /// List all saved remote server connections
@@ -772,8 +814,8 @@ pub async fn test_remote_server(
 }
 
 /// Check the status of a single remote server
-/// Called by frontend for each server in parallel for immediate UI updates
-#[tauri::command]
+/// Internal helper: probes a single connection and refreshes its cached status.
+/// Not a Tauri command — invoked from other remote/settings command handlers.
 pub(crate) async fn refresh_saved_connection_status(
     app: &AppHandle,
     server_id: &str,

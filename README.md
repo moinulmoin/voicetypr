@@ -26,7 +26,7 @@ Voicetypr is an open source AI voice-to-text dictation tool, alternative to Wisp
 - Works in any app - cursor, claude code, chatgpt, slack, etc
 
 ### 🤖 **Powered by local AI**
-- 100% offline transcription - your voice never leaves your device
+- Local transcription by default — your raw audio stays on your machine
 - Multiple model sizes for accuracy vs speed tradeoffs
 - Support for 99+ languages out of the box
 - Hardware acceleration (Metal on macOS)
@@ -37,8 +37,8 @@ Voicetypr is an open source AI voice-to-text dictation tool, alternative to Wisp
 - Minimal resource usage with maximum efficiency
 
 ### 🔒 **Privacy First**
-- Complete offline operation - no cloud, no tracking (only trial check)
-- Your recordings stay on your device
+- Transcription runs locally by default; cloud speech-to-text only when you select a cloud provider. Telemetry is opt-in and off by default; only a license/trial check phones home
+- Recordings stay on your device with local transcription; if you choose a cloud provider, that audio is sent to it for transcription
 - Open source for full transparency
 
 ### 🤖 **AI Enhancement** (NEW)

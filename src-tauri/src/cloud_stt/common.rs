@@ -64,9 +64,38 @@ pub(crate) fn is_transient(err: &SttError) -> bool {
     )
 }
 
-pub(super) fn http_client() -> reqwest::Client {
+/// Total deadline for a single cloud STT **transcription/upload/poll** request.
+///
+/// This MUST be at least as large as the largest deadline a caller hands a
+/// cloud request, so that the caller's shared deadline — never reqwest — is
+/// what bounds a legitimately long upload. The transcription executor wraps
+/// cloud calls in `tokio::time::timeout` using a watchdog budget clamped to
+/// 30 min (`transcription_watchdog_budget`, MAX_SECONDS = 30 * 60). The
+/// previous hard-coded 120 s cap fired *before* that budget for every request
+/// (the floor is 180 s), dropping valid long-file jobs as `SttError::Timeout`.
+/// Matching the 30 min ceiling makes the executor/poll budget the binding
+/// deadline while still bounding a request that connects but never responds
+/// for the direct (non-executor) upload callers and each individual Soniox
+/// poll request.
+///
+/// Only transcription traffic uses this; validation uses the much shorter
+/// [`VALIDATE_TIMEOUT`] — see [`build_client`].
+const REQUEST_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30 * 60);
+
+/// Short, interactive deadline for an API-key **validation** GET.
+///
+/// Validation hits a tiny authenticated listing endpoint that answers in well
+/// under a second. A connected-but-unresponsive endpoint must fail fast rather
+/// than pin the validation command for the transcription budget: `get_validate`
+/// retries a transient timeout once via `with_retry`, so the shared 30-min
+/// client would have held a hung endpoint for ~1 hour. This stays far below
+/// [`REQUEST_TIMEOUT`] so that risk cannot occur on the validation path.
+const VALIDATE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+
+/// Build an HTTPS-only reqwest client with the given per-request deadline.
+fn build_client(timeout: std::time::Duration) -> reqwest::Client {
     let builder = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(120))
+        .timeout(timeout)
         .connect_timeout(std::time::Duration::from_secs(15));
     // Cloud STT sends an API key (Authorization header) and the raw audio in
     // the request body, so the client must never speak plaintext HTTP. Force
@@ -77,6 +106,35 @@ pub(super) fn http_client() -> reqwest::Client {
     #[cfg(not(test))]
     let builder = builder.https_only(true);
     builder.build().unwrap_or_else(|_| reqwest::Client::new())
+}
+
+pub(super) fn http_client() -> reqwest::Client {
+    build_client(REQUEST_TIMEOUT)
+}
+
+/// The per-request deadline applied to **validation** traffic. Production uses
+/// [`VALIDATE_TIMEOUT`]; tests may shrink it via
+/// [`set_validate_timeout_override`] so the behavioral timeout regression test
+/// runs in milliseconds instead of waiting on the full 30 s.
+fn validate_request_timeout() -> std::time::Duration {
+    #[cfg(test)]
+    {
+        if let Some(ms) = VALIDATE_TIMEOUT_OVERRIDE.with(|c| c.get()) {
+            return std::time::Duration::from_millis(ms);
+        }
+    }
+    VALIDATE_TIMEOUT
+}
+
+// Test seam: shrink the validation request deadline (millisecond precision).
+#[cfg(test)]
+thread_local! {
+    static VALIDATE_TIMEOUT_OVERRIDE: std::cell::Cell<Option<u64>> = const { std::cell::Cell::new(None) };
+}
+
+#[cfg(test)]
+fn set_validate_timeout_override(ms: Option<u64>) {
+    VALIDATE_TIMEOUT_OVERRIDE.with(|c| c.set(ms));
 }
 
 pub(super) async fn with_retry<T, F, Fut>(mut op: F) -> Result<T, SttError>
@@ -124,7 +182,7 @@ pub(super) async fn get_validate(
     key: &str,
     provider_name: &str,
 ) -> Result<(), SttError> {
-    let client = http_client();
+    let client = build_client(validate_request_timeout());
     with_retry(|| {
         let client = client.clone();
         async move {
@@ -255,6 +313,7 @@ mod tests {
     use std::io::Write;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::Arc;
+    use std::time::{Duration, Instant};
     use tempfile::NamedTempFile;
     use wiremock::matchers::{header, method, path};
     use wiremock::{Mock, MockServer, Request, ResponseTemplate};
@@ -620,6 +679,73 @@ mod tests {
         .unwrap_err();
 
         assert!(matches!(error, SttError::Server));
+        assert_eq!(server.received_requests().await.unwrap().len(), 2);
+    }
+    #[test]
+    fn http_request_timeout_never_preempts_executor_budget() {
+        // The executor clamps its cloud watchdog budget to [180s, 30 min] via
+        // transcription_watchdog_budget. The HTTP client's total request
+        // timeout must be >= that ceiling so a legitimately long upload is
+        // bounded by the executor's shared deadline — never killed early by
+        // reqwest (the previous 120s cap dropped long jobs as SttError::Timeout
+        // before the budget elapsed).
+        let max_budget = crate::commands::audio::transcription_watchdog_budget(Some(u64::MAX));
+        assert!(
+            super::REQUEST_TIMEOUT >= max_budget,
+            "HTTP request timeout ({:?}) must be >= the max executor budget ({max_budget:?})",
+            super::REQUEST_TIMEOUT
+        );
+        // And it must remain a real, generous finite deadline for direct callers.
+        assert!(super::REQUEST_TIMEOUT.as_secs() >= 30 * 60);
+    }
+
+    #[tokio::test]
+    async fn get_validate_bounded_by_short_deadline_not_transcription_budget() {
+        // Regression: validation used the shared 30-min transcription client,
+        // so a connected-but-unresponsive validation endpoint held the
+        // validation command for ~1 h (`with_retry` doubles the budget on the
+        // transient Timeout). Validation must now use a short, interactive
+        // deadline.
+        //
+        // We shrink that deadline via the test seam and point get_validate at a
+        // server that accepts the connection but delays its answer far past the
+        // deadline. The call must surface SttError::Timeout well within the
+        // transcription budget. If get_validate were reverted to http_client()
+        // (30-min client) this would hang until the 5 s outer timeout fails the
+        // test — so this genuinely guards the fix.
+        super::set_validate_timeout_override(Some(500));
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/models"))
+            .respond_with(ResponseTemplate::new(200).set_delay(Duration::from_secs(3)))
+            .expect(2) // a transient Timeout is retried once
+            .mount(&server)
+            .await;
+
+        let start = Instant::now();
+        let outcome = tokio::time::timeout(
+            Duration::from_secs(5),
+            get_validate(
+                &format!("{}/models", server.uri()),
+                AuthScheme::Bearer,
+                "k",
+                "Groq",
+            ),
+        )
+        .await;
+        super::set_validate_timeout_override(None);
+
+        let elapsed = start.elapsed();
+        let err = outcome
+            .expect("validation must return under the short deadline, not hang")
+            .unwrap_err();
+        assert!(matches!(err, SttError::Timeout), "got {err:?}");
+        // Two attempts (500 ms deadline each) plus a 400 ms backoff land far
+        // below the 30-min transcription budget.
+        assert!(
+            elapsed < Duration::from_secs(5),
+            "validation took {elapsed:?}; the short deadline is not in effect"
+        );
         assert_eq!(server.received_requests().await.unwrap().len(), 2);
     }
 }

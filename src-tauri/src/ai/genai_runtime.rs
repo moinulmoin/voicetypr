@@ -2,7 +2,7 @@ use super::contract::AiPolishRequest;
 use super::error::{map_genai_error, AiProviderError, MappedAiProviderError};
 use crate::ai::catalog;
 use genai::adapter::AdapterKind;
-use genai::chat::ChatRequest;
+use genai::chat::{ChatOptions, ChatRequest, ReasoningEffort};
 use genai::resolver::{AuthData, Endpoint};
 use genai::{Client, ClientBuilder, ModelIden, ServiceTarget};
 use std::collections::HashMap;
@@ -50,9 +50,25 @@ impl GenaiRuntime {
         let chat_request =
             ChatRequest::from_user(request.input_text.clone()).with_system(request.prompt.clone());
 
+        // Inline formatting is latency- and cost-sensitive, so for reasoning-capable
+        // models we ask for the cheapest reasoning effort the provider allows. Each
+        // native adapter translates `ReasoningEffort::Minimal` into its own low knob:
+        //   - OpenAI (gpt-5):  request body `reasoning_effort: "minimal"`
+        //   - Gemini (2.5):    `thinkingConfig.thinkingBudget = 1000` (LOW; the genai
+        //                      crate maps Minimal->LOW since a zero budget is rejected
+        //                      by 2.5 Pro)
+        //   - Anthropic (4.x): adaptive thinking, effort "low" / 1024 budget tokens
+        // Non-reasoning models are left with `None` so we never attach a reasoning
+        // parameter a provider would reject (e.g. gpt-4o, gemini-2.0-flash).
+        let chat_options = if model_supports_reasoning(&request.provider_id, &request.model_id) {
+            Some(ChatOptions::default().with_reasoning_effort(ReasoningEffort::Minimal))
+        } else {
+            None
+        };
+
         let response = self
             .client
-            .exec_chat(model, chat_request, None)
+            .exec_chat(model, chat_request, chat_options.as_ref())
             .await
             .map_err(|error| map_genai_error(&error))?;
 
@@ -86,6 +102,15 @@ fn namespaced_model(provider_id: &str, model_id: &str) -> String {
         Some(namespace) => format!("{namespace}{model_id}"),
         None => model_id.to_string(),
     }
+}
+
+/// Whether the embedded catalog flags `(provider_id, model_id)` as a reasoning
+/// model. Unknown providers/models resolve to `false` so a reasoning effort is
+/// only ever attached to calls that can accept it.
+fn model_supports_reasoning(provider_id: &str, model_id: &str) -> bool {
+    catalog::all_provider_models(provider_id)
+        .into_iter()
+        .any(|model| model.model_id == model_id && model.reasoning)
 }
 
 fn ensure_trailing_slash(base_url: &str) -> String {
@@ -134,5 +159,21 @@ mod tests {
         assert_eq!(supports("openai"), Some(true));
         assert_eq!(supports("anthropic"), Some(true));
         assert_eq!(supports("gemini"), Some(true));
+    }
+
+    #[test]
+    fn reasoning_effort_targets_only_reasoning_models() {
+        // Recommended reasoning models should be gated in for minimal effort.
+        assert!(model_supports_reasoning("openai", "gpt-5-mini"));
+        assert!(model_supports_reasoning("gemini", "gemini-2.5-flash"));
+        assert!(model_supports_reasoning("anthropic", "claude-haiku-4-5"));
+
+        // Non-reasoning models must be excluded so no reasoning param is sent.
+        assert!(!model_supports_reasoning("openai", "gpt-4o"));
+        assert!(!model_supports_reasoning("gemini", "gemini-2.0-flash"));
+
+        // Unknown provider/model resolves to false (safe default).
+        assert!(!model_supports_reasoning("openai", "does-not-exist"));
+        assert!(!model_supports_reasoning("custom", "anything"));
     }
 }

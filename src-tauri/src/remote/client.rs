@@ -9,7 +9,15 @@ use serde::{Deserialize, Serialize};
 use std::fmt;
 use std::time::Duration;
 
+use futures_util::StreamExt;
 use reqwest::StatusCode;
+use sha2::{Digest, Sha256};
+
+/// Upper bound (in bytes) on how much of a `/api/v1/transcribe` response the
+/// client buffers into memory before parsing. A real reply is JSON and is many
+/// orders of magnitude smaller; this is purely a guard against a hostile or
+/// buggy LAN server memory-bombing the client.
+const MAX_TRANSCRIBE_RESPONSE_BYTES: u64 = 50 * 1024 * 1024;
 
 /// Source of audio for transcription (affects timeout calculation)
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -256,6 +264,27 @@ fn lossy_body(bytes: &[u8]) -> String {
     String::from_utf8_lossy(bytes).into_owned()
 }
 
+/// Produce a **non-sensitive** diagnostic marker for a server response body.
+///
+/// `ResponseSchema`/`ResponseDecode` failures can carry the full transcription
+/// reply (dictated text) in `body`; surfacing that via `server_error_body()`
+/// would leak it into logs and failed-transcription history. Instead we keep
+/// only the byte length (a size signal) and a truncated SHA-256 digest (a
+/// stable correlation fingerprint) so two identical bad responses still match
+/// while the raw content never leaves this function. The raw `lossy_body` path
+/// is retained for non-content error bodies (`AuthFailed`, `HttpStatus`) which
+/// carry only the server's own error/auth message, never transcript text.
+fn redact_body(bytes: &[u8]) -> String {
+    // Full 64-char digest, truncated to 16 hex chars (8 bytes / 64 bits) below —
+    // enough to correlate identical bad responses without revealing content.
+    let fingerprint = hex::encode(Sha256::digest(bytes));
+    format!(
+        "<redacted {} bytes; sha256/{}>",
+        bytes.len(),
+        &fingerprint[..16]
+    )
+}
+
 fn classify_reqwest_error(
     endpoint: RemoteEndpoint,
     error: reqwest::Error,
@@ -275,6 +304,51 @@ fn classify_reqwest_error(
     }
 }
 
+/// Buffer a remote response body, rejecting anything larger than `max_bytes`
+/// before it can exhaust client memory.
+///
+/// A `Content-Length` header advertising more than the cap is rejected up front,
+/// before any bytes are read. A body that streams past the cap anyway (chunked
+/// transfer with no `Content-Length`, or a lying header) is rejected as soon as
+/// the limit is crossed. This guards a hostile or buggy LAN server from
+/// memory-bombing the client via an oversized `/api/v1/transcribe` reply.
+async fn read_capped_bytes(
+    response: reqwest::Response,
+    endpoint: RemoteEndpoint,
+    max_bytes: u64,
+    timeout_ms: u64,
+) -> Result<Vec<u8>, RemoteClientError> {
+    if let Some(content_length) = response.content_length() {
+        if content_length > max_bytes {
+            return Err(RemoteClientError::HttpStatus {
+                endpoint,
+                status: StatusCode::PAYLOAD_TOO_LARGE,
+                body: Some(format!(
+                    "remote response exceeds {max_bytes} bytes (Content-Length: {content_length})"
+                )),
+            });
+        }
+    }
+
+    let mut stream = response.bytes_stream();
+    let mut buf: Vec<u8> = Vec::new();
+    while let Some(chunk) = stream.next().await {
+        let chunk = chunk.map_err(|e| classify_reqwest_error(endpoint, e, timeout_ms))?;
+        buf.extend_from_slice(&chunk);
+        if buf.len() as u64 > max_bytes {
+            return Err(RemoteClientError::HttpStatus {
+                endpoint,
+                status: StatusCode::PAYLOAD_TOO_LARGE,
+                body: Some(format!(
+                    "remote response exceeded {max_bytes} bytes while streaming"
+                )),
+            });
+        }
+    }
+
+    Ok(buf)
+}
+
 fn parse_json_value<T>(endpoint: RemoteEndpoint, body: &[u8]) -> Result<T, RemoteClientError>
 where
     T: serde::de::DeserializeOwned,
@@ -283,13 +357,13 @@ where
         serde_json::from_slice(body).map_err(|e| RemoteClientError::ResponseDecode {
             endpoint,
             detail: e.to_string(),
-            body: Some(lossy_body(body)),
+            body: Some(redact_body(body)),
         })?;
 
     serde_json::from_value(value).map_err(|e| RemoteClientError::ResponseSchema {
         endpoint,
         detail: e.to_string(),
-        body: Some(lossy_body(body)),
+        body: Some(redact_body(body)),
     })
 }
 
@@ -546,10 +620,13 @@ pub async fn transcribe_audio(
         .await
         .map_err(|e| classify_reqwest_error(endpoint, e, timeout_ms))?;
     let status = response.status();
-    let body = response
-        .bytes()
-        .await
-        .map_err(|e| classify_reqwest_error(endpoint, e, timeout_ms))?;
+    let body = read_capped_bytes(
+        response,
+        endpoint,
+        MAX_TRANSCRIBE_RESPONSE_BYTES,
+        timeout_ms,
+    )
+    .await?;
 
     if status == StatusCode::UNAUTHORIZED {
         return Err(RemoteClientError::AuthFailed {
@@ -624,5 +701,117 @@ mod tests {
             request.transcription_task.as_deref(),
             Some("translate_to_english")
         );
+    }
+
+    #[test]
+    fn redact_body_never_exposes_raw_content() {
+        let secret = "super secret dictated transcript";
+        let marker = redact_body(secret.as_bytes());
+
+        assert!(
+            !marker.contains(secret),
+            "raw content leaked into marker: {marker}"
+        );
+        assert!(
+            marker.contains(&secret.len().to_string()),
+            "byte length missing: {marker}"
+        );
+        assert!(
+            marker.contains("sha256/"),
+            "hash fingerprint missing: {marker}"
+        );
+        // Deterministic for identical input.
+        assert_eq!(redact_body(secret.as_bytes()), marker);
+        // Distinct content yields a distinct fingerprint.
+        assert_ne!(redact_body(b"totally different content"), marker);
+    }
+
+    #[test]
+    fn parse_json_value_redacts_response_schema_body() {
+        // Valid JSON that does NOT match the expected schema: the server returned
+        // a transcription-shaped body we cannot deserialize. Previously the whole
+        // body (which may hold dictated text) was captured verbatim into the
+        // error and leaked via server_error_body(); it must now be redacted.
+        #[derive(Debug, serde::Deserialize)]
+        #[allow(dead_code)]
+        struct TranscribeShape {
+            text: String,
+        }
+
+        let secret = "the quick brown fox";
+        let body = format!(r#"{{"not_text":"{secret}"}}"#); // valid JSON, missing `text`
+        let err = parse_json_value::<TranscribeShape>(RemoteEndpoint::Transcribe, body.as_bytes())
+            .expect_err("schema mismatch should error");
+
+        let leaked = err.server_error_body().unwrap_or_default();
+        assert!(!leaked.contains(secret), "raw transcript leaked: {leaked}");
+        assert!(
+            leaked.starts_with("<redacted"),
+            "expected redacted marker: {leaked}"
+        );
+    }
+
+    #[test]
+    fn parse_json_value_redacts_response_decode_body() {
+        let secret = "not-valid-json-body-with-credentials";
+        let err =
+            parse_json_value::<serde_json::Value>(RemoteEndpoint::Transcribe, secret.as_bytes())
+                .expect_err("invalid JSON should error");
+
+        let leaked = err.server_error_body().unwrap_or_default();
+        assert!(!leaked.contains(secret), "raw body leaked: {leaked}");
+        assert!(
+            leaked.starts_with("<redacted"),
+            "expected redacted marker: {leaked}"
+        );
+    }
+
+    #[tokio::test]
+    async fn read_capped_bytes_rejects_response_above_limit() {
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/api/v1/transcribe"))
+            .respond_with(ResponseTemplate::new(200).set_body_bytes(vec![b'x'; 64]))
+            .mount(&server)
+            .await;
+
+        let response = reqwest::Client::new()
+            .post(format!("{}/api/v1/transcribe", server.uri()))
+            .send()
+            .await
+            .expect("mock request should succeed");
+
+        let err = read_capped_bytes(response, RemoteEndpoint::Transcribe, 8, 1_000)
+            .await
+            .expect_err("oversized response must be rejected before buffering");
+        assert_eq!(err.status_code(), Some(StatusCode::PAYLOAD_TOO_LARGE));
+    }
+
+    #[tokio::test]
+    async fn read_capped_bytes_returns_body_within_limit() {
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let payload = br#"{"text":"hello"}"#.to_vec();
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/api/v1/transcribe"))
+            .respond_with(ResponseTemplate::new(200).set_body_bytes(payload.clone()))
+            .mount(&server)
+            .await;
+
+        let response = reqwest::Client::new()
+            .post(format!("{}/api/v1/transcribe", server.uri()))
+            .send()
+            .await
+            .expect("mock request should succeed");
+
+        let body = read_capped_bytes(response, RemoteEndpoint::Transcribe, 1024, 1_000)
+            .await
+            .expect("body within cap should be returned");
+        assert_eq!(body, payload);
     }
 }

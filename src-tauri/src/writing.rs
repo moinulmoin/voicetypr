@@ -467,8 +467,7 @@ async fn load_writing_profile(
 ) -> Result<WritingProfile, String> {
     let options =
         crate::commands::ai::get_enhancement_options_for_ai_enabled(app.clone(), ai_enabled)
-            .await
-            .unwrap_or_default();
+            .await?;
     let store = app.store("settings").map_err(|e| e.to_string())?;
     let legacy_translate_to_english = store
         .get("translate_to_english")
@@ -1818,9 +1817,16 @@ fn record_output_language_transform_fallback(
         message,
     });
 
-    if let Some(language) = transcript_language {
-        *output_language = language.to_string();
-    }
+    // The text was NOT transformed, so the output stays in the transcript's own
+    // language — never the requested target. When the transcript language is
+    // known, report it; when the source language is unknown (engine omitted
+    // it, remote STT, pre-detection models), fall back to the "same as
+    // transcript" sentinel rather than falsely reporting a target language the
+    // transform never produced.
+    *output_language = match transcript_language {
+        Some(language) => language.to_string(),
+        None => FINAL_TEXT_LANGUAGE_SAME_AS_TRANSCRIPT.to_string(),
+    };
 }
 
 fn smart_formatting_ai_context(
@@ -2388,6 +2394,31 @@ mod tests {
         assert_eq!(output_language, "es");
         assert_eq!(warnings.len(), 1);
         assert_eq!(warnings[0].code, "output_language_transform_failed");
+    }
+
+    #[test]
+    fn test_output_language_transform_fallback_unknown_transcript_language() {
+        // Providers that omit transcript language still set an explicit target,
+        // so `needs_output_language_transform` is true. When the transform does
+        // not happen (AI returned unchanged text, or a snippet was preserved
+        // literally) the requested target must NOT be reported: the output is
+        // still in the (unknown) transcript language, represented by the
+        // "same as transcript" sentinel. Regression for history/CLI reporting
+        // the wrong language.
+        let mut warnings = Vec::new();
+        let mut output_language = "fr".to_string();
+
+        record_output_language_transform_fallback(
+            &mut warnings,
+            &mut output_language,
+            None,
+            "snippet_literal_preserved",
+            "Snippet preserved literally; output language was not transformed".to_string(),
+        );
+
+        assert_eq!(output_language, FINAL_TEXT_LANGUAGE_SAME_AS_TRANSCRIPT);
+        assert_eq!(warnings.len(), 1);
+        assert_eq!(warnings[0].code, "snippet_literal_preserved");
     }
 
     #[test]

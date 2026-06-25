@@ -28,6 +28,30 @@ impl RecordingSize {
 }
 const WRITER_QUEUE_CAPACITY: usize = 1024; // Bounded memory; multi-second disk-stall slack.
 
+// Minimum capacity (in i16 samples) of each recycled chunk and each scratch
+// conversion buffer. Real audio devices never deliver per-callback buffers this
+// large, so this floor guarantees a reused buffer can swallow any realistic
+// callback payload without growing — growing would allocate on the real-time
+// audio thread and glitch the capture.
+const CHUNK_CAPACITY_MIN: usize = 8192;
+// Fallback per-callback frame bound used when a host reports no buffer-size
+// range for its default input config (some ALSA/OSS setups). 8192 frames
+// comfortably exceeds the largest buffer real input devices expose.
+const CHUNK_FALLBACK_FRAMES: usize = 8192;
+// Buffers preallocated beyond the writer-queue depth so one is always free while
+// another is being written and a third is being assembled in the callback. By
+// conservation this guarantees the recycle channel is never empty during capture:
+// the RT callback only ever reuses a buffer — it never allocates (plan 008).
+const CHUNK_POOL_SLACK: usize = 4;
+// Capacity of the recycle (free-pool) channel. It must hold the ENTIRE
+// preallocated pool so returning a buffer never blocks and never heap-allocates:
+// a bounded `sync_channel` is backed by a fixed ring buffer (no per-send node,
+// unlike an unbounded `channel`), keeping the RT callback's queue-full drop path
+// alloc-free. By conservation the channel can never contain more than
+// `WRITER_QUEUE_CAPACITY + CHUNK_POOL_SLACK` buffers at once, so this exact bound
+// makes `try_send` on the real-time thread always succeed without blocking.
+const RECYCLE_CHANNEL_CAPACITY: usize = WRITER_QUEUE_CAPACITY + CHUNK_POOL_SLACK;
+
 enum WriterMsg {
     Chunk(Vec<i16>),
     Finalize,
@@ -48,6 +72,40 @@ fn u16_to_f32(sample: u16) -> f32 {
 
 fn u16_to_i16(sample: u16) -> i16 {
     (sample as i32 - 32768) as i16
+}
+
+/// Largest callback payload (in i16 samples) a CPAL input stream built from
+/// `config` could ever deliver on the real-time thread.
+///
+/// CPAL always delivers exactly one buffer per callback, and the host can only
+/// pick a frame count inside the device's supported buffer-size range, so the
+/// range maximum (times the channel count) bounds every callback's sample count.
+/// Sizing every preallocated chunk — and the scratch conversion buffers — to this
+/// bound means `extend_from_slice` on the real-time thread never reallocates.
+fn max_callback_samples(device: &cpal::Device, config: &cpal::SupportedStreamConfig) -> usize {
+    let channels = config.channels() as usize;
+    let format = config.sample_format();
+    let max_frames = device
+        .supported_input_configs()
+        .ok()
+        .into_iter()
+        .flatten()
+        .filter(|c| c.channels() == config.channels() && c.sample_format() == format)
+        .filter_map(|c| match c.buffer_size() {
+            cpal::SupportedBufferSize::Range { max, .. } => Some(*max as usize),
+            cpal::SupportedBufferSize::Unknown => None,
+        })
+        .max()
+        .unwrap_or(CHUNK_FALLBACK_FRAMES);
+    chunk_capacity_for(max_frames, channels)
+}
+
+/// Pure core of [`max_callback_samples`]: the capacity (in i16 samples) needed so
+/// a reused buffer never grows for a callback delivering `max_frames` frames
+/// across `channels`. Floored at [`CHUNK_CAPACITY_MIN`] so a device that
+/// under-reports its range still leaves headroom.
+fn chunk_capacity_for(max_frames: usize, channels: usize) -> usize {
+    max_frames.saturating_mul(channels).max(CHUNK_CAPACITY_MIN)
 }
 
 pub struct AudioRecorder {
@@ -182,6 +240,11 @@ impl AudioRecorder {
                 config.sample_format()
             );
 
+            // Derive the largest callback payload (in i16 samples) this stream can
+            // ever deliver, so every preallocated chunk and scratch conversion
+            // buffer is sized to hold it without growing on the real-time thread.
+            let chunk_capacity = max_callback_samples(&device, &config);
+
             // Initialize silence detector and level meter
             let silence_detector = Arc::new(Mutex::new(SilenceDetector::new()));
             let level_meter = Arc::new(Mutex::new(
@@ -204,8 +267,17 @@ impl AudioRecorder {
             let writer = hound::WavWriter::create(&output_path, spec).map_err(|e| e.to_string())?;
 
             let (writer_tx, writer_rx) = mpsc::sync_channel::<WriterMsg>(WRITER_QUEUE_CAPACITY);
-            let (recycle_tx, recycle_rx) = mpsc::channel::<Vec<i16>>();
+            // Bounded so returning a buffer is alloc-free (fixed ring buffer; no
+            // per-send heap node like an unbounded channel) and, by conservation
+            // (see RECYCLE_CHANNEL_CAPACITY), never blocks the real-time thread.
+            let (recycle_tx, recycle_rx) = mpsc::sync_channel::<Vec<i16>>(RECYCLE_CHANNEL_CAPACITY);
             let recycle_tx_for_drop = recycle_tx.clone();
+            // Preallocate the chunk pool BEFORE the stream starts so the
+            // real-time audio callback reuses existing buffers and never
+            // allocates on the audio thread (plan 008: lock-free, no-alloc path).
+            for _ in 0..(WRITER_QUEUE_CAPACITY + CHUNK_POOL_SLACK) {
+                let _ = recycle_tx.send(Vec::with_capacity(chunk_capacity));
+            }
             let bytes_written = Arc::new(AtomicU64::new(0));
             let dropped_chunks = Arc::new(AtomicU64::new(0));
             let writer_bytes = bytes_written.clone();
@@ -303,20 +375,24 @@ impl AudioRecorder {
                     if stop_requested_clone.load(Ordering::SeqCst) {
                         // Only write on the first callback after stop; skip all subsequent ones
                         if !callback_drained_clone.load(Ordering::SeqCst) {
-                            let mut chunk = recycle_rx
-                                .try_recv()
-                                .unwrap_or_else(|_| Vec::with_capacity(4096));
-                            chunk.clear();
-                            chunk.extend_from_slice(i16_samples);
-                            match writer_tx_clone.try_send(WriterMsg::Chunk(chunk)) {
-                                Ok(()) => {}
-                                Err(TrySendError::Full(WriterMsg::Chunk(mut chunk))) => {
-                                    dropped_chunks_clone.fetch_add(1, Ordering::SeqCst);
-                                    chunk.clear();
-                                    let _ = recycle_tx_for_drop.send(chunk);
+                            if let Ok(mut chunk) = recycle_rx.try_recv() {
+                                chunk.clear();
+                                chunk.extend_from_slice(i16_samples);
+                                match writer_tx_clone.try_send(WriterMsg::Chunk(chunk)) {
+                                    Ok(()) => {}
+                                    Err(TrySendError::Full(WriterMsg::Chunk(mut chunk))) => {
+                                        dropped_chunks_clone.fetch_add(1, Ordering::SeqCst);
+                                        chunk.clear();
+                                        // try_send: never blocks or allocates
+                                        // on the RT thread. By conservation
+                                        // (RECYCLE_CHANNEL_CAPACITY) the channel
+                                        // always has room; on the impossible
+                                        // full case the chunk is simply dropped.
+                                        let _ = recycle_tx_for_drop.try_send(chunk);
+                                    }
+                                    Err(TrySendError::Full(WriterMsg::Finalize)) => {}
+                                    Err(TrySendError::Disconnected(_)) => {}
                                 }
-                                Err(TrySendError::Full(WriterMsg::Finalize)) => {}
-                                Err(TrySendError::Disconnected(_)) => {}
                             }
                             callback_drained_clone.store(true, Ordering::SeqCst);
                         }
@@ -338,9 +414,13 @@ impl AudioRecorder {
                         }
                     }
 
-                    let mut chunk = recycle_rx
-                        .try_recv()
-                        .unwrap_or_else(|_| Vec::with_capacity(4096));
+                    let Ok(mut chunk) = recycle_rx.try_recv() else {
+                        // Pool exhausted (all buffers in flight under extreme
+                        // backpressure): drop this chunk rather than allocate on
+                        // the RT thread (consistent with the queue-full drop path).
+                        dropped_chunks_clone.fetch_add(1, Ordering::SeqCst);
+                        return;
+                    };
                     chunk.clear();
                     chunk.extend_from_slice(i16_samples);
 
@@ -349,7 +429,11 @@ impl AudioRecorder {
                         Err(TrySendError::Full(WriterMsg::Chunk(mut chunk))) => {
                             dropped_chunks_clone.fetch_add(1, Ordering::SeqCst);
                             chunk.clear();
-                            let _ = recycle_tx_for_drop.send(chunk);
+                            // try_send: never blocks or allocates on the RT
+                            // thread. By conservation (RECYCLE_CHANNEL_CAPACITY)
+                            // the channel always has room; on the impossible
+                            // full case the chunk is simply dropped.
+                            let _ = recycle_tx_for_drop.try_send(chunk);
                         }
                         Err(TrySendError::Full(WriterMsg::Finalize)) => {}
                         Err(TrySendError::Disconnected(_)) => {}
@@ -360,7 +444,7 @@ impl AudioRecorder {
             let stream = match config.sample_format() {
                 cpal::SampleFormat::F32 => {
                     let process_audio = process_audio;
-                    let mut i16_scratch: Vec<i16> = Vec::with_capacity(4096);
+                    let mut i16_scratch: Vec<i16> = Vec::with_capacity(chunk_capacity);
                     device
                         .build_input_stream(
                             &config.config(),
@@ -379,7 +463,7 @@ impl AudioRecorder {
                 }
                 cpal::SampleFormat::I16 => {
                     let process_audio = process_audio;
-                    let mut f32_scratch: Vec<f32> = Vec::with_capacity(4096);
+                    let mut f32_scratch: Vec<f32> = Vec::with_capacity(chunk_capacity);
                     device
                         .build_input_stream(
                             &config.config(),
@@ -398,8 +482,8 @@ impl AudioRecorder {
                 }
                 cpal::SampleFormat::U16 => {
                     let process_audio = process_audio;
-                    let mut f32_scratch: Vec<f32> = Vec::with_capacity(4096);
-                    let mut i16_scratch: Vec<i16> = Vec::with_capacity(4096);
+                    let mut f32_scratch: Vec<f32> = Vec::with_capacity(chunk_capacity);
+                    let mut i16_scratch: Vec<i16> = Vec::with_capacity(chunk_capacity);
                     device
                         .build_input_stream(
                             &config.config(),
@@ -702,6 +786,90 @@ mod tests {
 
         // Zero bytes is fine
         assert!(RecordingSize::check(0).is_ok());
+    }
+    #[test]
+    fn chunk_pool_depth_covers_max_inflight_buffers() {
+        // Invariant for the no-alloc RT audio callback (plan 008): the
+        // preallocated pool must hold more buffers than can ever be in flight at
+        // once. At most WRITER_QUEUE_CAPACITY sit in the bounded writer queue, one
+        // is mid-write in the writer thread, and one is being assembled in the
+        // callback — so the slack must cover those two extra slots. By conservation
+        // this guarantees the recycle channel is never empty during capture, so the
+        // callback only ever reuses a buffer and never allocates on the audio thread.
+        const _: () = assert!(
+            CHUNK_POOL_SLACK >= 2,
+            "pool slack must cover the writer-in-progress + callback-in-progress buffers"
+        );
+    }
+
+    #[test]
+    fn chunk_capacity_covers_any_realistic_callback_without_growing() {
+        // Reproduces the real-time allocation bug: a recycled chunk preallocated
+        // to a FIXED capacity smaller than a real callback forces
+        // `extend_from_slice` to reallocate on the audio thread. The pre-fix code
+        // used a hard-coded 4096-sample capacity, which a 4096-frame * 2-channel
+        // callback (8192 samples) already exceeds. The capacity must always be
+        // >= the full callback payload (max_frames * channels).
+        for &(frames, channels) in &[
+            (512usize, 2usize),
+            (1024, 2),
+            (2048, 2),
+            (4096, 2),
+            (8192, 1),
+            (8192, 2),
+        ] {
+            let payload = frames * channels;
+            let cap = chunk_capacity_for(frames, channels);
+            assert!(
+                cap >= payload,
+                "frames={frames} channels={channels}: chunk capacity {cap} < callback payload \
+                 {payload}; the RT thread would reallocate on extend_from_slice"
+            );
+        }
+    }
+
+    #[test]
+    fn chunk_capacity_floored_above_underreported_ranges() {
+        // A device that under-reports its buffer range must still leave headroom
+        // so a reused buffer never grows. The pre-fix 4096-capacity chunks
+        // violated this for any callback larger than 4096 samples.
+        assert!(chunk_capacity_for(64, 1) >= CHUNK_CAPACITY_MIN);
+        assert!(chunk_capacity_for(64, 1) > 4096);
+    }
+
+    #[test]
+    fn recycle_channel_is_bounded_so_rt_return_is_alloc_free() {
+        // Reproduces the recycle-path allocation bug: the queue-full drop branch
+        // returns a chunk through the recycle channel ON the real-time thread. An
+        // UNBOUNDED mpsc::channel heap-allocates a node per send — an allocation
+        // on the RT thread. A bounded sync_channel is backed by a fixed ring
+        // buffer (no per-send allocation) and, by conservation, never fills, so
+        // the RT try_send always succeeds without allocating or blocking.
+
+        // The conservation invariant: the channel bound must equal the whole
+        // preallocated pool depth, so returning a buffer always has room.
+        assert_eq!(
+            RECYCLE_CHANNEL_CAPACITY,
+            WRITER_QUEUE_CAPACITY + CHUNK_POOL_SLACK
+        );
+
+        // The entire pool must fit the bounded channel without blocking
+        // (mirrors pool population in start_recording). One more must eventually
+        // be refused — proving the channel is bounded (fixed ring buffer, hence
+        // alloc-free), unlike an unbounded channel which accepts indefinitely.
+        let (tx, _rx) = mpsc::sync_channel::<Vec<i16>>(RECYCLE_CHANNEL_CAPACITY);
+        for _ in 0..RECYCLE_CHANNEL_CAPACITY {
+            assert!(
+                tx.try_send(Vec::new()).is_ok(),
+                "pool population must fit the bounded recycle channel"
+            );
+        }
+        // Try a few extra sends: a bounded channel must refuse at least one.
+        let refused = (0..CHUNK_POOL_SLACK + 1).any(|_| tx.try_send(Vec::new()).is_err());
+        assert!(
+            refused,
+            "sync_channel must be bounded; an unbounded channel would accept all sends"
+        );
     }
 
     #[test]

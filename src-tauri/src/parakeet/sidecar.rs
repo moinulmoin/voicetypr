@@ -74,6 +74,44 @@ where
     .await
 }
 
+/// Cancellable command dispatch shared by
+/// [`ParakeetClient::send_with_progress_and_cancel`]: runs the first attempt,
+/// and on `Terminated` (when the user did NOT cancel) respawns and retries once.
+/// EVERY attempt is wrapped in [`timed_request`] — including the cancel-flag
+/// path — so a sidecar that stays alive but stops responding still hits the
+/// command deadline instead of hanging forever.
+///
+/// `make_request(is_retry, cancel)` produces the deadline-bounded sidecar
+/// future (or a stand-in under test); the caller owns sidecar lifecycle around
+/// it. Extracted so the deadline-on-cancel-path invariant is unit-testable
+/// without spawning a real process.
+async fn dispatch_cancellable<F, Fut>(
+    command: &ParakeetCommand,
+    cancel_flag: Option<Arc<AtomicBool>>,
+    mut make_request: F,
+) -> Result<ParakeetResponse, ParakeetError>
+where
+    F: FnMut(bool, Option<Arc<AtomicBool>>) -> Fut,
+    Fut: std::future::Future<Output = Result<ParakeetResponse, ParakeetError>>,
+{
+    // First attempt — always deadline-bounded, even with a cancel flag. This was
+    // the bug: the cancel path used to call the sidecar directly, so a live but
+    // unresponsive sidecar could hang indefinitely while still polling cancel.
+    let response = timed_request(command, make_request(false, cancel_flag.clone())).await;
+    match response {
+        Err(ParakeetError::Terminated)
+            if !cancel_flag
+                .as_ref()
+                .is_some_and(|flag| flag.load(Ordering::Relaxed)) =>
+        {
+            // The sidecar died but the user did not cancel: respawn once and
+            // retry. The retry shared the same bug class, so it is bounded too.
+            timed_request(command, make_request(true, cancel_flag.clone())).await
+        }
+        other => other,
+    }
+}
+
 pub struct ParakeetSidecar {
     rx: Receiver<CommandEvent>,
     child: Option<CommandChild>,
@@ -286,83 +324,61 @@ impl ParakeetClient {
         app: &AppHandle,
         command: &ParakeetCommand,
         cancel_flag: Option<Arc<AtomicBool>>,
-        mut progress_callback: F,
+        progress_callback: F,
     ) -> Result<ParakeetResponse, ParakeetError>
     where
         F: FnMut(f32, Option<&str>),
     {
-        let mut guard = self.ensure(app).await?;
-        let response = match guard.as_mut() {
-            Some(sidecar) if cancel_flag.is_some() => {
-                sidecar
-                    .request_with_progress_and_cancel(
-                        command,
-                        Some(&mut progress_callback),
-                        cancel_flag.clone(),
-                    )
-                    .await
-            }
-            Some(sidecar) => {
-                timed_request(
-                    command,
-                    sidecar.request_with_progress_and_cancel(
-                        command,
-                        Some(&mut progress_callback),
-                        None,
-                    ),
-                )
-                .await
-            }
-            None => return Err(ParakeetError::Terminated),
-        };
-
-        match response {
-            Err(ParakeetError::Timeout { .. }) => {
-                Self::clear_sidecar(&mut guard);
-                response
-            }
-            Err(ParakeetError::Terminated)
-                if !cancel_flag
-                    .as_ref()
-                    .is_some_and(|flag| flag.load(Ordering::Relaxed)) =>
-            {
-                Self::clear_sidecar(&mut guard);
-                drop(guard);
+        // The progress callback is shared across the (at most two) sequential
+        // attempts. Wrap it so each attempt future can borrow it mutably without
+        // holding one long-lived `&mut` across both `make_request` invocations —
+        // the two attempts never overlap, so the lock is uncontended.
+        let progress = Arc::new(tokio::sync::Mutex::new(progress_callback));
+        let make_request = move |is_retry: bool, cancel: Option<Arc<AtomicBool>>| {
+            let progress = progress.clone();
+            async move {
                 let mut guard = self.ensure(app).await?;
+                if is_retry {
+                    // Previous attempt's sidecar died (Terminated): kill it so
+                    // `ensure` respawns a fresh process.
+                    Self::clear_sidecar(&mut guard);
+                    drop(guard);
+                    guard = self.ensure(app).await?;
+                }
                 let response = match guard.as_mut() {
-                    Some(sidecar) if cancel_flag.is_some() => {
-                        sidecar
-                            .request_with_progress_and_cancel(
-                                command,
-                                Some(&mut progress_callback),
-                                cancel_flag,
-                            )
-                            .await
-                    }
                     Some(sidecar) => {
-                        timed_request(
-                            command,
-                            sidecar.request_with_progress_and_cancel(
-                                command,
-                                Some(&mut progress_callback),
-                                None,
-                            ),
-                        )
-                        .await
+                        let mut cb = progress.lock().await;
+                        sidecar
+                            .request_with_progress_and_cancel(command, Some(&mut *cb), cancel)
+                            .await
                     }
                     None => Err(ParakeetError::Terminated),
                 };
-                if matches!(response, Err(ParakeetError::Timeout { .. })) {
-                    Self::clear_sidecar(&mut guard);
-                }
                 response
             }
-            Err(ParakeetError::SidecarError { code, message }) if code == "cancelled" => {
-                Self::clear_sidecar(&mut guard);
-                Err(ParakeetError::SidecarError { code, message })
-            }
-            other => other,
+        };
+
+        // Delegate the dispatch: it wraps BOTH attempts in `timed_request`
+        // (deadline enforced even on the cancel path) and retries once on
+        // Terminated-while-not-cancelled. This centralises the deadline-on-cancel
+        // invariant so it is unit-testable without spawning a real process.
+        let response = dispatch_cancellable(command, cancel_flag, make_request).await;
+
+        // Lifecycle: kill the sidecar when it is left unusable — deadline
+        // exceeded (the process may be wedged) or the user cancelled (the
+        // sidecar's cancel loop already tried to kill it; clear for a clean slate
+        // so the next command spawns fresh).
+        let clear_after = match &response {
+            Err(ParakeetError::Timeout { .. }) => true,
+            Err(ParakeetError::SidecarError { code, .. }) => code.as_str() == "cancelled",
+            _ => false,
+        };
+        if clear_after {
+            let mut guard = self.inner.write().await;
+            Self::clear_sidecar(&mut guard);
         }
+
+        response
     }
 
     pub async fn shutdown(&self) {
@@ -374,9 +390,15 @@ impl ParakeetClient {
 
 #[cfg(test)]
 mod tests {
-    use super::{extract_json_payload, parse_response_line, request_with_timeout};
+    use super::{
+        dispatch_cancellable, extract_json_payload, parse_response_line, request_with_timeout,
+    };
     use crate::parakeet::error::ParakeetError;
-    use crate::parakeet::messages::{ParakeetResponse, SHORT_REQUEST_TIMEOUT_SECS};
+    use crate::parakeet::messages::{
+        ParakeetCommand, ParakeetResponse, SHORT_REQUEST_TIMEOUT_SECS,
+    };
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::Arc;
     use std::time::Duration;
 
     #[test]
@@ -457,6 +479,103 @@ mod tests {
                 operation,
                 timeout_secs: SHORT_REQUEST_TIMEOUT_SECS,
             } if operation == "status"
+        ));
+    }
+    #[tokio::test(start_paused = true)]
+    async fn cancellable_dispatch_enforces_deadline_on_first_attempt_with_cancel_flag() {
+        // Reproduces the bug: send_with_progress_and_cancel used to call the
+        // sidecar directly (no timed_request) when a cancel_flag was present, so a
+        // sidecar that stayed alive but never responded hung forever while still
+        // polling cancel. The dispatch must wrap the FIRST attempt in a deadline
+        // even with a cancel flag.
+        //
+        // Fails on the pre-fix code: without the wrap, `make_request`'s pending
+        // future never resolves, the outer guard elapses, and `.expect` panics.
+        let command = ParakeetCommand::Status {};
+        let cancel = Some(Arc::new(AtomicBool::new(false)));
+        let make_request = |_is_retry: bool, _cancel: Option<Arc<AtomicBool>>| async move {
+            // A sidecar that stays alive but never sends a protocol line.
+            std::future::pending::<Result<ParakeetResponse, ParakeetError>>().await
+        };
+
+        let result = tokio::time::timeout(
+            Duration::from_secs(command.request_timeout_secs() * 2),
+            dispatch_cancellable(&command, cancel, make_request),
+        )
+        .await;
+
+        let err = result
+            .expect("dispatch hung — the cancel path's first attempt is not deadline-bounded")
+            .expect_err("expected a typed Timeout, not a response");
+        let expected = command.request_timeout_secs();
+        assert!(matches!(
+            err,
+            ParakeetError::Timeout { operation, timeout_secs }
+                if operation == "status" && timeout_secs == expected
+        ));
+        assert_eq!(expected, SHORT_REQUEST_TIMEOUT_SECS);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn cancellable_dispatch_enforces_deadline_on_retry_with_cancel_flag() {
+        // The retry branch shared the same bug: when the first attempt returned
+        // Terminated (sidecar died) the retry also skipped timed_request. With a
+        // cancel flag present, a retry that never responds must still hit the
+        // deadline rather than hang. Fails on the pre-fix code via the same
+        // outer-guard panic as the first-attempt case.
+        let command = ParakeetCommand::Status {};
+        let cancel = Some(Arc::new(AtomicBool::new(false)));
+        let make_request = |is_retry: bool, _cancel: Option<Arc<AtomicBool>>| async move {
+            if is_retry {
+                std::future::pending::<Result<ParakeetResponse, ParakeetError>>().await
+            } else {
+                Err(ParakeetError::Terminated)
+            }
+        };
+
+        let result = tokio::time::timeout(
+            Duration::from_secs(command.request_timeout_secs() * 2),
+            dispatch_cancellable(&command, cancel, make_request),
+        )
+        .await;
+
+        let err = result
+            .expect("dispatch hung on retry — the cancel path's retry is not deadline-bounded")
+            .expect_err("expected a typed Timeout, not a response");
+        assert!(matches!(
+            err,
+            ParakeetError::Timeout { operation, .. } if operation == "status"
+        ));
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn cancellable_dispatch_preserves_cancel_polling() {
+        // The added deadline must NOT mask cancellation: when the (simulated)
+        // sidecar honors the cancel flag and aborts, the dispatch surfaces the
+        // cancellation promptly instead of waiting the full deadline. Proves the
+        // wrap preserves cancel polling rather than always timing out.
+        let command = ParakeetCommand::Status {};
+        let cancel = Some(Arc::new(AtomicBool::new(true))); // already cancelled
+        let make_request = |_is_retry: bool, cancel: Option<Arc<AtomicBool>>| async move {
+            if cancel.as_ref().is_some_and(|f| f.load(Ordering::Relaxed)) {
+                Err(ParakeetError::SidecarError {
+                    code: "cancelled".to_string(),
+                    message: "Cancelled by user".to_string(),
+                })
+            } else {
+                std::future::pending::<Result<ParakeetResponse, ParakeetError>>().await
+            }
+        };
+
+        let started = tokio::time::Instant::now();
+        let err = dispatch_cancellable(&command, cancel, make_request)
+            .await
+            .expect_err("expected cancellation, not a response");
+        // Returned promptly (well before the deadline) — cancel polling wins.
+        assert!(started.elapsed() < Duration::from_secs(command.request_timeout_secs()));
+        assert!(matches!(
+            err,
+            ParakeetError::SidecarError { code, .. } if code == "cancelled"
         ));
     }
 

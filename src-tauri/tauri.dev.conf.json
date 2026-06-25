@@ -62,7 +62,7 @@
       },
       "nsis": {
         "installMode": "currentUser",
-        "installerHooks": "./windows/smart-installer-hooks.nsh"
+        "installerHooks": "./windows/installer-hooks.nsh"
       }
     }
   },

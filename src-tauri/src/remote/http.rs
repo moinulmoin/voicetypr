@@ -8,7 +8,7 @@ use log::{info, warn};
 use std::collections::HashMap;
 use std::net::{IpAddr, SocketAddr};
 use std::sync::{Arc, Mutex};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 use tokio::sync::{OwnedSemaphorePermit, RwLock, Semaphore};
 use warp::{http::StatusCode, Filter, Rejection, Reply};
 
@@ -22,7 +22,19 @@ use crate::transcription::TranscriptionResult;
 const AUTH_HEADER: &str = "X-Voicetypr-Key";
 const CONTEXT_HEADER: &str = "X-Voicetypr-Context";
 
-const MAX_AUDIO_BODY_BYTES: u64 = 50 * 1024 * 1024; // 50 MB
+/// Maximum wall-clock time for a single remote transcription. Bounds how long
+/// the single serialization permit can be held so a slow upload or a runaway
+/// engine run cannot starve other remote clients.
+const REMOTE_TRANSCRIBE_TIMEOUT: Duration = Duration::from_secs(3600); // 1 hour
+
+/// In-memory OOM-safety ceiling on the request body (warp buffers the whole
+/// body before the handler runs). Replaces the former 50 MB cap that rejected
+/// legitimate long recordings — 512 MB comfortably holds well over an hour of
+/// audio. The real bound on server resources is [`REMOTE_TRANSCRIBE_TIMEOUT`];
+/// this just stops a pathological upload from exhausting host memory. (Streaming
+/// the body to disk would avoid the in-memory copy, but the engine trait takes
+/// `&[u8]` and re-materializes to a tempfile internally, so it isn't worth it.)
+const MAX_AUDIO_BODY_BYTES: u64 = 512 * 1024 * 1024; // 512 MB
 const MAX_CONTEXT_HEADER_BYTES: usize = 4096;
 const MAX_CONTEXT_HEADER_ENCODED_BYTES: usize = MAX_CONTEXT_HEADER_BYTES.div_ceil(3) * 4;
 const MAX_CONTROL_BODY_BYTES: u64 = 4 * 1024;
@@ -105,14 +117,43 @@ pub trait ServerContext: Send + Sync {
     }
 }
 
-/// Create all warp routes for the remote transcription API
+/// Create all warp routes for the remote transcription API.
+///
+/// Uses production defaults for the transcription timeout (1 hour) and disk
+/// guard (2 GB). Tests that need to control either should use
+/// [`create_routes_with_limits`].
 pub fn create_routes<T: ServerContext + 'static>(
     ctx: Arc<RwLock<T>>,
     transcription_guard: Arc<Semaphore>,
     client_activity: ClientActivityMap,
 ) -> impl Filter<Extract = (impl Reply,), Error = Rejection> + Clone {
+    create_routes_with_limits(
+        ctx,
+        transcription_guard,
+        client_activity,
+        REMOTE_TRANSCRIBE_TIMEOUT,
+        MAX_AUDIO_BODY_BYTES,
+    )
+}
+
+/// Same as [`create_routes`] but with explicit transcription timeout and disk
+/// guard, for tests. Production callers always use [`create_routes`] which
+/// passes the module-level defaults.
+pub fn create_routes_with_limits<T: ServerContext + 'static>(
+    ctx: Arc<RwLock<T>>,
+    transcription_guard: Arc<Semaphore>,
+    client_activity: ClientActivityMap,
+    transcribe_timeout: Duration,
+    audio_disk_guard: u64,
+) -> impl Filter<Extract = (impl Reply,), Error = Rejection> + Clone {
     let status_route = status_endpoint(ctx.clone());
-    let transcribe_route = transcribe_endpoint(ctx.clone(), transcription_guard, client_activity);
+    let transcribe_route = transcribe_endpoint(
+        ctx.clone(),
+        transcription_guard,
+        client_activity,
+        transcribe_timeout,
+        audio_disk_guard,
+    );
     let control_models_route = control_models_endpoint(ctx);
 
     status_route.or(transcribe_route).or(control_models_route)
@@ -134,6 +175,8 @@ fn transcribe_endpoint<T: ServerContext + 'static>(
     ctx: Arc<RwLock<T>>,
     transcription_guard: Arc<Semaphore>,
     client_activity: ClientActivityMap,
+    transcribe_timeout: Duration,
+    audio_disk_guard: u64,
 ) -> impl Filter<Extract = (impl Reply,), Error = Rejection> + Clone {
     // Auth preflight runs first and carries NO permit/body filters, so an unauthenticated
     // client is rejected before it can take the single transcription permit or stream the
@@ -143,6 +186,15 @@ fn transcribe_endpoint<T: ServerContext + 'static>(
         .and(warp::header::optional::<String>(AUTH_HEADER))
         .and(with_context(ctx.clone()))
         .and_then(handle_transcribe_auth_preflight);
+
+    // Content-type preflight runs after auth and before the permit/body filters so a
+    // non-audio request can never hold the single transcription permit or stream its
+    // body. A non-audio content type returns 415 here; an audio content type falls
+    // through to `main_route`.
+    let content_type_error_route = warp::path!("api" / "v1" / "transcribe")
+        .and(warp::post())
+        .and(warp::header::<String>("content-type"))
+        .and_then(handle_transcribe_content_type_preflight);
 
     let main_route = warp::path!("api" / "v1" / "transcribe")
         .and(warp::post())
@@ -155,19 +207,27 @@ fn transcribe_endpoint<T: ServerContext + 'static>(
             "X-Voicetypr-Transcription-Task",
         ))
         .and(warp::header::optional::<String>(CONTEXT_HEADER))
-        // Acquire a permit BEFORE the body is buffered: only the permit holder buffers the
-        // (potentially ~50 MB) body, which bounds memory while preserving queueing.
-        .and(with_transcription_permit(transcription_guard))
-        .and(warp::body::content_length_limit(MAX_AUDIO_BODY_BYTES))
+        // Buffer the body BEFORE acquiring the transcription permit. A client
+        // that sends the audio headers then stalls or trickles the upload used
+        // to hold the single serialization permit for the entire (unbounded)
+        // upload, queuing every other remote transcription behind it with no
+        // 408. Now the stalled upload just fills memory — bounded by
+        // `content_length_limit` above — while the permit stays free, so other
+        // clients keep transcribing. The permit + 1h timeout then bound only
+        // the actual transcription. The permit is still owned inside the
+        // spawn_blocking task in `handle_transcribe`, so a timeout or client
+        // disconnect drops it without releasing it early.
+        .and(warp::body::content_length_limit(audio_disk_guard))
         .and(warp::body::bytes())
+        .and(with_transcription_permit(transcription_guard))
         .map(
-            |auth_key,
-             content_type,
-             spoken_language,
-             transcription_task,
-             request_context,
-             permit,
-             body| {
+            move |auth_key,
+                  content_type,
+                  spoken_language,
+                  transcription_task,
+                  request_context,
+                  body,
+                  permit| {
                 TranscribeRequestParts {
                     auth_key,
                     content_type,
@@ -175,6 +235,7 @@ fn transcribe_endpoint<T: ServerContext + 'static>(
                     transcription_task,
                     request_context,
                     body,
+                    transcribe_timeout,
                     permit,
                 }
             },
@@ -184,7 +245,7 @@ fn transcribe_endpoint<T: ServerContext + 'static>(
         .and(with_client_activity(client_activity))
         .and_then(handle_transcribe);
 
-    auth_error_route.or(main_route)
+    auth_error_route.or(content_type_error_route).or(main_route)
 }
 
 /// Auth preflight for POST /api/v1/transcribe. Runs BEFORE the permit/body filters so an
@@ -199,9 +260,22 @@ async fn handle_transcribe_auth_preflight<T: ServerContext + 'static>(
 ) -> Result<Box<dyn Reply>, Rejection> {
     let required_password = { ctx.read().await.get_password() };
     let Some(required_password) = required_password else {
-        // Open server: no password configured.
+        // Open server: no password configured. Fall through to the main route,
+        // which performs transcription without authentication.
         return Err(warp::reject::not_found());
     };
+    // A configured-but-empty password is not a valid credential. Fail closed:
+    // reject every request rather than treating the server as open, or letting an
+    // empty X-Voicetypr-Key match the empty configured value via `"" == ""`.
+    // (`auth_matches` independently rejects empty keys; this is belt-and-braces.)
+    if required_password.is_empty() {
+        return Ok(Box::new(warp::reply::with_status(
+            warp::reply::json(&ErrorResponse {
+                error: "unauthorized".to_string(),
+            }),
+            StatusCode::UNAUTHORIZED,
+        )));
+    }
     match auth_key {
         Some(provided) if auth_matches(&provided, &required_password) => {
             Err(warp::reject::not_found())
@@ -212,6 +286,26 @@ async fn handle_transcribe_auth_preflight<T: ServerContext + 'static>(
             }),
             StatusCode::UNAUTHORIZED,
         ))),
+    }
+}
+
+/// Content-type preflight for POST /api/v1/transcribe. Runs AFTER the auth preflight
+/// and BEFORE the permit/body filters, so a non-audio request is rejected with 415
+/// without ever acquiring the single transcription permit or buffering its body. An
+/// audio content type rejects with `not_found` so the request falls through to the
+/// main route, which re-extracts the header for the handler's defense-in-depth check.
+async fn handle_transcribe_content_type_preflight(
+    content_type: String,
+) -> Result<Box<dyn Reply>, Rejection> {
+    if content_type.starts_with("audio/") {
+        Err(warp::reject::not_found())
+    } else {
+        Ok(Box::new(warp::reply::with_status(
+            warp::reply::json(&ErrorResponse {
+                error: "unsupported_media_type".to_string(),
+            }),
+            StatusCode::UNSUPPORTED_MEDIA_TYPE,
+        )))
     }
 }
 
@@ -251,9 +345,11 @@ fn with_context<T: ServerContext + 'static>(
 }
 
 /// Acquire an owned transcription permit, waiting if all permits are in use.
-/// This filter runs BEFORE the body filter, so a queued request never buffers
-/// the (potentially ~50 MB) request body — only the permit holder buffers,
-/// which bounds memory while preserving queueing instead of rejecting callers.
+/// This filter runs AFTER the body has been fully buffered, so a slow or
+/// stalled upload consumes only memory (bounded by `content_length_limit`) and
+/// never the serialization permit — other remote clients keep transcribing
+/// while a trickled upload drains. The permit is then owned by the blocking
+/// transcription task, bounding only the actual engine work.
 fn with_transcription_permit(
     guard: Arc<Semaphore>,
 ) -> impl Filter<Extract = (OwnedSemaphorePermit,), Error = Rejection> + Clone {
@@ -289,6 +385,14 @@ fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
 }
 
 fn auth_matches(provided: &str, required: &str) -> bool {
+    // An empty string is never a valid credential. Reject it up front so an empty
+    // configured password (`Some("")`) paired with an empty X-Voicetypr-Key can
+    // never authorize via `"" == ""`, and an empty provided key can never match a
+    // non-empty configured password. This is the central primitive shared by the
+    // transcribe, status and control auth checks.
+    if provided.is_empty() || required.is_empty() {
+        return false;
+    }
     constant_time_eq(provided.as_bytes(), required.as_bytes())
 }
 
@@ -539,12 +643,20 @@ struct TranscribeRequestParts {
     transcription_task: Option<String>,
     request_context: Option<String>,
     body: bytes::Bytes,
-    /// Owned semaphore permit acquired before the body was buffered.
-    /// Held for the full duration of the blocking transcription work.
+    /// Deadline for the transcription; elapses → HTTP 408.
+    transcribe_timeout: Duration,
+    /// Owned semaphore permit acquired AFTER the body was buffered, so a slow
+    /// or stalled upload can't hold it. Owned by the blocking transcription
+    /// task and held for the full engine run (not released early on timeout or
+    /// client disconnect).
     permit: OwnedSemaphorePermit,
 }
 
 /// Handle POST /api/v1/transcribe
+///
+/// The transcription (the blocking CPU work) is wrapped in a
+/// `tokio::time::timeout` so a runaway engine run releases the single
+/// serialization permit within the deadline.
 async fn handle_transcribe<T: ServerContext + 'static>(
     parts: TranscribeRequestParts,
     client_addr: Option<SocketAddr>,
@@ -558,6 +670,7 @@ async fn handle_transcribe<T: ServerContext + 'static>(
         transcription_task,
         request_context,
         body,
+        transcribe_timeout,
         permit,
     } = parts;
 
@@ -576,8 +689,23 @@ async fn handle_transcribe<T: ServerContext + 'static>(
         server_name, audio_size_kb, content_type
     );
 
-    // Check authentication
+    // Check authentication (defense-in-depth; the auth preflight already enforced this).
     if let Some(required_password) = required_password {
+        // A configured-but-empty password is not a valid credential: fail closed,
+        // mirroring the auth preflight so defense-in-depth agrees even if a request
+        // reaches here with an empty configured password.
+        if required_password.is_empty() {
+            warn!(
+                "[Remote Server] Transcription request REJECTED - empty configured password on '{}'",
+                server_name
+            );
+            return Ok(warp::reply::with_status(
+                warp::reply::json(&ErrorResponse {
+                    error: "unauthorized".to_string(),
+                }),
+                StatusCode::UNAUTHORIZED,
+            ));
+        }
         match auth_key {
             Some(provided) if auth_matches(&provided, &required_password) => {
                 info!("[Remote Server] Transcription request authenticated successfully");
@@ -629,27 +757,48 @@ async fn handle_transcribe<T: ServerContext + 'static>(
     );
     let request_context = decode_context_header(request_context);
 
-    // Perform transcription on a blocking thread: transcribe_with_context is
-    // synchronous CPU work (full Whisper/Parakeet run) and must not pin a
-    // runtime worker. Hold the owned permit for the full blocking work so
-    // client disconnect / request-future drop cannot release serialization early.
+    // The single serialization permit is OWNED BY THE BLOCKING TASK, not the
+    // async scope: it is released only when the engine work actually finishes,
+    // even if we stop waiting for it. So neither a timeout nor a client
+    // disconnect frees the permit early — a subsequent remote request correctly
+    // waits until the host engine is genuinely free (remote-vs-remote stays
+    // serialized). The timeout only bounds how long the CLIENT waits: on elapse
+    // we return 408 and the detached engine task drains in the background
+    // (spawn_blocking cannot be truly cancelled).
     let ctx_for_blocking = ctx.clone();
-    let body_for_blocking = body.clone();
-    let transcription_outcome = tokio::task::spawn_blocking(move || {
-        let _permit = permit;
-        let guard = ctx_for_blocking.blocking_read();
-        guard.transcribe_with_context(
-            &body_for_blocking,
-            spoken_language.as_deref(),
-            transcription_task.as_deref(),
-            request_context.as_deref(),
-        )
+    let outcome = tokio::time::timeout(transcribe_timeout, async move {
+        let body_for_blocking = body.clone();
+        tokio::task::spawn_blocking(move || {
+            let _permit = permit;
+            let guard = ctx_for_blocking.blocking_read();
+            guard.transcribe_with_context(
+                &body_for_blocking,
+                spoken_language.as_deref(),
+                transcription_task.as_deref(),
+                request_context.as_deref(),
+            )
+        })
+        .await
+        .unwrap_or_else(|join_err| Err(format!("transcription task failed: {join_err}")))
     })
-    .await
-    .unwrap_or_else(|join_err| Err(format!("transcription task failed: {join_err}")));
+    .await;
 
-    match transcription_outcome {
-        Ok(result) => {
+    match outcome {
+        Err(_elapsed) => {
+            warn!(
+                "⏱️ [Remote Server] Transcription TIMED OUT on '{}' after {:?}; \
+                 returned 408 to client. Engine work continues in the background \
+                 and keeps the serialization permit until it completes.",
+                server_name, transcribe_timeout
+            );
+            Ok(warp::reply::with_status(
+                warp::reply::json(&ErrorResponse {
+                    error: "transcription_timeout".to_string(),
+                }),
+                StatusCode::REQUEST_TIMEOUT, // 408
+            ))
+        }
+        Ok(Ok(result)) => {
             let response = TranscribeResponse {
                 text: result.raw_text,
                 duration_ms: result.timings.processing_duration_ms.unwrap_or_default(),
@@ -668,7 +817,7 @@ async fn handle_transcribe<T: ServerContext + 'static>(
                 StatusCode::OK,
             ))
         }
-        Err(error) => {
+        Ok(Err(error)) => {
             warn!(
                 "[Remote Server] Transcription FAILED on '{}': {}",
                 server_name, error
@@ -1111,6 +1260,7 @@ mod tests {
                     transcription_task: None,
                     request_context: None,
                     body: bytes::Bytes::from_static(b"audio"),
+                    transcribe_timeout: REMOTE_TRANSCRIBE_TIMEOUT,
                     permit,
                 },
                 None, // client_addr — not relevant to this permit-hold test
@@ -1264,21 +1414,119 @@ mod tests {
     // ============================================================================
 
     #[tokio::test]
-    async fn test_transcribe_endpoint_rejects_oversized_body() {
+    async fn transcribe_rejects_body_exceeding_max_body() {
+        // Inject a tiny guard (1 KB) so we can test the rejection without
+        // allocating gigabytes. Production uses MAX_AUDIO_BODY_BYTES (512 MB).
+        let ctx = Arc::new(RwLock::new(MockContext));
+        let routes = create_routes_with_limits(
+            ctx,
+            test_transcription_guard(),
+            test_client_activity(),
+            REMOTE_TRANSCRIBE_TIMEOUT,
+            1024, // 1 KB guard
+        );
+
+        // 2 KB body exceeds the 1 KB injected guard → 413.
+        let response = warp::test::request()
+            .method("POST")
+            .path("/api/v1/transcribe")
+            .header("Content-Type", "audio/wav")
+            .body(vec![0u8; 2048])
+            .reply(&routes)
+            .await;
+
+        assert_eq!(response.status(), 413);
+    }
+
+    #[tokio::test]
+    async fn transcribe_accepts_body_above_old_50mb_cap() {
+        // 60 MB — comfortably above the former 50 MB cap. The body is buffered
+        // in memory under the 512 MB ceiling, so this is accepted instead of 413.
         let ctx = Arc::new(RwLock::new(MockContext));
         let routes = create_routes(ctx, test_transcription_guard(), test_client_activity());
 
-        let oversized_audio = vec![0u8; MAX_AUDIO_BODY_BYTES as usize + 1];
+        let large_audio = vec![0u8; 60 * 1024 * 1024];
 
         let response = warp::test::request()
             .method("POST")
             .path("/api/v1/transcribe")
             .header("Content-Type", "audio/wav")
-            .body(oversized_audio)
+            .body(large_audio)
             .reply(&routes)
             .await;
 
-        assert_eq!(response.status(), 413);
+        assert_eq!(response.status(), 200);
+        let body: TranscribeResponse = serde_json::from_slice(response.body()).unwrap();
+        assert_eq!(body.text, "mock transcription");
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn transcribe_timeout_returns_408_then_serializes_next() {
+        // The slow context sleeps 500 ms inside transcription; the fast context
+        // returns instantly. Both share the same single-permit guard. The 100 ms
+        // timeout makes the first request return 408 while its DETACHED engine
+        // task keeps running and KEEPS THE PERMIT until it drains (~400 ms more).
+        let slow_ctx = Arc::new(RwLock::new(DelayedMockContext::new(500)));
+        let fast_ctx = Arc::new(RwLock::new(MockContext));
+        let guard = Arc::new(Semaphore::new(1));
+
+        let slow_routes = create_routes_with_limits(
+            slow_ctx,
+            guard.clone(),
+            test_client_activity(),
+            Duration::from_millis(100), // 100 ms timeout
+            MAX_AUDIO_BODY_BYTES,
+        );
+        let fast_routes = create_routes_with_limits(
+            fast_ctx,
+            guard.clone(),
+            test_client_activity(),
+            Duration::from_secs(5),
+            MAX_AUDIO_BODY_BYTES,
+        );
+
+        // First request: transcription sleeps 500 ms, timeout fires at 100 ms → 408.
+        let slow_routes_clone = slow_routes.clone();
+        let response = tokio::time::timeout(
+            Duration::from_secs(5),
+            warp::test::request()
+                .method("POST")
+                .path("/api/v1/transcribe")
+                .header("Content-Type", "audio/wav")
+                .body(vec![0u8; 100])
+                .reply(&slow_routes_clone),
+        )
+        .await
+        .expect("slow request should resolve (with timeout) within 5 s");
+
+        assert_eq!(response.status(), 408);
+        let body: ErrorResponse = serde_json::from_slice(response.body()).unwrap();
+        assert_eq!(body.error, "transcription_timeout");
+
+        // Second request on the fast context with the SAME guard: it must
+        // SERIALIZE behind the first request's still-draining engine task and
+        // cannot complete until that task releases the permit. We TIME it to
+        // PROVE the permit is not released the instant the 408 is returned: the
+        // slow engine task still has ~400 ms to run, so B must wait that long.
+        // If the timeout released the permit early, B (instant context) would
+        // finish in well under 100 ms and this lower bound would catch it.
+        let b_start = std::time::Instant::now();
+        let response2 = warp::test::request()
+            .method("POST")
+            .path("/api/v1/transcribe")
+            .header("Content-Type", "audio/wav")
+            .body(vec![0u8; 100])
+            .reply(&fast_routes)
+            .await;
+        let b_elapsed = b_start.elapsed();
+
+        assert_eq!(response2.status(), 200);
+        assert!(
+            b_elapsed >= Duration::from_millis(250),
+            "second request completed in {b_elapsed:?}; the 408 released the \
+             transcription permit early — it must wait ~400 ms for the first \
+             request's detached engine task to finish and free the permit"
+        );
     }
 
     struct Utf8PreviewContext;
@@ -2332,5 +2580,293 @@ mod tests {
         assert_eq!(response.status(), 403);
         let body: ErrorResponse = serde_json::from_slice(response.body()).unwrap();
         assert_eq!(body.error, "model_control_disabled");
+    }
+
+    // ------------------------------------------------------------------------
+    // Auth regression: empty configured password / empty provided key (#1)
+    // ------------------------------------------------------------------------
+
+    #[test]
+    fn auth_matches_rejects_empty_strings() {
+        // `"" == ""` must never authorize; an empty key/value is never a credential.
+        assert!(!auth_matches("", ""));
+        assert!(!auth_matches("", "secret"));
+        assert!(!auth_matches("secret", ""));
+        assert!(auth_matches("secret", "secret"));
+    }
+
+    #[tokio::test]
+    async fn transcribe_rejects_empty_configured_password_with_empty_key() {
+        // A configured-but-empty password (`Some("")`) plus an empty X-Voicetypr-Key
+        // must NOT authorize via `"" == ""`. Fail closed with 401.
+        let ctx = Arc::new(RwLock::new(PasswordedControlContext {
+            password: String::new(),
+            model_name: "base.en".to_string(),
+            allow_model_control: true,
+        }));
+        let routes = create_routes(ctx, test_transcription_guard(), test_client_activity());
+
+        let response = warp::test::request()
+            .method("POST")
+            .path("/api/v1/transcribe")
+            .header("content-type", "audio/wav")
+            .header(AUTH_HEADER, "")
+            .body(vec![0u8; 32])
+            .reply(&routes)
+            .await;
+
+        assert_eq!(response.status(), 401);
+        let body: ErrorResponse = serde_json::from_slice(response.body()).unwrap();
+        assert_eq!(body.error, "unauthorized");
+    }
+
+    #[tokio::test]
+    async fn transcribe_rejects_empty_configured_password_with_no_key() {
+        // No key against an empty configured password: still 401 (never treated as open).
+        let ctx = Arc::new(RwLock::new(PasswordedControlContext {
+            password: String::new(),
+            model_name: "base.en".to_string(),
+            allow_model_control: true,
+        }));
+        let routes = create_routes(ctx, test_transcription_guard(), test_client_activity());
+
+        let response = warp::test::request()
+            .method("POST")
+            .path("/api/v1/transcribe")
+            .header("content-type", "audio/wav")
+            .body(vec![0u8; 32])
+            .reply(&routes)
+            .await;
+
+        assert_eq!(response.status(), 401);
+    }
+
+    #[tokio::test]
+    async fn transcribe_rejects_empty_provided_key_for_nonempty_password() {
+        // An empty X-Voicetypr-Key must never authorize a non-empty password.
+        let ctx = Arc::new(RwLock::new(PasswordedControlContext {
+            password: "secret".to_string(),
+            model_name: "base.en".to_string(),
+            allow_model_control: true,
+        }));
+        let routes = create_routes(ctx, test_transcription_guard(), test_client_activity());
+
+        let response = warp::test::request()
+            .method("POST")
+            .path("/api/v1/transcribe")
+            .header("content-type", "audio/wav")
+            .header(AUTH_HEADER, "")
+            .body(vec![0u8; 32])
+            .reply(&routes)
+            .await;
+
+        assert_eq!(response.status(), 401);
+    }
+
+    // ------------------------------------------------------------------------
+    // Content-type preflight: reject non-audio BEFORE permit/body (#2)
+    // ------------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn audio_with_content_type_params_is_accepted() {
+        // "audio/wav; charset=binary" must pass the starts_with("audio/") preflight.
+        let ctx = Arc::new(RwLock::new(MockContext));
+        let routes = create_routes(ctx, test_transcription_guard(), test_client_activity());
+
+        let response = warp::test::request()
+            .method("POST")
+            .path("/api/v1/transcribe")
+            .header("content-type", "audio/wav; charset=binary")
+            .body(b"audio")
+            .reply(&routes)
+            .await;
+
+        assert_eq!(response.status(), 200);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn non_audio_request_rejected_before_permit() {
+        // While request A (audio) holds the single transcription permit during a slow
+        // transcription, a non-audio request must return 415 immediately from the
+        // content-type preflight — without waiting for the permit or buffering its
+        // body. Before the fix this hung on the permit behind A's ~400ms run.
+        let ctx = Arc::new(RwLock::new(DelayedMockContext::new(400)));
+        let guard = Arc::new(Semaphore::new(1));
+        let routes = create_routes(ctx, guard, test_client_activity());
+
+        // Request A acquires the permit and blocks in transcription.
+        let routes_a = routes.clone();
+        let req_a = tokio::spawn(async move {
+            warp::test::request()
+                .method("POST")
+                .path("/api/v1/transcribe")
+                .header("content-type", "audio/wav")
+                .body(vec![0u8; 100])
+                .reply(&routes_a)
+                .await
+        });
+
+        // Give A time to acquire the permit and enter its blocking transcription.
+        sleep(Duration::from_millis(80)).await;
+
+        // Request B is non-audio: it must NOT wait for A's permit.
+        let result = tokio::time::timeout(
+            Duration::from_millis(150),
+            warp::test::request()
+                .method("POST")
+                .path("/api/v1/transcribe")
+                .header("content-type", "application/json")
+                .body("{}")
+                .reply(&routes),
+        )
+        .await;
+
+        let response =
+            result.expect("non-audio request must not wait for the transcription permit");
+        assert_eq!(response.status(), 415);
+        let body: ErrorResponse = serde_json::from_slice(response.body()).unwrap();
+        assert_eq!(body.error, "unsupported_media_type");
+
+        // Let A finish so the runtime isn't left with a blocked task.
+        let _ = tokio::time::timeout(Duration::from_secs(5), req_a).await;
+    }
+    // ------------------------------------------------------------------------
+    // Permit ordering: a slow upload must NOT hold the transcription permit (#1)
+    // ------------------------------------------------------------------------
+
+    /// Regression for the CRITICAL permit-before-body bug. The transcription
+    /// permit used to be acquired in the filter chain BEFORE `warp::body::bytes()`
+    /// read the body, so a client that sent the audio headers then stalled or
+    /// trickled the body held the single permit for the whole (unbounded) upload
+    /// — the 1h timeout only starts inside the handler, AFTER the body is
+    /// buffered — queuing every other remote transcription behind it with no 408.
+    ///
+    /// Reproduction over a real server: request A opens a raw TCP socket, sends
+    /// the headers + an explicit `Content-Length` + only PART of the body, then
+    /// stalls. Request B (a complete body sent ~150 ms later) must succeed
+    /// promptly because A holds NO permit while it is stuck in `bytes()`. With
+    /// the OLD ordering A grabs the permit before reading its body, so B blocks
+    /// on the permit until A's upload finishes (~1.5 s) and cannot complete
+    /// within the 700 ms window; with the fixed ordering A is stuck in `bytes()`
+    /// without the permit, B takes the free permit and succeeds right away.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn slow_upload_does_not_block_second_transcription() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        use tokio::net::TcpStream;
+
+        let ctx = Arc::new(RwLock::new(MockContext));
+        let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel();
+        let (addr_tx, addr_rx) = tokio::sync::oneshot::channel();
+
+        let server_context = ctx.clone();
+        let server_handle = tokio::spawn(async move {
+            let addr = ([127, 0, 0, 1], 0u16);
+            let routes = create_routes(
+                server_context,
+                test_transcription_guard(),
+                test_client_activity(),
+            );
+            let (addr, server) = warp::serve(routes).bind_with_graceful_shutdown(addr, async {
+                shutdown_rx.await.ok();
+            });
+            let _ = addr_tx.send(addr);
+            server.await;
+        });
+
+        let addr = addr_rx.await.expect("Server failed to start");
+        sleep(Duration::from_millis(50)).await;
+
+        let total_bytes: usize = 100;
+        // Request A: send headers + a quarter of the body, then stall. The
+        // explicit Content-Length lets warp's content_length_limit pass and makes
+        // `bytes()` block reading until all `total_bytes` arrive.
+        let mut stream_a = TcpStream::connect(addr).await.expect("connect A");
+        let head = format!(
+            "POST /api/v1/transcribe HTTP/1.1\r\nHost: localhost\r\n\
+             Content-Type: audio/wav\r\nContent-Length: {total_bytes}\r\n\
+             Connection: close\r\n\r\n"
+        );
+        stream_a.write_all(head.as_bytes()).await.unwrap();
+        stream_a.flush().await.unwrap();
+        stream_a
+            .write_all(&vec![0u8; total_bytes / 4])
+            .await
+            .unwrap();
+        stream_a.flush().await.unwrap();
+
+        // Let A's headers be parsed so its filter chain is running (and, under
+        // the old ordering, has already acquired the permit).
+        sleep(Duration::from_millis(150)).await;
+
+        // Request B: a complete, instantly-sent body on a fresh connection.
+        // Under the fixed ordering A holds NO permit while stalled in `bytes()`,
+        // so B takes the free permit and succeeds promptly. Under the old
+        // ordering A already holds the permit, so B blocks on it for the rest of
+        // A's ~1.5 s upload and cannot finish within the 700 ms window.
+        let client = reqwest::Client::new();
+        let transcribe_url = format!("http://{}/api/v1/transcribe", addr);
+        let b_start = std::time::Instant::now();
+        let response_b = tokio::time::timeout(
+            Duration::from_millis(700),
+            client
+                .post(&transcribe_url)
+                .header("Content-Type", "audio/wav")
+                .body(vec![0u8; 32])
+                .timeout(Duration::from_secs(5))
+                .send(),
+        )
+        .await
+        .expect(
+            "second transcription stalled behind a slow upload — the permit \
+             was acquired before the body was buffered",
+        )
+        .expect("request B send failed");
+        let b_elapsed = b_start.elapsed();
+        assert!(
+            response_b.status().is_success(),
+            "second transcription failed: {}",
+            response_b.status()
+        );
+        assert!(
+            b_elapsed < Duration::from_millis(700),
+            "second transcription took {b_elapsed:?}; it waited behind the \
+             slow upload's permit"
+        );
+
+        // Finish A's upload so the server can transcribe and respond.
+        stream_a
+            .write_all(&vec![0u8; total_bytes - total_bytes / 4])
+            .await
+            .unwrap();
+        stream_a.flush().await.unwrap();
+
+        // Read A's response. The status line arrives first, so read until we
+        // have it (Connection: close also yields EOF after the body).
+        let mut resp_a = Vec::with_capacity(1024);
+        let mut buf = [0u8; 1024];
+        let a_ok = loop {
+            let n = tokio::time::timeout(Duration::from_secs(5), stream_a.read(&mut buf))
+                .await
+                .expect("A response read timed out")
+                .expect("reading A response failed");
+            if n == 0 {
+                break false;
+            }
+            resp_a.extend_from_slice(&buf[..n]);
+            if resp_a.starts_with(b"HTTP/1.1 200") {
+                break true;
+            }
+            if resp_a.len() >= 64 {
+                break false;
+            }
+        };
+        assert!(
+            a_ok,
+            "A did not succeed: {}",
+            String::from_utf8_lossy(&resp_a)
+        );
+
+        let _ = shutdown_tx.send(());
+        let _ = tokio::time::timeout(Duration::from_secs(5), server_handle).await;
     }
 }

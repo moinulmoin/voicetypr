@@ -140,6 +140,37 @@ fn deferred_executor_route_error(
     }
 }
 
+/// Reject a translate-to-English task a cloud engine cannot honor.
+///
+/// Every curated cloud provider transcribes in the spoken language
+/// (`supports_translate_task == false`). Routing such a request through would
+/// return source-language text that `TranscriptionResult::new` then mislabels
+/// as English — it falls back to `"en"` for a translate task. Reject up front
+/// so the caller never receives mislabeled output. An engine that genuinely
+/// supports the task passes through unchanged (none of the cloud engines do
+/// today).
+fn ensure_cloud_task_supported(
+    provider: crate::cloud_stt::CloudProvider,
+    translate: bool,
+    source: TranscriptionSource,
+) -> Result<(), TranscriptionError> {
+    if translate
+        && !ProviderEngine::from_engine_str(provider.id())
+            .map(|engine| engine.capabilities().supports_translate_task)
+            .unwrap_or(false)
+    {
+        return Err(TranscriptionError::new(
+            TranscriptionErrorCode::EngineUnavailable,
+            source,
+            format!(
+                "{} cannot translate to English. Choose a local engine that can, such as Whisper.",
+                provider.display_name()
+            ),
+        ));
+    }
+    Ok(())
+}
+
 async fn route_once(
     app: &AppHandle,
     active: &ActiveEngineSelection,
@@ -238,6 +269,8 @@ async fn route_once(
             }
         }
         ActiveEngineSelection::Cloud { provider, .. } => {
+            ensure_cloud_task_supported(*provider, translate, source)?;
+
             let key = match secure_get(app, provider.key_name()) {
                 Ok(Some(key)) if !key.trim().is_empty() => key,
                 _ => {
@@ -544,8 +577,9 @@ fn should_delete_input(policy: &CleanupPolicy, success: bool, retryable: bool) -
 mod tests {
     use super::should_delete_input;
     use super::{
-        deferred_executor_route_error, effective_parakeet_audio_duration_ms, is_normalized_wav,
-        remap_timed_out, watchdog_budget_for, wav_duration_ms,
+        deferred_executor_route_error, effective_parakeet_audio_duration_ms,
+        ensure_cloud_task_supported, is_normalized_wav, remap_timed_out, watchdog_budget_for,
+        wav_duration_ms,
     };
     use crate::provider_capabilities::ProviderEngine;
     use crate::transcription::error::{TranscriptionError, TranscriptionErrorCode};
@@ -793,5 +827,38 @@ mod tests {
             effective_parakeet_audio_duration_ms(None, Path::new("/nonexistent/file.wav")),
             None
         );
+    }
+    #[test]
+    fn cloud_translate_to_english_rejected_for_unsupported_engines() {
+        use crate::cloud_stt::CloudProvider;
+
+        // No curated cloud provider supports translation; each must reject a
+        // translate-to-English request instead of returning source-language
+        // text that TranscriptionResult::new would mislabel as English.
+        for provider in CloudProvider::ALL {
+            let err = ensure_cloud_task_supported(*provider, true, TranscriptionSource::AudioFile)
+                .expect_err("translate-to-English must be rejected on cloud");
+            assert_eq!(err.code, TranscriptionErrorCode::EngineUnavailable);
+            assert!(
+                !err.retryable,
+                "an unsupported task must not be flagged retryable"
+            );
+            assert!(
+                err.user_message.contains("translate to English"),
+                "message should name the unsupported task: {}",
+                err.user_message
+            );
+            assert!(
+                err.user_message.contains(provider.display_name()),
+                "message should name the provider: {}",
+                err.user_message
+            );
+        }
+
+        // A plain transcribe task is always accepted on every cloud provider.
+        for provider in CloudProvider::ALL {
+            ensure_cloud_task_supported(*provider, false, TranscriptionSource::AudioFile)
+                .expect("transcribe task must be accepted on cloud");
+        }
     }
 }
