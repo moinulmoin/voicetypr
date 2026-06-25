@@ -218,6 +218,7 @@ export const OnboardingDesktop = function OnboardingDesktop({
     downloadModel,
     cancelDownload,
     deleteModel,
+    repairModel,
     isLoading,
   } = modelManagement;
 
@@ -1079,6 +1080,7 @@ export const OnboardingDesktop = function OnboardingDesktop({
                             onSelect={(modelName) => void selectLocalModel(modelName)}
                             onCancelDownload={cancelDownload}
                             onDelete={handleDeleteModel}
+                            onRepair={repairModel}
                             showSelectButton={isModelReady(name)}
                           />
                         );
