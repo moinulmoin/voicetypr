@@ -1,6 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
-import { open } from '@tauri-apps/plugin-shell';
 import { toast } from 'sonner';
 import { createLogger } from "@/lib/logger";
 
@@ -110,25 +109,22 @@ export function usePermissions(options?: {
 
     try {
       let granted = false;
-      let settingsUrl = '';
 
       switch (type) {
         case 'microphone':
           granted = await invoke<boolean>('request_microphone_permission');
-          settingsUrl = 'x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone';
           break;
 
         case 'accessibility':
           await invoke('request_accessibility_permission');
           // Accessibility permission request doesn't return a boolean
-          settingsUrl = 'x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility';
           break;
 
       }
 
       // Open settings if permission wasn't granted (except for accessibility which always opens)
       if (!granted && type !== 'accessibility') {
-        await open(settingsUrl);
+        await invoke('open_microphone_settings');
         
         if (showToasts) {
           toast.info(`Please grant ${type} permission in System Settings`, {
@@ -137,7 +133,7 @@ export function usePermissions(options?: {
         }
       } else if (type === 'accessibility') {
         // Always open settings for accessibility
-        await open(settingsUrl);
+        await invoke('open_accessibility_settings');
         
         if (showToasts) {
           toast.info('Please grant accessibility permission in System Settings', {

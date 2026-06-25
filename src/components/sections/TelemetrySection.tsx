@@ -73,8 +73,8 @@ export function TelemetrySection() {
               Help improve Voicetypr with anonymous diagnostics
             </p>
             <p className="mt-1 text-xs text-muted-foreground">
-              On by default — turn it off anytime. Sends only anonymous crash
-              reports to help us fix bugs, never your audio, transcripts, or
+              On by default — turn it off anytime. Sends only anonymous crash and
+              error reports to help us fix bugs, never your audio, transcripts, or
               personal data.
             </p>
           </div>

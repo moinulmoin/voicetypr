@@ -514,16 +514,12 @@ export const OnboardingDesktop = function OnboardingDesktop({
       if (type === "microphone") {
         const granted = await requestMicPermission();
         if (!granted) {
-          await open(
-            "x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone",
-          );
+          await invoke("open_microphone_settings");
         }
       } else {
         const granted = await requestAccessPermission();
         if (!granted) {
-          await open(
-            "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility",
-          );
+          await invoke("open_accessibility_settings");
         }
       }
     } catch (error) {
