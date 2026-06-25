@@ -29,7 +29,11 @@ import {
   FieldDescription,
   FieldLabel,
 } from "@/components/ui/field";
-import { ScrollArea } from "@/components/ui/scroll-area";
+import {
+  SettingsCard,
+  SettingsHeader,
+  SettingsPage,
+} from "@/components/settings/settings-ui";
 import { Spinner } from "@/components/ui/spinner";
 import { useSettings } from "@/contexts/SettingsContext";
 import { getErrorMessage } from "@/utils/error";
@@ -44,6 +48,7 @@ import {
   CheckCircle,
   Cloud,
   Download,
+  Globe,
   HardDrive,
   HelpCircle,
   Plus,
@@ -638,133 +643,125 @@ export function ModelsSection({
   );
 
   return (
-    <div className="flex h-full flex-col bg-background">
-      <div className="border-b border-border/40 px-6 py-5">
-        <div className="flex items-start justify-between gap-4">
-          <div className="min-w-0">
-            <div className="flex items-center gap-2">
-              <h1 className="text-2xl font-semibold tracking-tight">
-                Transcription sources
-              </h1>
-              <Dialog>
-                <DialogTrigger asChild>
-                  <Button type="button" variant="secondary" size="icon" aria-label="Transcription sources guide" className="rounded-full">
-                    <HelpCircle className="h-4.5 w-4.5" />
-                  </Button>
-                </DialogTrigger>
-                <DialogContent className="sm:max-w-lg">
-                  <DialogHeader>
-                    <DialogTitle>Transcription sources guide</DialogTitle>
-                    <DialogDescription>
-                      Pick where speech recognition runs before recording or uploading files.
-                    </DialogDescription>
-                  </DialogHeader>
-                  <div className="space-y-3 text-sm leading-6 text-muted-foreground">
-                    <p><strong className="text-foreground">Local</strong> models run on this machine and keep raw audio local.</p>
-                    <p><strong className="text-foreground">Cloud</strong> sources use a connected provider when you choose one.</p>
-                    <p><strong className="text-foreground">Remote Voicetypr</strong> uses another device on your network when that server is online.</p>
-                  </div>
-                </DialogContent>
-              </Dialog>
-            </div>
-            <p className="mt-1 text-sm leading-6 text-muted-foreground">
-              Choose local models now, cloud transcription when connected, or another Voicetypr device on your network.
-            </p>
-          </div>
-        </div>
-      </div>
-
-      <div className="flex-1 min-h-0 overflow-hidden">
-        <ScrollArea className="h-full">
-          <div className="space-y-6 px-6 py-5">
-            <Card className="space-y-4 border-border/60 bg-card p-4 shadow-sm">
-              <div className="flex flex-wrap items-center justify-between gap-3">
-                <div className="flex flex-wrap items-center gap-2 text-sm">
-                  {(hasDownloading || hasVerifying) && (
-                    <Badge variant="outline" className="gap-1.5 bg-primary/10 text-primary">
-                      {hasDownloading ? (
-                        <Download className="size-3.5" />
-                      ) : (
-                        <Spinner className="size-3.5" />
-                      )}
-                      {hasDownloading ? "Downloading..." : "Verifying..."}
-                    </Badge>
-                  )}
-                  {activeModelLabel ? (
-                    <Badge
-                      variant={activeRemoteServer ? "outline" : "secondary"}
-                      className={cn(
-                        "max-w-[320px] justify-start truncate",
-                        activeRemoteServer &&
-                          (activeRemoteWarning
-                            ? "border-amber-500/40 bg-amber-500/10 text-amber-800 dark:text-amber-300"
-                            : "border-sky-500/40 bg-sky-500/10 text-sky-800 dark:text-sky-300"),
-                      )}
-                    >
-                      {activeRemoteServer
-                        ? activeRemoteWarning
-                          ? `Routing risk (${activeRemoteWarning})`
-                          : "Routing to"
-                        : "Active"}: {activeModelLabel}
-                    </Badge>
-                  ) : (
-                    availableToUse.length > 0 && (
-                      <Badge variant="outline" className="border-amber-500/30 bg-amber-500/10 text-amber-700">
-                        No model selected
-                      </Badge>
-                    )
-                  )}
-                </div>
-                <div className="flex flex-wrap items-center gap-4 text-xs text-muted-foreground">
-                  <span className="flex items-center gap-1.5">
-                    <Zap className="size-3.5 text-emerald-600" />
-                    Speed
-                  </span>
-                  <span className="flex items-center gap-1.5">
-                    <CheckCircle className="size-3.5 text-blue-600" />
-                    Accuracy
-                  </span>
-                  <span className="flex items-center gap-1.5">
-                    <HardDrive className="size-3.5" />
-                    Size
-                  </span>
-                  <span className="flex items-center gap-1.5">
-                    <Star className="size-3.5 fill-amber-500 text-amber-500" />
-                    Recommended
-                  </span>
-                </div>
+    <>
+      <SettingsPage>
+      <SettingsHeader
+        title="Transcription"
+        description="Choose where your speech is transcribed — local models, cloud providers, and remote Voicetypr servers."
+        actions={
+          <Dialog>
+            <DialogTrigger asChild>
+              <Button type="button" variant="ghost" size="icon-sm" aria-label="Transcription sources guide" className="size-7 rounded-full text-muted-foreground">
+                <HelpCircle className="h-4 w-4" />
+              </Button>
+            </DialogTrigger>
+            <DialogContent className="sm:max-w-lg">
+              <DialogHeader>
+                <DialogTitle>Transcription sources guide</DialogTitle>
+                <DialogDescription>
+                  Pick where speech recognition runs before recording or uploading files.
+                </DialogDescription>
+              </DialogHeader>
+              <div className="space-y-3 text-sm leading-6 text-muted-foreground">
+                <p><strong className="text-foreground">Local</strong> models run on this machine and keep raw audio local.</p>
+                <p><strong className="text-foreground">Cloud</strong> sources use a connected provider when you choose one.</p>
+                <p><strong className="text-foreground">Remote Voicetypr</strong> uses another device on your network when that server is online.</p>
               </div>
+            </DialogContent>
+          </Dialog>
+        }
+      />
 
-              <Field orientation="responsive" className="rounded-xl border bg-muted/30 p-4">
-                <FieldContent>
-                  <FieldLabel htmlFor="language">Spoken Language</FieldLabel>
-                  <FieldDescription>
-                    The language you speak into Voicetypr. English-only models lock this to English.
-                  </FieldDescription>
-                </FieldContent>
-                <LanguageSelection
-                  value={languageValue}
-                  engine={currentEngine}
-                  englishOnly={isEnglishOnlyModel}
-                  onValueChange={(value) => {
-                    void handleLanguageChange(value);
-                  }}
-                />
-              </Field>
-            </Card>
-            {readyLocalModels.length > 0 && (
-              <section className="space-y-3">
-                <div>
-                  <h2 className="flex items-center gap-2 text-base font-semibold tracking-tight text-foreground">
-                    <HardDrive className="size-4" />
-                    Local models ({readyLocalModels.length})
-                  </h2>
-                  <p className="text-xs text-muted-foreground">
-                    Offline transcription models stored on this machine.
-                  </p>
-                </div>
-                <div className="grid gap-3">
-                  {readyLocalModels.map(([name, model]) => (
+      <SettingsCard
+        icon={Globe}
+        title="Spoken language"
+        description="Set the language you speak, and see the active source and what the model scores mean."
+      >
+        <div className="mt-4 flex flex-col gap-4">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div className="flex flex-wrap items-center gap-2 text-sm">
+              {(hasDownloading || hasVerifying) && (
+                <Badge variant="outline" className="gap-1.5 bg-primary/10 text-primary">
+                  {hasDownloading ? (
+                    <Download className="size-3.5" />
+                  ) : (
+                    <Spinner className="size-3.5" />
+                  )}
+                  {hasDownloading ? "Downloading..." : "Verifying..."}
+                </Badge>
+              )}
+              {activeModelLabel ? (
+                <Badge
+                  variant={activeRemoteServer ? "outline" : "secondary"}
+                  className={cn(
+                    "max-w-[320px] justify-start truncate",
+                    activeRemoteServer &&
+                      (activeRemoteWarning
+                        ? "border-amber-500/40 bg-amber-500/10 text-amber-800 dark:text-amber-300"
+                        : "border-sky-500/40 bg-sky-500/10 text-sky-800 dark:text-sky-300"),
+                  )}
+                >
+                  {activeRemoteServer
+                    ? activeRemoteWarning
+                      ? `Routing risk (${activeRemoteWarning})`
+                      : "Routing to"
+                    : "Active"}: {activeModelLabel}
+                </Badge>
+              ) : (
+                availableToUse.length > 0 && (
+                  <Badge variant="outline" className="border-amber-500/30 bg-amber-500/10 text-amber-700">
+                    No model selected
+                  </Badge>
+                )
+              )}
+            </div>
+            <div className="flex flex-wrap items-center gap-4 text-xs text-muted-foreground">
+              <span className="flex items-center gap-1.5">
+                <Zap className="size-3.5 text-emerald-600" />
+                Speed
+              </span>
+              <span className="flex items-center gap-1.5">
+                <CheckCircle className="size-3.5 text-blue-600" />
+                Accuracy
+              </span>
+              <span className="flex items-center gap-1.5">
+                <HardDrive className="size-3.5" />
+                Size
+              </span>
+              <span className="flex items-center gap-1.5">
+                <Star className="size-3.5 fill-amber-500 text-amber-500" />
+                Recommended
+              </span>
+            </div>
+          </div>
+
+          <Field orientation="responsive" className="rounded-xl border bg-muted/30 p-4">
+            <FieldContent>
+              <FieldLabel htmlFor="language">Spoken Language</FieldLabel>
+              <FieldDescription>
+                The language you speak into Voicetypr. English-only models lock this to English.
+              </FieldDescription>
+            </FieldContent>
+            <LanguageSelection
+              value={languageValue}
+              engine={currentEngine}
+              englishOnly={isEnglishOnlyModel}
+              onValueChange={(value) => {
+                void handleLanguageChange(value);
+              }}
+            />
+          </Field>
+        </div>
+      </SettingsCard>
+
+      {readyLocalModels.length > 0 && (
+        <SettingsCard
+          icon={HardDrive}
+          title={`Local models (${readyLocalModels.length})`}
+          description="Offline transcription models stored on this machine."
+        >
+          <div className="mt-4 grid gap-3">
+            {readyLocalModels.map(([name, model]) => (
                     <ModelCard
                       key={name}
                       name={name}
@@ -785,42 +782,32 @@ export function ModelsSection({
                       isSelected={!activeRemoteServer && currentModel === name}
                     />
                   ))}
-                </div>
-              </section>
-            )}
+          </div>
+        </SettingsCard>
+      )}
 
-            {readyCloudModels.length > 0 && (
-              <section className="space-y-3">
-                <div>
-                  <h2 className="flex items-center gap-2 text-base font-semibold tracking-tight text-foreground">
-                    <Cloud className="size-4" />
-                    Cloud transcription ({readyCloudModels.length})
-                  </h2>
-                  <p className="text-xs text-muted-foreground">
-                    Connected providers that can transcribe without a local model. When selected,
-                    Voicetypr may send Personal Library words, names, and corrections as
-                    transcription context to improve recognition; snippets are not sent.
-                  </p>
-                </div>
-                <div className="grid gap-3">
-                  {readyCloudModels.map(([name, model]) => renderCloudCard([name, model]))}
-                </div>
-              </section>
-            )}
+      {readyCloudModels.length > 0 && (
+        <SettingsCard
+          icon={Cloud}
+          title={`Cloud transcription (${readyCloudModels.length})`}
+          description="Connected providers that can transcribe without a local model. When selected, Voicetypr may send Personal Library words, names, and corrections as transcription context to improve recognition; snippets are not sent."
+        >
+          <div className="mt-4 grid gap-3">
+            {readyCloudModels.map(([name, model]) => renderCloudCard([name, model]))}
+          </div>
+        </SettingsCard>
+      )}
 
-            {(setupLocalModels.length > 0 || setupCloudModels.length > 0) && (
-              <section className="space-y-3">
-                <div>
-                  <h2 className="text-base font-semibold tracking-tight text-foreground">
-                    Set up sources
-                  </h2>
-                  <p className="text-xs text-muted-foreground">
-                    Download local models or connect cloud providers before selecting them.
-                  </p>
-                </div>
-                {setupLocalModels.length > 0 && (
-                  <div className="grid gap-3">
-                    {setupLocalModels.map(([name, model]) => (
+      {(setupLocalModels.length > 0 || setupCloudModels.length > 0) && (
+        <SettingsCard
+          icon={Download}
+          title="Set up sources"
+          description="Download local models or connect cloud providers before selecting them."
+        >
+          <div className="mt-4 space-y-3">
+            {setupLocalModels.length > 0 && (
+              <div className="grid gap-3">
+                {setupLocalModels.map(([name, model]) => (
                       <ModelCard
                         key={name}
                         name={name}
@@ -848,45 +835,42 @@ export function ModelsSection({
                     {setupCloudModels.map(([name, model]) => renderCloudCard([name, model]))}
                   </div>
                 )}
-              </section>
-            )}
+          </div>
+        </SettingsCard>
+      )}
 
-            <section className="space-y-3">
-              <div className="flex items-center justify-between gap-4">
-                <div>
-                  <h2 className="flex items-center gap-2 text-base font-semibold tracking-tight text-foreground">
-                    <Server className="size-4" />
-                    Remote Voicetypr ({remoteServers.length})
-                  </h2>
-                  <p className="text-xs text-muted-foreground">
-                    Use another Voicetypr device on your network without copying audio to the cloud.
-                  </p>
-                </div>
-                <div className="flex flex-wrap gap-2">
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    onClick={() => void discoverRemoteServers(true)}
-                    disabled={isDiscoveringServers}
-                  >
-                    {isDiscoveringServers ? <Spinner className="size-4" /> : null}
-                    Scan LAN
-                  </Button>
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    onClick={() => {
-                      setSelectedDiscoveredServer(null);
-                      setAddServerModalOpen(true);
-                    }}
-                  >
-                    <Plus className="size-4" />
-                    Add manually
-                  </Button>
-                </div>
-              </div>
-              {discoveredServers.length > 0 && (
-                <div className="grid gap-3">
+      <SettingsCard
+        icon={Server}
+        title={`Remote Voicetypr (${remoteServers.length})`}
+        description="Use another Voicetypr device on your network without copying audio to the cloud."
+        action={
+          <div className="flex flex-wrap gap-2">
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => void discoverRemoteServers(true)}
+              disabled={isDiscoveringServers}
+            >
+              {isDiscoveringServers ? <Spinner className="size-4" /> : null}
+              Scan LAN
+            </Button>
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => {
+                setSelectedDiscoveredServer(null);
+                setAddServerModalOpen(true);
+              }}
+            >
+              <Plus className="size-4" />
+              Add manually
+            </Button>
+          </div>
+        }
+      >
+        <div className="mt-4 space-y-3">
+          {discoveredServers.length > 0 && (
+            <div className="grid gap-3">
                   {discoveredServers.map((server) => {
                     const alreadySaved = remoteServers.some(
                       (saved) => saved.host === server.host && saved.port === server.port,
@@ -947,43 +931,42 @@ export function ModelsSection({
                   </EmptyHeader>
                 </Empty>
               )}
-            </section>
+        </div>
+      </SettingsCard>
 
-            {isLoading &&
-              availableToUse.length === 0 &&
-              availableToSetup.length === 0 && (
-                <Empty className="border border-border/60 bg-card/70 py-12">
-                  <EmptyHeader>
-                    <EmptyMedia variant="icon">
-                      <Spinner className="size-5" />
-                    </EmptyMedia>
-                    <EmptyTitle>Loading models</EmptyTitle>
-                    <EmptyDescription>
-                      Checking available transcription sources.
-                    </EmptyDescription>
-                  </EmptyHeader>
-                </Empty>
-              )}
+      {isLoading &&
+        availableToUse.length === 0 &&
+        availableToSetup.length === 0 && (
+          <Empty className="border border-border/60 bg-card/70 py-12">
+            <EmptyHeader>
+              <EmptyMedia variant="icon">
+                <Spinner className="size-5" />
+              </EmptyMedia>
+              <EmptyTitle>Loading models</EmptyTitle>
+              <EmptyDescription>
+                Checking available transcription sources.
+              </EmptyDescription>
+            </EmptyHeader>
+          </Empty>
+        )}
 
-            {!isLoading &&
-              availableToUse.length === 0 &&
-              availableToSetup.length === 0 &&
-              remoteServers.length === 0 && (
-                <Empty className="border border-border/60 bg-card/70 py-12">
-                  <EmptyHeader>
-                    <EmptyMedia variant="icon">
-                      <Bot className="size-5" />
-                    </EmptyMedia>
-                    <EmptyTitle>No models available</EmptyTitle>
-                    <EmptyDescription>
-                      Models will appear here when they become available.
-                    </EmptyDescription>
-                  </EmptyHeader>
-                </Empty>
-              )}
-          </div>
-        </ScrollArea>
-      </div>
+      {!isLoading &&
+        availableToUse.length === 0 &&
+        availableToSetup.length === 0 &&
+        remoteServers.length === 0 && (
+          <Empty className="border border-border/60 bg-card/70 py-12">
+            <EmptyHeader>
+              <EmptyMedia variant="icon">
+                <Bot className="size-5" />
+              </EmptyMedia>
+              <EmptyTitle>No models available</EmptyTitle>
+              <EmptyDescription>
+                Models will appear here when they become available.
+              </EmptyDescription>
+            </EmptyHeader>
+          </Empty>
+        )}
+      </SettingsPage>
 
       {activeProvider && (
         <ApiKeyModal
@@ -1031,6 +1014,6 @@ export function ModelsSection({
             : null
         }
       />
-    </div>
+    </>
   );
 }

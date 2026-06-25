@@ -1,4 +1,3 @@
-import { ScrollArea } from "@/components/ui/scroll-area";
 import {
   Collapsible,
   CollapsibleContent,
@@ -12,7 +11,12 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
-import { 
+import {
+  SettingsCard,
+  SettingsHeader,
+  SettingsPage,
+} from "@/components/settings/settings-ui";
+import {
   ChevronDown,
   Mail,
   Mic,
@@ -22,7 +26,10 @@ import {
   Copy,
   FileText,
   Globe,
-  Monitor
+  Monitor,
+  Wrench,
+  LifeBuoy,
+  Stethoscope,
 } from "lucide-react";
 import XIcon from "@/components/icons/XIcon";
 import { useState, useEffect } from 'react';
@@ -74,7 +81,7 @@ export function HelpSection() {
         ]);
         setAppVersion(appVer);
         setPlatformName(`${os} ${osVer}`);
-        
+
         // Prepare diagnostics info
         const lines: string[] = [
           `App Version: ${appVer}`,
@@ -136,8 +143,8 @@ export function HelpSection() {
   ];
 
   const toggleItem = (itemId: string) => {
-    setOpenItems(prev => 
-      prev.includes(itemId) 
+    setOpenItems(prev =>
+      prev.includes(itemId)
         ? prev.filter(id => id !== itemId)
         : [...prev, itemId]
     );
@@ -152,9 +159,9 @@ Issue Description:
 [Please describe your issue here]
 
 Steps to reproduce:
-1. 
-2. 
-3. 
+1.
+2.
+3.
 
 Expected behavior:
 
@@ -162,7 +169,7 @@ Expected behavior:
 Actual behavior:
 
 `;
-    
+
     setEmailSubject(subject);
     setEmailBody(body);
     setShowEmailModal(true);
@@ -224,163 +231,155 @@ Actual behavior:
   };
 
   return (
-    <div className="h-full min-h-0 flex flex-col">
-      {/* Header */}
-      <div className="shrink-0 px-6 py-4 border-b border-border/40">
-        <div className="flex items-center justify-between">
-          <div>
-            <h1 className="text-2xl font-semibold">Help & Support</h1>
-            <p className="text-sm text-muted-foreground mt-1">
-              Quick fixes and support resources
-            </p>
-          </div>
-        </div>
-      </div>
+    <SettingsPage>
+      <SettingsHeader
+        title="Help"
+        description="Troubleshooting, support, and bug reports."
+      />
 
-      <ScrollArea className="flex-1 min-h-0">
-        <div className="p-6 space-y-6">
-          {/* Quick Fixes Section */}
-          <div className="space-y-4">
-            <h2 className="text-base font-semibold">Quick Fixes</h2>
-            
-            <div className="space-y-2">
-              {quickFixes.map(fix => {
-                const Icon = fix.icon;
-                const isOpen = openItems.includes(fix.id);
-                
-                return (
-                  <Collapsible
-                    key={fix.id}
-                    open={isOpen}
-                    onOpenChange={() => toggleItem(fix.id)}
-                  >
-                    <div className="rounded-lg border border-border/50 bg-card overflow-hidden">
-                      <CollapsibleTrigger className="w-full px-4 py-3 flex items-center justify-between hover:bg-accent/50 transition-colors">
-                        <div className="flex items-center gap-3">
-                          <Icon className="h-4 w-4 text-muted-foreground" />
-                          <span className="text-sm font-medium">{fix.title}</span>
-                        </div>
-                        <ChevronDown className={`h-4 w-4 text-muted-foreground transition-transform ${isOpen ? 'rotate-180' : ''}`} />
-                      </CollapsibleTrigger>
-                      
-                      <CollapsibleContent>
-                        <div className="px-4 pb-4 pt-2 space-y-3 border-t border-border/50">
-                          <div className="space-y-2">
-                            <div className="space-y-1">
-                              <p className="text-xs font-medium text-muted-foreground">Issue</p>
-                              <p className="text-sm">{fix.issue}</p>
-                            </div>
-                            
-                            <div className="space-y-1 mt-3">
-                              <p className="text-xs font-medium text-muted-foreground">Solution</p>
-                              <p className="text-sm">{fix.solution}</p>
-                            </div>
-                          </div>
-                        </div>
-                      </CollapsibleContent>
+      {/* Quick Fixes */}
+      <SettingsCard
+        icon={Wrench}
+        title="Quick fixes"
+        description="Common issues and how to resolve them."
+      >
+        <div className="mt-4 space-y-2">
+          {quickFixes.map(fix => {
+            const Icon = fix.icon;
+            const isOpen = openItems.includes(fix.id);
+
+            return (
+              <Collapsible
+                key={fix.id}
+                open={isOpen}
+                onOpenChange={() => toggleItem(fix.id)}
+              >
+                <div className="rounded-lg border border-border/50 bg-card overflow-hidden">
+                  <CollapsibleTrigger className="w-full px-4 py-3 flex items-center justify-between hover:bg-accent/50 transition-colors">
+                    <div className="flex items-center gap-3">
+                      <Icon className="h-4 w-4 text-muted-foreground" />
+                      <span className="text-sm font-medium">{fix.title}</span>
                     </div>
-                  </Collapsible>
-                );
-              })}
+                    <ChevronDown className={`h-4 w-4 text-muted-foreground transition-transform ${isOpen ? 'rotate-180' : ''}`} />
+                  </CollapsibleTrigger>
+
+                  <CollapsibleContent>
+                    <div className="px-4 pb-4 pt-2 space-y-3 border-t border-border/50">
+                      <div className="space-y-2">
+                        <div className="space-y-1">
+                          <p className="text-xs font-medium text-muted-foreground">Issue</p>
+                          <p className="text-sm">{fix.issue}</p>
+                        </div>
+
+                        <div className="space-y-1 mt-3">
+                          <p className="text-xs font-medium text-muted-foreground">Solution</p>
+                          <p className="text-sm">{fix.solution}</p>
+                        </div>
+                      </div>
+                    </div>
+                  </CollapsibleContent>
+                </div>
+              </Collapsible>
+            );
+          })}
+        </div>
+      </SettingsCard>
+
+      {/* Get Support */}
+      <SettingsCard
+        icon={LifeBuoy}
+        title="Get support"
+        description="Reach out or report a bug with diagnostic info."
+      >
+        <div className="mt-4 space-y-3">
+          <button
+            onClick={handleXSupport}
+            className="w-full rounded-lg border border-border/50 bg-card hover:bg-accent/50 transition-colors p-4 flex items-center justify-between group"
+          >
+            <div className="flex items-center gap-3">
+              <div className="p-2 rounded-lg bg-sage-bg group-hover:bg-sage-bg/80 transition-colors">
+                <XIcon className="h-4 w-4 text-sage" />
+              </div>
+              <div className="text-left">
+                <p className="text-sm font-medium">Follow us on X</p>
+                <p className="text-xs text-muted-foreground">
+                  @voicetypr - Get updates and support
+                </p>
+              </div>
             </div>
-          </div>
+            <ChevronDown className="h-4 w-4 text-muted-foreground -rotate-90" />
+          </button>
 
-          {/* Contact Support Section */}
-          <div className="space-y-4">
-            <h2 className="text-base font-semibold">Get Support</h2>
-            
-            <div className="space-y-3">
-              <button
-                onClick={handleXSupport}
-                className="w-full rounded-lg border border-border/50 bg-card hover:bg-accent/50 transition-colors p-4 flex items-center justify-between group"
-              >
-                <div className="flex items-center gap-3">
-                  <div className="p-2 rounded-lg bg-primary/10 group-hover:bg-primary/20 transition-colors">
-                    <XIcon className="h-4 w-4" />
-                  </div>
-                  <div className="text-left">
-                    <p className="text-sm font-medium">Follow us on X</p>
-                    <p className="text-xs text-muted-foreground">
-                      @voicetypr - Get updates and support
-                    </p>
-                  </div>
-                </div>
-                <ChevronDown className="h-4 w-4 text-muted-foreground -rotate-90" />
-              </button>
-
-              <button
-                onClick={handleEmailSupport}
-                className="w-full rounded-lg border border-border/50 bg-card hover:bg-accent/50 transition-colors p-4 flex items-center justify-between group"
-              >
-                <div className="flex items-center gap-3">
-                  <div className="p-2 rounded-lg bg-primary/10 group-hover:bg-primary/20 transition-colors">
-                    <Mail className="h-4 w-4" />
-                  </div>
-                  <div className="text-left">
-                    <p className="text-sm font-medium">Email Support</p>
-                    <p className="text-xs text-muted-foreground">
-                      Send us an email with diagnostic info
-                    </p>
-                  </div>
-                </div>
-                <ChevronDown className="h-4 w-4 text-muted-foreground -rotate-90" />
-              </button>
+          <button
+            onClick={handleEmailSupport}
+            className="w-full rounded-lg border border-border/50 bg-card hover:bg-accent/50 transition-colors p-4 flex items-center justify-between group"
+          >
+            <div className="flex items-center gap-3">
+              <div className="p-2 rounded-lg bg-sage-bg group-hover:bg-sage-bg/80 transition-colors">
+                <Mail className="h-4 w-4 text-sage" />
+              </div>
+              <div className="text-left">
+                <p className="text-sm font-medium">Email Support</p>
+                <p className="text-xs text-muted-foreground">
+                  Send us an email with diagnostic info
+                </p>
+              </div>
             </div>
-          </div>
+            <ChevronDown className="h-4 w-4 text-muted-foreground -rotate-90" />
+          </button>
+        </div>
+      </SettingsCard>
 
-          {/* Diagnostics Section */}
-          <div className="space-y-4">
-            <h2 className="text-base font-semibold">Diagnostics</h2>
-            
-            <div className="space-y-3">
-              <button
-                onClick={handleCopySystemInfo}
-                className="w-full rounded-lg border border-border/50 bg-card hover:bg-accent/50 transition-colors p-4 flex items-center justify-between group"
-              >
-                <div className="flex items-center gap-3">
-                  <div className="p-2 rounded-lg bg-primary/10 group-hover:bg-primary/20 transition-colors">
-                    <Copy className="h-4 w-4" />
-                  </div>
-                  <div className="text-left">
-                    <p className="text-sm font-medium">Copy System Info</p>
-                    <p className="text-xs text-muted-foreground">
-                      Copy basic system information to clipboard
-                    </p>
-                  </div>
-                </div>
-                <ChevronDown className="h-4 w-4 text-muted-foreground -rotate-90" />
-              </button>
-
-              <button
-                onClick={handleOpenLogs}
-                className="w-full rounded-lg border border-border/50 bg-card hover:bg-accent/50 transition-colors p-4 flex items-center justify-between group"
-              >
-                <div className="flex items-center gap-3">
-                  <div className="p-2 rounded-lg bg-primary/10 group-hover:bg-primary/20 transition-colors">
-                    <FileText className="h-4 w-4" />
-                  </div>
-                  <div className="text-left">
-                    <p className="text-sm font-medium">Open Logs Folder</p>
-                    <p className="text-xs text-muted-foreground">
-                      Open logs folder to attach to support messages
-                    </p>
-                  </div>
-                </div>
-                <ChevronDown className="h-4 w-4 text-muted-foreground -rotate-90" />
-              </button>
-
+      {/* Diagnostics */}
+      <SettingsCard
+        icon={Stethoscope}
+        title="Diagnostics"
+        description="System information to help us debug your issue."
+      >
+        <div className="mt-4 space-y-3">
+          <button
+            onClick={handleCopySystemInfo}
+            className="w-full rounded-lg border border-border/50 bg-card hover:bg-accent/50 transition-colors p-4 flex items-center justify-between group"
+          >
+            <div className="flex items-center gap-3">
+              <div className="p-2 rounded-lg bg-sage-bg group-hover:bg-sage-bg/80 transition-colors">
+                <Copy className="h-4 w-4 text-sage" />
+              </div>
+              <div className="text-left">
+                <p className="text-sm font-medium">Copy System Info</p>
+                <p className="text-xs text-muted-foreground">
+                  Copy basic system information to clipboard
+                </p>
+              </div>
             </div>
-          </div>
+            <ChevronDown className="h-4 w-4 text-muted-foreground -rotate-90" />
+          </button>
+
+          <button
+            onClick={handleOpenLogs}
+            className="w-full rounded-lg border border-border/50 bg-card hover:bg-accent/50 transition-colors p-4 flex items-center justify-between group"
+          >
+            <div className="flex items-center gap-3">
+              <div className="p-2 rounded-lg bg-sage-bg group-hover:bg-sage-bg/80 transition-colors">
+                <FileText className="h-4 w-4 text-sage" />
+              </div>
+              <div className="text-left">
+                <p className="text-sm font-medium">Open Logs Folder</p>
+                <p className="text-xs text-muted-foreground">
+                  Open logs folder to attach to support messages
+                </p>
+              </div>
+            </div>
+            <ChevronDown className="h-4 w-4 text-muted-foreground -rotate-90" />
+          </button>
 
           {/* System Info Footer */}
-          <div className="pt-4">
-            <div className="flex items-center justify-between text-xs text-muted-foreground">
-              <span>Voicetypr v{appVersion}</span>
-              <span>{platformName}</span>
-            </div>
+          <div className="flex items-center justify-between pt-1 text-xs text-muted-foreground">
+            <span>Voicetypr v{appVersion}</span>
+            <span>{platformName}</span>
           </div>
         </div>
-      </ScrollArea>
+      </SettingsCard>
 
       {/* Email Client Selection Modal */}
       <Dialog open={showEmailModal} onOpenChange={setShowEmailModal}>
@@ -421,6 +420,6 @@ Actual behavior:
           </div>
         </DialogContent>
       </Dialog>
-    </div>
+    </SettingsPage>
   );
 }

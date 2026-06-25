@@ -9,7 +9,12 @@ import {
   DialogTrigger,
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
-import { ScrollArea } from "@/components/ui/scroll-area";
+import {
+  SettingsCard,
+  SettingsHeader,
+  SettingsPage,
+  SettingRow,
+} from "@/components/settings/settings-ui";
 import { useLicense } from "@/contexts/LicenseContext";
 import { open } from '@tauri-apps/plugin-shell';
 import { ask } from '@tauri-apps/plugin-dialog';
@@ -104,199 +109,201 @@ export function AccountSection() {
     }
   };
 
+  const isUnlicensed =
+    !isLoading && (!status || status.status === 'expired' || status.status === 'none' || status.status === 'trial');
+
   return (
-    <div className="h-full flex flex-col">
-      {/* Header */}
-      <div className="px-6 py-4 border-b border-border/40">
-        <div className="flex items-center justify-between gap-4">
-          <div className="min-w-0">
-            <div className="flex items-center gap-2">
-              <h1 className="text-2xl font-semibold">Licensing</h1>
-              <Dialog>
-                <DialogTrigger asChild>
-                  <Button type="button" variant="secondary" size="icon" aria-label="Licensing guide" className="rounded-full">
-                    <HelpCircle className="h-4.5 w-4.5" />
-                  </Button>
-                </DialogTrigger>
-                <DialogContent className="sm:max-w-lg">
-                  <DialogHeader>
-                    <DialogTitle>Licensing guide</DialogTitle>
-                    <DialogDescription>
-                      Manage your trial and activate or remove a Pro license.
-                    </DialogDescription>
-                  </DialogHeader>
-                  <div className="space-y-3 text-sm leading-6 text-muted-foreground">
-                    <p><strong className="text-foreground">Trial</strong> shows the remaining trial state when no Pro license is active.</p>
-                    <p><strong className="text-foreground">License activation</strong> validates the key and stores only the app needs to confirm status.</p>
-                    <p><strong className="text-foreground">Purchase</strong> opens the checkout flow when you need to upgrade from trial or free.</p>
-                  </div>
-                </DialogContent>
-              </Dialog>
-            </div>
-            <p className="mt-1 text-sm text-muted-foreground">
-              Manage trial status and license activation.
-            </p>
-          </div>
-          {status && status.status === 'licensed' && (
-            <div className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-green-500/10">
+    <SettingsPage>
+      <SettingsHeader
+        title={
+          <span className="flex items-center gap-2">
+            Licensing
+            <Dialog>
+              <DialogTrigger asChild>
+                <Button type="button" variant="ghost" size="icon-sm" aria-label="Licensing guide" className="size-7 rounded-full text-muted-foreground">
+                  <HelpCircle className="h-4 w-4" />
+                </Button>
+              </DialogTrigger>
+              <DialogContent className="sm:max-w-lg">
+                <DialogHeader>
+                  <DialogTitle>Licensing guide</DialogTitle>
+                  <DialogDescription>
+                    Manage your trial and activate or remove a Pro license.
+                  </DialogDescription>
+                </DialogHeader>
+                <div className="space-y-3 text-sm leading-6 text-muted-foreground">
+                  <p><strong className="text-foreground">Trial</strong> shows the remaining trial state when no Pro license is active.</p>
+                  <p><strong className="text-foreground">License activation</strong> validates the key and stores only the app needs to confirm status.</p>
+                  <p><strong className="text-foreground">Purchase</strong> opens the checkout flow when you need to upgrade from trial or free.</p>
+                </div>
+              </DialogContent>
+            </Dialog>
+          </span>
+        }
+        description="Your trial and license activation."
+        actions={
+          status && status.status === 'licensed' ? (
+            <div className="flex items-center gap-2 rounded-lg bg-green-500/10 px-3 py-1.5">
               <Crown className="h-4 w-4 text-green-600 dark:text-green-400" />
               <span className="text-sm font-medium text-green-600 dark:text-green-400">
                 Pro Licensed
               </span>
             </div>
-          )}
-        </div>
-      </div>
+          ) : undefined
+        }
+      />
 
-      <ScrollArea className="flex-1">
-        <div className="p-6 space-y-6">
-          {/* License Status Section */}
-          <div className="space-y-4">
-            <div className="rounded-lg border border-border/50 bg-card p-4 space-y-4">
-              <div className="flex items-center justify-between">
-                <div className="flex items-center gap-2">
-                  <Shield className="h-4 w-4 text-muted-foreground" />
-                  <span className="text-sm text-muted-foreground">Status</span>
+      <SettingsCard
+        icon={Shield}
+        title="License status"
+        description="Your current trial or Pro license state."
+      >
+        <SettingRow
+          title="Status"
+          control={
+            <Badge variant={getStatusBadgeVariant()} className="font-medium">
+              {isLoading ? 'Loading...' : formatLicenseStatus()}
+            </Badge>
+          }
+        />
+
+        {!isLoading && !status && (
+          <SettingRow
+            title="Couldn’t load license status"
+            description="We weren’t able to read your license. Try again."
+            control={
+              <Button onClick={checkStatus} variant="outline" size="sm">
+                Retry
+              </Button>
+            }
+          />
+        )}
+
+        {/* Licensed user info */}
+        {status && status.status === 'licensed' && (
+          <div className="mt-4 space-y-4">
+            <div className="space-y-3 rounded-lg border border-green-500/20 bg-green-500/10 p-4">
+              <div className="flex items-start gap-3">
+                <div className="rounded-md bg-green-500/10 p-1.5">
+                  <Check className="h-4 w-4 text-green-600 dark:text-green-400" />
                 </div>
-                <Badge variant={getStatusBadgeVariant()} className="font-medium">
-                  {isLoading ? 'Loading...' : formatLicenseStatus()}
-                </Badge>
-              </div>
-
-              {!isLoading && !status && (
-                <div className="flex items-center justify-between gap-2">
-                  <p className="text-xs text-muted-foreground">
-                    Couldn’t load license status.
+                <div className="flex-1 space-y-1">
+                  <p className="text-sm font-medium text-green-900 dark:text-green-100">
+                    Voicetypr Pro Active
                   </p>
-                  <Button onClick={checkStatus} variant="outline" size="sm">
-                    Retry
-                  </Button>
-                </div>
-              )}
-
-              {/* Licensed user info */}
-              {status && status.status === 'licensed' && (
-                <div className="space-y-4">
-                  <div className="bg-green-500/10 border border-green-500/20 rounded-lg p-4 space-y-3">
-                    <div className="flex items-start gap-3">
-                      <div className="p-1.5 rounded-md bg-green-500/10">
-                        <Check className="h-4 w-4 text-green-600 dark:text-green-400" />
-                      </div>
-                      <div className="flex-1 space-y-1">
-                        <p className="text-sm font-medium text-green-900 dark:text-green-100">
-                          Voicetypr Pro Active
-                        </p>
-                        {status.license_key && (
-                          <p className="text-xs text-green-700 dark:text-green-300 font-mono">
-                            License: ****-****-****-{status.license_key.slice(-4)}
-                          </p>
-                        )}
-                        <p className="text-xs text-muted-foreground mt-2">
-                          All pro features unlocked
-                        </p>
-                      </div>
-                    </div>
-                  </div>
-
-                  <div className="flex gap-2">
-                    <Button
-                      onClick={() => openExternalLink("https://polar.sh/ideaplexa/portal")}
-                      variant="outline"
-                      size="sm"
-                      className="flex-1"
-                    >
-                      Manage License
-                    </Button>
-                    <Button
-                      onClick={handleDeactivate}
-                      variant="outline"
-                      size="sm"
-                      className="flex-1"
-                    >
-                      Deactivate License
-                    </Button>
-                  </div>
-                </div>
-              )}
-
-              {/* Actions for unlicensed/expired users */}
-              {(!isLoading && (!status || status.status === 'expired' || status.status === 'none' || status.status === 'trial')) && (
-                <div className="space-y-4">
-                  {/* Trial/Expired Notice */}
-                  {status && (status.status === 'trial' || status.status === 'expired') && (
-                    <div className="bg-amber-500/10 border border-amber-500/20 rounded-lg p-4">
-                      <div className="flex items-start gap-3">
-                        <div className="p-1.5 rounded-md bg-amber-500/10">
-                          <Clock className="h-4 w-4 text-amber-500" />
-                        </div>
-                        <div className="flex-1 space-y-1">
-                          <p className="text-sm font-medium text-amber-900 dark:text-amber-400">
-                            {status.status === 'trial' ? 'Trial Active' : 'Trial Expired'}
-                          </p>
-                          <p className="text-xs text-amber-800 dark:text-amber-500">
-                            {status.status === 'trial' && status.trial_days_left !== undefined
-                              ? status.trial_days_left > 0
-                                ? `${status.trial_days_left} day${status.trial_days_left !== 1 ? 's' : ''} remaining in your trial`
-                                : 'Trial expires today'
-                              : 'Upgrade to Pro to continue'}
-                          </p>
-                        </div>
-                      </div>
-                    </div>
-                  )}
-
-                  <div className="flex gap-2">
-                    <Button
-                      onClick={openPurchasePage}
-                      className="flex-1"
-                      size="sm"
-                    >
-                      <Crown className="h-3.5 w-3.5 mr-1.5" />
-                      Buy License
-                    </Button>
-                    <Button
-                      onClick={() => openExternalLink("https://polar.sh/ideaplexa/portal")}
-                      variant="outline"
-                      size="sm"
-                      className="flex-1"
-                    >
-                      Manage License
-                    </Button>
-                  </div>
-
-                  <div className="space-y-2 pt-2 border-t border-border/50">
-                    <p className="text-sm font-medium">Have a license key?</p>
-                    <div className="flex gap-2">
-                      <Input
-                        placeholder="Enter license key"
-                        value={licenseKey}
-                        onChange={(e) => setLicenseKey(e.target.value)}
-                        onKeyDown={(e) => {
-                          if (e.key === 'Enter') {
-                            handleActivate();
-                          }
-                        }}
-                        className="flex-1 text-sm"
-                      />
-                      <Button
-                        onClick={handleActivate}
-                        disabled={!licenseKey.trim() || isActivating}
-                        size="sm"
-                      >
-                        {isActivating ? 'Activating...' : 'Activate'}
-                      </Button>
-                    </div>
-                    <p className="text-xs text-muted-foreground">
-                      You may be prompted for your password to securely store the license
+                  {status.license_key && (
+                    <p className="font-mono text-xs text-green-700 dark:text-green-300">
+                      License: ****-****-****-{status.license_key.slice(-4)}
                     </p>
-                  </div>
+                  )}
+                  <p className="mt-2 text-xs text-muted-foreground">
+                    All pro features unlocked
+                  </p>
                 </div>
-              )}
+              </div>
             </div>
 
+            <div className="flex gap-2">
+              <Button
+                onClick={() => openExternalLink("https://polar.sh/ideaplexa/portal")}
+                variant="outline"
+                size="sm"
+                className="flex-1"
+              >
+                Manage License
+              </Button>
+              <Button
+                onClick={handleDeactivate}
+                variant="outline"
+                size="sm"
+                className="flex-1"
+              >
+                Deactivate License
+              </Button>
+            </div>
           </div>
-        </div>
-      </ScrollArea>
-    </div>
+        )}
+
+        {/* Trial/Expired notice for unlicensed users */}
+        {status && (status.status === 'trial' || status.status === 'expired') && (
+          <div className="mt-4 rounded-lg border border-amber-500/20 bg-amber-500/10 p-4">
+            <div className="flex items-start gap-3">
+              <div className="rounded-md bg-amber-500/10 p-1.5">
+                <Clock className="h-4 w-4 text-amber-500" />
+              </div>
+              <div className="flex-1 space-y-1">
+                <p className="text-sm font-medium text-amber-900 dark:text-amber-400">
+                  {status.status === 'trial' ? 'Trial Active' : 'Trial Expired'}
+                </p>
+                <p className="text-xs text-amber-800 dark:text-amber-500">
+                  {status.status === 'trial' && status.trial_days_left !== undefined
+                    ? status.trial_days_left > 0
+                      ? `${status.trial_days_left} day${status.trial_days_left !== 1 ? 's' : ''} remaining in your trial`
+                      : 'Trial expires today'
+                    : 'Upgrade to Pro to continue'}
+                </p>
+              </div>
+            </div>
+          </div>
+        )}
+      </SettingsCard>
+
+      {/* Activate / purchase for unlicensed, expired, or trial users */}
+      {isUnlicensed && (
+        <SettingsCard
+          icon={Crown}
+          title="Activate license"
+          description="Upgrade to Pro or enter an existing license key."
+        >
+          <div className="mt-4 space-y-4">
+            <div className="flex gap-2">
+              <Button
+                onClick={openPurchasePage}
+                className="flex-1"
+                size="sm"
+              >
+                <Crown className="mr-1.5 h-3.5 w-3.5" />
+                Buy License
+              </Button>
+              <Button
+                onClick={() => openExternalLink("https://polar.sh/ideaplexa/portal")}
+                variant="outline"
+                size="sm"
+                className="flex-1"
+              >
+                Manage License
+              </Button>
+            </div>
+
+            <div className="space-y-2 border-t border-border/50 pt-4">
+              <p className="text-sm font-medium">Have a license key?</p>
+              <div className="flex gap-2">
+                <Input
+                  placeholder="Enter license key"
+                  value={licenseKey}
+                  onChange={(e) => setLicenseKey(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') {
+                      handleActivate();
+                    }
+                  }}
+                  className="flex-1 text-sm"
+                />
+                <Button
+                  onClick={handleActivate}
+                  disabled={!licenseKey.trim() || isActivating}
+                  size="sm"
+                >
+                  {isActivating ? 'Activating...' : 'Activate'}
+                </Button>
+              </div>
+              <p className="text-xs text-muted-foreground">
+                You may be prompted for your password to securely store the license
+              </p>
+            </div>
+          </div>
+        </SettingsCard>
+      )}
+    </SettingsPage>
   );
 }

@@ -30,6 +30,7 @@ import { cn } from "@/lib/utils";
 import { getModelDisplayName } from "@/lib/model-display";
 import { isCloudEngine } from "@/lib/cloudProviders";
 import { ScrollArea } from "@/components/ui/scroll-area";
+import { SettingsPage, SettingsHeader, SettingsCard } from "@/components/settings/settings-ui";
 import { useUploadStore } from "@/state/upload";
 import { createLogger } from "@/lib/logger";
 
@@ -291,55 +292,51 @@ export function AudioUploadSection() {
   }, []);
 
   return (
-    <div className="h-full min-h-0 flex flex-col">
-      {/* Header */}
-      <div className="shrink-0 px-6 py-4 border-b border-border/40">
-        <div className="flex items-center justify-between gap-4">
-          <div className="min-w-0">
-            <div className="flex items-center gap-2">
-              <h1 className="text-2xl font-semibold">Upload files</h1>
-              <Dialog>
-                <DialogTrigger asChild>
-                  <Button type="button" variant="secondary" size="icon" aria-label="Upload guide" className="rounded-full">
-                    <HelpCircle className="h-4.5 w-4.5" />
-                  </Button>
-                </DialogTrigger>
-                <DialogContent className="sm:max-w-lg">
-                  <DialogHeader>
-                    <DialogTitle>Upload guide</DialogTitle>
-                    <DialogDescription>
-                      Upload uses your currently selected transcription source. Change it in Transcription if you want a different model or remote device first.
-                    </DialogDescription>
-                  </DialogHeader>
-                  <div className="space-y-3 text-sm leading-6 text-muted-foreground">
-                    <p><strong className="text-foreground">Supported files</strong>: WAV, MP3, M4A, FLAC, OGG, MP4, and WebM.</p>
-                    <p><strong className="text-foreground">Video files</strong>: audio is extracted first, then transcribed.</p>
-                    <p><strong className="text-foreground">Long files</strong>: expect longer processing times and higher memory use.</p>
-                  </div>
-                </DialogContent>
-              </Dialog>
-            </div>
-            <p className="mt-1 text-sm text-muted-foreground">
-              Transcribe audio or video files using the same source you use for live recording.
-            </p>
-          </div>
-          <Badge variant="secondary" className="max-w-[280px] truncate">
-            Source: {activeSourceLabel}
-          </Badge>
-        </div>
-      </div>
+    <SettingsPage>
+      <SettingsHeader
+        title="Upload"
+        description="Transcribe existing audio files, then copy or save the transcript."
+        actions={
+          <>
+            <Badge variant="secondary" className="max-w-[280px] truncate">
+              Source: {activeSourceLabel}
+            </Badge>
+            <Dialog>
+              <DialogTrigger asChild>
+                <Button type="button" variant="ghost" size="icon-sm" aria-label="Upload guide" className="size-7 rounded-full text-muted-foreground">
+                  <HelpCircle className="h-4 w-4" />
+                </Button>
+              </DialogTrigger>
+              <DialogContent className="sm:max-w-lg">
+                <DialogHeader>
+                  <DialogTitle>Upload guide</DialogTitle>
+                  <DialogDescription>
+                    Upload uses your currently selected transcription source. Change it in Transcription if you want a different model or remote device first.
+                  </DialogDescription>
+                </DialogHeader>
+                <div className="space-y-3 text-sm leading-6 text-muted-foreground">
+                  <p><strong className="text-foreground">Supported files</strong>: WAV, MP3, M4A, FLAC, OGG, MP4, and WebM.</p>
+                  <p><strong className="text-foreground">Video files</strong>: audio is extracted first, then transcribed.</p>
+                  <p><strong className="text-foreground">Long files</strong>: expect longer processing times and higher memory use.</p>
+                </div>
+              </DialogContent>
+            </Dialog>
+          </>
+        }
+      />
 
-      <ScrollArea className="flex-1 min-h-0">
-        <div className="p-6 space-y-6">
-          {/* Upload Card */}
-          <div className={cn(
-            "rounded-lg border-2 bg-card overflow-hidden transition-all",
-            isDragging
-              ? "border-primary bg-primary/5 scale-[1.02]"
-              : "border-border/50"
-          )}>
-            <div className="p-6">
-              <div className="space-y-4">
+      <SettingsCard
+        icon={Upload}
+        title="Audio file"
+        description="Drag and drop an audio or video file, or browse to select one, then transcribe."
+      >
+        <div className={cn(
+          "mt-4 rounded-lg border-2 overflow-hidden transition-all",
+          isDragging
+            ? "border-primary bg-primary/5 scale-[1.02]"
+            : "border-transparent"
+        )}>
+          <div className="space-y-4">
                 {/* File Selection / Drop Zone */}
                 {status !== 'done' && (
                     <div className="space-y-4">
@@ -424,10 +421,18 @@ export function AudioUploadSection() {
                       )}
                   </div>
                 )}
+          </div>
+        </div>
+      </SettingsCard>
 
-                {/* Transcription Result */}
-                {status === 'done' && resultText && selectedFile && (
-                    <div className="space-y-4">
+      {/* Transcription Result */}
+      {status === 'done' && resultText && selectedFile && (
+        <SettingsCard
+          icon={FileText}
+          title="Transcript"
+          description="Copy the text or save it to a file. Transcripts are also saved to History."
+        >
+                    <div className="mt-4 space-y-4">
                       <div className="p-4 rounded-lg bg-accent/30 space-y-3">
                         <div className="flex items-start gap-4">
                           <div className="flex-1">
@@ -506,45 +511,34 @@ export function AudioUploadSection() {
                         </Button>
                       </div>
                     </div>
-                )}
+        </SettingsCard>
+      )}
 
-                {status === 'error' && storeError && (
-                    <div className="p-4 rounded-lg bg-amber-500/10 border border-amber-200/50 flex items-start gap-2">
-                      <AlertCircle className="h-4 w-4 text-amber-600 mt-0.5" />
-                      <div>
-                        <p className="text-sm text-amber-700">{storeError}</p>
-                      </div>
-                    </div>
-                )}
-              </div>
-            </div>
-          </div>
-
-          {/* Info Card */}
-          <div className="rounded-lg border border-border/50 bg-card overflow-hidden">
-            <div className="p-4">
-              <div className="flex items-start gap-3">
-                <div className="p-1.5 rounded-md bg-muted">
-                  <AlertCircle className="h-4 w-4 text-muted-foreground" />
-                </div>
-                <div className="space-y-2 flex-1">
-                  <h3 className="font-medium text-sm">Important Information</h3>
-                  <div className="text-sm text-muted-foreground space-y-1">
-                    <p>• <strong>Supported Formats:</strong> WAV, MP3, M4A, FLAC, OGG, MP4, WebM</p>
-                    <p>• <strong>Conversion:</strong> Non-WAV files will be converted to 16 kHz mono WAV before transcription; this may take time</p>
-                    <p>• <strong>Video:</strong> Video files are supported; audio is extracted first</p>
-                    <p>• <strong>Processing:</strong> Uses your selected local, cloud, or remote transcription source</p>
-                    <p>• <strong>Duration:</strong> Longer media may take longer and use more memory</p>
-                    <p className="font-medium text-foreground/80 mt-2">
-                      Long media (4-5+ hours) may take several minutes and use significant memory.
-                    </p>
-                  </div>
-                </div>
-              </div>
-            </div>
+      {status === 'error' && storeError && (
+        <div className="rounded-lg bg-amber-500/10 border border-amber-200/50 p-4 flex items-start gap-2">
+          <AlertCircle className="h-4 w-4 text-amber-600 mt-0.5" />
+          <div>
+            <p className="text-sm text-amber-700">{storeError}</p>
           </div>
         </div>
-      </ScrollArea>
-    </div>
+      )}
+
+      <SettingsCard
+        icon={AlertCircle}
+        title="Important information"
+        description="What to expect when uploading audio and video files."
+      >
+        <div className="mt-4 text-sm text-muted-foreground space-y-1">
+          <p>• <strong>Supported Formats:</strong> WAV, MP3, M4A, FLAC, OGG, MP4, WebM</p>
+          <p>• <strong>Conversion:</strong> Non-WAV files will be converted to 16 kHz mono WAV before transcription; this may take time</p>
+          <p>• <strong>Video:</strong> Video files are supported; audio is extracted first</p>
+          <p>• <strong>Processing:</strong> Uses your selected local, cloud, or remote transcription source</p>
+          <p>• <strong>Duration:</strong> Longer media may take longer and use more memory</p>
+          <p className="font-medium text-foreground/80 mt-2">
+            Long media (4-5+ hours) may take several minutes and use significant memory.
+          </p>
+        </div>
+      </SettingsCard>
+    </SettingsPage>
   );
 }

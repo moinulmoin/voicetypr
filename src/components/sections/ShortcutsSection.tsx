@@ -1,6 +1,6 @@
 import { BareModifierSpec, HotkeyInput } from "@/components/HotkeyInput";
 import { Button } from "@/components/ui/button";
-import { ScrollArea } from "@/components/ui/scroll-area";
+import { SettingsCard, SettingsHeader, SettingsPage } from "@/components/settings/settings-ui";
 import { Spinner } from "@/components/ui/spinner";
 import { normalizeShortcutKeys, ValidationPresets } from "@/lib/keyboard-normalizer";
 import type {
@@ -377,84 +377,70 @@ export function ShortcutsSection() {
   }, [editingDisabled, isCapturing]);
 
   return (
-    <div className="h-full min-h-0 flex flex-col">
-      <div className="shrink-0 border-b border-border/40 px-6 py-4">
-        <div className="flex items-center gap-2">
-          <h1 className="text-2xl font-semibold">Shortcuts</h1>
+    <SettingsPage>
+      <SettingsHeader
+        title="Shortcuts"
+        description="Keyboard shortcuts for recording, history, formatting, and the dashboard."
+      />
+
+      <div className="rounded-2xl border border-border bg-muted/40 p-4 text-sm text-muted-foreground">
+        <div className="flex gap-2">
+          <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-sage" />
+          <p>
+            Voicetypr tests global shortcuts and refuses combos already owned by macOS, Windows, or another app.
+          </p>
         </div>
-        <p className="mt-1 text-sm text-muted-foreground">
-          Configure global shortcuts for recording, history, formatting modes, and the dashboard.{" "}
-          These supplement your primary recording shortcut in Settings.
+        <p className="mt-1 text-xs">
+          {singleKeyCount} of {MAX_SINGLE_KEY_BINDINGS} single-key shortcuts used.
         </p>
       </div>
 
-      <ScrollArea className="flex-1 min-h-0">
-        <div className="space-y-5 p-6">
-          <div className="rounded-lg border border-border/60 bg-muted/40 p-3 text-sm text-muted-foreground">
-            <div className="flex gap-2">
-              <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-foreground/70" />
-              <p>
-                Voicetypr tests global shortcuts and refuses combos already owned by macOS, Windows, or another app.
-              </p>
-            </div>
-            <p className="mt-1 text-xs">
-              {singleKeyCount} of {MAX_SINGLE_KEY_BINDINGS} single-key shortcuts used.
-            </p>
-          </div>
+      {actionLoadError && (
+        <div role="alert" className="rounded-2xl border border-destructive/30 bg-destructive/10 p-3 text-sm text-destructive">
+          Shortcut actions could not be loaded: {actionLoadError}. You can still review saved shortcuts once the app reconnects.
+        </div>
+      )}
 
-          {actionLoadError && (
-            <div role="alert" className="rounded-lg border border-destructive/30 bg-destructive/10 p-3 text-sm text-destructive">
-              Shortcut actions could not be loaded: {actionLoadError}. You can still review saved shortcuts once the app reconnects.
-            </div>
-          )}
+      {settingsLoadError && (
+        <div role="alert" className="rounded-2xl border border-destructive/30 bg-destructive/10 p-3 text-sm text-destructive">
+          Shortcut settings could not be loaded: {settingsLoadError}. Reload shortcut settings before editing; controls are read-only to avoid overwriting existing shortcuts.
+        </div>
+      )}
 
-          {settingsLoadError && (
-            <div role="alert" className="rounded-lg border border-destructive/30 bg-destructive/10 p-3 text-sm text-destructive">
-              Shortcut settings could not be loaded: {settingsLoadError}. Reload shortcut settings before editing; controls are read-only to avoid overwriting existing shortcuts.
-            </div>
-          )}
+      {loading ? (
+        <div className="flex items-center gap-2 rounded-2xl border border-border bg-card p-4 text-sm text-muted-foreground">
+          <Spinner className="h-4 w-4" />
+          Loading shortcuts…
+        </div>
+      ) : groupedActions.length === 0 ? (
+        <div className="rounded-2xl border border-border bg-card p-6 text-sm text-muted-foreground">
+          No shortcut actions are available.
+        </div>
+      ) : (
+        groupedActions.map(([section, sectionActions]) => {
+          const sectionBindingCount = sectionActions.reduce(
+            (count, action) => count + (bindingsByAction.get(action.action)?.length ?? 0),
+            0,
+          );
 
-          {loading ? (
-            <div className="flex items-center gap-2 rounded-xl border border-border/60 bg-card p-4 text-sm text-muted-foreground">
-              <Spinner className="h-4 w-4" />
-              Loading shortcuts…
-            </div>
-          ) : groupedActions.length === 0 ? (
-            <div className="rounded-xl border border-border/60 bg-card p-6 text-sm text-muted-foreground">
-              No shortcut actions are available.
-            </div>
-          ) : (
-            groupedActions.map(([section, sectionActions]) => {
-              const sectionBindingCount = sectionActions.reduce(
-                (count, action) => count + (bindingsByAction.get(action.action)?.length ?? 0),
-                0,
-              );
-
-              return (
-                <section key={section} className="rounded-xl border border-border/60 bg-card">
-                  <div className="border-b border-border/60 px-4 py-3">
-                    <div className="flex items-center gap-2">
-                      <div className="rounded-md bg-primary/10 p-1.5">
-                        <Keyboard className="h-4 w-4 text-primary" />
-                      </div>
-                      <div>
-                        <h2 className="font-medium">{section}</h2>
-                        <p className="text-xs text-muted-foreground">
-                          {sectionBindingCount === 1 ? "1 binding configured" : `${sectionBindingCount} bindings configured`}
-                        </p>
-                      </div>
-                    </div>
-                  </div>
-
-                  <div className="divide-y divide-border/60">
-                    {sectionActions.map((action) => {
+          return (
+            <SettingsCard
+              key={section}
+              icon={Keyboard}
+              title={section}
+              description={
+                sectionBindingCount === 1 ? "1 binding configured" : `${sectionBindingCount} bindings configured`
+              }
+            >
+              <div className="mt-4 divide-y divide-border">
+                {sectionActions.map((action) => {
                       const bindings = bindingsByAction.get(action.action) ?? [];
 
                       return (
-                        <div key={action.action} role="group" aria-label={action.label} className="space-y-3 p-4">
+                        <div key={action.action} role="group" aria-label={action.label} className="space-y-3 py-4 first:pt-0 last:pb-0">
                           <div className="min-w-0">
-                            <h3 className="font-medium">{action.label}</h3>
-                            <p className="mt-1 text-sm text-muted-foreground">{action.description}</p>
+                            <h3 className="text-[13.5px] font-semibold text-foreground">{action.label}</h3>
+                            <p className="mt-0.5 text-[12.5px] leading-relaxed text-muted-foreground">{action.description}</p>
                           </div>
 
                           {bindings.length === 0 ? (
@@ -478,7 +464,7 @@ export function ShortcutsSection() {
                                 if (isEditing && editingCapture) {
                                   // ── Edit / capture mode ──────────────────────────
                                   return (
-                                    <div key={binding.id} className="rounded-lg border border-primary/40 bg-primary/5 p-3 space-y-3">
+                                    <div key={binding.id} className="rounded-xl border border-sage/40 bg-sage-bg/40 p-3 space-y-3">
                                       <div className="flex items-start gap-2">
                                         <HotkeyInput
                                           inline
@@ -539,7 +525,7 @@ export function ShortcutsSection() {
 
                                 // ── Read mode ────────────────────────────────────
                                 return (
-                                  <div key={binding.id} className="flex flex-col gap-3 rounded-lg border border-border/60 p-3 sm:flex-row sm:items-center sm:justify-between">
+                                  <div key={binding.id} className="flex flex-col gap-3 rounded-xl border border-border p-3 sm:flex-row sm:items-center sm:justify-between">
                                     <span aria-label={`${action.label} shortcut`} className="font-mono text-sm">
                                       {formatBindingDisplay(binding)}
                                     </span>
@@ -575,13 +561,11 @@ export function ShortcutsSection() {
                         </div>
                       );
                     })}
-                  </div>
-                </section>
-              );
-            })
-          )}
-        </div>
-      </ScrollArea>
-    </div>
+              </div>
+            </SettingsCard>
+          );
+        })
+      )}
+    </SettingsPage>
   );
 }

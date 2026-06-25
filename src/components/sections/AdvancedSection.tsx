@@ -1,5 +1,11 @@
 import { PermissionErrorBoundary } from "@/components/PermissionErrorBoundary";
 import { TelemetrySection } from "./TelemetrySection";
+import {
+  SettingsCard,
+  SettingsHeader,
+  SettingsPage,
+  SettingRow,
+} from "@/components/settings/settings-ui";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -9,7 +15,6 @@ import {
   DialogTitle,
   DialogTrigger,
 } from "@/components/ui/dialog";
-import { ScrollArea } from "@/components/ui/scroll-area";
 import {
   Tooltip,
   TooltipContent,
@@ -29,6 +34,8 @@ import {
   Loader2,
   Mic,
   RefreshCw,
+  RotateCcw,
+  ShieldCheck,
   Trash2
 } from "lucide-react";
 import { useEffect, useState } from "react";
@@ -118,213 +125,194 @@ export function AdvancedSection() {
 
   return (
     <PermissionErrorBoundary>
-      <div className="h-full min-h-0 flex flex-col">
-        {/* Header */}
-        <div className="shrink-0 px-6 py-4 border-b border-border/40">
-          <div className="flex items-center justify-between">
-            <div className="min-w-0">
-              <div className="flex items-center gap-2">
-                <h1 className="text-2xl font-semibold">Advanced</h1>
-                <Dialog>
-                  <DialogTrigger asChild>
-                    <Button type="button" variant="secondary" size="icon" aria-label="Advanced guide" className="rounded-full">
-                      <HelpCircle className="h-4.5 w-4.5" />
-                    </Button>
-                  </DialogTrigger>
-                  <DialogContent className="sm:max-w-lg">
-                    <DialogHeader>
-                      <DialogTitle>Advanced guide</DialogTitle>
-                      <DialogDescription>
-                        Advanced settings are for permissions, onboarding recovery, and clearing app state.
-                      </DialogDescription>
-                    </DialogHeader>
-                    <div className="space-y-3 text-sm leading-6 text-muted-foreground">
-                      <p><strong className="text-foreground">Permissions</strong> refreshes microphone and accessibility access after macOS changes.</p>
-                      <p><strong className="text-foreground">Onboarding reset</strong> reruns setup without deleting your transcript history.</p>
-                      <p><strong className="text-foreground">Factory reset</strong> is destructive and should only be used when you want to clear local app data.</p>
-                    </div>
-                  </DialogContent>
-                </Dialog>
-              </div>
-              <p className="mt-1 text-sm text-muted-foreground">
-                System permissions and app management
-              </p>
-            </div>
-          </div>
-        </div>
-
-        <ScrollArea className="flex-1 min-h-0">
-          <div className="p-6 space-y-6">
-            {/* Permissions Section - Only show on macOS */}
-            {showAccessibility && (
-              <div className="space-y-4">
-                <div className="flex items-center justify-between">
-                  <h2 className="text-base font-semibold">Permissions</h2>
-                  <TooltipProvider>
-                    <Tooltip>
-                      <TooltipTrigger asChild>
-                        <Button
-                          size="sm"
-                          variant="ghost"
-                          onClick={() => refresh()}
-                          disabled={isLoading}
-                          className="h-8 px-2"
-                        >
-                          {isLoading ? (
-                            <Loader2 className="h-4 w-4 animate-spin" />
-                          ) : (
-                            <RefreshCw className="h-4 w-4" />
-                          )}
-                        </Button>
-                      </TooltipTrigger>
-                      <TooltipContent>
-                        <p>Refresh permission status</p>
-                      </TooltipContent>
-                    </Tooltip>
-                  </TooltipProvider>
-                </div>
-
-                <div className="rounded-lg border border-border/50 bg-card p-4 space-y-3">
-                  {permissionData.map((perm) => (
-                    <div
-                      key={perm.type}
-                      className="flex items-center justify-between"
-                    >
-                      <div className="flex items-center gap-3">
-                        <perm.icon className="h-4 w-4 text-muted-foreground" />
-                        <div>
-                          <p className="text-sm font-medium">{perm.title}</p>
-                          <p className="text-xs text-muted-foreground">
-                            {perm.description}
-                          </p>
-                        </div>
-                      </div>
-
-                      <div className="flex items-center">
-                        {perm.status === "checking" ? (
-                          <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
-                        ) : perm.status === "granted" ? (
-                          <div className="flex items-center gap-1.5 text-green-600">
-                            <CheckCircle className="h-4 w-4" />
-                            <span className="text-sm">Granted</span>
-                          </div>
-                        ) : (
-                          <Button
-                            size="sm"
-                            variant="outline"
-                            onClick={() => handleRequestPermission(perm.type)}
-                            disabled={isRequestingPermission === perm.type}
-                          >
-                            {isRequestingPermission === perm.type ? (
-                              <Loader2 className="h-3 w-3 animate-spin" />
-                            ) : (
-                              "Grant"
-                            )}
-                          </Button>
-                        )}
-                      </div>
-                    </div>
-                  ))}
-                </div>
-
-                {(hasMicrophonePermission === false || (showAccessibility && hasAccessibilityPermission === false)) && (
-                  <div className="text-xs text-muted-foreground space-y-1 pt-2">
-                    <p className="font-medium">Missing permissions:</p>
-                    <ul className="list-disc list-inside space-y-0.5 ml-2">
-                      {hasMicrophonePermission === false && <li>Microphone: Required for voice recording</li>}
-                      {showAccessibility && hasAccessibilityPermission === false && <li>Accessibility: Required for global hotkeys</li>}
-                    </ul>
-                  </div>
-                )}
-              </div>
-            )}
-
-            <TelemetrySection />
-
-            {/* Reset Options Section */}
-            <div className="space-y-4">
-              <h2 className="text-base font-semibold">Reset Options</h2>
-
-              <div className="rounded-lg border border-border/50 bg-card p-4 space-y-4">
-                <div className="flex items-center justify-between">
-                  <div className="flex-1">
-                    <p className="text-sm font-medium">Reset Onboarding</p>
-                    <p className="text-xs text-muted-foreground mt-1">
-                      Re-run the initial setup wizard
-                    </p>
-                  </div>
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    onClick={handleResetOnboarding}
-                  >
-                    <RefreshCw className="h-3 w-3" />
-                    Reset
+      <SettingsPage>
+        <SettingsHeader
+          title={
+            <span className="flex items-center gap-2">
+              Advanced
+              <Dialog>
+                <DialogTrigger asChild>
+                  <Button type="button" variant="ghost" size="icon-sm" aria-label="Advanced guide" className="size-7 rounded-full text-muted-foreground">
+                    <HelpCircle className="h-4 w-4" />
                   </Button>
-                </div>
+                </DialogTrigger>
+                <DialogContent className="sm:max-w-lg">
+                  <DialogHeader>
+                    <DialogTitle>Advanced guide</DialogTitle>
+                    <DialogDescription>
+                      Advanced settings are for permissions, onboarding recovery, and clearing app state.
+                    </DialogDescription>
+                  </DialogHeader>
+                  <div className="space-y-3 text-sm leading-6 text-muted-foreground">
+                    <p><strong className="text-foreground">Permissions</strong> refreshes microphone and accessibility access after macOS changes.</p>
+                    <p><strong className="text-foreground">Onboarding reset</strong> reruns setup without deleting your transcript history.</p>
+                    <p><strong className="text-foreground">Factory reset</strong> is destructive and should only be used when you want to clear local app data.</p>
+                  </div>
+                </DialogContent>
+              </Dialog>
+            </span>
+          }
+          description="Permissions, diagnostics, and resetting the app."
+        />
 
-                <div className="pt-3">
-                  <p className="text-sm font-medium mb-1">Reset App Data</p>
-                  <p className="text-xs text-muted-foreground mb-2">
-                    Completely reset Voicetypr to its initial state
-                  </p>
-                  <ul className="text-xs text-muted-foreground list-disc list-inside mb-3 space-y-0.5">
-                    <li>Delete all transcription history</li>
-                    <li>Remove all downloaded models</li>
-                    <li>Clear all settings and preferences</li>
-                    <li>Reset system permissions</li>
-                  </ul>
+        {/* Permissions Section - Only show on macOS */}
+        {showAccessibility && (
+          <SettingsCard
+            icon={ShieldCheck}
+            title="Permissions"
+            description="System access Voicetypr needs to record and trigger hotkeys."
+            action={
+              <TooltipProvider>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      onClick={() => refresh()}
+                      disabled={isLoading}
+                      className="h-8 px-2"
+                    >
+                      {isLoading ? (
+                        <Loader2 className="h-4 w-4 animate-spin" />
+                      ) : (
+                        <RefreshCw className="h-4 w-4" />
+                      )}
+                    </Button>
+                  </TooltipTrigger>
+                  <TooltipContent>
+                    <p>Refresh permission status</p>
+                  </TooltipContent>
+                </Tooltip>
+              </TooltipProvider>
+            }
+          >
+            {permissionData.map((perm) => (
+              <SettingRow
+                key={perm.type}
+                title={
+                  <span className="flex items-center gap-2.5">
+                    <perm.icon className="h-4 w-4 text-muted-foreground" />
+                    {perm.title}
+                  </span>
+                }
+                description={perm.description}
+              >
+                {perm.status === "checking" ? (
+                  <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
+                ) : perm.status === "granted" ? (
+                  <div className="flex items-center gap-1.5 text-green-600">
+                    <CheckCircle className="h-4 w-4" />
+                    <span className="text-sm">Granted</span>
+                  </div>
+                ) : (
                   <Button
-                    variant="destructive"
                     size="sm"
-                    disabled={isResetting}
-                    onClick={async () => {
-                      const confirmed = await ask(
-                        "This action cannot be undone. This will permanently delete all your Voicetypr data.\n\nThe app will restart after reset.\n\nAre you absolutely sure?",
-                        {
-                          title: "Reset App Data",
-                          okLabel: "Reset Everything",
-                          cancelLabel: "Cancel",
-                          kind: "warning"
-                        }
-                      );
-
-                      if (confirmed) {
-                        setIsResetting(true);
-                        try {
-                          await invoke("reset_app_data");
-                          toast.success("App data reset successfully. Restarting...");
-                          setTimeout(() => {
-                            relaunch();
-                          }, 1000);
-                        } catch (error) {
-                          log.error("Failed to reset app data:", error);
-                          toast.error("Failed to reset app data");
-                          setIsResetting(false);
-                        }
-                      }
-                    }}
-                    className="w-full"
+                    variant="outline"
+                    onClick={() => handleRequestPermission(perm.type)}
+                    disabled={isRequestingPermission === perm.type}
                   >
-                    {isResetting ? (
-                      <>
-                        <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                        Resetting...
-                      </>
+                    {isRequestingPermission === perm.type ? (
+                      <Loader2 className="h-3 w-3 animate-spin" />
                     ) : (
-                      <>
-                        <Trash2 className="mr-2 h-4 w-4" />
-                        Reset App Data
-                      </>
+                      "Grant"
                     )}
                   </Button>
-                </div>
-              </div>
-            </div>
+                )}
+              </SettingRow>
+            ))}
 
+            {(hasMicrophonePermission === false || (showAccessibility && hasAccessibilityPermission === false)) && (
+              <div className="mt-4 border-t border-border pt-4 text-xs text-muted-foreground space-y-1">
+                <p className="font-medium">Missing permissions:</p>
+                <ul className="list-disc list-inside space-y-0.5 ml-2">
+                  {hasMicrophonePermission === false && <li>Microphone: Required for voice recording</li>}
+                  {showAccessibility && hasAccessibilityPermission === false && <li>Accessibility: Required for global hotkeys</li>}
+                </ul>
+              </div>
+            )}
+          </SettingsCard>
+        )}
+
+        <TelemetrySection />
+
+        {/* Reset Options Section */}
+        <SettingsCard
+          icon={RotateCcw}
+          title="Reset options"
+          description="Re-run setup or wipe Voicetypr back to a clean state."
+        >
+          <SettingRow
+            title="Reset Onboarding"
+            description="Re-run the initial setup wizard"
+          >
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={handleResetOnboarding}
+            >
+              <RefreshCw className="h-3 w-3" />
+              Reset
+            </Button>
+          </SettingRow>
+
+          <div className="mt-4 border-t border-border pt-4">
+            <p className="text-[13.5px] font-semibold text-foreground mb-1">Reset App Data</p>
+            <p className="text-[12.5px] text-muted-foreground mb-2">
+              Completely reset Voicetypr to its initial state
+            </p>
+            <ul className="text-xs text-muted-foreground list-disc list-inside mb-3 space-y-0.5">
+              <li>Delete all transcription history</li>
+              <li>Remove all downloaded models</li>
+              <li>Clear all settings and preferences</li>
+              <li>Reset system permissions</li>
+            </ul>
+            <Button
+              variant="destructive"
+              size="sm"
+              disabled={isResetting}
+              onClick={async () => {
+                const confirmed = await ask(
+                  "This action cannot be undone. This will permanently delete all your Voicetypr data.\n\nThe app will restart after reset.\n\nAre you absolutely sure?",
+                  {
+                    title: "Reset App Data",
+                    okLabel: "Reset Everything",
+                    cancelLabel: "Cancel",
+                    kind: "warning"
+                  }
+                );
+
+                if (confirmed) {
+                  setIsResetting(true);
+                  try {
+                    await invoke("reset_app_data");
+                    toast.success("App data reset successfully. Restarting...");
+                    setTimeout(() => {
+                      relaunch();
+                    }, 1000);
+                  } catch (error) {
+                    log.error("Failed to reset app data:", error);
+                    toast.error("Failed to reset app data");
+                    setIsResetting(false);
+                  }
+                }
+              }}
+              className="w-full"
+            >
+              {isResetting ? (
+                <>
+                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                  Resetting...
+                </>
+              ) : (
+                <>
+                  <Trash2 className="mr-2 h-4 w-4" />
+                  Reset App Data
+                </>
+              )}
+            </Button>
           </div>
-        </ScrollArea>
-      </div>
+        </SettingsCard>
+      </SettingsPage>
     </PermissionErrorBoundary>
   );
 }
