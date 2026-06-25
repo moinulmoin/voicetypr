@@ -2,7 +2,7 @@
 
 use super::error::ParakeetError;
 use super::messages::{ParakeetCommand, ParakeetResponse};
-use log::{debug, error, trace, warn};
+use log::{debug, error, warn};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
@@ -238,7 +238,25 @@ impl ParakeetSidecar {
                         );
                         return Err(err);
                     }
-                    trace!("Parakeet sidecar: {}", trimmed);
+                    // FluidAudio writes its REAL download/runtime diagnostics
+                    // to stderr (HuggingFace rate-limits, `downloadFailed`,
+                    // CoreML errors, …) as plain text, not JSON protocol.
+                    // Surface error-looking lines at `warn!`; floor everything
+                    // else at `info!` (NOT `trace!`) — the shipped app logs at
+                    // info level, so trace lines are invisible in field logs,
+                    // which would hide the last thing FluidAudio prints before a
+                    // stall. `info` keeps that stall context visible by default.
+                    let lower = trimmed.to_ascii_lowercase();
+                    let looks_like_error = lower.contains("error")
+                        || lower.contains("fail")
+                        || lower.contains("rate limit")
+                        || lower.contains("huggingface")
+                        || trimmed.contains('❌');
+                    if looks_like_error {
+                        warn!("Parakeet sidecar: {}", trimmed);
+                    } else {
+                        log::info!("Parakeet sidecar: {}", trimmed);
+                    }
                 }
             }
         }

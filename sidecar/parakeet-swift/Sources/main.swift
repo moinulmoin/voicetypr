@@ -211,7 +211,7 @@ struct ParakeetSidecar {
         if CommandLine.arguments.count > 1 {
             // Direct file mode for testing
             let audioPath = CommandLine.arguments[1]
-            await loadModel(version: .v3, forceDownload: true, emitStatus: false, encoder: encoder)
+            await loadModel(version: .v3, forceDownload: false, emitStatus: false, encoder: encoder)
             await transcribeFile(audioPath, language: nil, translateToEnglish: false, customVocabulary: [], encoder: encoder)
         } else {
             // JSON communication mode for Tauri
@@ -331,7 +331,7 @@ struct ParakeetSidecar {
             }
         }
 
-        if isModelLoaded, let loadedVersion = loadedModelVersion, loadedVersion == version {
+        if isModelLoaded, !forceDownload, let loadedVersion = loadedModelVersion, loadedVersion == version {
             log("⚡ Model already loaded: \(loadedVersion.modelIdentifier)")
             if emitStatus {
                 sendResponse(StatusResponse(loadedModel: loadedVersion.modelIdentifier, modelVersion: loadedVersion.rawValue), encoder: encoder)
@@ -348,6 +348,16 @@ struct ParakeetSidecar {
             if forceDownload {
                 log("📥 Force-downloading Parakeet \(version.rawValue.uppercased()) via FluidAudio...")
                 log("🌐 This will download ~500MB. Please wait...")
+                // FluidAudio's `downloadAndLoad` calls `download(force: false)`
+                // internally, which silently reuses existing on-disk files (no
+                // resume, no re-fetch). To honor `force_download`, first release
+                // the in-memory model and purge every cache location for this
+                // version (same paths as the `delete_model` handler) so the
+                // subsequent download re-fetches a clean copy.
+                if loadedModelVersion == version {
+                    await unloadModel()
+                }
+                deleteModelFiles(for: version)
                 models = try await withLibraryStdoutRedirected {
                     try await AsrModels.downloadAndLoad(version: version.asrVersion, progressHandler: progressHandler)
                 }
