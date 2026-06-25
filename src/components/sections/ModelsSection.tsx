@@ -24,17 +24,13 @@ import {
   EmptyTitle,
 } from "@/components/ui/empty";
 import {
-  Field,
-  FieldContent,
-  FieldDescription,
-  FieldLabel,
-} from "@/components/ui/field";
-import {
+  SettingRow,
   SettingsCard,
   SettingsHeader,
   SettingsPage,
 } from "@/components/settings/settings-ui";
 import { Spinner } from "@/components/ui/spinner";
+import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { useSettings } from "@/contexts/SettingsContext";
 import { getErrorMessage } from "@/utils/error";
 import { getCloudProviderByModel } from "@/lib/cloudProviders";
@@ -123,6 +119,7 @@ export function ModelsSection({
   const [discoveredServers, setDiscoveredServers] = useState<DiscoveredRemoteServer[]>([]);
   const [selectedDiscoveredServer, setSelectedDiscoveredServer] = useState<DiscoveredRemoteServer | null>(null);
   const [isDiscoveringServers, setIsDiscoveringServers] = useState(false);
+  const [sourceFilter, setSourceFilter] = useState<"all" | "local" | "cloud" | "remote">("all");
 
   const { availableToUse, availableToSetup } = useMemo(() => {
     const useList: [string, ModelInfo][] = [];
@@ -153,6 +150,23 @@ export function ModelsSection({
   const readyCloudModels = availableToUse.filter(([, model]) => isCloudModel(model));
   const setupLocalModels = availableToSetup.filter(([, model]) => isLocalModel(model));
   const setupCloudModels = availableToSetup.filter(([, model]) => isCloudModel(model));
+
+  const localCount = readyLocalModels.length + setupLocalModels.length;
+  const cloudCount = readyCloudModels.length + setupCloudModels.length;
+  const remoteCount = remoteServers.length;
+  const allCount = localCount + cloudCount + remoteCount;
+  const hasRemoteSegment = remoteCount > 0;
+
+  const showLocal = sourceFilter === "all" || sourceFilter === "local";
+  const showCloud = sourceFilter === "all" || sourceFilter === "cloud";
+  const showRemote = sourceFilter === "all" || sourceFilter === "remote";
+
+  // If the selected segment is Remote but no remote servers exist anymore, fall back to All.
+  useEffect(() => {
+    if (sourceFilter === "remote" && !hasRemoteSegment) {
+      setSourceFilter("all");
+    }
+  }, [sourceFilter, hasRemoteSegment]);
 
   // No header summary line — section titles include counts
 
@@ -418,46 +432,6 @@ export function ModelsSection({
     setAddServerModalOpen(true);
   }, []);
 
-  const activeServer = useMemo(
-    () => remoteServers.find((server) => server.id === activeRemoteServer),
-    [activeRemoteServer, remoteServers],
-  );
-
-  const activeModelLabel = useMemo(() => {
-    // If a remote server is active, show "ServerName - ModelName" format
-    if (activeRemoteServer && activeServer) {
-      const serverName = activeServer.name || activeServer.host;
-      if (activeServer.model) {
-        return `${serverName} - ${getModelDisplayName(activeServer.model) ?? activeServer.model}`;
-      }
-      return serverName;
-    }
-    if (activeRemoteServer) {
-      return "Selected remote Voicetypr";
-    }
-    if (!currentModel) return null;
-    const entry = models.find(([name]) => name === currentModel);
-    if (!entry) return getModelDisplayName(currentModel) ?? currentModel;
-    return getModelDisplayName(currentModel, { [currentModel]: entry[1] }) ?? currentModel;
-  }, [currentModel, models, activeRemoteServer, activeServer]);
-
-  const activeRemoteWarning = useMemo(() => {
-    if (!activeRemoteServer) return null;
-
-    switch (activeServer?.status) {
-      case "Online":
-        return null;
-      case "Offline":
-        return "Remote offline";
-      case "AuthFailed":
-        return "Auth failed";
-      case "SelfConnection":
-        return "Self connection";
-      default:
-        return "Status unknown";
-    }
-  }, [activeRemoteServer, activeServer]);
-
   useEffect(() => {
     if (!settings) return;
     if (isEnglishOnlyModel && settings.speech_language !== "en") {
@@ -567,6 +541,29 @@ export function ModelsSection({
     : undefined;
   const isModalOpen = !!cloudModal && !!activeProvider;
 
+  // Subtle inline key explaining the model-card score badges.
+  const modelScoreLegend = (
+    <div className="mb-3 flex flex-wrap items-center gap-x-4 gap-y-1.5 text-[11px] text-muted-foreground">
+      <span className="font-medium uppercase tracking-wide">Badges</span>
+      <span className="flex items-center gap-1.5">
+        <Zap className="size-3.5 text-emerald-600" />
+        Speed
+      </span>
+      <span className="flex items-center gap-1.5">
+        <CheckCircle className="size-3.5 text-blue-600" />
+        Accuracy
+      </span>
+      <span className="flex items-center gap-1.5">
+        <HardDrive className="size-3.5" />
+        Size
+      </span>
+      <span className="flex items-center gap-1.5">
+        <Star className="size-3.5 fill-amber-500 text-amber-500" />
+        Recommended
+      </span>
+    </div>
+  );
+
   const renderCloudCard = useCallback(
     ([name, model]: [string, ModelInfo]) => {
       if (!isCloudModel(model)) return null;
@@ -672,14 +669,12 @@ export function ModelsSection({
         }
       />
 
-      <SettingsCard
-        icon={Globe}
-        title="Spoken language"
-        description="Set the language you speak, and see the active source and what the model scores mean."
-      >
-        <div className="mt-4 flex flex-col gap-4">
-          <div className="flex flex-wrap items-center justify-between gap-3">
-            <div className="flex flex-wrap items-center gap-2 text-sm">
+      <SettingsCard icon={Globe} title="Spoken language">
+        <SettingRow
+          title="Spoken language"
+          description="The language you speak. English-only models lock this to English."
+          control={
+            <div className="flex items-center gap-2">
               {(hasDownloading || hasVerifying) && (
                 <Badge variant="outline" className="gap-1.5 bg-primary/10 text-primary">
                   {hasDownloading ? (
@@ -690,77 +685,50 @@ export function ModelsSection({
                   {hasDownloading ? "Downloading..." : "Verifying..."}
                 </Badge>
               )}
-              {activeModelLabel ? (
-                <Badge
-                  variant={activeRemoteServer ? "outline" : "secondary"}
-                  className={cn(
-                    "max-w-[320px] justify-start truncate",
-                    activeRemoteServer &&
-                      (activeRemoteWarning
-                        ? "border-amber-500/40 bg-amber-500/10 text-amber-800 dark:text-amber-300"
-                        : "border-sky-500/40 bg-sky-500/10 text-sky-800 dark:text-sky-300"),
-                  )}
-                >
-                  {activeRemoteServer
-                    ? activeRemoteWarning
-                      ? `Routing risk (${activeRemoteWarning})`
-                      : "Routing to"
-                    : "Active"}: {activeModelLabel}
-                </Badge>
-              ) : (
-                availableToUse.length > 0 && (
-                  <Badge variant="outline" className="border-amber-500/30 bg-amber-500/10 text-amber-700">
-                    No model selected
-                  </Badge>
-                )
-              )}
+              <LanguageSelection
+                value={languageValue}
+                engine={currentEngine}
+                englishOnly={isEnglishOnlyModel}
+                onValueChange={(value) => {
+                  void handleLanguageChange(value);
+                }}
+              />
             </div>
-            <div className="flex flex-wrap items-center gap-4 text-xs text-muted-foreground">
-              <span className="flex items-center gap-1.5">
-                <Zap className="size-3.5 text-emerald-600" />
-                Speed
-              </span>
-              <span className="flex items-center gap-1.5">
-                <CheckCircle className="size-3.5 text-blue-600" />
-                Accuracy
-              </span>
-              <span className="flex items-center gap-1.5">
-                <HardDrive className="size-3.5" />
-                Size
-              </span>
-              <span className="flex items-center gap-1.5">
-                <Star className="size-3.5 fill-amber-500 text-amber-500" />
-                Recommended
-              </span>
-            </div>
-          </div>
-
-          <Field orientation="responsive" className="rounded-xl border bg-muted/30 p-4">
-            <FieldContent>
-              <FieldLabel htmlFor="language">Spoken Language</FieldLabel>
-              <FieldDescription>
-                The language you speak into Voicetypr. English-only models lock this to English.
-              </FieldDescription>
-            </FieldContent>
-            <LanguageSelection
-              value={languageValue}
-              engine={currentEngine}
-              englishOnly={isEnglishOnlyModel}
-              onValueChange={(value) => {
-                void handleLanguageChange(value);
-              }}
-            />
-          </Field>
-        </div>
+          }
+        />
       </SettingsCard>
 
-      {readyLocalModels.length > 0 && (
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <ToggleGroup
+          type="single"
+          variant="outline"
+          size="sm"
+          spacing={0}
+          value={sourceFilter}
+          onValueChange={(value) => {
+            if (value) setSourceFilter(value as typeof sourceFilter);
+          }}
+          aria-label="Filter transcription sources"
+        >
+          <ToggleGroupItem value="all">All ({allCount})</ToggleGroupItem>
+          <ToggleGroupItem value="local">Local ({localCount})</ToggleGroupItem>
+          <ToggleGroupItem value="cloud">Cloud ({cloudCount})</ToggleGroupItem>
+          {hasRemoteSegment && (
+            <ToggleGroupItem value="remote">Remote ({remoteCount})</ToggleGroupItem>
+          )}
+        </ToggleGroup>
+      </div>
+
+      {showLocal && readyLocalModels.length > 0 && (
         <SettingsCard
           icon={HardDrive}
           title={`Local models (${readyLocalModels.length})`}
           description="Offline transcription models stored on this machine."
         >
-          <div className="mt-4 grid gap-3">
+          <div className="mt-4">
+            {modelScoreLegend}
+          </div>
+          <div className="grid gap-3">
             {readyLocalModels.map(([name, model]) => (
                     <ModelCard
                       key={name}
@@ -786,7 +754,7 @@ export function ModelsSection({
         </SettingsCard>
       )}
 
-      {readyCloudModels.length > 0 && (
+      {showCloud && readyCloudModels.length > 0 && (
         <SettingsCard
           icon={Cloud}
           title={`Cloud transcription (${readyCloudModels.length})`}
@@ -798,14 +766,15 @@ export function ModelsSection({
         </SettingsCard>
       )}
 
-      {(setupLocalModels.length > 0 || setupCloudModels.length > 0) && (
+      {((showLocal && setupLocalModels.length > 0) ||
+        (showCloud && setupCloudModels.length > 0)) && (
         <SettingsCard
           icon={Download}
           title="Set up sources"
           description="Download local models or connect cloud providers before selecting them."
         >
           <div className="mt-4 space-y-3">
-            {setupLocalModels.length > 0 && (
+            {showLocal && setupLocalModels.length > 0 && (
               <div className="grid gap-3">
                 {setupLocalModels.map(([name, model]) => (
                       <ModelCard
@@ -830,7 +799,7 @@ export function ModelsSection({
                     ))}
                   </div>
                 )}
-                {setupCloudModels.length > 0 && (
+                {showCloud && setupCloudModels.length > 0 && (
                   <div className="grid gap-3">
                     {setupCloudModels.map(([name, model]) => renderCloudCard([name, model]))}
                   </div>
@@ -839,6 +808,7 @@ export function ModelsSection({
         </SettingsCard>
       )}
 
+      {showRemote && (
       <SettingsCard
         icon={Server}
         title={`Remote Voicetypr (${remoteServers.length})`}
@@ -933,6 +903,7 @@ export function ModelsSection({
               )}
         </div>
       </SettingsCard>
+      )}
 
       {isLoading &&
         availableToUse.length === 0 &&
