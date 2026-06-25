@@ -65,11 +65,11 @@ export const ModelCard = function ModelCard({
   return (
     <Card
       className={cn(
-        "group px-4 py-3 border transition-all hover:shadow-sm",
+        "group rounded-xl border border-border bg-card p-4 transition-colors",
         isUsable && showSelectButton ? "cursor-pointer" : "",
         isSelected
-          ? "border-primary/45 bg-primary/5 shadow-sm ring-2 ring-primary/15"
-          : "border-border/60 bg-card/90 hover:border-border"
+          ? "border-sage/50 bg-sage-bg/40"
+          : "hover:border-sage/40 hover:bg-muted/30"
       )}
       onClick={() => isUsable && showSelectButton && onSelect(name)}
     >
@@ -79,42 +79,42 @@ export const ModelCard = function ModelCard({
             <h3
               className={cn(
                 "truncate text-sm font-semibold tracking-tight",
-                isSelected && "text-primary"
+                isSelected && "text-sage"
               )}
             >
               {getModelDisplayName(name, { [name]: model })}
             </h3>
             {model.recommended && (
-              <Badge variant="secondary" className="gap-1 bg-secondary text-secondary-foreground">
-                <Star className="size-3 fill-current text-primary/70" aria-label="Recommended model" />
+              <Badge variant="secondary" className="gap-1 bg-sage-bg text-sage">
+                <Star className="size-3 fill-current" aria-label="Recommended model" />
                 Recommended
               </Badge>
             )}
             {isSelected && (
-              <Badge className="gap-1">
+              <Badge className="gap-1 bg-sage text-sage-foreground">
                 <CheckCircle className="size-3" />
                 Active
               </Badge>
             )}
           </div>
 
-          <div className="mt-2 flex flex-wrap items-center gap-3 text-xs text-muted-foreground">
+          <div className="mt-2.5 flex flex-wrap items-center gap-x-4 gap-y-1.5 text-xs text-muted-foreground">
             <span className="inline-flex items-center gap-1.5">
-              <Zap className="size-3.5 text-emerald-600" />
+              <Zap className="size-3.5 text-sage" />
               Speed <span className="font-medium text-foreground">{model.speed_score}</span>
             </span>
             <span className="inline-flex items-center gap-1.5">
-              <CheckCircle className="size-3.5 text-blue-600" />
+              <CheckCircle className="size-3.5 text-sage" />
               Accuracy <span className="font-medium text-foreground">{model.accuracy_score}</span>
             </span>
             <span className="inline-flex items-center gap-1.5">
-              <HardDrive className="size-3.5 text-muted-foreground" />
+              <HardDrive className="size-3.5 text-sage" />
               <span className="font-mono text-foreground">{formatSize()}</span>
             </span>
           </div>
         </div>
 
-        <div className="flex shrink-0 items-center gap-2">
+        <div className="flex shrink-0 items-center gap-1.5">
           {model.downloaded ? (
             <>
               {onRepair && (
@@ -153,12 +153,12 @@ export const ModelCard = function ModelCard({
           ) : downloadProgress !== undefined ? (
             <>
               {model.engine === 'parakeet' && downloadProgress === 0 ? (
-                <Badge variant="outline" className="gap-1.5 bg-primary/10 text-primary">
+                <Badge variant="outline" className="gap-1.5 bg-sage-bg text-sage">
                   <Spinner className="size-3.5" />
                   {downloadLabel}
                 </Badge>
               ) : (
-                <div className="flex items-center gap-2">
+                <div className="flex items-center gap-2.5">
                   <div className="min-w-0">
                     <Progress value={downloadProgress} className="h-1.5 w-24" />
                     {downloadPhase && (
@@ -167,7 +167,7 @@ export const ModelCard = function ModelCard({
                       </p>
                     )}
                   </div>
-                  <span className="w-10 text-right text-xs font-medium text-primary">
+                  <span className="w-10 text-right text-xs font-medium text-sage">
                     {Math.round(downloadProgress)}%
                   </span>
                 </div>

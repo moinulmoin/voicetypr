@@ -433,25 +433,25 @@ export function RemoteServerCard({
   return (
     <Card
       className={cn(
-        "px-4 py-3 border transition-all hover:shadow-sm",
+        "rounded-xl border border-border bg-card p-4 transition-colors",
         isSelectable && !isActive ? "cursor-pointer" : "cursor-default",
         status === "self_connection"
           ? "border-amber-500/30 bg-amber-500/10"
           : isActive
-            ? "border-sky-500/40 bg-sky-500/5 shadow-sm ring-2 ring-sky-500/20"
+            ? "border-sage/50 bg-sage-bg/40"
             : isSelectable
-              ? "border-border/60 bg-card/90 hover:border-border"
-              : "border-border/60 bg-card/90"
+              ? "hover:border-sage/40 hover:bg-muted/30"
+              : ""
       )}
       onClick={() => isSelectable && !isActive && onSelect(server.id)}
     >
       <div className="flex items-center justify-between gap-4">
-        <div className="flex min-w-0 items-center gap-3">
+        <div className="flex min-w-0 flex-1 items-center gap-3">
           <div
             className={cn(
               "flex size-9 shrink-0 items-center justify-center rounded-lg border",
               isActive
-                ? "border-sky-500/25 bg-sky-500/10 text-sky-700 dark:text-sky-300"
+                ? "border-sage/30 bg-sage-bg text-sage"
                 : status === "online"
                   ? "border-emerald-500/20 bg-emerald-500/10 text-emerald-700"
                   : status === "auth_failed" || status === "self_connection"
@@ -461,12 +461,12 @@ export function RemoteServerCard({
           >
             <Server className="size-4" />
           </div>
-          <div className="min-w-0">
+          <div className="min-w-0 flex-1">
             <div className="flex items-center gap-2">
               <h3
                 className={cn(
                   "truncate text-sm font-semibold tracking-tight",
-                  isActive && "text-sky-800 dark:text-sky-200"
+                  isActive && "text-sage"
                 )}
               >
                 {displayName}
@@ -477,7 +477,7 @@ export function RemoteServerCard({
                   className={cn(
                     "gap-1",
                     status === "online"
-                      ? "border-sky-500/40 bg-sky-500/10 text-sky-800 dark:text-sky-300"
+                      ? "border-sage/40 bg-sage-bg text-sage"
                       : "border-amber-500/40 bg-amber-500/10 text-amber-800 dark:text-amber-300",
                   )}
                 >
@@ -495,7 +495,7 @@ export function RemoteServerCard({
                 </Badge>
               )}
             </div>
-            <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+            <div className="mt-2.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground">
               {status === "unknown" ? (
                 modelDisplayName ? (
                   <>
@@ -566,44 +566,45 @@ export function RemoteServerCard({
           </div>
         </div>
 
-        {isActive && onDeselect && (
-          <Button
-            size="sm"
-            variant="outline"
-            className="shrink-0"
-            onClick={handleDeselect}
-          >
-            Stop routing
-          </Button>
-        )}
+        <div className="flex shrink-0 items-center gap-1.5">
+          {isActive && onDeselect && (
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={handleDeselect}
+            >
+              Stop routing
+            </Button>
+          )}
 
-        <ButtonGroup className="shrink-0">
-          <Button
-            size="sm"
-            variant="ghost"
-            className="size-8 p-0 text-muted-foreground hover:text-foreground"
-            onClick={handleEdit}
-            title="Edit server"
-            aria-label={`Edit ${displayName}`}
-          >
-            <Pencil className="size-4" />
-          </Button>
-          <Button
-            size="sm"
-            variant="ghost"
-            className="size-8 p-0 text-muted-foreground hover:text-destructive"
-            onClick={handleRemove}
-            disabled={removing}
-            title="Remove server"
-            aria-label={`Remove ${displayName}`}
-          >
-            {removing ? (
-              <Spinner className="size-4" />
-            ) : (
-              <Trash2 className="size-4" />
-            )}
-          </Button>
-        </ButtonGroup>
+          <ButtonGroup>
+            <Button
+              size="sm"
+              variant="ghost"
+              className="size-8 p-0 text-muted-foreground hover:text-foreground"
+              onClick={handleEdit}
+              title="Edit server"
+              aria-label={`Edit ${displayName}`}
+            >
+              <Pencil className="size-4" />
+            </Button>
+            <Button
+              size="sm"
+              variant="ghost"
+              className="size-8 p-0 text-muted-foreground hover:text-destructive"
+              onClick={handleRemove}
+              disabled={removing}
+              title="Remove server"
+              aria-label={`Remove ${displayName}`}
+            >
+              {removing ? (
+                <Spinner className="size-4" />
+              ) : (
+                <Trash2 className="size-4" />
+              )}
+            </Button>
+          </ButtonGroup>
+        </div>
       </div>
 
       {showRemoteModelControl && (

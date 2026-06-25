@@ -568,9 +568,11 @@ export function ModelsSection({
         <Card
           key={name}
           className={cn(
-            "px-4 py-3 border transition-all hover:shadow-sm",
-            requiresSetup ? "bg-card/70 opacity-90" : "cursor-pointer bg-card/90 hover:border-border",
-            isActive && "border-primary/45 bg-primary/5 shadow-sm ring-2 ring-primary/15",
+            "group rounded-xl border border-border bg-card p-4 transition-colors",
+            requiresSetup ? "" : "cursor-pointer",
+            isActive
+              ? "border-sage/50 bg-sage-bg/40"
+              : "hover:border-sage/40 hover:bg-muted/30",
           )}
           onClick={async () => {
             if (requiresSetup) {
@@ -582,47 +584,60 @@ export function ModelsSection({
           }}
         >
           <div className="flex items-center justify-between gap-4">
-            <div className="min-w-0">
+            <div className="min-w-0 flex-1">
               <div className="flex items-center gap-2">
                 <h3 className={cn("truncate text-sm font-semibold tracking-tight", isActive && "text-sage")}>
                   {provider?.displayName || provider?.providerName || getModelDisplayName(name, { [name]: model }) || name}
                 </h3>
                 {isActive && (
-                  <Badge className="gap-1">
+                  <Badge className="gap-1 bg-sage text-sage-foreground">
                     <CheckCircle className="size-3" />
                     Active
                   </Badge>
                 )}
               </div>
-              <p className="mt-1 flex flex-wrap items-center gap-3 text-xs text-muted-foreground">
-                <span>{getModelDisplayName(name, { [name]: model }) || "Cloud model"}</span>
-                <span>Speed <span className="font-medium text-foreground">{model.speed_score ?? "—"}</span></span>
-                <span>Accuracy <span className="font-medium text-foreground">{model.accuracy_score ?? "—"}</span></span>
-              </p>
+              {provider?.description && (
+                <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
+                  {provider.description}
+                </p>
+              )}
+              <div className="mt-2 flex flex-wrap items-center gap-x-4 gap-y-1.5 text-xs text-muted-foreground">
+                <span className="inline-flex items-center gap-1.5">
+                  <Zap className="size-3.5 text-sage" />
+                  Speed <span className="font-medium text-foreground">{model.speed_score ?? "—"}</span>
+                </span>
+                <span className="inline-flex items-center gap-1.5">
+                  <CheckCircle className="size-3.5 text-sage" />
+                  Accuracy <span className="font-medium text-foreground">{model.accuracy_score ?? "—"}</span>
+                </span>
+              </div>
             </div>
-            {requiresSetup ? (
-              <Button
-                size="sm"
-                variant="outline"
-                onClick={(event) => {
-                  event.stopPropagation();
-                  openCloudModal(name, "connect");
-                }}
-              >
-                {provider?.setupCta ?? "Add API Key"}
-              </Button>
-            ) : (
-              <Button
-                size="sm"
-                variant="ghost"
-                onClick={(event) => {
-                  event.stopPropagation();
-                  handleCloudDisconnect(name);
-                }}
-              >
-                Remove API Key
-              </Button>
-            )}
+            <div className="flex shrink-0 items-center gap-1.5">
+              {requiresSetup ? (
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    openCloudModal(name, "connect");
+                  }}
+                >
+                  {provider?.setupCta ?? "Add API Key"}
+                </Button>
+              ) : (
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  className="text-muted-foreground hover:text-destructive"
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    handleCloudDisconnect(name);
+                  }}
+                >
+                  Remove API Key
+                </Button>
+              )}
+            </div>
           </div>
         </Card>
       );
@@ -841,21 +856,26 @@ export function ModelsSection({
                     if (alreadySaved) return null;
 
                     return (
-                      <Card key={`${server.machine_id}:${server.host}:${server.port}`} className="border-border/60 bg-card/80 p-4">
-                        <div className="flex flex-wrap items-center justify-between gap-3">
-                          <div className="min-w-0">
+                      <Card
+                        key={`${server.machine_id}:${server.host}:${server.port}`}
+                        className="rounded-xl border border-border bg-card p-4 transition-colors hover:border-sage/40 hover:bg-muted/30"
+                      >
+                        <div className="flex items-center justify-between gap-4">
+                          <div className="min-w-0 flex-1">
                             <div className="flex items-center gap-2">
-                              <Server className="size-4 text-primary" />
-                              <h3 className="truncate text-sm font-semibold">{server.name}</h3>
+                              <Server className="size-4 shrink-0 text-sage" />
+                              <h3 className="truncate text-sm font-semibold tracking-tight">{server.name}</h3>
                               <Badge variant={server.auth_required ? "outline" : "secondary"}>
                                 {server.auth_required ? "Password required" : "Found on LAN"}
                               </Badge>
                             </div>
-                            <p className="mt-1 text-xs text-muted-foreground">
-                              {server.host}:{server.port} · {getModelDisplayName(server.model) ?? humanizeModelId(server.model)}
+                            <p className="mt-2.5 flex flex-wrap items-center gap-x-3 text-xs text-muted-foreground">
+                              <span>{server.host}:{server.port}</span>
+                              <span>·</span>
+                              <span className="truncate">{getModelDisplayName(server.model) ?? humanizeModelId(server.model)}</span>
                             </p>
                           </div>
-                          <Button size="sm" onClick={() => void handleAddDiscoveredServer(server)}>
+                          <Button size="sm" className="shrink-0" onClick={() => void handleAddDiscoveredServer(server)}>
                             {server.auth_required ? "Add with password" : "Add"}
                           </Button>
                         </div>

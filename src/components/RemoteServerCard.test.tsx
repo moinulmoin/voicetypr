@@ -356,7 +356,7 @@ describe("RemoteServerCard", () => {
         expect(screen.getByText("Online")).toBeInTheDocument();
       });
 
-      const card = screen.getByText("192.168.1.100:47842").closest("[class*='px-4']");
+      const card = screen.getByText("192.168.1.100:47842").closest("[class*='p-4']");
       await act(async () => {
         fireEvent.click(card!);
       });
@@ -383,7 +383,7 @@ describe("RemoteServerCard", () => {
         expect(screen.getByText("Offline")).toBeInTheDocument();
       });
 
-      const card = screen.getByText("192.168.1.100:47842").closest("[class*='px-4']");
+      const card = screen.getByText("192.168.1.100:47842").closest("[class*='p-4']");
       await act(async () => {
         fireEvent.click(card!);
       });
@@ -407,7 +407,7 @@ describe("RemoteServerCard", () => {
         );
       });
 
-      const card = screen.getByText("192.168.1.100:47842").closest("[class*='px-4']");
+      const card = screen.getByText("192.168.1.100:47842").closest("[class*='p-4']");
       await act(async () => {
         fireEvent.click(card!);
       });
@@ -571,7 +571,7 @@ describe("RemoteServerCard", () => {
         expect(screen.getByText("This Machine")).toBeInTheDocument();
       });
 
-      const card = screen.getByText("192.168.1.100:47842").closest("[class*='px-4']");
+      const card = screen.getByText("192.168.1.100:47842").closest("[class*='p-4']");
       await act(async () => {
         fireEvent.click(card!);
       });
