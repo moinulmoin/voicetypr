@@ -620,7 +620,7 @@ export const OnboardingDesktop = function OnboardingDesktop({
 
       // 2. Upsert the native binding with the stable id, action determined by Hold to talk.
       //    holdToTalk ON  → modifier_hold / hold_to_record (PTT).
-      //    holdToTalk OFF → double_tap   / toggle_recording (double-tap to toggle).
+      //    holdToTalk OFF → isolated_tap / toggle_recording (single tap to toggle).
       const currentSettings = await invoke<ShortcutSettings>("get_shortcut_settings");
       const newBinding: ShortcutBinding = holdToTalk
         ? {
@@ -644,7 +644,7 @@ export const OnboardingDesktop = function OnboardingDesktop({
             trigger: "pressed",
             enabled: true,
             allow_risky_combo: false,
-            trigger_kind: "double_tap",
+            trigger_kind: "isolated_tap",
             modifier: {
               modifier: capturedBareModifier.modifier as ModifierKind,
               side: capturedBareModifier.side as ModifierSide,
@@ -1295,7 +1295,7 @@ export const OnboardingDesktop = function OnboardingDesktop({
                   placeholder={capturedBareModifier
                     ? holdToTalk
                       ? `Hold ${formatBareModifierLabel(capturedBareModifier)} · push-to-talk`
-                      : `Double-tap ${formatBareModifierLabel(capturedBareModifier)} · tap to toggle`
+                      : `Tap ${formatBareModifierLabel(capturedBareModifier)} · tap to toggle`
                     : undefined}
                 />
                 {capturedBareModifier ? (
@@ -1310,21 +1310,13 @@ export const OnboardingDesktop = function OnboardingDesktop({
                   ) : (
                     <Alert>
                       <Info className="size-4" />
-                      <AlertTitle>Double-tap to toggle on/off</AlertTitle>
+                      <AlertTitle>Tap to toggle</AlertTitle>
                       <AlertDescription>
-                        Double-tap {formatBareModifierLabel(capturedBareModifier)} to start recording, double-tap again to stop.
+                        Tap {formatBareModifierLabel(capturedBareModifier)} to start recording, tap again to stop.
                       </AlertDescription>
                     </Alert>
                   )
-                ) : (
-                  <Alert>
-                    <Info className="size-4" />
-                    <AlertTitle>Tip</AlertTitle>
-                    <AlertDescription>
-                      Use a shortcut you can hit without looking down. Voicetypr works best when recording feels invisible.
-                    </AlertDescription>
-                  </Alert>
-                )}
+                ) : null}
                 <div className="flex items-center gap-3">
                   <Switch
                     id="hold-to-talk"
@@ -1437,7 +1429,7 @@ export const OnboardingDesktop = function OnboardingDesktop({
                 {capturedBareModifier
                   ? holdToTalk
                     ? <>Hold {formatBareModifierLabel(capturedBareModifier)} anywhere to start recording — release to stop.</>
-                    : <>Double-tap {formatBareModifierLabel(capturedBareModifier)} anywhere to start or stop recording.</>
+                    : <>Tap {formatBareModifierLabel(capturedBareModifier)} anywhere to start or stop recording.</>
                   : holdToTalk
                     ? <>Hold {formatHotkey(hotkey)} anywhere to start recording — release to stop.</>
                     : <>Press {formatHotkey(hotkey)} anywhere to start recording.</>}

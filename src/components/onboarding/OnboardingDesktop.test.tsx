@@ -583,7 +583,7 @@ describe("OnboardingDesktop", () => {
     expect(screen.queryByText(/use gpu acceleration/i)).not.toBeInTheDocument();
   });
 
-  it("saves double_tap binding when bare modifier captured with Hold to talk OFF", async () => {
+  it("saves isolated_tap binding when bare modifier captured with Hold to talk OFF", async () => {
     const user = userEvent.setup();
     renderOnboarding();
 
@@ -611,13 +611,13 @@ describe("OnboardingDesktop", () => {
 
     await screen.findByRole("button", { name: /review result/i });
 
-    // double_tap / toggle_recording / pressed
+    // isolated_tap / toggle_recording / pressed
     expect(invokeMock).toHaveBeenCalledWith("update_shortcut_settings", {
       settings: {
         bindings: [
           expect.objectContaining({
             id: "onboarding-primary-hold",
-            trigger_kind: "double_tap",
+            trigger_kind: "isolated_tap",
             action: "toggle_recording",
             trigger: "pressed",
             modifier: { modifier: "alt", side: "right" },
