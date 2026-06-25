@@ -47,7 +47,6 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 use tauri::async_runtime::{Mutex as AsyncMutex, RwLock as AsyncRwLock};
-use tauri_plugin_global_shortcut::GlobalShortcutExt;
 use tauri_plugin_store::StoreExt;
 use uuid::Uuid;
 
@@ -4333,13 +4332,8 @@ pub async fn start_recording(
         ],
     );
 
-    // Register global ESC key for cancellation
+    // Route ESC cancellation through the native trigger engine while recording is active.
     let app_state = app.state::<AppState>();
-    let escape_shortcut: tauri_plugin_global_shortcut::Shortcut = "Escape"
-        .parse()
-        .map_err(|e| format!("Failed to parse ESC shortcut: {:?}", e))?;
-
-    log::info!("Attempting to register ESC shortcut: {:?}", escape_shortcut);
 
     // Clear ESC state
     app_state
@@ -4353,17 +4347,7 @@ pub async fn start_recording(
         }
     }
 
-    // Register the ESC key globally
-    match app.global_shortcut().register(escape_shortcut) {
-        Ok(_) => {
-            log::info!("Successfully registered global ESC key for recording cancellation");
-        }
-        Err(e) => {
-            log::error!("Failed to register ESC shortcut: {}", e);
-            // Don't fail recording start if ESC registration fails
-            log::warn!("Recording will continue without ESC cancellation support");
-        }
-    }
+    crate::trigger::engine_host::rebuild_engine_bindings(&app);
 
     Ok(())
 }
@@ -4475,22 +4459,7 @@ pub async fn stop_recording(
         );
     } // MutexGuard dropped here BEFORE any await
 
-    // Unregister ESC key
-    match "Escape".parse::<tauri_plugin_global_shortcut::Shortcut>() {
-        Ok(escape_shortcut) => {
-            if let Err(e) = app.global_shortcut().unregister(escape_shortcut) {
-                log::debug!(
-                    "Failed to unregister ESC shortcut (might not have been registered): {}",
-                    e
-                );
-            } else {
-                log::info!("Unregistered ESC shortcut");
-            }
-        }
-        Err(e) => {
-            log::debug!("Failed to parse ESC shortcut for unregistration: {:?}", e);
-        }
-    }
+    crate::trigger::engine_host::rebuild_engine_bindings(&app);
 
     // Clean up ESC state
     app_state
@@ -6987,18 +6956,6 @@ pub async fn cancel_recording(app: AppHandle) -> Result<(), String> {
     // Resume system media if we paused it
     MEDIA_CONTROLLER.resume_if_we_paused();
 
-    // Unregister ESC key
-    match "Escape".parse::<tauri_plugin_global_shortcut::Shortcut>() {
-        Ok(escape_shortcut) => {
-            if let Err(e) = app.global_shortcut().unregister(escape_shortcut) {
-                log::debug!("Failed to unregister ESC shortcut: {}", e);
-            }
-        }
-        Err(e) => {
-            log::debug!("Failed to parse ESC shortcut: {:?}", e);
-        }
-    }
-
     // Clean up ESC state
     app_state
         .esc_pressed_once
@@ -7046,6 +7003,7 @@ pub async fn cancel_recording(app: AppHandle) -> Result<(), String> {
             update_recording_state(&app, RecordingState::Idle, None);
         }
     }
+    crate::trigger::engine_host::rebuild_engine_bindings(&app);
 
     log::info!("=== CANCEL RECORDING COMPLETED ===");
     Ok(())

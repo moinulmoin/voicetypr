@@ -50,11 +50,6 @@ mod tests {
         }
 
         {
-            let shortcut = app_state.recording_shortcut.lock().unwrap();
-            assert!(shortcut.is_none());
-        }
-
-        {
             let path = app_state.current_recording_path.lock().unwrap();
             assert!(path.is_none());
         }

@@ -11,7 +11,6 @@ use crate::remote::lifecycle::RemoteServerManager;
 use crate::remote::settings::{ConnectionStatus, RemoteSettings};
 use crate::whisper::languages::{validate_language, SUPPORTED_LANGUAGES};
 use crate::whisper::manager::WhisperManager;
-use crate::AppState;
 use std::sync::atomic::{AtomicU64, Ordering};
 use tauri::async_runtime::Mutex as AsyncMutex;
 
@@ -21,7 +20,6 @@ static TRAY_MENU_GENERATION: AtomicU64 = AtomicU64::new(0);
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use tauri::{AppHandle, Emitter, Manager};
-use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut};
 use tauri_plugin_store::StoreExt;
 
 // Recording indicator offset constants (in pixels)
@@ -571,54 +569,43 @@ pub async fn save_settings(app: AppHandle, settings: Settings) -> Result<(), Str
     let normalized_transcription_acceleration =
         normalize_stored_transcription_acceleration(Some(&settings.transcription_acceleration));
 
-    if settings.recording_mode == "push_to_talk" && settings.use_different_ptt_key {
-        if let Some(ptt_hotkey) = settings.ptt_hotkey.as_deref() {
-            let normalized_ptt = normalize_shortcut_keys(ptt_hotkey);
-            if let Ok(ptt_shortcut) = normalized_ptt.parse::<Shortcut>() {
-                let app_state = app.state::<crate::AppState>();
-                if let Some(conflict) =
-                    shortcuts::registered_custom_shortcut_conflict(&app_state, &ptt_shortcut)
-                {
-                    return Err(format!(
-                        "Push-to-talk hotkey duplicates enabled custom shortcut '{}'",
-                        conflict.id
-                    ));
-                }
-            }
-        }
+    let normalized_hotkey = normalize_shortcut_keys(&settings.hotkey);
+    if !normalized_hotkey.is_empty() {
+        validate_key_combination_allowing_safe_single_key(&normalized_hotkey)
+            .map_err(|e| format!("Invalid hotkey: {}", e))?;
+        crate::trigger::mapping::parse_combo(&normalized_hotkey)
+            .map_err(|e| format!("Invalid hotkey '{}': {}", settings.hotkey, e))?;
     }
+
     let app_state = app.state::<crate::AppState>();
     let recording_mode = match settings.recording_mode.as_str() {
         "push_to_talk" => crate::RecordingMode::PushToTalk,
         _ => crate::RecordingMode::Toggle,
     };
-    let old_ptt_shortcut = app_state.ptt_shortcut.lock().ok().and_then(|guard| *guard);
-    let mut active_ptt_shortcut: Option<Shortcut> = None;
-    let mut newly_registered_ptt: Option<Shortcut> = None;
-    let mut old_ptt_to_unregister_after_save: Option<Shortcut> = None;
 
-    if recording_mode == crate::RecordingMode::PushToTalk && settings.use_different_ptt_key {
-        if let Some(ptt_hotkey) = settings.ptt_hotkey.clone() {
-            let normalized_ptt =
-                crate::commands::key_normalizer::normalize_shortcut_keys(&ptt_hotkey);
-            let ptt_shortcut: Shortcut = normalized_ptt
-                .parse()
-                .map_err(|e| format!("Invalid push-to-talk hotkey '{}': {}", ptt_hotkey, e))?;
-
-            if old_ptt_shortcut != Some(ptt_shortcut) {
-                app.global_shortcut().register(ptt_shortcut).map_err(|e| {
-                    log::error!("Failed to register PTT shortcut: {}", e);
-                    format!("Failed to register push-to-talk hotkey: {}", e)
-                })?;
-                newly_registered_ptt = Some(ptt_shortcut);
-                old_ptt_to_unregister_after_save = old_ptt_shortcut;
-            }
-
-            active_ptt_shortcut = Some(ptt_shortcut);
-        }
-    } else {
-        old_ptt_to_unregister_after_save = old_ptt_shortcut;
+    let ptt_hotkey_for_validation =
+        if recording_mode == crate::RecordingMode::PushToTalk && settings.use_different_ptt_key {
+            settings
+                .ptt_hotkey
+                .as_deref()
+                .filter(|value| !value.trim().is_empty())
+        } else {
+            None
+        };
+    if let Some(ptt_hotkey) = ptt_hotkey_for_validation {
+        let normalized_ptt = normalize_shortcut_keys(ptt_hotkey);
+        validate_key_combination_allowing_safe_single_key(&normalized_ptt)
+            .map_err(|e| format!("Invalid push-to-talk hotkey: {}", e))?;
+        crate::trigger::mapping::parse_combo(&normalized_ptt)
+            .map_err(|e| format!("Invalid push-to-talk hotkey '{}': {}", ptt_hotkey, e))?;
     }
+    shortcuts::validate_shortcut_settings(
+        shortcuts::load_shortcut_settings(&app)?,
+        &shortcuts::ExistingShortcutStrings {
+            primary_hotkey: Some(settings.hotkey.clone()),
+            ptt_hotkey: ptt_hotkey_for_validation.map(str::to_string),
+        },
+    )?;
     store.set("hotkey", json!(settings.hotkey));
     store.set("current_model", json!(settings.current_model));
     store.set("current_model_engine", json!(settings.current_model_engine));
@@ -715,12 +702,7 @@ pub async fn save_settings(app: AppHandle, settings: Settings) -> Result<(), Str
         if let Some(port) = settings.sharing_port {
             remote_settings.server_config.port = port;
         }
-        if let Err(error) = save_remote_settings(&app, &remote_settings) {
-            if let Some(new_ptt) = newly_registered_ptt {
-                let _ = app.global_shortcut().unregister(new_ptt);
-            }
-            return Err(error);
-        }
+        save_remote_settings(&app, &remote_settings)?;
     }
 
     // Recording persistence settings
@@ -736,24 +718,15 @@ pub async fn save_settings(app: AppHandle, settings: Settings) -> Result<(), Str
     }
 
     if let Err(error) = store.save() {
-        if let Some(new_ptt) = newly_registered_ptt {
-            let _ = app.global_shortcut().unregister(new_ptt);
-        }
         return Err(error.to_string());
-    }
-
-    if let Some(old_ptt) = old_ptt_to_unregister_after_save {
-        let _ = app.global_shortcut().unregister(old_ptt);
-    }
-
-    if let Ok(mut ptt_guard) = app_state.ptt_shortcut.lock() {
-        *ptt_guard = active_ptt_shortcut;
     }
 
     if let Ok(mut mode_guard) = app_state.recording_mode.lock() {
         *mode_guard = recording_mode;
         log::info!("Recording mode updated to: {:?}", recording_mode);
     }
+
+    crate::trigger::engine_host::rebuild_engine_bindings(&app);
 
     if old_transcription_acceleration != normalized_transcription_acceleration {
         log::info!(
@@ -960,232 +933,57 @@ pub async fn set_global_shortcut(app: AppHandle, shortcut: String) -> Result<(),
         }
     );
 
-    // Empty string = clear / unregister the primary (and PTT) recording shortcut.
-    // Used when the user switches to a bare-modifier hold binding that does not
-    // need a global shortcut registration at all.
-    if shortcut.is_empty() {
-        let shortcuts = app.global_shortcut();
-        let app_state = app.state::<AppState>();
-
-        // Persist empty hotkey FIRST so that if save fails, runtime state is untouched.
-        let store = match app.store("settings") {
-            Ok(store) => store,
-            Err(e) => {
-                log::error!("Failed to get settings store: {}", e);
-                return Err("Failed to access settings store".to_string());
-            }
-        };
-        store.set("hotkey", json!(""));
-        if let Err(e) = store.save() {
-            log::error!("Failed to save settings after clearing hotkey: {}", e);
-            return Err(format!("Failed to save settings: {}", e));
-        }
-
-        // Save succeeded — now unregister and clear runtime state.
-
-        // Unregister and clear the primary recording shortcut.
-        if let Ok(mut guard) = app_state.recording_shortcut.lock() {
-            if let Some(old) = *guard {
-                if shortcuts.is_registered(old) {
-                    if let Err(e) = shortcuts.unregister(old) {
-                        log::warn!("Failed to unregister primary recording shortcut: {}", e);
-                    }
-                }
-            }
-            *guard = None;
-        }
-
-        // Also clear the PTT shortcut so no stale global shortcut remains.
-        if let Ok(mut guard) = app_state.ptt_shortcut.lock() {
-            if let Some(old) = *guard {
-                if shortcuts.is_registered(old) {
-                    if let Err(e) = shortcuts.unregister(old) {
-                        log::warn!("Failed to unregister PTT shortcut: {}", e);
-                    }
-                }
-            }
-            *guard = None;
-        }
-
-        log::info!("Primary recording shortcut cleared successfully");
-        return Ok(());
-    }
-
-    // Validate non-empty shortcut format
     if shortcut.len() > 100 {
         log::error!("Invalid shortcut format: too long");
         return Err("Invalid shortcut format".to_string());
     }
 
-    // Normalize before validation so frontend aliases like "Cmd" and "ArrowUp"
-    // are checked against the same names Tauri will parse.
     let normalized_shortcut = normalize_shortcut_keys(&shortcut);
-    log::debug!(
-        "Normalized shortcut: {} -> {}",
-        shortcut,
-        normalized_shortcut
-    );
-
-    // Validate key combination
-    if let Err(e) = validate_key_combination_allowing_safe_single_key(&normalized_shortcut) {
-        log::error!("Invalid key combination '{}': {}", shortcut, e);
-        return Err(format!("Invalid key combination: {}", e));
+    if !normalized_shortcut.is_empty() {
+        validate_key_combination_allowing_safe_single_key(&normalized_shortcut)
+            .map_err(|e| format!("Invalid key combination: {}", e))?;
+        crate::trigger::mapping::parse_combo(&normalized_shortcut)
+            .map_err(|_| "Invalid shortcut format".to_string())?;
     }
 
-    // Validate that shortcut can be parsed
-    let new_shortcut: Shortcut = normalized_shortcut.parse().map_err(|e| {
-        log::error!(
-            "Failed to parse normalized shortcut '{}': {}",
-            normalized_shortcut,
-            e
-        );
-        "Invalid shortcut format".to_string()
+    let store = app.store("settings").map_err(|e| {
+        log::error!("Failed to get settings store: {}", e);
+        "Failed to access settings store".to_string()
     })?;
 
-    // Get global shortcut manager and app state
-    let shortcuts = app.global_shortcut();
-    let app_state = app.state::<AppState>();
-
-    if let Some(conflict) =
-        shortcuts::registered_custom_shortcut_conflict(&app_state, &new_shortcut)
+    let recording_mode = store
+        .get("recording_mode")
+        .and_then(|value| value.as_str().map(str::to_string))
+        .unwrap_or_else(|| "toggle".to_string());
+    let ptt_hotkey = if recording_mode == "push_to_talk"
+        && store
+            .get("use_different_ptt_key")
+            .and_then(|value| value.as_bool())
+            .unwrap_or(false)
     {
-        return Err(format!(
-            "Primary recording hotkey duplicates enabled custom shortcut '{}'",
-            conflict.id
-        ));
-    }
-
-    let old_shortcut = app_state
-        .recording_shortcut
-        .lock()
-        .ok()
-        .and_then(|guard| *guard);
-    let shortcut_changed = old_shortcut != Some(new_shortcut);
-    let shortcut_registered = shortcuts.is_registered(new_shortcut);
-    let needs_registration = shortcut_changed || !shortcut_registered;
-    // Save to settings (original version for display).
-    let store = match app.store("settings") {
-        Ok(store) => store,
-        Err(e) => {
-            log::error!("Failed to get settings store: {}", e);
-            return Err("Failed to access settings store".to_string());
-        }
-    };
-    let previous_hotkey_value = store.get("hotkey");
-
-    let restore_store_value = || {
-        if let Some(previous_hotkey_value) = previous_hotkey_value.clone() {
-            store.set("hotkey", previous_hotkey_value);
-        } else {
-            store.delete("hotkey");
-        }
-    };
-
-    let unregister_new_shortcut = || {
-        if needs_registration {
-            if let Err(e) = shortcuts.unregister(new_shortcut) {
-                log::debug!(
-                    "Failed to unregister new recording shortcut while rolling back: {}",
-                    e
-                );
-            }
-        }
-    };
-
-    if needs_registration {
-        // Register the candidate before touching the currently-working shortcut.
-        // If registration fails, the old shortcut remains active.
-        log::debug!("Registering new shortcut: {}", normalized_shortcut);
-
-        if let Err(e) = shortcuts.register(new_shortcut) {
-            let error_msg = e.to_string();
-            let error_lower = error_msg.to_lowercase();
-
-            // According to tauri-plugin-global-shortcut docs:
-            // If register() returns an error, the shortcut is NOT functional.
-            // Registration is atomic - it either succeeds completely or fails.
-            log::error!("Failed to register hotkey '{}': {}", normalized_shortcut, e);
-
-            let detailed_error = if error_lower.contains("already registered")
-                || error_lower.contains("conflict")
-                || error_lower.contains("in use")
-            {
-                "Hotkey is already in use by another application. Please choose a different combination.".to_string()
-            } else if error_lower.contains("parse") || error_lower.contains("invalid") {
-                "Invalid hotkey combination. Please use a valid key combination.".to_string()
-            } else {
-                format!("Failed to register hotkey: {}", e)
-            };
-
-            return Err(detailed_error);
-        }
-
-        log::info!(
-            "Successfully registered candidate hotkey: {}",
-            normalized_shortcut
-        );
+        store
+            .get("ptt_hotkey")
+            .and_then(|value| value.as_str().map(str::to_string))
+            .filter(|value| !value.trim().is_empty())
     } else {
-        log::debug!("Recording shortcut unchanged and already registered; skipping global shortcut re-registration");
-    }
+        None
+    };
 
-    if shortcut_changed {
-        match app_state.recording_shortcut.lock() {
-            Ok(mut shortcut_guard) => {
-                *shortcut_guard = Some(new_shortcut);
-                log::debug!("Updated recording shortcut state");
-            }
-            Err(e) => {
-                log::error!("Failed to acquire recording shortcut lock: {}", e);
-                unregister_new_shortcut();
-                return Err("Failed to update shortcut state".to_string());
-            }
-        }
-    }
+    shortcuts::validate_shortcut_settings(
+        shortcuts::load_shortcut_settings(&app)?,
+        &shortcuts::ExistingShortcutStrings {
+            primary_hotkey: Some(shortcut.clone()),
+            ptt_hotkey,
+        },
+    )?;
 
     store.set("hotkey", json!(shortcut));
-    if let Err(e) = store.save() {
-        log::error!("Failed to save settings: {}", e);
-        if shortcut_changed {
-            if let Ok(mut shortcut_guard) = app_state.recording_shortcut.lock() {
-                *shortcut_guard = old_shortcut;
-            }
-        }
-        restore_store_value();
-        unregister_new_shortcut();
-        return Err(format!("Failed to save settings: {}", e));
-    }
+    store
+        .save()
+        .map_err(|e| format!("Failed to save settings: {}", e))?;
 
-    if shortcut_changed {
-        if let Some(old) = old_shortcut {
-            if shortcuts.is_registered(old) {
-                log::debug!(
-                    "Unregistering old shortcut after committing new shortcut: {:?}",
-                    old
-                );
-                if let Err(e) = shortcuts.unregister(old) {
-                    log::error!("Failed to unregister old recording shortcut: {}", e);
-                    if let Ok(mut shortcut_guard) = app_state.recording_shortcut.lock() {
-                        *shortcut_guard = old_shortcut;
-                    }
-                    restore_store_value();
-                    if let Err(save_error) = store.save() {
-                        log::error!(
-                            "Failed to restore previous hotkey setting after unregister failure: {}",
-                            save_error
-                        );
-                    }
-                    unregister_new_shortcut();
-                    return Err(format!("Failed to replace previous hotkey: {}", e));
-                }
-            } else {
-                log::debug!(
-                    "Previous recording shortcut was not registered; no unregister needed: {:?}",
-                    old
-                );
-            }
-        }
-    }
-    log::info!("Successfully updated global shortcut to: {}", shortcut);
+    crate::trigger::engine_host::rebuild_engine_bindings(&app);
+    log::info!("Successfully updated global shortcut");
 
     Ok(())
 }

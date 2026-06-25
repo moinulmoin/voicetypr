@@ -1755,7 +1755,10 @@ mod tests {
         // the 5s watchdog. No latency is asserted — only completion ordering.
         let status_response = tokio::time::timeout(
             Duration::from_secs(5),
-            client.get(&status_url).timeout(Duration::from_secs(5)).send(),
+            client
+                .get(&status_url)
+                .timeout(Duration::from_secs(5))
+                .send(),
         )
         .await
         .expect("status request hung — it was serialized behind transcription")
@@ -1769,14 +1772,11 @@ mod tests {
         // Release the gate so transcription can finish.
         drop(release_tx);
 
-        let transcribe_response = tokio::time::timeout(
-            Duration::from_secs(5),
-            transcribe_handle,
-        )
-        .await
-        .expect("transcription did not finish within 5s of gate release")
-        .expect("transcribe task panicked")
-        .expect("transcribe request failed");
+        let transcribe_response = tokio::time::timeout(Duration::from_secs(5), transcribe_handle)
+            .await
+            .expect("transcription did not finish within 5s of gate release")
+            .expect("transcribe task panicked")
+            .expect("transcribe request failed");
         assert!(transcribe_response.status().is_success());
 
         let _ = shutdown_tx.send(());

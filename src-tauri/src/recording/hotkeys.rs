@@ -3,149 +3,26 @@ use crate::commands::audio::{
 };
 use crate::commands::shortcuts::{
     self, hold_shortcut_transition, pressed_shortcut_should_run, CustomHoldTransition,
-    RegisteredShortcutBinding, ShortcutAction, ShortcutTrigger,
+    ShortcutAction, ShortcutTrigger,
 };
-use crate::recording::escape_handler::handle_escape_key_press;
-use crate::{get_recording_state, update_recording_state, AppState, RecordingMode, RecordingState};
+use crate::{get_recording_state, update_recording_state, AppState, RecordingState};
+use keytrigger::KeyPhase;
 use std::sync::atomic::{AtomicBool, Ordering};
 use tauri::Manager;
-use tauri_plugin_global_shortcut::{Shortcut, ShortcutState};
-
-/// Handle global shortcut events for recording
-///
-/// This is the main entry point for all global shortcut handling.
-/// It determines the recording mode and dispatches to the appropriate handler.
-pub fn handle_global_shortcut(
-    app: &tauri::AppHandle,
-    shortcut: &Shortcut,
-    event_state: ShortcutState,
-) {
-    log::debug!(
-        "Global shortcut triggered: {:?} - State: {:?}",
-        shortcut,
-        event_state
-    );
-
-    let Some(app_state) = app.try_state::<AppState>() else {
-        log::warn!("Global shortcut triggered before AppState initialized");
-        return;
-    };
-
-    if let Some(binding) = shortcuts::matching_custom_binding(&app_state, shortcut) {
-        dispatch_custom_shortcut(app, &app_state, binding, event_state);
-        return;
-    }
-
-    let recording_mode = {
-        if let Ok(mode_guard) = app_state.recording_mode.lock() {
-            *mode_guard
-        } else {
-            RecordingMode::Toggle
-        }
-    };
-
-    let is_recording_shortcut = {
-        if let Ok(shortcut_guard) = app_state.recording_shortcut.lock() {
-            if let Some(ref recording_shortcut) = *shortcut_guard {
-                shortcut == recording_shortcut
-            } else {
-                false
-            }
-        } else {
-            false
-        }
-    };
-
-    let is_ptt_shortcut = {
-        if let Ok(ptt_guard) = app_state.ptt_shortcut.lock() {
-            if let Some(ref ptt_shortcut) = *ptt_guard {
-                shortcut == ptt_shortcut
-            } else {
-                false
-            }
-        } else {
-            false
-        }
-    };
-
-    let should_handle =
-        should_handle_recording_shortcut(recording_mode, is_recording_shortcut, is_ptt_shortcut);
-
-    if should_handle {
-        let current_state = get_recording_state(app);
-        match recording_mode {
-            RecordingMode::Toggle => {
-                handle_toggle_mode(app, &app_state, current_state, event_state);
-            }
-            RecordingMode::PushToTalk => {
-                let source_id = if is_ptt_shortcut {
-                    "__builtin_ptt_shortcut"
-                } else {
-                    "__builtin_recording_shortcut"
-                };
-                handle_hold_to_record_source(app, &app_state, source_id, event_state);
-            }
-        }
-    } else if !is_recording_shortcut && !is_ptt_shortcut {
-        handle_non_recording_shortcut(app, shortcut, event_state);
-    }
-}
-
-fn handle_hold_to_record_source(
-    app: &tauri::AppHandle,
-    app_state: &AppState,
-    source_id: &str,
-    event_state: ShortcutState,
-) {
-    let transition = match app_state.active_custom_hold_bindings.lock() {
-        Ok(mut active_bindings) => {
-            hold_shortcut_transition(&mut active_bindings, source_id, event_state)
-        }
-        Err(error) => {
-            log::error!("Failed to lock active hold bindings: {}", error);
-            CustomHoldTransition::Noop
-        }
-    };
-
-    match transition {
-        CustomHoldTransition::Start => {
-            let current_state = get_recording_state(app);
-            handle_ptt_mode(app, app_state, current_state, ShortcutState::Pressed);
-        }
-        CustomHoldTransition::Stop => {
-            let current_state = get_recording_state(app);
-            handle_ptt_mode(app, app_state, current_state, ShortcutState::Released);
-        }
-        CustomHoldTransition::Noop => {}
-    }
-}
-
-fn should_handle_recording_shortcut(
-    recording_mode: RecordingMode,
-    is_recording_shortcut: bool,
-    is_ptt_shortcut: bool,
-) -> bool {
-    match recording_mode {
-        // Toggle mode needs both Pressed and Released events so repeated
-        // Windows key-repeat Pressed events map to one physical hold.
-        RecordingMode::Toggle => is_recording_shortcut,
-        RecordingMode::PushToTalk => is_recording_shortcut || is_ptt_shortcut,
-    }
-}
 
 /// Handle toggle mode recording (click to start/stop)
 fn handle_toggle_mode(
     app: &tauri::AppHandle,
     app_state: &AppState,
     current_state: RecordingState,
-    event_state: ShortcutState,
+    event_state: KeyPhase,
 ) {
     match event_state {
-        ShortcutState::Released => {
+        KeyPhase::Released => {
             app_state.toggle_key_held.store(false, Ordering::SeqCst);
             return;
         }
-        ShortcutState::Pressed => {}
+        KeyPhase::Pressed => {}
     }
 
     if !claim_toggle_press(&app_state.toggle_key_held) {
@@ -222,15 +99,44 @@ fn claim_toggle_press(toggle_key_held: &AtomicBool) -> bool {
     !toggle_key_held.swap(true, Ordering::SeqCst)
 }
 
+fn handle_hold_to_record_source(
+    app: &tauri::AppHandle,
+    app_state: &AppState,
+    source_id: &str,
+    event_state: KeyPhase,
+) {
+    let transition = match app_state.active_custom_hold_bindings.lock() {
+        Ok(mut active_bindings) => {
+            hold_shortcut_transition(&mut active_bindings, source_id, event_state)
+        }
+        Err(error) => {
+            log::error!("Failed to lock active hold bindings: {}", error);
+            CustomHoldTransition::Noop
+        }
+    };
+
+    match transition {
+        CustomHoldTransition::Start => {
+            let current_state = get_recording_state(app);
+            handle_ptt_mode(app, app_state, current_state, KeyPhase::Pressed);
+        }
+        CustomHoldTransition::Stop => {
+            let current_state = get_recording_state(app);
+            handle_ptt_mode(app, app_state, current_state, KeyPhase::Released);
+        }
+        CustomHoldTransition::Noop => {}
+    }
+}
+
 /// Handle push-to-talk mode recording (hold to record, release to stop)
 fn handle_ptt_mode(
     app: &tauri::AppHandle,
     app_state: &AppState,
     current_state: RecordingState,
-    event_state: ShortcutState,
+    event_state: KeyPhase,
 ) {
     match event_state {
-        ShortcutState::Pressed => {
+        KeyPhase::Pressed => {
             log::info!("PTT: Key pressed");
             app_state.ptt_key_held.store(true, Ordering::Relaxed);
 
@@ -253,7 +159,7 @@ fn handle_ptt_mode(
                 });
             }
         }
-        ShortcutState::Released => {
+        KeyPhase::Released => {
             log::info!("PTT: Key released");
 
             // Debounce: swap returns previous value, skip if already false (duplicate release)
@@ -299,39 +205,20 @@ fn should_dispatch_custom_pressed_binding(
     active_bindings: &mut std::collections::HashSet<String>,
     binding_id: &str,
     action: ShortcutAction,
-    event_state: ShortcutState,
+    event_state: KeyPhase,
 ) -> bool {
     let should_run = pressed_shortcut_should_run(active_bindings, binding_id, event_state);
-    should_run
-        || (action == ShortcutAction::ToggleRecording && event_state == ShortcutState::Released)
+    should_run || (action == ShortcutAction::ToggleRecording && event_state == KeyPhase::Released)
 }
 
-fn dispatch_custom_shortcut(
-    app: &tauri::AppHandle,
-    app_state: &AppState,
-    binding: RegisteredShortcutBinding,
-    event_state: ShortcutState,
-) {
-    dispatch_action(
-        app,
-        app_state,
-        &binding.id,
-        binding.action,
-        binding.trigger,
-        event_state,
-    );
-}
-
-/// Dispatch a shortcut action by (id, action, trigger). Shared by the legacy
-/// `global_shortcut` path and the native trigger engine so both run identical
-/// pressed/hold gating and action handling.
+/// Dispatch a shortcut action by (id, action, trigger) through the native engine.
 pub(crate) fn dispatch_action(
     app: &tauri::AppHandle,
     app_state: &AppState,
     id: &str,
     action: ShortcutAction,
     trigger: ShortcutTrigger,
-    event_state: ShortcutState,
+    event_state: KeyPhase,
 ) {
     if trigger == ShortcutTrigger::Pressed {
         let should_dispatch = match app_state.active_custom_pressed_bindings.lock() {
@@ -366,7 +253,7 @@ pub(crate) fn dispatch_action(
             handle_hold_to_record_source(app, app_state, id, event_state);
         }
         ShortcutAction::CancelRecording => {
-            if event_state == ShortcutState::Pressed {
+            if event_state == KeyPhase::Pressed {
                 let app_handle = app.clone();
                 tauri::async_runtime::spawn(async move {
                     if let Err(error) = crate::commands::audio::cancel_recording(app_handle).await {
@@ -376,7 +263,7 @@ pub(crate) fn dispatch_action(
             }
         }
         ShortcutAction::CopyLastTranscription => {
-            if event_state == ShortcutState::Pressed {
+            if event_state == KeyPhase::Pressed {
                 let app_handle = app.clone();
                 tauri::async_runtime::spawn(async move {
                     match shortcuts::latest_copyable_transcription_text(&app_handle).await {
@@ -398,7 +285,7 @@ pub(crate) fn dispatch_action(
             }
         }
         ShortcutAction::PasteLastTranscription => {
-            if event_state == ShortcutState::Pressed {
+            if event_state == KeyPhase::Pressed {
                 let app_handle = app.clone();
                 tauri::async_runtime::spawn(async move {
                     match shortcuts::latest_copyable_transcription_text(&app_handle).await {
@@ -420,7 +307,7 @@ pub(crate) fn dispatch_action(
             }
         }
         ShortcutAction::CycleFormattingMode => {
-            if event_state == ShortcutState::Pressed {
+            if event_state == KeyPhase::Pressed {
                 let app_handle = app.clone();
                 tauri::async_runtime::spawn(async move {
                     if let Err(error) = shortcuts::cycle_formatting_preset(app_handle).await {
@@ -430,7 +317,7 @@ pub(crate) fn dispatch_action(
             }
         }
         ShortcutAction::ToggleAiFormatting => {
-            if event_state == ShortcutState::Pressed {
+            if event_state == KeyPhase::Pressed {
                 let app_handle = app.clone();
                 tauri::async_runtime::spawn(async move {
                     if let Err(e) = shortcuts::toggle_ai_formatting(app_handle).await {
@@ -445,7 +332,7 @@ pub(crate) fn dispatch_action(
         | ShortcutAction::SetNotes
         | ShortcutAction::SetMessage
         | ShortcutAction::SetCode => {
-            if event_state == ShortcutState::Pressed {
+            if event_state == KeyPhase::Pressed {
                 if let Some(preset) = shortcuts::action_preset(action) {
                     let app_handle = app.clone();
                     tauri::async_runtime::spawn(async move {
@@ -459,7 +346,7 @@ pub(crate) fn dispatch_action(
             }
         }
         ShortcutAction::OpenDashboard => {
-            if event_state == ShortcutState::Pressed {
+            if event_state == KeyPhase::Pressed {
                 let app_handle = app.clone();
                 tauri::async_runtime::spawn(async move {
                     if let Err(error) = crate::commands::window::focus_main_window(app_handle).await
@@ -472,66 +359,15 @@ pub(crate) fn dispatch_action(
     }
 }
 
-/// Handle non-recording shortcuts (e.g., ESC key)
-fn handle_non_recording_shortcut(
-    app: &tauri::AppHandle,
-    shortcut: &Shortcut,
-    event_state: ShortcutState,
-) {
-    log::debug!("Non-recording shortcut triggered: {:?}", shortcut);
-
-    let escape_shortcut: Shortcut = match "Escape".parse() {
-        Ok(s) => s,
-        Err(e) => {
-            log::error!("Failed to parse Escape shortcut: {:?}", e);
-            return;
-        }
-    };
-
-    log::debug!(
-        "Comparing shortcuts - received: {:?}, escape: {:?}",
-        shortcut,
-        escape_shortcut
-    );
-
-    if shortcut == &escape_shortcut {
-        log::info!("ESC key detected in global handler");
-
-        let app_handle = app.clone();
-
-        tauri::async_runtime::spawn(async move {
-            let app_state = app_handle.state::<AppState>();
-            handle_escape_key_press(&app_state, &app_handle, event_state).await;
-        });
-    }
-}
-
 #[cfg(test)]
 mod tests {
-    use super::{
-        claim_toggle_press, should_dispatch_custom_pressed_binding,
-        should_handle_recording_shortcut,
-    };
-    use crate::{commands::shortcuts::ShortcutAction, RecordingMode};
+    use super::{claim_toggle_press, should_dispatch_custom_pressed_binding};
+    use crate::commands::shortcuts::ShortcutAction;
+    use keytrigger::KeyPhase;
     use std::{
         collections::HashSet,
         sync::atomic::{AtomicBool, Ordering},
     };
-    use tauri_plugin_global_shortcut::ShortcutState;
-
-    #[test]
-    fn toggle_shortcut_events_are_handled_for_press_and_release() {
-        assert!(should_handle_recording_shortcut(
-            RecordingMode::Toggle,
-            true,
-            false
-        ));
-        assert!(!should_handle_recording_shortcut(
-            RecordingMode::Toggle,
-            false,
-            false
-        ));
-    }
 
     #[test]
     fn claim_toggle_press_blocks_repeats_until_release() {
@@ -554,7 +390,7 @@ mod tests {
             &mut active_bindings,
             binding_id,
             ShortcutAction::ToggleRecording,
-            ShortcutState::Pressed,
+            KeyPhase::Pressed,
         ));
         assert!(claim_toggle_press(&held));
 
@@ -562,14 +398,14 @@ mod tests {
             &mut active_bindings,
             binding_id,
             ShortcutAction::ToggleRecording,
-            ShortcutState::Pressed,
+            KeyPhase::Pressed,
         ));
 
         assert!(should_dispatch_custom_pressed_binding(
             &mut active_bindings,
             binding_id,
             ShortcutAction::ToggleRecording,
-            ShortcutState::Released,
+            KeyPhase::Released,
         ));
         held.store(false, Ordering::SeqCst);
 
@@ -577,7 +413,7 @@ mod tests {
             &mut active_bindings,
             binding_id,
             ShortcutAction::ToggleRecording,
-            ShortcutState::Pressed,
+            KeyPhase::Pressed,
         ));
         assert!(claim_toggle_press(&held));
     }

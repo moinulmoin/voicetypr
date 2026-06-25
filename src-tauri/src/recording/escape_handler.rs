@@ -1,7 +1,7 @@
 use crate::{cancel_recording, get_recording_state, AppState, RecordingState};
+use keytrigger::KeyPhase;
 use std::sync::atomic::Ordering;
 use tauri::{AppHandle, Manager};
-use tauri_plugin_global_shortcut::ShortcutState;
 
 /// Handle ESC key press during recording
 ///
@@ -12,10 +12,10 @@ use tauri_plugin_global_shortcut::ShortcutState;
 pub async fn handle_escape_key_press(
     app_state: &AppState,
     app_handle: &AppHandle,
-    event_state: ShortcutState,
+    event_state: KeyPhase,
 ) {
     // Only react to ESC key press events (ignore key release)
-    if event_state != ShortcutState::Pressed {
+    if event_state != KeyPhase::Pressed {
         log::debug!(
             "Ignoring ESC event since it is not a key press: {:?}",
             event_state

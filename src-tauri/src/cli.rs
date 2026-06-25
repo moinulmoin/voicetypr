@@ -310,14 +310,7 @@ async fn warm_ai_key_cache(app: &tauri::AppHandle) -> Result<(), Box<dyn Error>>
                 .strip_prefix("ai_api_key_")
                 .map(str::to_string)
                 .unwrap_or(key_name.clone());
-            cache_ai_api_key(
-                app.clone(),
-                CacheApiKeyArgs {
-                    provider,
-                    api_key,
-                },
-            )
-            .await?;
+            cache_ai_api_key(app.clone(), CacheApiKeyArgs { provider, api_key }).await?;
         }
     }
     Ok(())

@@ -5,7 +5,6 @@ use std::sync::{Arc, Mutex};
 use std::time::Instant;
 use tauri::async_runtime::{Mutex as AsyncMutex, RwLock as AsyncRwLock};
 use tauri::{Emitter, Listener, Manager};
-use tauri_plugin_global_shortcut::GlobalShortcutExt;
 use tauri_plugin_log::{Builder as LogBuilder, RotationStrategy, Target, TargetKind};
 use tauri_plugin_store::StoreExt;
 
@@ -443,13 +442,6 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     builder
-        .plugin(
-            tauri_plugin_global_shortcut::Builder::new()
-                .with_handler(|app, shortcut, event| {
-                    recording::handle_global_shortcut(app.app_handle(), shortcut, event.state());
-                })
-                .build(),
-        )
         .setup(move |app| {
             let setup_start = Instant::now();
             log::info!("🚀 App setup START - version: {}", app_version);
@@ -1080,65 +1072,20 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             #[cfg(target_os = "windows")]
             apply_tray_theme_icon(app.app_handle());
 
-            // Load hotkey from settings store with graceful degradation
+            // Load recording mode into AppState; shortcut routing itself is rebuilt below
+            // from the persisted settings store and current recording state.
             log_start("HOTKEY_SETUP");
-            log_with_context(log::Level::Debug, "Setting up hotkey", &[
-                ("default", "CommandOrControl+Shift+Space")
-            ]);
-
-            let hotkey_str = match app.store("settings") {
-                Ok(store) => {
-                    match store.get("hotkey").and_then(|v| v.as_str().map(|s| s.to_string())) {
-                        Some(s) if !s.is_empty() => s,
-                        None => {
-                            log::info!("🎹 No hotkey configured, using default");
-                            "CommandOrControl+Shift+Space".to_string()
-                        }
-                        _ => {
-                            // Explicitly empty = primary hotkey was cleared (modifier-hold in use)
-                            log::info!("🎹 Primary hotkey cleared; will skip global shortcut registration");
-                            String::new()
-                        }
-                    }
-                }
+            let recording_mode_str = match app.store("settings") {
+                Ok(store) => store
+                    .get("recording_mode")
+                    .and_then(|v| v.as_str().map(|s| s.to_string()))
+                    .unwrap_or_else(|| "toggle".to_string()),
                 Err(e) => {
                     log_failed("SETTINGS_LOAD", &format!("Failed to load settings store: {}", e));
-                    log_with_context(log::Level::Debug, "Settings load failed", &[
-                        ("component", "settings"),
-                        ("fallback", "CommandOrControl+Shift+Space")
-                    ]);
-                    "CommandOrControl+Shift+Space".to_string()
+                    "toggle".to_string()
                 }
             };
 
-            log::info!("🎯 Loading hotkey: {}", hotkey_str);
-
-            // Load recording mode and PTT settings
-            let (recording_mode_str, use_different_ptt_key, ptt_hotkey_str) = match app.store("settings") {
-                Ok(store) => {
-                    let mode = store
-                        .get("recording_mode")
-                        .and_then(|v| v.as_str().map(|s| s.to_string()))
-                        .unwrap_or_else(|| "toggle".to_string());
-
-                    let use_diff = store
-                        .get("use_different_ptt_key")
-                        .and_then(|v| v.as_bool())
-                        .unwrap_or(false);
-
-                    let ptt_key = store
-                        .get("ptt_hotkey")
-                        .and_then(|v| v.as_str().map(|s| s.to_string()));
-
-                    (mode, use_diff, ptt_key)
-                }
-                Err(_) => {
-                    log::info!("Using default recording mode settings");
-                    ("toggle".to_string(), false, None)
-                }
-            };
-
-            // Set recording mode in AppState
             let app_state = app.state::<AppState>();
             let recording_mode = match recording_mode_str.as_str() {
                 "push_to_talk" => RecordingMode::PushToTalk,
@@ -1150,162 +1097,14 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
                 log::info!("Recording mode set to: {:?}", recording_mode);
             }
 
-            // Skip global shortcut registration only when the primary hotkey was
-            // explicitly cleared AND a live HoldToRecord engine binding covers
-            // recording. If the state is inconsistent (empty hotkey but no engine
-            // binding), fall through so the default hotkey gets registered.
-            let has_engine_recording = crate::commands::shortcuts::load_shortcut_settings(app.handle())
-                .map(|s| crate::trigger::mapping::has_recording_engine_binding(&s.bindings))
-                .unwrap_or(false);
-
-            'register_primary: {
-            if hotkey_str.is_empty() {
-                if has_engine_recording {
-                    log::info!("🎹 Primary hotkey empty; engine HoldToRecord binding present — skipping global shortcut registration");
-                    log_complete("HOTKEY_SETUP", 0);
-                    break 'register_primary;
-                } else {
-                    log::warn!("Primary hotkey empty but no enabled hold-to-record engine binding found; falling back to default hotkey");
-                    // Fall through — empty string fails parse below, triggering the
-                    // CommandOrControl+Shift+Space fallback at line ~915.
-                }
-            }
-
-            // Normalize the hotkey for Tauri
-            let normalized_hotkey = crate::commands::key_normalizer::normalize_shortcut_keys(&hotkey_str);
-
-            // Register global shortcut from settings with fallback
-            let shortcut: tauri_plugin_global_shortcut::Shortcut = match normalized_hotkey.parse() {
-                Ok(s) => s,
-                Err(_) => {
-                    log::warn!("Invalid hotkey format '{}', using default", normalized_hotkey);
-                    match "CommandOrControl+Shift+Space".parse() {
-                        Ok(default_shortcut) => default_shortcut,
-                        Err(e) => {
-                            log::error!("Even default shortcut failed to parse: {}", e);
-                            // Emit event to notify frontend that hotkey registration failed
-                            if let Some(window) = app.get_webview_window("main") {
-                                let _ = window.emit("hotkey-registration-failed", ());
-                            }
-                            // Return a minimal working shortcut or continue without hotkey
-                            return Ok(());
-                        }
-                    }
-                }
-            };
-
-            // Store the recording shortcut in managed state
-            let app_state = app.state::<AppState>();
-            if let Ok(mut shortcut_guard) = app_state.recording_shortcut.lock() {
-                *shortcut_guard = Some(shortcut);
-            }
-
-            // Try to register global shortcut with panic protection
-            let registration_start = Instant::now();
-            let registration_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                app.global_shortcut().register(shortcut)
-            }));
-
-            match registration_result {
-                Ok(Ok(_)) => {
-                    log_complete("HOTKEY_REGISTRATION", registration_start.elapsed().as_millis() as u64);
-                    log_with_context(log::Level::Debug, "Hotkey registered", &[
-                        ("hotkey", &hotkey_str),
-                        ("normalized", &normalized_hotkey)
-                    ]);
-                    log::info!("✅ Successfully registered global hotkey: {}", hotkey_str);
-                }
-                Ok(Err(e)) => {
-                    log_failed("HOTKEY_REGISTRATION", &e.to_string());
-                    log_with_context(log::Level::Debug, "Hotkey registration failed", &[
-                        ("hotkey", &hotkey_str),
-                        ("normalized", &normalized_hotkey),
-                        ("suggestion", "Try different hotkey or close conflicting apps")
-                    ]);
-
-                    log::error!("❌ Failed to register global hotkey '{}': {}", hotkey_str, e);
-                    log::warn!("⚠️  The app will continue without global hotkey support. Another application may be using this shortcut.");
-
-                    // Emit event to notify frontend that hotkey registration failed
-                    if let Some(window) = app.get_webview_window("main") {
-                        let _ = window.emit("hotkey-registration-failed", serde_json::json!({
-                            "hotkey": hotkey_str,
-                            "error": e.to_string(),
-                            "suggestion": "Please choose a different hotkey in settings or close conflicting applications"
-                        }));
-                    }
-                }
-                Err(panic_err) => {
-                    let panic_msg = if let Some(s) = panic_err.downcast_ref::<&str>() {
-                        s.to_string()
-                    } else if let Some(s) = panic_err.downcast_ref::<String>() {
-                        s.clone()
-                    } else {
-                        "Unknown panic during hotkey registration".to_string()
-                    };
-
-                    log::error!("💥 PANIC during hotkey registration: {}", panic_msg);
-                    log::warn!("⚠️  Continuing without global hotkey due to panic");
-
-                    // Emit event to notify frontend
-                    if let Some(window) = app.get_webview_window("main") {
-                        let _ = window.emit("hotkey-registration-failed", serde_json::json!({
-                            "hotkey": hotkey_str,
-                            "error": format!("Critical error: {}", panic_msg),
-                            "suggestion": "The hotkey system encountered an error. Please restart the app or try a different hotkey."
-                        }));
-                    }
-                }
-            }
-            } // end 'register_primary
-
-            // Register PTT shortcut if configured differently
-            if recording_mode == RecordingMode::PushToTalk && use_different_ptt_key {
-                if let Some(ptt_key) = ptt_hotkey_str {
-                    log::info!("🎤 Registering separate PTT hotkey: {}", ptt_key);
-
-                    let normalized_ptt = crate::commands::key_normalizer::normalize_shortcut_keys(&ptt_key);
-
-                    if let Ok(ptt_shortcut) = normalized_ptt.parse::<tauri_plugin_global_shortcut::Shortcut>() {
-                        // Store PTT shortcut in AppState
-                        let app_state = app.state::<AppState>();
-                        if let Ok(mut ptt_guard) = app_state.ptt_shortcut.lock() {
-                            *ptt_guard = Some(ptt_shortcut);
-                        }
-
-                        // Try to register PTT shortcut
-                        match app.global_shortcut().register(ptt_shortcut) {
-                            Ok(_) => {
-                                log::info!("✅ Successfully registered PTT hotkey: {}", ptt_key);
-                            }
-                            Err(e) => {
-                                log::error!("❌ Failed to register PTT hotkey '{}': {}", ptt_key, e);
-                                log::warn!("⚠️  PTT will use primary hotkey instead");
-
-                                // Clear the PTT shortcut so we fall back to primary
-                                if let Ok(mut ptt_guard) = app_state.ptt_shortcut.lock() {
-                                    *ptt_guard = None;
-                                }
-                            }
-                        }
-                    } else {
-                        log::warn!("Invalid PTT hotkey format: {}", ptt_key);
-                    }
-                }
-            }
-
-            if let Err(error) = crate::commands::shortcuts::register_saved_shortcuts(app.app_handle()) {
-                log::error!("Failed to register saved custom shortcuts: {}", error);
-            }
-
-            // Start the native trigger engine (modifier-hold / double-tap).
-            // On macOS the tap needs Accessibility; if not yet granted, start()
-            // logs and we retry when the grant event fires.
             crate::trigger::engine_host::start_engine(app.app_handle());
+            crate::trigger::engine_host::rebuild_engine_bindings(app.app_handle());
+            log_complete("HOTKEY_SETUP", 0);
             {
                 let engine_app = app.app_handle().clone();
                 app.listen("accessibility-granted", move |_event| {
                     crate::trigger::engine_host::start_engine(&engine_app);
+                    crate::trigger::engine_host::rebuild_engine_bindings(&engine_app);
                 });
             }
 

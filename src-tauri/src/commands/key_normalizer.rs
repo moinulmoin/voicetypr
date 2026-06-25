@@ -459,54 +459,15 @@ mod tests {
     }
 
     #[test]
-    fn test_single_modifier_parsing() {
-        // Test that demonstrates the difference between single modifiers and combinations
-        use tauri_plugin_global_shortcut::Shortcut;
+    fn test_single_modifier_validation() {
+        // Bare modifiers are not standalone shortcuts; modifier-only triggers are
+        // represented explicitly as ModifierHold/IsolatedTap bindings.
+        assert!(validate_key_combination("Alt").is_err());
+        assert!(validate_key_combination("Shift").is_err());
+        assert!(validate_key_combination("Control").is_err());
 
-        // These should fail to parse as single keys
-        assert!(
-            "Alt".parse::<Shortcut>().is_err(),
-            "Alt alone should not parse"
-        );
-        assert!(
-            "Shift".parse::<Shortcut>().is_err(),
-            "Shift alone should not parse"
-        );
-        assert!(
-            "Control".parse::<Shortcut>().is_err(),
-            "Control alone should not parse"
-        );
-
-        // Let's test what actually works for single keys
-        let test_keys = vec![
-            "LeftAlt",
-            "RightAlt",
-            "LeftShift",
-            "RightShift",
-            "LeftControl",
-            "RightControl",
-            "LeftMeta",
-            "RightMeta",
-            "A",
-            "B",
-            "Space",
-            "F1",
-            "Tab",
-            "CapsLock",
-        ];
-
-        for key in test_keys {
-            match key.parse::<Shortcut>() {
-                Ok(_) => println!("{} parses successfully", key),
-                Err(e) => println!("{} failed to parse: {:?}", key, e),
-            }
-        }
-
-        // Combinations with generic modifiers should work
-        assert!("Alt+A".parse::<Shortcut>().is_ok(), "Alt+A should parse");
-        assert!(
-            "Shift+Space".parse::<Shortcut>().is_ok(),
-            "Shift+Space should parse"
-        );
+        // Combinations with generic modifiers remain valid.
+        assert!(validate_key_combination("Alt+A").is_ok());
+        assert!(validate_key_combination("Shift+Space").is_ok());
     }
 }

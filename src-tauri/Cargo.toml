@@ -116,7 +116,6 @@ rand = "0.8"
 wiremock = "0.6"
 [target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
 tauri-plugin-fs = "2"
-tauri-plugin-global-shortcut = "2"
 tauri-plugin-mic-recorder = "2"
 tauri-plugin-shell = "2"
 tauri-plugin-dialog = "2"
