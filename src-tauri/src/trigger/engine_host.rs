@@ -175,7 +175,16 @@ pub fn rebuild_engine_bindings(app: &AppHandle) {
             )
     });
 
-    if !has_bare_modifier_primary && !hotkey.trim().is_empty() {
+    if !has_bare_modifier_primary {
+        // Default-combo fallback: if the stored hotkey is empty/blank and there is
+        // no bare-modifier primary either, the user would otherwise be left with NO
+        // way to start recording by hotkey. The retired global-shortcut startup
+        // fell back to this same default for that inconsistent state.
+        let hotkey = if hotkey.trim().is_empty() {
+            "CommandOrControl+Shift+Space".to_string()
+        } else {
+            hotkey
+        };
         let hold_to_record = recording_mode == RecordingMode::PushToTalk;
         bindings.push(ShortcutBinding {
             id: "primary".to_string(),

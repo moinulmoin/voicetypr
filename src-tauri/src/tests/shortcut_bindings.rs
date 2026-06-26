@@ -141,6 +141,42 @@ fn duplicate_existing_hotkey_rejected() {
 }
 
 #[test]
+fn primary_and_ptt_must_differ() {
+    // The recording hotkey and the push-to-talk hotkey must not resolve to the
+    // same physical trigger -- engine_host would otherwise synthesize both a
+    // `primary` and a `ptt` binding for one keypress.
+    let same = ExistingShortcutStrings {
+        primary_hotkey: Some("CommandOrControl+Shift+P".to_string()),
+        ptt_hotkey: Some("CommandOrControl+Shift+P".to_string()),
+    };
+    assert!(validate_shortcut_settings(ShortcutSettings::default(), &same).is_err());
+
+    // Distinct triggers are fine.
+    let distinct = ExistingShortcutStrings {
+        primary_hotkey: Some("CommandOrControl+Shift+P".to_string()),
+        ptt_hotkey: Some("Alt+Space".to_string()),
+    };
+    assert!(validate_shortcut_settings(ShortcutSettings::default(), &distinct).is_ok());
+}
+
+#[cfg(target_os = "windows")]
+#[test]
+fn platform_equivalent_combos_dedup_on_windows() {
+    // On Windows, parse_combo collapses CommandOrControl -> Control, so these two
+    // string-distinct combos resolve to the SAME trigger and must be rejected as
+    // duplicates -- a plain string compare would let both fire on one keypress.
+    let bindings = vec![
+        binding(ShortcutAction::CopyLastTranscription, "CommandOrControl+J"),
+        binding(ShortcutAction::PasteLastTranscription, "Control+J"),
+    ];
+    assert!(validate_shortcut_settings(
+        ShortcutSettings { bindings },
+        &ExistingShortcutStrings::default(),
+    )
+    .is_err());
+}
+
+#[test]
 fn escape_is_reserved_even_for_risky_hold_binding() {
     let mut escape = binding(ShortcutAction::HoldToRecord, "Escape");
     escape.trigger = ShortcutTrigger::Hold;

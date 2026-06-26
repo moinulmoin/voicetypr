@@ -333,12 +333,27 @@ fn prepare_shortcut_settings(
         .primary_hotkey
         .as_deref()
         .map(normalize_shortcut_keys)
-        .filter(|value| !value.is_empty());
+        .filter(|value| !value.is_empty())
+        .map(|value| trigger_dedup_key(&value));
     let ptt = existing
         .ptt_hotkey
         .as_deref()
         .map(normalize_shortcut_keys)
-        .filter(|value| !value.is_empty());
+        .filter(|value| !value.is_empty())
+        .map(|value| trigger_dedup_key(&value));
+
+    // The primary recording hotkey and the push-to-talk hotkey must not resolve
+    // to the SAME physical trigger. The retired OS shortcut registrar rejected
+    // this; without the check engine_host would synthesize both a `primary` and a
+    // `ptt` binding for one keypress. Compared on the resolved trigger, not the
+    // raw string.
+    if let (Some(primary_key), Some(ptt_key)) = (&primary, &ptt) {
+        if primary_key == ptt_key {
+            return Err("The recording hotkey and the push-to-talk hotkey are the \
+                        same. Choose a different push-to-talk key."
+                .to_string());
+        }
+    }
 
     let mut prepared = Vec::with_capacity(settings.bindings.len());
     for binding in settings.bindings {
@@ -378,6 +393,19 @@ fn prepare_shortcut_settings(
     Ok(prepared)
 }
 
+/// Canonical dedup/collision key for a NORMALIZED shortcut string, resolved
+/// through the engine's `parse_combo` so platform-equivalent combos compare
+/// equal (e.g. on Windows `CommandOrControl+A` and `Control+A` both resolve to
+/// the same Control+A trigger). Falls back to the normalized string for inputs
+/// the engine cannot parse. `ModSet` is a `u8` bitset so the trigger's `Debug`
+/// is a stable canonical key.
+fn trigger_dedup_key(normalized: &str) -> String {
+    match crate::trigger::mapping::parse_combo(normalized) {
+        Ok(trigger) => format!("{:?}", trigger),
+        Err(_) => normalized.to_string(),
+    }
+}
+
 fn prepare_enabled_shortcut(
     binding: &ShortcutBinding,
     primary: Option<&str>,
@@ -393,20 +421,24 @@ fn prepare_enabled_shortcut(
     crate::trigger::mapping::validate(binding)?;
 
     let normalized = normalize_shortcut_keys(&binding.shortcut);
+    // Dedup/collision on the RESOLVED trigger, not the raw string: on Windows
+    // `CommandOrControl+A` and `Control+A` are distinct strings that parse_combo
+    // collapses to one trigger, so a string compare would let both fire at once.
+    let dedup_key = trigger_dedup_key(&normalized);
 
-    if primary == Some(normalized.as_str()) {
+    if primary == Some(dedup_key.as_str()) {
         return Err(format!(
             "Shortcut '{}' duplicates the primary recording hotkey",
             binding.shortcut
         ));
     }
-    if ptt == Some(normalized.as_str()) {
+    if ptt == Some(dedup_key.as_str()) {
         return Err(format!(
             "Shortcut '{}' duplicates the push-to-talk hotkey",
             binding.shortcut
         ));
     }
-    if !seen_enabled.insert(normalized.clone()) {
+    if !seen_enabled.insert(dedup_key) {
         return Err(format!(
             "Duplicate enabled shortcut binding: {}",
             binding.shortcut

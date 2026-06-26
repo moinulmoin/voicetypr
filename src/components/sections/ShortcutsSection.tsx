@@ -72,6 +72,15 @@ const MOD_LABELS: Record<string, string> = {
   shift: "Shift",
 };
 
+// The primary recording trigger (toggle/hold) is configured in General Settings,
+// not here. Exclude these actions from the custom-shortcuts list so the recording
+// hotkey isn't shown/edited in two places and a duplicate recording binding can't
+// be created from this page.
+const PRIMARY_RECORDING_ACTIONS: ReadonlySet<string> = new Set([
+  "toggle_recording",
+  "hold_to_record",
+]);
+
 function formatBindingDisplay(binding: ShortcutBinding): string {
   const kind = binding.trigger_kind ?? "combo";
   const mod = binding.modifier;
@@ -158,6 +167,9 @@ export function ShortcutsSection() {
     const groups = new Map<string, ShortcutActionDefinition[]>();
 
     for (const action of actions) {
+      if (PRIMARY_RECORDING_ACTIONS.has(action.action)) {
+        continue; // primary recording hotkey is managed in General Settings
+      }
       const existing = groups.get(action.section);
       if (existing) {
         existing.push(action);
