@@ -813,7 +813,9 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
 
             // Build the tray menu using our helper function
             // Note: We need to block here since setup is sync
-            let menu = tauri::async_runtime::block_on(build_tray_menu(app.app_handle()))?;
+            let tray_app = app.app_handle().clone();
+            let try_build_tray = move || -> Result<(), Box<dyn std::error::Error>> {
+            let menu = tauri::async_runtime::block_on(build_tray_menu(&tray_app))?;
 
 
             // Bare-mark template icon for the menubar (no background; adapts to light/dark).
@@ -995,7 +997,43 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
                         show_main_window(app);
                     }
                 })
-                .build(app)?;
+                .build(&tray_app)?;
+            Ok(())
+            };
+
+            // Tray creation can fail transiently on Windows (e.g. the shell's
+            // notification area isn't ready yet -> os error 0x80004005 / E_FAIL).
+            // This previously aborted the entire setup hook and stopped the app
+            // from launching at all. Retry a few times, then continue WITHOUT a
+            // tray instead of crashing -- a missing tray must never be fatal.
+            let mut tray_attempt: u32 = 0;
+            loop {
+                tray_attempt += 1;
+                match try_build_tray() {
+                    Ok(()) => {
+                        if tray_attempt > 1 {
+                            log::info!("Tray icon created on attempt {}", tray_attempt);
+                        }
+                        break;
+                    }
+                    Err(e) if tray_attempt < 5 => {
+                        log::warn!(
+                            "Tray icon creation failed (attempt {}/5): {} -- retrying in 400ms",
+                            tray_attempt,
+                            e
+                        );
+                        std::thread::sleep(std::time::Duration::from_millis(400));
+                    }
+                    Err(e) => {
+                        log::error!(
+                            "Tray icon creation failed after {} attempts; continuing without system tray: {}",
+                            tray_attempt,
+                            e
+                        );
+                        break;
+                    }
+                }
+            }
 
             // Load hotkey from settings store with graceful degradation
             log_start("HOTKEY_SETUP");
