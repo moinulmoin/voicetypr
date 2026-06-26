@@ -84,6 +84,38 @@ fn hide_main_window(app: &tauri::AppHandle) {
     }
 }
 
+// Read the Windows taskbar theme (SystemUsesLightTheme) — deliberately distinct
+// from the app theme (AppsUseLightTheme), because the tray icon lives on the
+// taskbar and Windows lets the two differ (e.g. dark taskbar + light apps).
+#[cfg(target_os = "windows")]
+fn windows_taskbar_is_light() -> bool {
+    use winreg::enums::HKEY_CURRENT_USER;
+    use winreg::RegKey;
+    RegKey::predef(HKEY_CURRENT_USER)
+        .open_subkey(r"Software\Microsoft\Windows\CurrentVersion\Themes\Personalize")
+        .and_then(|k| k.get_value::<u32, _>("SystemUsesLightTheme"))
+        .map(|v| v == 1)
+        .unwrap_or(false)
+}
+
+// Pick the tray icon that contrasts with the current Windows taskbar theme:
+// dark mark on a light taskbar, white mark on a dark taskbar. macOS uses a
+// template icon that auto-adapts, so this is Windows-only.
+#[cfg(target_os = "windows")]
+fn apply_tray_theme_icon(app: &tauri::AppHandle) {
+    if let Some(tray) = app.tray_by_id("main") {
+        let icon = if windows_taskbar_is_light() {
+            tauri::include_image!("icons/tray-light.png")
+        } else {
+            tauri::include_image!("icons/tray.png")
+        };
+        if let Err(e) = tray.set_icon(Some(icon)) {
+            log::warn!("Failed to set theme-adaptive tray icon: {}", e);
+        }
+        let _ = tray.set_icon_as_template(false);
+    }
+}
+
 #[cfg(target_os = "macos")]
 const APP_QUIT_TO_TRAY_ID: &str = "app-quit-to-tray";
 #[cfg(target_os = "macos")]
@@ -1042,6 +1074,12 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
                 }
             }
 
+            // Windows ignores macOS template icons, so a single white mark is
+            // invisible on a light taskbar. Pick the icon that contrasts with the
+            // current taskbar theme (refreshed on theme changes in on_window_event).
+            #[cfg(target_os = "windows")]
+            apply_tray_theme_icon(app.app_handle());
+
             // Load hotkey from settings store with graceful degradation
             log_start("HOTKEY_SETUP");
             log_with_context(log::Level::Debug, "Setting up hotkey", &[
@@ -1647,6 +1685,11 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
                         log::warn!("No tray icon; allowing main window to close (quit) instead of hiding");
                     }
                 }
+            }
+            // Refresh the tray icon when the OS theme flips (Windows taskbar).
+            #[cfg(target_os = "windows")]
+            if let tauri::WindowEvent::ThemeChanged(_) = event {
+                apply_tray_theme_icon(window.app_handle());
             }
         })
         .build(app_context)
