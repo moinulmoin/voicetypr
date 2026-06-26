@@ -67,6 +67,13 @@ fn show_main_window(app: &tauri::AppHandle) {
 
 /// Hide the main window and the macOS Dock icon — back to the menubar/tray.
 fn hide_main_window(app: &tauri::AppHandle) {
+    // If the system tray failed to create (e.g. the Windows shell notification
+    // area wasn't ready at startup), hiding the window would leave the app
+    // running with no way to bring it back. Keep the window visible instead.
+    if app.tray_by_id("main").is_none() {
+        log::warn!("No tray icon present; keeping main window visible instead of hiding to tray");
+        return;
+    }
     if let Some(window) = app.get_webview_window("main") {
         if let Err(e) = window.hide() {
             log::error!("Failed to hide main window: {}", e);
@@ -813,7 +820,9 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
 
             // Build the tray menu using our helper function
             // Note: We need to block here since setup is sync
-            let menu = tauri::async_runtime::block_on(build_tray_menu(app.app_handle()))?;
+            let tray_app = app.app_handle().clone();
+            let try_build_tray = move || -> Result<(), Box<dyn std::error::Error>> {
+            let menu = tauri::async_runtime::block_on(build_tray_menu(&tray_app))?;
 
 
             // Bare-mark template icon for the menubar (no background; adapts to light/dark).
@@ -995,7 +1004,43 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
                         show_main_window(app);
                     }
                 })
-                .build(app)?;
+                .build(&tray_app)?;
+            Ok(())
+            };
+
+            // Tray creation can fail transiently on Windows (e.g. the shell's
+            // notification area isn't ready yet -> os error 0x80004005 / E_FAIL).
+            // This previously aborted the entire setup hook and stopped the app
+            // from launching at all. Retry a few times, then continue WITHOUT a
+            // tray instead of crashing -- a missing tray must never be fatal.
+            let mut tray_attempt: u32 = 0;
+            loop {
+                tray_attempt += 1;
+                match try_build_tray() {
+                    Ok(()) => {
+                        if tray_attempt > 1 {
+                            log::info!("Tray icon created on attempt {}", tray_attempt);
+                        }
+                        break;
+                    }
+                    Err(e) if tray_attempt < 5 => {
+                        log::warn!(
+                            "Tray icon creation failed (attempt {}/5): {} -- retrying in 400ms",
+                            tray_attempt,
+                            e
+                        );
+                        std::thread::sleep(std::time::Duration::from_millis(400));
+                    }
+                    Err(e) => {
+                        log::error!(
+                            "Tray icon creation failed after {} attempts; continuing without system tray: {}",
+                            tray_attempt,
+                            e
+                        );
+                        break;
+                    }
+                }
+            }
 
             // Load hotkey from settings store with graceful degradation
             log_start("HOTKEY_SETUP");
@@ -1591,9 +1636,16 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {
                 // Only hide the window instead of closing it (except for pill)
                 if window.label() == "main" {
-                    api.prevent_close();
-                    hide_main_window(window.app_handle());
-                    log::info!("Main window hidden instead of closed");
+                    // Close-to-tray ONLY when a tray icon exists. If tray creation
+                    // failed at startup, prevent_close + hide would strand the app as a
+                    // background process with no way back -> let the close proceed (quit).
+                    if window.app_handle().tray_by_id("main").is_some() {
+                        api.prevent_close();
+                        hide_main_window(window.app_handle());
+                        log::info!("Main window hidden instead of closed");
+                    } else {
+                        log::warn!("No tray icon; allowing main window to close (quit) instead of hiding");
+                    }
                 }
             }
         })
