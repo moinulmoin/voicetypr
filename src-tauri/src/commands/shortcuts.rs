@@ -1,8 +1,8 @@
 use std::collections::HashSet;
 
+use keytrigger::KeyPhase;
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, Manager};
-use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut, ShortcutState};
 use tauri_plugin_store::StoreExt;
 
 use crate::ai::prompts::{EnhancementOptions, EnhancementPreset};
@@ -43,19 +43,17 @@ pub enum ShortcutTrigger {
     Hold,
 }
 
-/// How a binding is triggered. `Combo` (default) uses the legacy
-/// `global_shortcut` path; `ModifierHold`/`DoubleTap` use the native engine.
+/// How a binding is triggered. All shortcut kinds are routed through the native engine.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum TriggerKind {
     #[default]
     Combo,
     ModifierHold,
-    DoubleTap,
     IsolatedTap,
 }
 
-/// A side-specific modifier for native (`ModifierHold`/`DoubleTap`) bindings.
+/// A side-specific modifier for native modifier bindings.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ModifierSpec {
     pub modifier: ModifierKind,
@@ -91,8 +89,6 @@ pub struct ShortcutBinding {
     pub trigger_kind: TriggerKind,
     #[serde(default)]
     pub modifier: Option<ModifierSpec>,
-    #[serde(default)]
-    pub double_tap_ms: Option<u64>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -110,14 +106,6 @@ pub struct ShortcutActionDefinition {
     pub allows_single_key: bool,
 }
 
-#[derive(Debug, Clone)]
-pub struct RegisteredShortcutBinding {
-    pub id: String,
-    pub action: ShortcutAction,
-    pub trigger: ShortcutTrigger,
-    pub shortcut: Shortcut,
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum CustomHoldTransition {
     Start,
@@ -128,11 +116,11 @@ pub(crate) enum CustomHoldTransition {
 pub(crate) fn pressed_shortcut_should_run(
     active_bindings: &mut HashSet<String>,
     binding_id: &str,
-    event_state: ShortcutState,
+    event_state: KeyPhase,
 ) -> bool {
     match event_state {
-        ShortcutState::Pressed => active_bindings.insert(binding_id.to_string()),
-        ShortcutState::Released => {
+        KeyPhase::Pressed => active_bindings.insert(binding_id.to_string()),
+        KeyPhase::Released => {
             active_bindings.remove(binding_id);
             false
         }
@@ -142,17 +130,17 @@ pub(crate) fn pressed_shortcut_should_run(
 pub(crate) fn hold_shortcut_transition(
     active_bindings: &mut HashSet<String>,
     binding_id: &str,
-    event_state: ShortcutState,
+    event_state: KeyPhase,
 ) -> CustomHoldTransition {
     match event_state {
-        ShortcutState::Pressed => {
+        KeyPhase::Pressed => {
             if active_bindings.insert(binding_id.to_string()) && active_bindings.len() == 1 {
                 CustomHoldTransition::Start
             } else {
                 CustomHoldTransition::Noop
             }
         }
-        ShortcutState::Released => {
+        KeyPhase::Released => {
             if active_bindings.remove(binding_id) && active_bindings.is_empty() {
                 CustomHoldTransition::Stop
             } else {
@@ -166,12 +154,6 @@ pub(crate) fn hold_shortcut_transition(
 pub struct ExistingShortcutStrings {
     pub primary_hotkey: Option<String>,
     pub ptt_hotkey: Option<String>,
-}
-
-#[derive(Debug, Clone)]
-struct PreparedShortcutBinding {
-    binding: ShortcutBinding,
-    shortcut: Option<Shortcut>,
 }
 
 #[tauri::command]
@@ -192,189 +174,18 @@ pub fn update_shortcut_settings(
     let existing = current_existing_shortcuts(&app);
     let prepared = prepare_shortcut_settings(settings, &existing)?;
     let sanitized = ShortcutSettings {
-        bindings: prepared.iter().map(|item| item.binding.clone()).collect(),
+        bindings: prepared.clone(),
     };
 
+    save_shortcut_settings(&app, &sanitized)?;
+
+    // Apply after the settings commit so runtime state reflects the durable source of truth.
+    crate::trigger::engine_host::rebuild_engine_bindings(&app);
+
     let app_state = app.state::<AppState>();
-    let previous = app_state
-        .custom_shortcut_bindings
-        .lock()
-        .map_err(|e| format!("Failed to lock custom shortcut state: {}", e))?
-        .clone();
-
-    unregister_registered_shortcuts(&app, &previous);
-
-    let mut newly_registered = Vec::new();
-    for item in prepared.iter().filter(|item| item.binding.enabled) {
-        let Some(shortcut) = item.shortcut else {
-            continue;
-        };
-        if let Err(error) = app.global_shortcut().register(shortcut) {
-            unregister_registered_shortcuts(&app, &newly_registered);
-            restore_registered_shortcuts(&app, &app_state, previous);
-            return Err(format!(
-                "Failed to register shortcut '{}' for {:?}: {}",
-                item.binding.shortcut, item.binding.action, error
-            ));
-        }
-
-        newly_registered.push(RegisteredShortcutBinding {
-            id: item.binding.id.clone(),
-            action: item.binding.action,
-            trigger: item.binding.trigger,
-            shortcut,
-        });
-    }
-
-    if let Err(error) = save_shortcut_settings(&app, &sanitized) {
-        unregister_registered_shortcuts(&app, &newly_registered);
-        restore_registered_shortcuts(&app, &app_state, previous);
-        return Err(error);
-    }
-
-    // Route native (ModifierHold/DoubleTap) bindings to the trigger engine
-    // BEFORE clearing shared active state, so a removed/edited hold-to-record
-    // that is mid-hold is released (Stop) while its id is still tracked.
-    crate::trigger::engine_host::apply_engine_bindings(&app, &sanitized.bindings);
-
-    {
-        let mut guard = app_state
-            .custom_shortcut_bindings
-            .lock()
-            .map_err(|e| format!("Failed to lock custom shortcut state: {}", e))?;
-        *guard = newly_registered;
-        clear_active_custom_shortcut_state(&app_state);
-    }
-
-    Ok(sanitized)
-}
-
-pub fn register_saved_shortcuts(app: &AppHandle) -> Result<(), String> {
-    let settings = load_shortcut_settings(app)?;
-    let existing = current_existing_shortcuts(app);
-    let primary = existing
-        .primary_hotkey
-        .as_deref()
-        .map(normalize_shortcut_keys)
-        .filter(|value| !value.is_empty());
-    let ptt = existing
-        .ptt_hotkey
-        .as_deref()
-        .map(normalize_shortcut_keys)
-        .filter(|value| !value.is_empty());
-    let app_state = app.state::<AppState>();
-
-    let mut registered = Vec::new();
-    let mut seen_enabled = HashSet::new();
-    let mut single_key_count: usize = 0;
-    let mut engine_source: Vec<ShortcutBinding> = Vec::new();
-    for binding in settings
-        .bindings
-        .into_iter()
-        .filter(|binding| binding.enabled)
-    {
-        let sanitized = ShortcutBinding {
-            id: binding.id.trim().to_string(),
-            shortcut: binding.shortcut.trim().to_string(),
-            ..binding
-        };
-
-        // Native engine kinds (modifier-hold / double-tap) bypass global_shortcut.
-        if crate::trigger::mapping::is_engine_kind(&sanitized) {
-            engine_source.push(sanitized);
-            continue;
-        }
-
-        let shortcut = match prepare_enabled_shortcut(
-            &sanitized,
-            primary.as_deref(),
-            ptt.as_deref(),
-            &mut seen_enabled,
-        ) {
-            Ok(shortcut) => shortcut,
-            Err(error) => {
-                log::error!(
-                    "Skipping saved shortcut '{}' for {:?}: {}",
-                    sanitized.shortcut,
-                    sanitized.action,
-                    error
-                );
-                continue;
-            }
-        };
-
-        let normalized = normalize_shortcut_keys(&sanitized.shortcut);
-        if is_single_key_shortcut(&normalized) {
-            if single_key_count >= MAX_SINGLE_KEY_BINDINGS {
-                log::warn!(
-                    "Skipping saved single-key shortcut '{}' for {:?}: exceeds the {}-binding cap",
-                    sanitized.shortcut,
-                    sanitized.action,
-                    MAX_SINGLE_KEY_BINDINGS,
-                );
-                continue;
-            }
-            single_key_count += 1;
-        }
-
-        match app.global_shortcut().register(shortcut) {
-            Ok(_) => registered.push(RegisteredShortcutBinding {
-                id: sanitized.id,
-                action: sanitized.action,
-                trigger: sanitized.trigger,
-                shortcut,
-            }),
-            Err(error) => {
-                log::error!(
-                    "Failed to register saved shortcut '{}' for {:?}: {}",
-                    sanitized.shortcut,
-                    sanitized.action,
-                    error
-                );
-            }
-        }
-    }
-    let mut guard = app_state
-        .custom_shortcut_bindings
-        .lock()
-        .map_err(|e| format!("Failed to lock custom shortcut state: {}", e))?;
-    *guard = registered;
     clear_active_custom_shortcut_state(&app_state);
 
-    crate::trigger::engine_host::apply_engine_bindings(app, &engine_source);
-    Ok(())
-}
-
-pub fn matching_custom_binding(
-    app_state: &AppState,
-    shortcut: &Shortcut,
-) -> Option<RegisteredShortcutBinding> {
-    app_state
-        .custom_shortcut_bindings
-        .lock()
-        .ok()
-        .and_then(|bindings| {
-            bindings
-                .iter()
-                .find(|binding| &binding.shortcut == shortcut)
-                .cloned()
-        })
-}
-
-pub fn registered_custom_shortcut_conflict(
-    app_state: &AppState,
-    shortcut: &Shortcut,
-) -> Option<RegisteredShortcutBinding> {
-    app_state
-        .custom_shortcut_bindings
-        .lock()
-        .ok()
-        .and_then(|bindings| {
-            bindings
-                .iter()
-                .find(|binding| &binding.shortcut == shortcut)
-                .cloned()
-        })
+    Ok(sanitized)
 }
 
 #[cfg(test)]
@@ -505,31 +316,44 @@ pub async fn toggle_ai_formatting(app: AppHandle) -> Result<(), String> {
     Ok(())
 }
 
-#[cfg(test)]
 pub fn validate_shortcut_settings(
     settings: ShortcutSettings,
     existing: &ExistingShortcutStrings,
 ) -> Result<ShortcutSettings, String> {
-    prepare_shortcut_settings(settings, existing).map(|prepared| ShortcutSettings {
-        bindings: prepared.into_iter().map(|item| item.binding).collect(),
-    })
+    prepare_shortcut_settings(settings, existing)
+        .map(|prepared| ShortcutSettings { bindings: prepared })
 }
 
 fn prepare_shortcut_settings(
     settings: ShortcutSettings,
     existing: &ExistingShortcutStrings,
-) -> Result<Vec<PreparedShortcutBinding>, String> {
+) -> Result<Vec<ShortcutBinding>, String> {
     let mut seen_enabled = HashSet::new();
     let primary = existing
         .primary_hotkey
         .as_deref()
         .map(normalize_shortcut_keys)
-        .filter(|value| !value.is_empty());
+        .filter(|value| !value.is_empty())
+        .map(|value| trigger_dedup_key(&value));
     let ptt = existing
         .ptt_hotkey
         .as_deref()
         .map(normalize_shortcut_keys)
-        .filter(|value| !value.is_empty());
+        .filter(|value| !value.is_empty())
+        .map(|value| trigger_dedup_key(&value));
+
+    // The primary recording hotkey and the push-to-talk hotkey must not resolve
+    // to the SAME physical trigger. The retired OS shortcut registrar rejected
+    // this; without the check engine_host would synthesize both a `primary` and a
+    // `ptt` binding for one keypress. Compared on the resolved trigger, not the
+    // raw string.
+    if let (Some(primary_key), Some(ptt_key)) = (&primary, &ptt) {
+        if primary_key == ptt_key {
+            return Err("The recording hotkey and the push-to-talk hotkey are the \
+                        same. Choose a different push-to-talk key."
+                .to_string());
+        }
+    }
 
     let mut prepared = Vec::with_capacity(settings.bindings.len());
     for binding in settings.bindings {
@@ -539,39 +363,23 @@ fn prepare_shortcut_settings(
             ..binding
         };
 
-        if sanitized.enabled && crate::trigger::mapping::is_engine_kind(&sanitized) {
-            // Native engine kinds are not tauri Shortcuts; validate separately
-            // and keep them out of the global_shortcut registration vector.
-            crate::trigger::mapping::validate(&sanitized)?;
-            prepared.push(PreparedShortcutBinding {
-                binding: sanitized,
-                shortcut: None,
-            });
-        } else if sanitized.enabled {
-            let shortcut = prepare_enabled_shortcut(
+        if sanitized.enabled {
+            prepare_enabled_shortcut(
                 &sanitized,
                 primary.as_deref(),
                 ptt.as_deref(),
                 &mut seen_enabled,
             )?;
-            prepared.push(PreparedShortcutBinding {
-                binding: sanitized,
-                shortcut: Some(shortcut),
-            });
-        } else {
-            prepared.push(PreparedShortcutBinding {
-                binding: sanitized,
-                shortcut: None,
-            });
         }
+        prepared.push(sanitized);
     }
 
     let single_key_count = prepared
         .iter()
         .filter(|pb| {
-            pb.binding.enabled
-                && pb.shortcut.is_some()
-                && is_single_key_shortcut(&normalize_shortcut_keys(&pb.binding.shortcut))
+            pb.enabled
+                && !pb.shortcut.is_empty()
+                && is_single_key_shortcut(&normalize_shortcut_keys(&pb.shortcut))
         })
         .count();
     if single_key_count > MAX_SINGLE_KEY_BINDINGS {
@@ -585,28 +393,52 @@ fn prepare_shortcut_settings(
     Ok(prepared)
 }
 
+/// Canonical dedup/collision key for a NORMALIZED shortcut string, resolved
+/// through the engine's `parse_combo` so platform-equivalent combos compare
+/// equal (e.g. on Windows `CommandOrControl+A` and `Control+A` both resolve to
+/// the same Control+A trigger). Falls back to the normalized string for inputs
+/// the engine cannot parse. `ModSet` is a `u8` bitset so the trigger's `Debug`
+/// is a stable canonical key.
+fn trigger_dedup_key(normalized: &str) -> String {
+    match crate::trigger::mapping::parse_combo(normalized) {
+        Ok(trigger) => format!("{:?}", trigger),
+        Err(_) => normalized.to_string(),
+    }
+}
+
 fn prepare_enabled_shortcut(
     binding: &ShortcutBinding,
     primary: Option<&str>,
     ptt: Option<&str>,
     seen_enabled: &mut HashSet<String>,
-) -> Result<Shortcut, String> {
-    validate_enabled_binding(binding)?;
-    let normalized = normalize_shortcut_keys(&binding.shortcut);
+) -> Result<(), String> {
+    if binding.trigger_kind != TriggerKind::Combo {
+        crate::trigger::mapping::validate(binding)?;
+        return Ok(());
+    }
 
-    if primary == Some(normalized.as_str()) {
+    validate_enabled_binding(binding)?;
+    crate::trigger::mapping::validate(binding)?;
+
+    let normalized = normalize_shortcut_keys(&binding.shortcut);
+    // Dedup/collision on the RESOLVED trigger, not the raw string: on Windows
+    // `CommandOrControl+A` and `Control+A` are distinct strings that parse_combo
+    // collapses to one trigger, so a string compare would let both fire at once.
+    let dedup_key = trigger_dedup_key(&normalized);
+
+    if primary == Some(dedup_key.as_str()) {
         return Err(format!(
             "Shortcut '{}' duplicates the primary recording hotkey",
             binding.shortcut
         ));
     }
-    if ptt == Some(normalized.as_str()) {
+    if ptt == Some(dedup_key.as_str()) {
         return Err(format!(
             "Shortcut '{}' duplicates the push-to-talk hotkey",
             binding.shortcut
         ));
     }
-    if !seen_enabled.insert(normalized.clone()) {
+    if !seen_enabled.insert(dedup_key) {
         return Err(format!(
             "Duplicate enabled shortcut binding: {}",
             binding.shortcut
@@ -617,18 +449,64 @@ fn prepare_enabled_shortcut(
         return Err("Escape is reserved for recording cancellation".to_string());
     }
 
-    normalized
-        .parse::<Shortcut>()
-        .map_err(|e| format!("Invalid shortcut '{}': {}", binding.shortcut, e))
+    Ok(())
 }
 
 pub(crate) fn load_shortcut_settings(app: &AppHandle) -> Result<ShortcutSettings, String> {
     let store = app.store("settings").map_err(|e| e.to_string())?;
     match store.get(SHORTCUT_BINDINGS_KEY) {
-        Some(value) => serde_json::from_value(value.clone())
-            .map_err(|e| format!("Failed to parse shortcut settings: {}", e)),
+        Some(value) => {
+            let mut raw = value.clone();
+            if migrate_legacy_tap_bindings(&mut raw) {
+                store.set(SHORTCUT_BINDINGS_KEY, raw.clone());
+                store.save().map_err(|e| e.to_string())?;
+            }
+            let settings_value = if raw.is_array() {
+                serde_json::json!({ "bindings": raw })
+            } else {
+                raw
+            };
+            serde_json::from_value(settings_value)
+                .map_err(|e| format!("Failed to parse shortcut settings: {}", e))
+        }
         None => Ok(ShortcutSettings::default()),
     }
+}
+
+fn migrate_legacy_tap_bindings(value: &mut serde_json::Value) -> bool {
+    let Some(bindings) = (if value.is_array() {
+        value.as_array_mut()
+    } else {
+        value
+            .get_mut("bindings")
+            .and_then(serde_json::Value::as_array_mut)
+    }) else {
+        return false;
+    };
+
+    let mut changed = false;
+    for binding in bindings {
+        let Some(object) = binding.as_object_mut() else {
+            continue;
+        };
+
+        if object
+            .get("trigger_kind")
+            .and_then(serde_json::Value::as_str)
+            == Some(concat!("double", "_tap"))
+        {
+            object.insert(
+                "trigger_kind".to_string(),
+                serde_json::Value::String("isolated_tap".to_string()),
+            );
+            changed = true;
+        }
+        if object.remove(concat!("double", "_tap_ms")).is_some() {
+            changed = true;
+        }
+    }
+
+    changed
 }
 
 fn save_shortcut_settings(app: &AppHandle, settings: &ShortcutSettings) -> Result<(), String> {
@@ -716,49 +594,12 @@ fn allows_single_key(binding: &ShortcutBinding) -> bool {
     binding.allow_risky_combo
 }
 
-fn unregister_registered_shortcuts(app: &AppHandle, bindings: &[RegisteredShortcutBinding]) {
-    for binding in bindings {
-        if let Err(error) = app.global_shortcut().unregister(binding.shortcut) {
-            log::debug!(
-                "Failed to unregister custom shortcut {:?}: {}",
-                binding.action,
-                error
-            );
-        }
-    }
-}
-
 fn clear_active_custom_shortcut_state(app_state: &AppState) {
     if let Ok(mut active_holds) = app_state.active_custom_hold_bindings.lock() {
         active_holds.clear();
     }
     if let Ok(mut active_pressed) = app_state.active_custom_pressed_bindings.lock() {
         active_pressed.clear();
-    }
-}
-
-fn restore_registered_shortcuts(
-    app: &AppHandle,
-    app_state: &tauri::State<'_, AppState>,
-    previous: Vec<RegisteredShortcutBinding>,
-) {
-    let mut restored = Vec::with_capacity(previous.len());
-    for binding in previous {
-        match app.global_shortcut().register(binding.shortcut) {
-            Ok(_) => restored.push(binding),
-            Err(error) => log::error!(
-                "Failed to restore custom shortcut {:?} after update failure: {}",
-                binding.action,
-                error
-            ),
-        }
-    }
-
-    if let Ok(mut guard) = app_state.custom_shortcut_bindings.lock() {
-        *guard = restored;
-        clear_active_custom_shortcut_state(app_state);
-    } else {
-        log::error!("Failed to lock custom shortcut state while restoring bindings");
     }
 }
 

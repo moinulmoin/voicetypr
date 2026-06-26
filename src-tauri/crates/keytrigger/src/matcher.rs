@@ -95,6 +95,7 @@ impl Matcher {
             if !repeat {
                 self.handle_double_tap(gesture, now, emit);
                 self.handle_isolated_down(gesture, now);
+                self.handle_combo_exact_down(ev, emit);
             }
         } else {
             match modifier {
@@ -112,6 +113,7 @@ impl Matcher {
         }
 
         self.recompute_levels(emit);
+        self.maintain_combo_exact(emit);
     }
 
     /// Double-tap edge detection for a concrete `gesture` (a non-repeat down).
@@ -253,6 +255,7 @@ impl Matcher {
                 }
                 Trigger::DoubleTap { .. } => continue, // edge trigger, handled elsewhere
                 Trigger::IsolatedTap { .. } => continue,
+                Trigger::ComboExact { .. } => continue, // edge-activated; see handle_combo_exact_down / maintain_combo_exact
             };
             let was = self.active.get(id).copied().unwrap_or(false);
             if now_active && !was {
@@ -267,6 +270,61 @@ impl Matcher {
                     id: id.clone(),
                     phase: KeyPhase::Released,
                 });
+            }
+        }
+        self.bindings = bindings;
+    }
+
+    /// Edge activation for [`Trigger::ComboExact`]: on a NON-REPEAT down of a
+    /// non-modifier `key`, fire `Pressed` iff the currently-held modifier set
+    /// EQUALS the binding's `mods` exactly. A superset (or subset) of modifiers
+    /// does NOT activate, and a key held before the modifiers arrive never
+    /// activates — activation is strictly the key-down edge with exact mods
+    /// already held. This is what separates `ComboExact` from the subset-based
+    /// [`Trigger::Chord`] evaluated in [`Matcher::recompute_levels`].
+    fn handle_combo_exact_down(&mut self, ev: RawKeyEvent, emit: &mut dyn FnMut(TriggerEvent)) {
+        // Only a non-repeat, non-modifier key-down can start a combo; modifier
+        // presses arrive as their own events and never feed this path.
+        if ev.is_repeat || modifier_of(ev.key).is_some() {
+            return;
+        }
+        let modset = self.current_modset();
+        let bindings = std::mem::take(&mut self.bindings);
+        for (id, trig) in &bindings {
+            if let Trigger::ComboExact { mods, key } = trig {
+                if *key == ev.key && *mods == modset {
+                    self.active.insert(id.clone(), true);
+                    emit(TriggerEvent {
+                        id: id.clone(),
+                        phase: KeyPhase::Pressed,
+                    });
+                }
+            }
+        }
+        self.bindings = bindings;
+    }
+
+    /// Release any active [`Trigger::ComboExact`] binding whose hold condition
+    /// no longer holds: the bound `key` is no longer down, or the held modifier
+    /// set drifted away from the exact `mods`. Runs on every event so PTT-style
+    /// releases (lifting a required modifier while the key stays down) fire
+    /// promptly. Bindings that never activated are skipped (nothing to release).
+    fn maintain_combo_exact(&mut self, emit: &mut dyn FnMut(TriggerEvent)) {
+        let modset = self.current_modset();
+        let bindings = std::mem::take(&mut self.bindings);
+        for (id, trig) in &bindings {
+            if let Trigger::ComboExact { mods, key } = trig {
+                let active = self.active.get(id).copied().unwrap_or(false);
+                if active {
+                    let holds = self.keys_down.contains(key) && *mods == modset;
+                    if !holds {
+                        self.active.insert(id.clone(), false);
+                        emit(TriggerEvent {
+                            id: id.clone(),
+                            phase: KeyPhase::Released,
+                        });
+                    }
+                }
             }
         }
         self.bindings = bindings;
@@ -965,5 +1023,178 @@ mod tests {
             ],
         );
         assert!(out.is_empty());
+    }
+    fn ce(id: &str, mods: ModSet, key: NamedKey) -> (TriggerId, Trigger) {
+        (
+            id.into(),
+            Trigger::ComboExact {
+                mods,
+                key: KeySpec::Named(key),
+            },
+        )
+    }
+
+    #[test]
+    fn combo_exact_fires_on_exact_mods_key_down() {
+        // (a) exact mods + non-repeat key-down → fires once, then key-up releases.
+        let mods = ModSet::empty().with(Modifier::Meta).with(Modifier::Shift);
+        let mut m = with_bindings(vec![ce("ce", mods, NamedKey::J)]);
+        let t = Instant::now();
+        let out = drive(
+            &mut m,
+            &[
+                (mdown(NamedKey::MetaLeft, Side::Left), t),
+                (mdown(NamedKey::ShiftLeft, Side::Left), t),
+                (kdown(NamedKey::J), t),
+                (kup(NamedKey::J), t),
+            ],
+        );
+        assert_eq!(out, vec![press("ce"), release("ce")]);
+        assert_eq!(m.active_count(), 0);
+    }
+
+    #[test]
+    fn combo_exact_superset_mods_does_not_fire() {
+        // (b) required Cmd+Shift, pressed Cmd+Shift+Alt (superset) → must NOT fire.
+        let mods = ModSet::empty().with(Modifier::Meta).with(Modifier::Shift);
+        let mut m = with_bindings(vec![ce("ce", mods, NamedKey::J)]);
+        let t = Instant::now();
+        let out = drive(
+            &mut m,
+            &[
+                (mdown(NamedKey::MetaLeft, Side::Left), t),
+                (mdown(NamedKey::ShiftLeft, Side::Left), t),
+                (mdown(NamedKey::AltLeft, Side::Left), t),
+                (kdown(NamedKey::J), t),
+                (kup(NamedKey::J), t),
+            ],
+        );
+        assert!(out.is_empty());
+        assert_eq!(m.active_count(), 0);
+    }
+
+    #[test]
+    fn combo_exact_subset_mods_does_not_fire() {
+        // required Cmd+Shift, pressed Cmd only (subset) → must NOT fire.
+        let mods = ModSet::empty().with(Modifier::Meta).with(Modifier::Shift);
+        let mut m = with_bindings(vec![ce("ce", mods, NamedKey::J)]);
+        let t = Instant::now();
+        let out = drive(
+            &mut m,
+            &[
+                (mdown(NamedKey::MetaLeft, Side::Left), t),
+                (kdown(NamedKey::J), t),
+                (kup(NamedKey::J), t),
+            ],
+        );
+        assert!(out.is_empty());
+    }
+
+    #[test]
+    fn combo_exact_key_held_before_mods_does_not_fire() {
+        // (c) key down first, modifiers added afterward → must NOT fire (edge-only).
+        let mods = ModSet::empty().with(Modifier::Meta);
+        let mut m = with_bindings(vec![ce("ce", mods, NamedKey::J)]);
+        let t = Instant::now();
+        let out = drive(
+            &mut m,
+            &[
+                (kdown(NamedKey::J), t),
+                (mdown(NamedKey::MetaLeft, Side::Left), t),
+                (mup(NamedKey::MetaLeft, Side::Left), t),
+                (kup(NamedKey::J), t),
+            ],
+        );
+        assert!(out.is_empty());
+        assert_eq!(m.active_count(), 0);
+    }
+
+    #[test]
+    fn combo_exact_releases_on_key_up() {
+        // (d) release fires exactly on key-up while mods stay held.
+        let mods = ModSet::empty().with(Modifier::Control);
+        let mut m = with_bindings(vec![ce("ce", mods, NamedKey::K)]);
+        let t = Instant::now();
+        let out = drive(
+            &mut m,
+            &[
+                (mdown(NamedKey::ControlLeft, Side::Left), t),
+                (kdown(NamedKey::K), t),
+                (kup(NamedKey::K), t),
+                // Mod released AFTER key-up must not double-release.
+                (mup(NamedKey::ControlLeft, Side::Left), t),
+            ],
+        );
+        assert_eq!(out, vec![press("ce"), release("ce")]);
+        assert_eq!(m.active_count(), 0);
+    }
+
+    #[test]
+    fn combo_exact_releases_when_required_mod_lifted() {
+        // (e) PTT: lift a required modifier while the key stays down → Released.
+        let mods = ModSet::empty().with(Modifier::Meta);
+        let mut m = with_bindings(vec![ce("ce", mods, NamedKey::J)]);
+        let t = Instant::now();
+        let out = drive(
+            &mut m,
+            &[
+                (mdown(NamedKey::MetaLeft, Side::Left), t),
+                (kdown(NamedKey::J), t),
+                // Cmd lifted, J still down → release (modifier drift).
+                (mup(NamedKey::MetaLeft, Side::Left), t),
+                (kup(NamedKey::J), t),
+            ],
+        );
+        assert_eq!(out, vec![press("ce"), release("ce")]);
+        assert_eq!(m.active_count(), 0);
+    }
+
+    #[test]
+    fn combo_exact_repeat_keydown_does_not_refire() {
+        // Auto-repeat key-downs must not re-press an already-active combo.
+        let mods = ModSet::empty().with(Modifier::Meta);
+        let mut m = with_bindings(vec![ce("ce", mods, NamedKey::J)]);
+        let t = Instant::now();
+        let out = drive(
+            &mut m,
+            &[
+                (mdown(NamedKey::MetaLeft, Side::Left), t),
+                (kdown(NamedKey::J), t),
+                (ev(NamedKey::J, None, true, true), t), // auto-repeat down
+                (kup(NamedKey::J), t),
+            ],
+        );
+        assert_eq!(out, vec![press("ce"), release("ce")]);
+        assert_eq!(m.active_count(), 0);
+    }
+
+    #[test]
+    fn combo_exact_coexists_with_subset_chord() {
+        // ComboExact must not perturb the subset Chord path.
+        let mut m = with_bindings(vec![
+            ce("ce", ModSet::empty().with(Modifier::Meta), NamedKey::J),
+            (
+                "chord".into(),
+                Trigger::Chord {
+                    mods: ModSet::empty().with(Modifier::Meta),
+                    key: KeySpec::Named(NamedKey::J),
+                },
+            ),
+        ]);
+        let t = Instant::now();
+        // Cmd+J: ComboExact fires (exact), Chord also fires (subset). Both
+        // release on key-up.
+        let out = drive(
+            &mut m,
+            &[
+                (mdown(NamedKey::MetaLeft, Side::Left), t),
+                (kdown(NamedKey::J), t),
+                (kup(NamedKey::J), t),
+            ],
+        );
+        assert!(out.contains(&press("ce")));
+        assert!(out.contains(&release("ce")));
+        assert!(out.contains(&press("chord")));
+        assert!(out.contains(&release("chord")));
     }
 }

@@ -632,7 +632,6 @@ export const OnboardingDesktop = function OnboardingDesktop({
               modifier: capturedBareModifier.modifier as ModifierKind,
               side: capturedBareModifier.side as ModifierSide,
             },
-            double_tap_ms: null,
           }
         : {
             id: ONBOARDING_HOLD_ID,
@@ -646,7 +645,6 @@ export const OnboardingDesktop = function OnboardingDesktop({
               modifier: capturedBareModifier.modifier as ModifierKind,
               side: capturedBareModifier.side as ModifierSide,
             },
-            double_tap_ms: null,
           };
       await invoke("update_shortcut_settings", {
         settings: {
@@ -1293,7 +1291,7 @@ export const OnboardingDesktop = function OnboardingDesktop({
                   placeholder={capturedBareModifier
                     ? holdToTalk
                       ? `Hold ${formatBareModifierLabel(capturedBareModifier)} · push-to-talk`
-                      : `Tap ${formatBareModifierLabel(capturedBareModifier)} · tap to toggle`
+                      : `Tap ${formatBareModifierLabel(capturedBareModifier)} · toggle on/off`
                     : undefined}
                 />
                 {capturedBareModifier ? (
@@ -1308,7 +1306,7 @@ export const OnboardingDesktop = function OnboardingDesktop({
                   ) : (
                     <Alert>
                       <Info className="size-4" />
-                      <AlertTitle>Tap to toggle</AlertTitle>
+                      <AlertTitle>Tap to toggle on/off</AlertTitle>
                       <AlertDescription>
                         Tap {formatBareModifierLabel(capturedBareModifier)} to start recording, tap again to stop.
                       </AlertDescription>

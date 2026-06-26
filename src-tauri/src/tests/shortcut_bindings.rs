@@ -7,8 +7,8 @@ use crate::commands::shortcuts::{
     ShortcutBinding, ShortcutSettings, ShortcutTrigger, SideKind, TriggerKind,
     MAX_SINGLE_KEY_BINDINGS,
 };
+use keytrigger::KeyPhase;
 use std::collections::HashSet;
-use tauri_plugin_global_shortcut::ShortcutState;
 
 fn binding(action: ShortcutAction, shortcut: &str) -> ShortcutBinding {
     ShortcutBinding {
@@ -20,7 +20,6 @@ fn binding(action: ShortcutAction, shortcut: &str) -> ShortcutBinding {
         allow_risky_combo: false,
         trigger_kind: crate::commands::shortcuts::TriggerKind::Combo,
         modifier: None,
-        double_tap_ms: None,
     }
 }
 
@@ -142,6 +141,42 @@ fn duplicate_existing_hotkey_rejected() {
 }
 
 #[test]
+fn primary_and_ptt_must_differ() {
+    // The recording hotkey and the push-to-talk hotkey must not resolve to the
+    // same physical trigger -- engine_host would otherwise synthesize both a
+    // `primary` and a `ptt` binding for one keypress.
+    let same = ExistingShortcutStrings {
+        primary_hotkey: Some("CommandOrControl+Shift+P".to_string()),
+        ptt_hotkey: Some("CommandOrControl+Shift+P".to_string()),
+    };
+    assert!(validate_shortcut_settings(ShortcutSettings::default(), &same).is_err());
+
+    // Distinct triggers are fine.
+    let distinct = ExistingShortcutStrings {
+        primary_hotkey: Some("CommandOrControl+Shift+P".to_string()),
+        ptt_hotkey: Some("Alt+Space".to_string()),
+    };
+    assert!(validate_shortcut_settings(ShortcutSettings::default(), &distinct).is_ok());
+}
+
+#[cfg(target_os = "windows")]
+#[test]
+fn platform_equivalent_combos_dedup_on_windows() {
+    // On Windows, parse_combo collapses CommandOrControl -> Control, so these two
+    // string-distinct combos resolve to the SAME trigger and must be rejected as
+    // duplicates -- a plain string compare would let both fire on one keypress.
+    let bindings = vec![
+        binding(ShortcutAction::CopyLastTranscription, "CommandOrControl+J"),
+        binding(ShortcutAction::PasteLastTranscription, "Control+J"),
+    ];
+    assert!(validate_shortcut_settings(
+        ShortcutSettings { bindings },
+        &ExistingShortcutStrings::default(),
+    )
+    .is_err());
+}
+
+#[test]
 fn escape_is_reserved_even_for_risky_hold_binding() {
     let mut escape = binding(ShortcutAction::HoldToRecord, "Escape");
     escape.trigger = ShortcutTrigger::Hold;
@@ -186,22 +221,22 @@ fn pressed_trigger_dedupes_until_release() {
     assert!(pressed_shortcut_should_run(
         &mut active,
         "copy",
-        ShortcutState::Pressed,
+        KeyPhase::Pressed,
     ));
     assert!(!pressed_shortcut_should_run(
         &mut active,
         "copy",
-        ShortcutState::Pressed,
+        KeyPhase::Pressed,
     ));
     assert!(!pressed_shortcut_should_run(
         &mut active,
         "copy",
-        ShortcutState::Released,
+        KeyPhase::Released,
     ));
     assert!(pressed_shortcut_should_run(
         &mut active,
         "copy",
-        ShortcutState::Pressed,
+        KeyPhase::Pressed,
     ));
 }
 
@@ -210,19 +245,19 @@ fn multiple_hold_bindings_stop_only_after_last_release() {
     let mut active = HashSet::new();
 
     assert_eq!(
-        hold_shortcut_transition(&mut active, "hold-a", ShortcutState::Pressed),
+        hold_shortcut_transition(&mut active, "hold-a", KeyPhase::Pressed),
         CustomHoldTransition::Start
     );
     assert_eq!(
-        hold_shortcut_transition(&mut active, "hold-b", ShortcutState::Pressed),
+        hold_shortcut_transition(&mut active, "hold-b", KeyPhase::Pressed),
         CustomHoldTransition::Noop
     );
     assert_eq!(
-        hold_shortcut_transition(&mut active, "hold-a", ShortcutState::Released),
+        hold_shortcut_transition(&mut active, "hold-a", KeyPhase::Released),
         CustomHoldTransition::Noop
     );
     assert_eq!(
-        hold_shortcut_transition(&mut active, "hold-b", ShortcutState::Released),
+        hold_shortcut_transition(&mut active, "hold-b", KeyPhase::Released),
         CustomHoldTransition::Stop
     );
 }
@@ -464,12 +499,11 @@ fn legacy_binding_json_defaults_to_combo() {
         crate::commands::shortcuts::TriggerKind::Combo
     );
     assert!(parsed.modifier.is_none());
-    assert!(parsed.double_tap_ms.is_none());
 }
 
 /// A Right-Option HoldToRecord binding (the onboarding default) validates correctly
 /// even when the primary hotkey field is explicitly empty (cleared by the user).
-/// This is the engine-kind path: it bypasses global_shortcut, so no parse/conflict
+/// This is the engine-kind path: it bypasses native engine, so no parse/conflict
 /// check is performed against the primary hotkey.
 #[test]
 fn modifier_hold_right_option_validates_with_empty_primary() {
@@ -485,7 +519,6 @@ fn modifier_hold_right_option_validates_with_empty_primary() {
             modifier: ModifierKind::Alt,
             side: SideKind::Right,
         }),
-        double_tap_ms: None,
     };
     let settings = ShortcutSettings {
         bindings: vec![binding],
@@ -520,7 +553,6 @@ fn engine_kind_binding_not_treated_as_combo_against_empty_primary() {
             modifier: ModifierKind::Meta,
             side: SideKind::Right,
         }),
-        double_tap_ms: None,
     };
     let existing = ExistingShortcutStrings {
         primary_hotkey: Some(String::new()),

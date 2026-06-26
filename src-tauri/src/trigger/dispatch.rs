@@ -1,8 +1,7 @@
 //! Route `keytrigger::TriggerEvent`s to the shared shortcut dispatch path.
 
-use keytrigger::{KeyPhase, TriggerEvent};
+use keytrigger::TriggerEvent;
 use tauri::{AppHandle, Manager};
-use tauri_plugin_global_shortcut::ShortcutState;
 
 use crate::state::app_state::AppState;
 
@@ -26,10 +25,19 @@ pub fn on_engine_event(app: &AppHandle, ev: TriggerEvent) {
         return;
     };
 
-    let state = match ev.phase {
-        KeyPhase::Pressed => ShortcutState::Pressed,
-        KeyPhase::Released => ShortcutState::Released,
-    };
+    if ev.id == "escape-cancel" {
+        let app_handle = app.clone();
+        tauri::async_runtime::spawn(async move {
+            let app_state = app_handle.state::<AppState>();
+            crate::recording::escape_handler::handle_escape_key_press(
+                &app_state,
+                &app_handle,
+                ev.phase,
+            )
+            .await;
+        });
+        return;
+    }
 
     crate::recording::hotkeys::dispatch_action(
         app,
@@ -37,6 +45,6 @@ pub fn on_engine_event(app: &AppHandle, ev: TriggerEvent) {
         &binding.id,
         binding.action,
         binding.trigger,
-        state,
+        ev.phase,
     );
 }

@@ -2,51 +2,34 @@
 
 use std::time::Duration;
 
-use keytrigger::{Modifier, Side, TapKey, Trigger};
+use keytrigger::{KeySpec, ModSet, Modifier, NamedKey, Side, TapKey, Trigger};
 
+use crate::commands::key_normalizer::normalize_shortcut_keys;
 use crate::commands::shortcuts::{
     ModifierKind, ShortcutAction, ShortcutBinding, ShortcutTrigger, SideKind, TriggerKind,
 };
 
-/// Default double-tap window; bounded so a stored value can't be absurd.
-const DEFAULT_DOUBLE_TAP_MS: u64 = 350;
-const MIN_DOUBLE_TAP_MS: u64 = 120;
-const MAX_DOUBLE_TAP_MS: u64 = 1000;
 /// Max single-press duration that still counts as an isolated tap.
 const ISOLATED_TAP_MS: u64 = 500;
 
-/// True if this binding is handled by the native engine (not `global_shortcut`).
+/// True if this binding is handled by the native engine (by the native engine).
 pub fn is_engine_kind(binding: &ShortcutBinding) -> bool {
     matches!(
         binding.trigger_kind,
-        TriggerKind::ModifierHold | TriggerKind::DoubleTap | TriggerKind::IsolatedTap
+        TriggerKind::Combo | TriggerKind::ModifierHold | TriggerKind::IsolatedTap
     )
 }
 
-/// Convert a binding to its `keytrigger::Trigger`, or `None` if it is not an
-/// engine kind or is missing required fields.
+/// Convert a binding to its `keytrigger::Trigger`, or `None` if required fields
+/// are missing or a combo string fails to parse.
 pub fn to_trigger(binding: &ShortcutBinding) -> Option<Trigger> {
     match binding.trigger_kind {
-        TriggerKind::Combo => None,
+        TriggerKind::Combo => parse_combo(&binding.shortcut).ok(),
         TriggerKind::ModifierHold => {
             let spec = binding.modifier?;
             Some(Trigger::ModifierHold {
                 modifier: modifier(spec.modifier),
                 side: side(spec.side),
-            })
-        }
-        TriggerKind::DoubleTap => {
-            // v1: double-tap targets a modifier (e.g. double-tap Command).
-            let spec = binding.modifier?;
-            let within = Duration::from_millis(
-                binding
-                    .double_tap_ms
-                    .unwrap_or(DEFAULT_DOUBLE_TAP_MS)
-                    .clamp(MIN_DOUBLE_TAP_MS, MAX_DOUBLE_TAP_MS),
-            );
-            Some(Trigger::DoubleTap {
-                key: TapKey::Mod(modifier(spec.modifier), side(spec.side)),
-                within,
             })
         }
         TriggerKind::IsolatedTap => {
@@ -64,6 +47,7 @@ pub fn to_trigger(binding: &ShortcutBinding) -> Option<Trigger> {
 ///
 /// Used at startup: an empty primary hotkey is only safe to skip when such a
 /// binding exists and covers recording via the native keytrigger engine.
+#[cfg(test)]
 pub fn has_recording_engine_binding(bindings: &[ShortcutBinding]) -> bool {
     bindings.iter().any(|b| {
         b.enabled
@@ -73,14 +57,17 @@ pub fn has_recording_engine_binding(bindings: &[ShortcutBinding]) -> bool {
     })
 }
 
-/// Validate an enabled engine-kind binding (the `global_shortcut` validator does
-/// not run for these). Returns a user-facing error string on failure.
+/// Validate an enabled engine-kind binding (bindings). Returns a user-facing error string on failure.
 pub fn validate(binding: &ShortcutBinding) -> Result<(), String> {
     if binding.id.trim().is_empty() {
         return Err("Shortcut binding id is required".to_string());
     }
     match binding.trigger_kind {
-        TriggerKind::Combo => {}
+        TriggerKind::Combo => {
+            // Combo routes through the engine as ComboExact/SingleKey; reject it
+            // here if the stored shortcut string cannot be parsed.
+            parse_combo(&binding.shortcut)?;
+        }
         TriggerKind::ModifierHold => {
             if binding.modifier.is_none() {
                 return Err(format!(
@@ -97,21 +84,6 @@ pub fn validate(binding: &ShortcutBinding) -> Result<(), String> {
                 return Err(
                     "Hold-a-modifier shortcuts can only be used for Hold-to-record".to_string(),
                 );
-            }
-        }
-        TriggerKind::DoubleTap => {
-            if binding.modifier.is_none() {
-                return Err(format!(
-                    "Double-tap binding '{}' requires a modifier",
-                    binding.id
-                ));
-            }
-            // Double-tap is a one-shot press; it cannot drive a hold.
-            if binding.trigger != ShortcutTrigger::Pressed {
-                return Err("Double-tap shortcuts must use the press trigger".to_string());
-            }
-            if binding.action == ShortcutAction::HoldToRecord {
-                return Err("Double-tap cannot be used for Hold-to-record".to_string());
             }
         }
         TriggerKind::IsolatedTap => {
@@ -150,14 +122,211 @@ fn side(kind: SideKind) -> Side {
     }
 }
 
+/// Parse a normalized combo string (e.g. "CommandOrControl+Shift+Space") into a
+/// `ComboExact` (>=1 modifier) or `SingleKey` (no modifier) trigger. Errors on an
+/// unknown token or when there is not exactly one non-modifier key.
+pub(crate) fn parse_combo(shortcut: &str) -> Result<Trigger, String> {
+    let normalized = normalize_shortcut_keys(shortcut);
+    let mut mods = ModSet::empty();
+    let mut key: Option<KeySpec> = None;
+    for token in normalized.split('+').filter(|t| !t.is_empty()) {
+        if let Some(m) = modifier_token(token) {
+            mods.insert(m);
+        } else if let Some(k) = key_token(token) {
+            if key.is_some() {
+                return Err(format!(
+                    "Shortcut '{}' has more than one non-modifier key",
+                    shortcut
+                ));
+            }
+            key = Some(KeySpec::Named(k));
+        } else {
+            return Err(format!(
+                "Unsupported key '{}' in shortcut '{}'",
+                token, shortcut
+            ));
+        }
+    }
+    let key = key.ok_or_else(|| format!("Shortcut '{}' has no non-modifier key", shortcut))?;
+    if mods.is_empty() {
+        Ok(Trigger::SingleKey { key })
+    } else {
+        Ok(Trigger::ComboExact { mods, key })
+    }
+}
+
+/// Normalized modifier token -> side-agnostic `Modifier`. `CommandOrControl`
+/// resolves per-OS: Command (Meta) on macOS, Control elsewhere.
+fn modifier_token(token: &str) -> Option<Modifier> {
+    match token {
+        "CommandOrControl" => Some(if cfg!(target_os = "macos") {
+            Modifier::Meta
+        } else {
+            Modifier::Control
+        }),
+        "Control" => Some(Modifier::Control),
+        "Alt" => Some(Modifier::Alt),
+        "Shift" => Some(Modifier::Shift),
+        _ => None,
+    }
+}
+
+/// Normalized non-modifier key token -> keytrigger `NamedKey` (None if unknown).
+fn key_token(token: &str) -> Option<NamedKey> {
+    if token.len() == 1 {
+        let c = token.chars().next()?;
+        if c.is_ascii_uppercase() {
+            return letter_named(c);
+        }
+        if c.is_ascii_digit() {
+            return digit_named(c);
+        }
+    }
+    let named = match token {
+        "Space" => NamedKey::Space,
+        "Enter" => NamedKey::Enter,
+        "Tab" => NamedKey::Tab,
+        "Backspace" => NamedKey::Backspace,
+        "Escape" => NamedKey::Escape,
+        "Delete" => NamedKey::Delete,
+        "Insert" => NamedKey::Insert,
+        "Up" => NamedKey::ArrowUp,
+        "Down" => NamedKey::ArrowDown,
+        "Left" => NamedKey::ArrowLeft,
+        "Right" => NamedKey::ArrowRight,
+        "Home" => NamedKey::Home,
+        "End" => NamedKey::End,
+        "PageUp" => NamedKey::PageUp,
+        "PageDown" => NamedKey::PageDown,
+        "Comma" => NamedKey::Comma,
+        "Period" => NamedKey::Period,
+        "Slash" => NamedKey::Slash,
+        "Semicolon" => NamedKey::Semicolon,
+        "Quote" => NamedKey::Quote,
+        "BracketLeft" => NamedKey::BracketLeft,
+        "BracketRight" => NamedKey::BracketRight,
+        "Backslash" => NamedKey::Backslash,
+        "Equal" => NamedKey::Equal,
+        "Minus" => NamedKey::Minus,
+        "Backquote" => NamedKey::Backquote,
+        "NumpadAdd" => NamedKey::NumpadAdd,
+        "NumpadSubtract" => NamedKey::NumpadSubtract,
+        "NumpadMultiply" => NamedKey::NumpadMultiply,
+        "NumpadDivide" => NamedKey::NumpadDivide,
+        "NumpadDecimal" => NamedKey::NumpadDecimal,
+        "NumpadEnter" => NamedKey::NumpadEnter,
+        "NumpadEqual" => NamedKey::NumpadEqual,
+        _ if token.starts_with("Numpad") => return numpad_named(token),
+        _ if token.starts_with('F') => return fkey_named(token),
+        _ => return None,
+    };
+    Some(named)
+}
+
+fn letter_named(c: char) -> Option<NamedKey> {
+    const LETTERS: [NamedKey; 26] = [
+        NamedKey::A,
+        NamedKey::B,
+        NamedKey::C,
+        NamedKey::D,
+        NamedKey::E,
+        NamedKey::F,
+        NamedKey::G,
+        NamedKey::H,
+        NamedKey::I,
+        NamedKey::J,
+        NamedKey::K,
+        NamedKey::L,
+        NamedKey::M,
+        NamedKey::N,
+        NamedKey::O,
+        NamedKey::P,
+        NamedKey::Q,
+        NamedKey::R,
+        NamedKey::S,
+        NamedKey::T,
+        NamedKey::U,
+        NamedKey::V,
+        NamedKey::W,
+        NamedKey::X,
+        NamedKey::Y,
+        NamedKey::Z,
+    ];
+    LETTERS.get((c as u8 - b'A') as usize).copied()
+}
+
+fn digit_named(c: char) -> Option<NamedKey> {
+    const DIGITS: [NamedKey; 10] = [
+        NamedKey::Digit0,
+        NamedKey::Digit1,
+        NamedKey::Digit2,
+        NamedKey::Digit3,
+        NamedKey::Digit4,
+        NamedKey::Digit5,
+        NamedKey::Digit6,
+        NamedKey::Digit7,
+        NamedKey::Digit8,
+        NamedKey::Digit9,
+    ];
+    DIGITS.get((c as u8 - b'0') as usize).copied()
+}
+
+fn fkey_named(token: &str) -> Option<NamedKey> {
+    const FKEYS: [NamedKey; 24] = [
+        NamedKey::F1,
+        NamedKey::F2,
+        NamedKey::F3,
+        NamedKey::F4,
+        NamedKey::F5,
+        NamedKey::F6,
+        NamedKey::F7,
+        NamedKey::F8,
+        NamedKey::F9,
+        NamedKey::F10,
+        NamedKey::F11,
+        NamedKey::F12,
+        NamedKey::F13,
+        NamedKey::F14,
+        NamedKey::F15,
+        NamedKey::F16,
+        NamedKey::F17,
+        NamedKey::F18,
+        NamedKey::F19,
+        NamedKey::F20,
+        NamedKey::F21,
+        NamedKey::F22,
+        NamedKey::F23,
+        NamedKey::F24,
+    ];
+    let n: usize = token.strip_prefix('F')?.parse().ok()?;
+    n.checked_sub(1).and_then(|i| FKEYS.get(i).copied())
+}
+
+fn numpad_named(token: &str) -> Option<NamedKey> {
+    const NUMPAD: [NamedKey; 10] = [
+        NamedKey::Numpad0,
+        NamedKey::Numpad1,
+        NamedKey::Numpad2,
+        NamedKey::Numpad3,
+        NamedKey::Numpad4,
+        NamedKey::Numpad5,
+        NamedKey::Numpad6,
+        NamedKey::Numpad7,
+        NamedKey::Numpad8,
+        NamedKey::Numpad9,
+    ];
+    let n: usize = token.strip_prefix("Numpad")?.parse().ok()?;
+    NUMPAD.get(n).copied()
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{has_recording_engine_binding, is_engine_kind, to_trigger, validate};
+    use super::{has_recording_engine_binding, is_engine_kind, parse_combo, to_trigger, validate};
     use crate::commands::shortcuts::{
         ModifierKind, ModifierSpec, ShortcutAction, ShortcutBinding, ShortcutTrigger, SideKind,
         TriggerKind,
     };
-    use keytrigger::{Modifier, Side, Trigger};
+    use keytrigger::{KeySpec, ModSet, Modifier, NamedKey, Side, Trigger};
 
     fn hold_binding() -> ShortcutBinding {
         ShortcutBinding {
@@ -172,16 +341,17 @@ mod tests {
                 modifier: ModifierKind::Alt,
                 side: SideKind::Right,
             }),
-            double_tap_ms: None,
         }
     }
 
     #[test]
-    fn combo_is_not_engine_kind() {
+    fn combo_maps_and_validates() {
         let mut b = hold_binding();
         b.trigger_kind = TriggerKind::Combo;
-        assert!(!is_engine_kind(&b));
-        assert!(to_trigger(&b).is_none());
+        b.shortcut = "CommandOrControl+Shift+Space".to_string();
+        assert!(is_engine_kind(&b));
+        assert!(validate(&b).is_ok());
+        assert!(matches!(to_trigger(&b), Some(Trigger::ComboExact { .. })));
     }
 
     #[test]
@@ -202,25 +372,6 @@ mod tests {
     fn modifier_hold_rejects_non_hold_record_action() {
         let mut b = hold_binding();
         b.action = ShortcutAction::ToggleRecording;
-        assert!(validate(&b).is_err());
-    }
-
-    #[test]
-    fn double_tap_maps_and_validates() {
-        let mut b = hold_binding();
-        b.trigger_kind = TriggerKind::DoubleTap;
-        b.trigger = ShortcutTrigger::Pressed;
-        b.action = ShortcutAction::ToggleRecording;
-        assert!(validate(&b).is_ok());
-        assert!(matches!(to_trigger(&b), Some(Trigger::DoubleTap { .. })));
-    }
-
-    #[test]
-    fn double_tap_rejects_hold_to_record() {
-        let mut b = hold_binding();
-        b.trigger_kind = TriggerKind::DoubleTap;
-        b.trigger = ShortcutTrigger::Pressed;
-        b.action = ShortcutAction::HoldToRecord;
         assert!(validate(&b).is_err());
     }
 
@@ -281,7 +432,7 @@ mod tests {
     }
 
     #[test]
-    fn has_recording_engine_binding_combo_kind_returns_false() {
+    fn has_recording_engine_binding_invalid_combo_returns_false() {
         let mut b = hold_binding();
         b.trigger_kind = TriggerKind::Combo;
         assert!(!has_recording_engine_binding(&[b]));
@@ -342,5 +493,47 @@ mod tests {
         b.modifier = None;
         assert!(validate(&b).is_err());
         assert!(to_trigger(&b).is_none());
+    }
+
+    #[test]
+    fn parse_combo_maps_combos_single_keys_and_special_keys() {
+        // Combo with >=1 modifier -> ComboExact with EXACT mods (per-OS CommandOrControl).
+        let expected_mods = if cfg!(target_os = "macos") {
+            ModSet::empty().with(Modifier::Meta).with(Modifier::Shift)
+        } else {
+            ModSet::empty()
+                .with(Modifier::Control)
+                .with(Modifier::Shift)
+        };
+        assert_eq!(
+            parse_combo("CommandOrControl+Shift+Space"),
+            Ok(Trigger::ComboExact {
+                mods: expected_mods,
+                key: KeySpec::Named(NamedKey::Space),
+            })
+        );
+        // Lone non-modifier key -> SingleKey.
+        assert_eq!(
+            parse_combo("F8"),
+            Ok(Trigger::SingleKey {
+                key: KeySpec::Named(NamedKey::F8),
+            })
+        );
+        // NumpadEqual is picker-emittable AND fires on both backends, so it must parse.
+        // CapsLock is NOT engine-representable on macOS (it arrives as flagsChanged with
+        // no key-down), so it must error clearly at save instead of becoming a dead hotkey.
+        assert!(parse_combo("Alt+CapsLock").is_err());
+        assert!(parse_combo("CapsLock").is_err());
+        assert!(matches!(
+            parse_combo("Control+NumpadEqual"),
+            Ok(Trigger::ComboExact {
+                key: KeySpec::Named(NamedKey::NumpadEqual),
+                ..
+            })
+        ));
+        // Untappable / unknown keys fail clearly (not silently): a modifier-only
+        // string has no key, and media keys are not engine-representable.
+        assert!(parse_combo("Shift").is_err());
+        assert!(parse_combo("Alt+AudioVolumeUp").is_err());
     }
 }

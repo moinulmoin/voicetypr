@@ -305,7 +305,10 @@ mod tests {
             Some(SilenceDetectorEvent::TimeoutWithSpeech)
         );
         assert_eq!(
-            detector.update_at(SILENT, voiced + SILENCE_TIMEOUT_AFTER + Duration::from_secs(1)),
+            detector.update_at(
+                SILENT,
+                voiced + SILENCE_TIMEOUT_AFTER + Duration::from_secs(1)
+            ),
             None
         );
     }
@@ -320,7 +323,10 @@ mod tests {
             Some(SilenceDetectorEvent::TimeoutNoSpeech)
         );
         assert_eq!(
-            detector.update_at(SILENT, start + SILENCE_TIMEOUT_AFTER + Duration::from_secs(1)),
+            detector.update_at(
+                SILENT,
+                start + SILENCE_TIMEOUT_AFTER + Duration::from_secs(1)
+            ),
             None
         );
     }

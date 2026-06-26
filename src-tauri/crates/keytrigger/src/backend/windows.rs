@@ -20,6 +20,9 @@ use std::cell::RefCell;
 use std::collections::HashSet;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::mpsc::Sender;
+use std::sync::Arc;
+
+use arc_swap::ArcSwap;
 
 use windows::Win32::Foundation::{LPARAM, LRESULT, WPARAM};
 use windows::Win32::System::Threading::GetCurrentThreadId;
@@ -29,14 +32,17 @@ use windows::Win32::UI::WindowsAndMessaging::{
     WH_KEYBOARD_LL, WM_KEYDOWN, WM_QUIT, WM_SYSKEYDOWN,
 };
 
-use crate::engine::{KeyEventSource, Msg, ReadySignal};
-use crate::types::{KeySpec, NamedKey, RawKeyEvent, Side};
+use crate::engine::{ConsumeSet, KeyEventSource, Msg, ReadySignal};
+use crate::types::{KeySpec, ModSet, Modifier, NamedKey, RawKeyEvent, Side};
 
 struct HookState {
     tx: Sender<Msg>,
     /// Currently-down virtual-key codes, for autorepeat detection (LL hooks do
     /// not flag repeats).
     down: HashSet<u32>,
+    /// Lock-free consume set shared with the matcher's binding set; the hook
+    /// consults it (no lock) to decide whether to swallow a key-down.
+    consume: Arc<ArcSwap<ConsumeSet>>,
 }
 
 thread_local! {
@@ -57,11 +63,13 @@ impl WinKeyboardHook {
 }
 
 impl KeyEventSource for WinKeyboardHook {
-    fn run(&self, tx: Sender<Msg>, ready: ReadySignal) {
+    fn run(&self, tx: Sender<Msg>, ready: ReadySignal, consume: Arc<ArcSwap<ConsumeSet>>) {
+        let consume_for_hook = Arc::clone(&consume);
         HOOK_STATE.with(|s| {
             *s.borrow_mut() = Some(HookState {
                 tx: tx.clone(),
                 down: HashSet::new(),
+                consume: consume_for_hook,
             });
         });
 
@@ -117,8 +125,9 @@ unsafe extern "system" fn keyboard_hook_proc(code: i32, wparam: WPARAM, lparam: 
     if code == HC_ACTION as i32 {
         // A panic unwinding out of an `extern "system"` (Win32) callback is UB
         // and aborts the whole process across the FFI boundary, so catch it and
-        // always fall through to the trailing CallNextHookEx below.
-        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        // fall through to the trailing CallNextHookEx. The closure returns whether
+        // the key was consumed; a panic is treated as "not consumed" (pass through).
+        let consumed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             let kb = unsafe { &*(lparam.0 as *const KBDLLHOOKSTRUCT) };
             // Ignore synthetic keystrokes (LLKHF_INJECTED). rdev's post-transcription
             // paste is injected via SendInput, which sets this flag; forwarding it to
@@ -129,7 +138,7 @@ unsafe extern "system" fn keyboard_hook_proc(code: i32, wparam: WPARAM, lparam: 
             // AutoHotkey firing the hotkey) — accepted: global hotkeys are physical
             // input only. Still chain CallNextHookEx for pass-through.
             if (kb.flags.0 & LLKHF_INJECTED.0) != 0 {
-                return;
+                return false;
             }
             let message = wparam.0 as u32;
             let down = message == WM_KEYDOWN || message == WM_SYSKEYDOWN;
@@ -149,9 +158,26 @@ unsafe extern "system" fn keyboard_hook_proc(code: i32, wparam: WPARAM, lparam: 
                         down,
                         is_repeat,
                     }));
+                    // Consume ONLY a non-repeat, non-modifier key-down whose exact
+                    // (mods, key) is a registered combo/single — mirrors the macOS
+                    // tap. Modifiers, key-ups, and auto-repeats pass through.
+                    down && !is_repeat
+                        && side.is_none()
+                        && state
+                            .consume
+                            .load()
+                            .consumes(key, modset_from_down(&state.down))
+                } else {
+                    false
                 }
-            });
-        }));
+            })
+        }))
+        .unwrap_or(false);
+        if consumed {
+            // Swallow: do not chain to the next hook, so the key never reaches
+            // the focused application.
+            return LRESULT(1);
+        }
     }
     unsafe { CallNextHookEx(None, code, wparam, lparam) }
 }
@@ -285,10 +311,23 @@ fn map_vk(vk: u32) -> (KeySpec, Option<Side>) {
         0x28 => Some(NamedKey::ArrowDown),
         0x14 => Some(NamedKey::CapsLock),
         0x6A => Some(NamedKey::NumpadMultiply),
-        0x6B => Some(NamedKey::NumpadPlus),
-        0x6D => Some(NamedKey::NumpadMinus),
+        0x6B => Some(NamedKey::NumpadAdd),
+        0x6D => Some(NamedKey::NumpadSubtract),
         0x6E => Some(NamedKey::NumpadDecimal),
         0x6F => Some(NamedKey::NumpadDivide),
+        0x92 => Some(NamedKey::NumpadEqual), // VK_OEM_NEC_EQUAL ('=' on numpad)
+        // Punctuation / OEM keys (US ANSI layout).
+        0xBA => Some(NamedKey::Semicolon),
+        0xBB => Some(NamedKey::Equal),
+        0xBC => Some(NamedKey::Comma),
+        0xBD => Some(NamedKey::Minus),
+        0xBE => Some(NamedKey::Period),
+        0xBF => Some(NamedKey::Slash),
+        0xC0 => Some(NamedKey::Backquote),
+        0xDB => Some(NamedKey::BracketLeft),
+        0xDC => Some(NamedKey::Backslash),
+        0xDD => Some(NamedKey::BracketRight),
+        0xDE => Some(NamedKey::Quote),
         _ => None,
     };
 
@@ -296,4 +335,23 @@ fn map_vk(vk: u32) -> (KeySpec, Option<Side>) {
         Some(n) => (KeySpec::Named(n), None),
         None => (KeySpec::Raw(vk), None),
     }
+}
+
+/// Derive the side-agnostic [`ModSet`] currently held from the set of down
+/// virtual-key codes (the LL hook reports side-specific modifier vks).
+fn modset_from_down(down: &HashSet<u32>) -> ModSet {
+    let mut m = ModSet::empty();
+    if down.contains(&0xA0) || down.contains(&0xA1) {
+        m.insert(Modifier::Shift);
+    }
+    if down.contains(&0xA2) || down.contains(&0xA3) {
+        m.insert(Modifier::Control);
+    }
+    if down.contains(&0xA4) || down.contains(&0xA5) {
+        m.insert(Modifier::Alt);
+    }
+    if down.contains(&0x5B) || down.contains(&0x5C) {
+        m.insert(Modifier::Meta);
+    }
+    m
 }

@@ -21,7 +21,7 @@ pub mod engine;
 pub mod matcher;
 pub mod types;
 
-pub use engine::{Control, KeyEventSource, Msg, ReadySignal, TriggerEngine};
+pub use engine::{ConsumeSet, Control, KeyEventSource, Msg, ReadySignal, TriggerEngine};
 pub use matcher::Matcher;
 pub use types::{
     EngineError, KeyPhase, KeySpec, ModSet, Modifier, ModifierSpec, NamedKey, RawKeyEvent, Side,

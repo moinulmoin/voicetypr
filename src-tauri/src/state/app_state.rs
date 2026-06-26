@@ -38,15 +38,11 @@ pub struct QueuedPillEvent {
 /// Application state - managed by Tauri (runtime state only)
 pub struct AppState {
     pub recording_state: UnifiedRecordingState,
-    pub recording_shortcut: Arc<Mutex<Option<tauri_plugin_global_shortcut::Shortcut>>>,
     pub current_recording_path: Arc<Mutex<Option<PathBuf>>>,
     pub transcription_task: Arc<Mutex<Option<tokio::task::JoinHandle<()>>>>,
     pub recording_mode: Arc<Mutex<RecordingMode>>,
     pub ptt_key_held: Arc<AtomicBool>,
     pub toggle_key_held: Arc<AtomicBool>,
-    pub ptt_shortcut: Arc<Mutex<Option<tauri_plugin_global_shortcut::Shortcut>>>,
-    pub custom_shortcut_bindings:
-        Arc<Mutex<Vec<crate::commands::shortcuts::RegisteredShortcutBinding>>>,
     pub active_custom_hold_bindings: Arc<Mutex<HashSet<String>>>,
     pub active_custom_pressed_bindings: Arc<Mutex<HashSet<String>>>,
     pub trigger_engine: Arc<keytrigger::TriggerEngine>,
@@ -74,14 +70,11 @@ impl AppState {
     pub fn new() -> Self {
         Self {
             recording_state: UnifiedRecordingState::new(),
-            recording_shortcut: Arc::new(Mutex::new(None)),
             current_recording_path: Arc::new(Mutex::new(None)),
             transcription_task: Arc::new(Mutex::new(None)),
             recording_mode: Arc::new(Mutex::new(RecordingMode::Toggle)),
             ptt_key_held: Arc::new(AtomicBool::new(false)),
             toggle_key_held: Arc::new(AtomicBool::new(false)),
-            ptt_shortcut: Arc::new(Mutex::new(None)),
-            custom_shortcut_bindings: Arc::new(Mutex::new(Vec::new())),
             active_custom_hold_bindings: Arc::new(Mutex::new(HashSet::new())),
             active_custom_pressed_bindings: Arc::new(Mutex::new(HashSet::new())),
             trigger_engine: Arc::new(keytrigger::TriggerEngine::new()),

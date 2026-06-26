@@ -50,16 +50,6 @@ describe("findActivePrimaryBinding", () => {
     expect(findActivePrimaryBinding([hold])).toBe(hold);
   });
 
-  it("matches a double-tap toggle binding", () => {
-    const tap = binding({
-      id: "double-tap-toggle",
-      action: "toggle_recording",
-      trigger: "pressed",
-      trigger_kind: "double_tap",
-    });
-    expect(findActivePrimaryBinding([tap])).toBe(tap);
-  });
-
   it("ignores disabled bindings", () => {
     const disabled = binding({ id: "disabled-hold", enabled: false });
     expect(findActivePrimaryBinding([disabled])).toBeNull();
@@ -85,9 +75,13 @@ describe("formatPrimaryHotkeyLabel", () => {
     platform.isMacOS = true;
   });
 
-  it("returns the combo string when a hotkey is set", () => {
+  it("formats the combo string when a hotkey is set", () => {
     expect(formatPrimaryHotkeyLabel(null, "CommandOrControl+Shift+Space")).toBe(
-      "CommandOrControl+Shift+Space",
+      "⌘+⇧+␣",
+    );
+    platform.isMacOS = false;
+    expect(formatPrimaryHotkeyLabel(null, "CommandOrControl+Shift+Space")).toBe(
+      "Ctrl+Shift+Space",
     );
   });
 
@@ -95,15 +89,6 @@ describe("formatPrimaryHotkeyLabel", () => {
     expect(formatPrimaryHotkeyLabel(binding({ trigger_kind: "modifier_hold" }), undefined)).toBe(
       "Hold Right ⌘ to talk",
     );
-  });
-
-  it("formats a double-tap primary as a double-tap-to-toggle phrase", () => {
-    expect(
-      formatPrimaryHotkeyLabel(
-        binding({ action: "toggle_recording", trigger: "pressed", trigger_kind: "double_tap" }),
-        undefined,
-      ),
-    ).toBe("Double-tap Right ⌘ to toggle");
   });
 
   it("formats an isolated-tap primary as a tap-to-toggle phrase", () => {
