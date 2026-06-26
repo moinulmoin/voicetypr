@@ -122,5 +122,23 @@ fn main() {
     println!("cargo:rerun-if-changed=../pnpm-lock.yaml");
     println!("cargo:rerun-if-changed=../pnpm-workspace.yaml");
 
+    // Tauri validates `bundle.resources` paths at COMPILE time (generate_context!
+    // / tauri-build, which auto-merges tauri.windows.conf.json for the Windows
+    // target). We ship voicetypr.pdb (debug symbols) as a resource, but it is a
+    // BUILD OUTPUT of this very compile: scripts/stage-windows-pdb.cjs
+    // (beforeBundleCommand) copies the real PDB into place only at bundle time --
+    // too late for this validation, and absent entirely in a plain `cargo build`
+    // (the CI compile check). Create a placeholder now so validation passes; the
+    // real PDB overwrites it before bundling.
+    if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("windows") {
+        let pdb_resource = Path::new("windows/resources/voicetypr.pdb");
+        if !pdb_resource.exists() {
+            if let Some(dir) = pdb_resource.parent() {
+                std::fs::create_dir_all(dir).ok();
+            }
+            std::fs::File::create(pdb_resource).ok();
+        }
+    }
+
     tauri_build::build()
 }

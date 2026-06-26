@@ -123,3 +123,11 @@ tauri-plugin-store = "2"
 tauri-plugin-autostart = "2"
 tauri-plugin-os = "2"
 tauri-plugin-single-instance = "2"
+[profile.release]
+# Client-side crash symbolication for Bugsink (which does NOT symbolicate native
+# server-side): line tables give function + file:line resolved in-process at
+# capture (sentry `backtrace`); strip = "none" keeps the symbol table so macOS
+# resolves names. Windows additionally emits voicetypr.pdb, shipped beside the
+# exe (see windows/installer-hooks.nsh) so dbghelp can resolve at runtime.
+debug = "line-tables-only"
+strip = "none"

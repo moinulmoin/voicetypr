@@ -62,13 +62,29 @@
     ${EndIf}
 !macroend
 
+!macro InstallPdbSymbols
+    ; Place debug symbols (voicetypr.pdb) beside voicetypr.exe so the Sentry
+    ; backtrace integration (dbghelp) resolves function names + line numbers at
+    ; crash time. The bundler installs it under resources/; copy it next to the
+    ; exe where dbghelp's default per-module search looks. Best-effort: symbols
+    ; are a diagnostics aid and never required for the app to run.
+    ${If} ${FileExists} "$INSTDIR\resources\windows\resources\voicetypr.pdb"
+        DetailPrint "Installing debug symbols (voicetypr.pdb)..."
+        CopyFiles /SILENT "$INSTDIR\resources\windows\resources\voicetypr.pdb" "$INSTDIR\voicetypr.pdb"
+    ${Else}
+        DetailPrint "voicetypr.pdb not bundled, skipping debug symbol install"
+    ${EndIf}
+!macroend
+
 !macro NSIS_HOOK_PREINSTALL
 !macroend
 
 !macro NSIS_HOOK_POSTINSTALL
     !insertmacro InstallVcRedist
     !insertmacro InstallVulkanRuntime
+    !insertmacro InstallPdbSymbols
 !macroend
 
 !macro NSIS_HOOK_PREUNINSTALL
+    Delete "$INSTDIR\voicetypr.pdb"
 !macroend

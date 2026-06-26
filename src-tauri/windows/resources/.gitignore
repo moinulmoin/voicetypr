@@ -1,0 +1,5 @@
+# Runtime installers + debug symbols are fetched/generated at build time (CI),
+# never committed. Keep the directory tracked via .gitkeep only.
+*
+!.gitkeep
+!.gitignore
