@@ -67,6 +67,13 @@ fn show_main_window(app: &tauri::AppHandle) {
 
 /// Hide the main window and the macOS Dock icon — back to the menubar/tray.
 fn hide_main_window(app: &tauri::AppHandle) {
+    // If the system tray failed to create (e.g. the Windows shell notification
+    // area wasn't ready at startup), hiding the window would leave the app
+    // running with no way to bring it back. Keep the window visible instead.
+    if app.tray_by_id("main").is_none() {
+        log::warn!("No tray icon present; keeping main window visible instead of hiding to tray");
+        return;
+    }
     if let Some(window) = app.get_webview_window("main") {
         if let Err(e) = window.hide() {
             log::error!("Failed to hide main window: {}", e);
@@ -1629,9 +1636,16 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {
                 // Only hide the window instead of closing it (except for pill)
                 if window.label() == "main" {
-                    api.prevent_close();
-                    hide_main_window(window.app_handle());
-                    log::info!("Main window hidden instead of closed");
+                    // Close-to-tray ONLY when a tray icon exists. If tray creation
+                    // failed at startup, prevent_close + hide would strand the app as a
+                    // background process with no way back -> let the close proceed (quit).
+                    if window.app_handle().tray_by_id("main").is_some() {
+                        api.prevent_close();
+                        hide_main_window(window.app_handle());
+                        log::info!("Main window hidden instead of closed");
+                    } else {
+                        log::warn!("No tray icon; allowing main window to close (quit) instead of hiding");
+                    }
                 }
             }
         })
