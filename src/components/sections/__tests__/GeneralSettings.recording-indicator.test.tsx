@@ -481,7 +481,7 @@ describe('GeneralSettings recording hotkey editor', () => {
     render(<GeneralSettings />);
     await waitFor(() => {
       // The label appears in both FieldDescription and the display box
-      expect(screen.getAllByText('CommandOrControl+Shift+Space').length).toBeGreaterThan(0);
+      expect(screen.getAllByText('Ctrl+Shift+Space').length).toBeGreaterThan(0);
     });
   });
 
@@ -797,7 +797,7 @@ describe('GeneralSettings settings values', () => {
     mockSettings.hotkey = 'CommandOrControl+Shift+Space';
     render(<GeneralSettings />);
     await waitFor(() => {
-      expect(screen.getAllByText('CommandOrControl+Shift+Space').length).toBeGreaterThan(0);
+      expect(screen.getAllByText('Ctrl+Shift+Space').length).toBeGreaterThan(0);
     });
   });
 

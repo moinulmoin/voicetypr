@@ -75,9 +75,13 @@ describe("formatPrimaryHotkeyLabel", () => {
     platform.isMacOS = true;
   });
 
-  it("returns the combo string when a hotkey is set", () => {
+  it("formats the combo string when a hotkey is set", () => {
     expect(formatPrimaryHotkeyLabel(null, "CommandOrControl+Shift+Space")).toBe(
-      "CommandOrControl+Shift+Space",
+      "⌘+⇧+␣",
+    );
+    platform.isMacOS = false;
+    expect(formatPrimaryHotkeyLabel(null, "CommandOrControl+Shift+Space")).toBe(
+      "Ctrl+Shift+Space",
     );
   });
 

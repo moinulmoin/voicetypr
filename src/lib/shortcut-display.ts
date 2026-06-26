@@ -1,5 +1,6 @@
 import { isMacOS } from "@/lib/platform";
 import type { ModifierSpec, ShortcutBinding } from "@/types/shortcuts";
+import { formatKeyForDisplay } from "@/lib/keyboard-normalizer";
 
 const BARE_MOD_ICONS: Record<string, string> = {
   alt: "⌥",
@@ -51,7 +52,8 @@ export function formatModifierLabel(mod: ModifierSpec): string {
  * This is the single source of truth for "what trigger starts recording":
  * - Bare-modifier primary (stored in `ShortcutSettings`; `hotkey` is empty) → a
  *   human label such as "Hold ⌘ to talk" or "Tap ⌥ to toggle".
- * - Combo primary (stored in `settings.hotkey`) → the raw combo string.
+ * - Combo primary (stored in `settings.hotkey`) → the combo formatted for humans
+ *   (e.g. `⌘+⇧+␣` on macOS, `Ctrl+Shift+Space` elsewhere).
  * - Nothing configured → "Not set".
  *
  * Never falls back to a hardcoded default like `Cmd+Shift+Space`.
@@ -67,6 +69,14 @@ export function formatPrimaryHotkeyLabel(
     if (binding?.trigger_kind === "isolated_tap") return `Tap ${mod} to toggle`;
     return mod;
   }
-  if (hotkey) return hotkey;
+  if (hotkey) {
+    // Format the combo for humans (CommandOrControl -> ⌘/Ctrl, Shift -> ⇧, ...)
+    // instead of leaking the raw accelerator string into the UI.
+    return hotkey
+      .split("+")
+      .filter(Boolean)
+      .map((key) => formatKeyForDisplay(key, isMacOS))
+      .join("+");
+  }
   return "Not set";
 }
