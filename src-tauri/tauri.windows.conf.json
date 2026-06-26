@@ -1,9 +1,13 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
+  "build": {
+    "beforeBundleCommand": "node scripts/stage-windows-pdb.cjs"
+  },
   "bundle": {
     "resources": [
       "windows/resources/vc_redist.x64.exe",
-      "windows/resources/VulkanRT-Installer.exe"
+      "windows/resources/VulkanRT-Installer.exe",
+      "windows/resources/voicetypr.pdb"
     ],
     "externalBin": [
       "../sidecar/ffmpeg/dist/ffmpeg",

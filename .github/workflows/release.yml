@@ -450,7 +450,9 @@ jobs:
         env:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_KEY_PASSWORD }}
-          RUSTFLAGS: -C target-feature=+crt-static
+          # /PDBALTPATH:%_PDB% records a RELATIVE pdb name in the PE so dbghelp
+          # resolves voicetypr.pdb next to the installed exe (not the CI build path).
+          RUSTFLAGS: "-C target-feature=+crt-static -C link-arg=/PDBALTPATH:%_PDB%"
           VOICETYPR_REQUIRE_VULKAN_SIDECAR: "1"
         run: pnpm tauri build --target x86_64-pc-windows-msvc --ci --config src-tauri/tauri.windows.conf.json
 
