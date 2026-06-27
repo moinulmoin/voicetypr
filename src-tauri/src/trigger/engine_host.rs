@@ -532,6 +532,50 @@ mod tests {
         assert!(primary.enabled);
     }
 
+    fn isolated_tap_binding(id: &str) -> ShortcutBinding {
+        ShortcutBinding {
+            id: id.to_string(),
+            action: ShortcutAction::ToggleRecording,
+            shortcut: String::new(),
+            trigger: ShortcutTrigger::Pressed,
+            enabled: true,
+            allow_risky_combo: false,
+            trigger_kind: TriggerKind::IsolatedTap,
+            modifier: Some(ModifierSpec {
+                modifier: ModifierKind::Alt,
+                side: SideKind::Right,
+            }),
+        }
+    }
+
+    /// Issue A migration also covers an `IsolatedTap` stale primary
+    /// (`stale_primary_candidate` matches both ModifierHold and IsolatedTap):
+    /// a non-empty combo hotkey disables the tap primary and synthesizes the combo.
+    #[test]
+    fn nonempty_hotkey_disables_stale_isolated_tap_primary() {
+        let stale = isolated_tap_binding("onboarding-primary-hold");
+        let (bindings, stale_id) = plan_engine_bindings(
+            &[stale],
+            "CommandOrControl+Space",
+            RecordingMode::Toggle,
+            false,
+            None,
+            false,
+        );
+
+        assert_eq!(stale_id.as_deref(), Some("onboarding-primary-hold"));
+        assert!(
+            !bindings.iter().any(|b| b.id == "onboarding-primary-hold"),
+            "stale isolated-tap primary must not be installed"
+        );
+        assert!(
+            bindings
+                .iter()
+                .any(|b| b.id == "primary" && b.trigger_kind == TriggerKind::Combo),
+            "combo primary must be synthesized over a stale isolated-tap primary"
+        );
+    }
+
     /// Empty hotkey + a valid bare-modifier primary: the bare primary owns
     /// recording, no combo is synthesized, and nothing is migrated (unchanged
     /// behavior).
