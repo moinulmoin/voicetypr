@@ -14,7 +14,7 @@ use parking_lot::Mutex;
 
 use crate::backend::platform_source;
 use crate::matcher::Matcher;
-use crate::types::{EngineError, KeySpec, ModSet, RawKeyEvent, Trigger, TriggerEvent, TriggerId};
+use crate::types::{EngineError, KeySpec, ModSet, NamedKey, RawKeyEvent, Trigger, TriggerEvent, TriggerId};
 
 /// Messages flowing to the dispatcher thread. Raw events and control messages
 /// share one channel so they are processed in order.
@@ -65,6 +65,25 @@ pub struct ConsumeSet {
     /// Bare keys consumed only when NO modifiers are held.
     pub singles: Vec<KeySpec>,
 }
+/// Whether `key` is a bare (side-specific) modifier key. Such keys must NEVER be
+/// swallowed at the OS level: consuming Control/Shift/Alt/Win would globally
+/// break shortcuts like Ctrl+C/V. The OS backends additionally guard modifier
+/// virtual-key codes at the hook, but excluding bare-modifier `SingleKey`
+/// bindings here ensures the matcher's own consume set cannot resurrect the bug
+/// via a stray binding.
+fn is_modifier_key(key: KeySpec) -> bool {
+    matches!(
+        key,
+        KeySpec::Named(NamedKey::AltLeft)
+            | KeySpec::Named(NamedKey::AltRight)
+            | KeySpec::Named(NamedKey::ControlLeft)
+            | KeySpec::Named(NamedKey::ControlRight)
+            | KeySpec::Named(NamedKey::MetaLeft)
+            | KeySpec::Named(NamedKey::MetaRight)
+            | KeySpec::Named(NamedKey::ShiftLeft)
+            | KeySpec::Named(NamedKey::ShiftRight)
+    )
+}
 
 impl ConsumeSet {
     /// Build the consume set from a binding list (ignores non-consuming triggers).
@@ -74,7 +93,14 @@ impl ConsumeSet {
         for (_, trig) in bindings {
             match trig {
                 Trigger::ComboExact { mods, key } => combos.push((*mods, *key)),
-                Trigger::SingleKey { key } => singles.push(*key),
+                // Belt-and-suspenders: a bare-modifier SingleKey never enters
+                // the consume set. Consuming Control/Shift/Alt/Win would
+                // globally break Ctrl+C/V etc.; the OS backends also guard
+                // modifier VKs at the hook, but filtering here means a stray
+                // bare-modifier binding can't be swallowed even transiently.
+                Trigger::SingleKey { key } if !is_modifier_key(*key) => {
+                    singles.push(*key);
+                }
                 _ => {}
             }
         }
@@ -528,5 +554,51 @@ mod tests {
         let set = ConsumeSet::default();
         assert!(!set.consumes(j(), ModSet::empty()));
         assert!(!set.consumes(j(), ModSet::empty().with(Modifier::Meta)));
+    }
+    #[test]
+    fn consume_set_filters_bare_modifier_single_keys() {
+        // Bare-modifier SingleKeys must NOT enter the consume set: consuming a
+        // modifier would globally swallow Control/Shift/Alt/Win (Ctrl+C/V etc.).
+        let set = ConsumeSet::from_bindings(&[
+            (
+                "blocked-ctrl".into(),
+                Trigger::SingleKey {
+                    key: KeySpec::Named(NamedKey::ControlLeft),
+                },
+            ),
+            (
+                "blocked-alt".into(),
+                Trigger::SingleKey {
+                    key: KeySpec::Named(NamedKey::AltLeft),
+                },
+            ),
+            (
+                "blocked-shift".into(),
+                Trigger::SingleKey {
+                    key: KeySpec::Named(NamedKey::ShiftRight),
+                },
+            ),
+            (
+                "blocked-meta".into(),
+                Trigger::SingleKey {
+                    key: KeySpec::Named(NamedKey::MetaLeft),
+                },
+            ),
+            (
+                "kept".into(),
+                Trigger::SingleKey {
+                    key: KeySpec::Named(NamedKey::F8),
+                },
+            ),
+        ]);
+        // Only the non-modifier single survives into the set.
+        assert_eq!(set.singles, vec![KeySpec::Named(NamedKey::F8)]);
+        // The filtered modifier is not consumed even with zero mods held.
+        assert!(!set.consumes(
+            KeySpec::Named(NamedKey::ControlLeft),
+            ModSet::empty()
+        ));
+        // The non-modifier single is consumed as before.
+        assert!(set.consumes(KeySpec::Named(NamedKey::F8), ModSet::empty()));
     }
 }

@@ -509,7 +509,7 @@ fn migrate_legacy_tap_bindings(value: &mut serde_json::Value) -> bool {
     changed
 }
 
-fn save_shortcut_settings(app: &AppHandle, settings: &ShortcutSettings) -> Result<(), String> {
+pub(crate) fn save_shortcut_settings(app: &AppHandle, settings: &ShortcutSettings) -> Result<(), String> {
     let store = app.store("settings").map_err(|e| e.to_string())?;
     store.set(
         SHORTCUT_BINDINGS_KEY,
