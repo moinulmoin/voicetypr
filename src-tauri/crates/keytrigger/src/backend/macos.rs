@@ -1,6 +1,7 @@
-//! macOS backend: a listen-only `CGEventTap` on a dedicated CFRunLoop thread.
+//! macOS backend: an active (intercepting) `CGEventTap` on a dedicated CFRunLoop thread.
 //!
-//! - ListenOnly tap (never consumes); callback returns `None` (pass-through).
+//! - Default (intercepting) tap: the callback returns `None` to CONSUME a key
+//!   when the consume predicate matches; otherwise it returns the event to pass through.
 //! - `FlagsChanged` carries the changed modifier's keycode plus the post-change
 //!   aggregate flag mask. The keycode gives the side; the modifier's type bit in
 //!   the event flags gives authoritative down/up (`CGEventSourceKeyState` lags

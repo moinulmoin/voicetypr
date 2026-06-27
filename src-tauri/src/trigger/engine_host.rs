@@ -153,11 +153,8 @@ pub fn rebuild_engine_bindings(app: &AppHandle) {
     // longer see an enabled binding that would suppress combo synthesis.
     if let Some(id) = stale_id {
         let mut repaired = settings;
-        let mutated = repaired
-            .bindings
-            .iter_mut()
-            .any(|b| if b.id == id { b.enabled = false; true } else { false });
-        if mutated {
+        if let Some(binding) = repaired.bindings.iter_mut().find(|b| b.id == id) {
+            binding.enabled = false;
             match crate::commands::shortcuts::save_shortcut_settings(app, &repaired) {
                 Ok(()) => log::info!(
                     "keytrigger: disabled stale bare-modifier primary '{}' — combo hotkey is authoritative",
@@ -306,6 +303,10 @@ fn plan_engine_bindings(
                 trigger_kind: TriggerKind::Combo,
                 modifier: None,
             });
+        } else {
+            log::warn!(
+                "keytrigger: push-to-talk is set to use a different PTT key, but ptt_hotkey is empty — PTT will not arm"
+            );
         }
     }
 
