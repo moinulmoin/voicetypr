@@ -15,7 +15,7 @@ const BARE_MOD_ICONS: Record<string, string> = {
  * The primary is the onboarding hold binding, or — failing that — the first
  * enabled engine-kind binding (`modifier_hold` / `isolated_tap`)
  * that drives recording (`hold_to_record` / `toggle_recording`). Combo shortcuts
- * live in `settings.hotkey` (the `global_shortcut` path) and are intentionally
+ * live in `settings.hotkey` (the primary combo hotkey) and are intentionally
  * not considered here.
  *
  * Returns `null` when the active primary is a combo, or nothing is set.

@@ -32,7 +32,7 @@ export interface ShortcutBinding {
   trigger: ShortcutTrigger;
   enabled: boolean;
   allow_risky_combo: boolean;
-  /** Defaults to "combo" (legacy global_shortcut). Native kinds use the engine. */
+  /** Defaults to "combo" for combo hotkeys. Native kinds (modifier_hold / isolated_tap) use the keytrigger engine. */
   trigger_kind?: TriggerKind;
   /** Modifier target for "modifier_hold" / "isolated_tap" kinds. */
   modifier?: ModifierSpec | null;
