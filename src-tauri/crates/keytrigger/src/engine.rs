@@ -93,15 +93,13 @@ impl ConsumeSet {
         for (_, trig) in bindings {
             match trig {
                 Trigger::ComboExact { mods, key } => combos.push((*mods, *key)),
-                Trigger::SingleKey { key } => {
-                    // Belt-and-suspenders: a bare-modifier SingleKey never enters
-                    // the consume set. Consuming Control/Shift/Alt/Win would
-                    // globally break Ctrl+C/V etc.; the OS backends also guard
-                    // modifier VKs at the hook, but filtering here means a stray
-                    // bare-modifier binding can't be swallowed even transiently.
-                    if !is_modifier_key(*key) {
-                        singles.push(*key);
-                    }
+                // Belt-and-suspenders: a bare-modifier SingleKey never enters
+                // the consume set. Consuming Control/Shift/Alt/Win would
+                // globally break Ctrl+C/V etc.; the OS backends also guard
+                // modifier VKs at the hook, but filtering here means a stray
+                // bare-modifier binding can't be swallowed even transiently.
+                Trigger::SingleKey { key } if !is_modifier_key(*key) => {
+                    singles.push(*key);
                 }
                 _ => {}
             }
