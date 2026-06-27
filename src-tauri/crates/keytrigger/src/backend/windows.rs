@@ -34,6 +34,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
 
 use crate::engine::{ConsumeSet, KeyEventSource, Msg, ReadySignal};
 use crate::types::{KeySpec, ModSet, Modifier, NamedKey, RawKeyEvent, Side};
+use super::vk::should_consume_keydown;
 
 struct HookState {
     tx: Sender<Msg>,
@@ -158,15 +159,23 @@ unsafe extern "system" fn keyboard_hook_proc(code: i32, wparam: WPARAM, lparam: 
                         down,
                         is_repeat,
                     }));
-                    // Consume ONLY a non-repeat, non-modifier key-down whose exact
-                    // (mods, key) is a registered combo/single — mirrors the macOS
-                    // tap. Modifiers, key-ups, and auto-repeats pass through.
-                    down && !is_repeat
-                        && side.is_none()
-                        && state
-                            .consume
-                            .load()
-                            .consumes(key, modset_from_down(&state.down))
+                    // Forward EVERY event to the matcher for observation, but
+                    // swallow (consume) only a non-repeat, non-modifier key-down
+                    // whose exact (mods, key) is a registered combo/single. A bare
+                    // modifier VK is NEVER consumed — swallowing Control/Shift/Alt/
+                    // Win would globally break shortcuts like Ctrl+C/V. macOS routes
+                    // modifier changes through a FlagsChanged branch that always
+                    // passes through; `should_consume_keydown` enforces the same
+                    // invariant here (pure + unit-tested in `backend::vk`).
+                    should_consume_keydown(
+                        vk,
+                        key,
+                        side,
+                        down,
+                        is_repeat,
+                        modset_from_down(&state.down),
+                        &state.consume.load(),
+                    )
                 } else {
                     false
                 }
