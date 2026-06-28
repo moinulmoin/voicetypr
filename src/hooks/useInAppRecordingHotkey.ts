@@ -78,12 +78,16 @@ export function useInAppRecordingHotkey(): void {
       // space) now that we are handling it as the recording hotkey.
       event.preventDefault();
 
-      if (currentRecording.isActive) {
-        log.debug("In-app hotkey matched in editable field — stopping recording");
-        void currentRecording.stopRecording();
-      } else {
+      // Mirror the native toggle state machine (handle_toggle_mode): act only on
+      // settled states and ignore transitional ones (starting/stopping/
+      // transcribing), so a tap mid-transcription can't clobber that flow.
+      const state = currentRecording.state;
+      if (state === "idle" || state === "error") {
         log.debug("In-app hotkey matched in editable field — starting recording");
         void currentRecording.startRecording();
+      } else if (state === "recording") {
+        log.debug("In-app hotkey matched in editable field — stopping recording");
+        void currentRecording.stopRecording();
       }
     };
 

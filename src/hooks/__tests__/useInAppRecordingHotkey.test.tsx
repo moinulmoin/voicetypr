@@ -50,6 +50,7 @@ describe("useInAppRecordingHotkey", () => {
     platform.isMacOS = false;
     mockSettings.hotkey = "CommandOrControl+Space";
     mockRecording.isActive = false;
+    mockRecording.state = "idle";
     mockRecording.startRecording.mockReset();
     mockRecording.stopRecording.mockReset();
     editable = document.createElement("textarea");
@@ -71,14 +72,24 @@ describe("useInAppRecordingHotkey", () => {
     expect(mockRecording.stopRecording).not.toHaveBeenCalled();
   });
 
-  it("stops recording when it is already active", () => {
-    mockRecording.isActive = true;
+  it("stops recording when it is already recording", () => {
+    mockRecording.state = "recording";
     renderHook(() => useInAppRecordingHotkey());
 
     fireHotkey(editable);
 
     expect(mockRecording.stopRecording).toHaveBeenCalledTimes(1);
     expect(mockRecording.startRecording).not.toHaveBeenCalled();
+  });
+
+  it("ignores the hotkey during transitional states (transcribing)", () => {
+    mockRecording.state = "transcribing";
+    renderHook(() => useInAppRecordingHotkey());
+
+    fireHotkey(editable);
+
+    expect(mockRecording.startRecording).not.toHaveBeenCalled();
+    expect(mockRecording.stopRecording).not.toHaveBeenCalled();
   });
 
   it("ignores the hotkey when focus is not in an editable field", () => {
