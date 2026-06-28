@@ -67,6 +67,11 @@ export function useInAppRecordingHotkey(): void {
       // one-key shortcut), so leave them to the focused field's normal input.
       if (!event.ctrlKey && !event.metaKey) return;
 
+      // AltGr is reported as Ctrl+Alt on Windows and produces typed characters
+      // (e.g. German @, €). Skip it so AltGr typing in a text field never matches
+      // a configured Ctrl+Alt combo and steals the keystroke.
+      if (event.getModifierState?.("AltGraph")) return;
+
       const { hotkey: currentHotkey, recording: currentRecording } = latest.current;
       if (!currentHotkey || !eventMatchesShortcut(event, currentHotkey)) return;
 

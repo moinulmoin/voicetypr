@@ -169,4 +169,28 @@ describe("useInAppRecordingHotkey", () => {
 
     expect(mockRecording.startRecording).not.toHaveBeenCalled();
   });
+
+  it("ignores AltGr keystrokes so typing isn't stolen (Ctrl+Alt + AltGraph)", () => {
+    mockSettings.hotkey = "CommandOrControl+Alt+Q";
+    renderHook(() => useInAppRecordingHotkey());
+
+    const event = new KeyboardEvent("keydown", {
+      bubbles: true,
+      cancelable: true,
+      ctrlKey: true,
+      altKey: true,
+      code: "KeyQ",
+      key: "@",
+    });
+    // jsdom doesn't honor modifierAltGraph init reliably; force AltGraph on.
+    Object.defineProperty(event, "getModifierState", {
+      value: (key: string) => key === "AltGraph",
+    });
+    const preventDefault = vi.spyOn(event, "preventDefault");
+    editable.dispatchEvent(event);
+
+    expect(mockRecording.startRecording).not.toHaveBeenCalled();
+    expect(mockRecording.stopRecording).not.toHaveBeenCalled();
+    expect(preventDefault).not.toHaveBeenCalled();
+  });
 });

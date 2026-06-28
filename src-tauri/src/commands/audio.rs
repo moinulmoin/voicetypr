@@ -3802,6 +3802,27 @@ pub async fn start_recording(
         }
     }
 
+    // Idempotent fast-path: if a recording is already starting or active — e.g. a
+    // redundant start from the in-app hotkey fallback racing the native hotkey
+    // path for one physical press — no-op BEFORE any side effects. This region is
+    // await-free through `update_recording_state(Starting)` below, so whichever
+    // caller publishes `Starting` first makes the other observe it here and return
+    // Ok, never bumping the generation, clobbering flags, or hitting the
+    // `Recording -> Starting` state-machine rejection.
+    {
+        let live_state = crate::get_recording_state(&app);
+        if matches!(
+            live_state,
+            crate::RecordingState::Starting | crate::RecordingState::Recording
+        ) {
+            log::debug!(
+                "start_recording: already {:?}; treating redundant start as no-op",
+                live_state
+            );
+            return Ok(());
+        }
+    }
+
     // All validation passed, update state to starting
     log::debug!(
         "⏱️ [REC TIMING] validation complete (+{}ms)",
