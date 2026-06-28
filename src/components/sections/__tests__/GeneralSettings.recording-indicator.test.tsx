@@ -584,6 +584,40 @@ describe('GeneralSettings recording hotkey editor', () => {
     });
   });
 
+  it('clears the combo hotkey BEFORE saving a bare-modifier binding (regression #100)', async () => {
+    // Fix A's startup migration treats a non-empty settings.hotkey as the
+    // authoritative primary and disables a bare-modifier primary. So when the
+    // user switches from a combo to a bare modifier, the combo MUST be cleared
+    // before update_shortcut_settings rebuilds the engine — otherwise the new
+    // bare-modifier binding is disabled the instant it is saved.
+    render(<GeneralSettings />);
+    const editButton = await screen.findByRole('button', { name: /edit/i });
+    fireEvent.click(editButton);
+    await screen.findByTestId('hotkey-input');
+
+    fireEvent.click(screen.getByTestId('mock-trigger-bare-modifier'));
+    fireEvent.click(screen.getByRole('button', { name: /save/i }));
+
+    await waitFor(() => {
+      expect(mockUpdateSettings).toHaveBeenCalledWith({ hotkey: '' });
+      expect(vi.mocked(invoke)).toHaveBeenCalledWith(
+        'update_shortcut_settings',
+        expect.anything(),
+      );
+    });
+
+    const clearIdx = mockUpdateSettings.mock.calls.findIndex(
+      ([arg]) => (arg as { hotkey?: string } | undefined)?.hotkey === '',
+    );
+    const clearOrder = mockUpdateSettings.mock.invocationCallOrder[clearIdx];
+    const saveIdx = vi
+      .mocked(invoke)
+      .mock.calls.findIndex(([cmd]) => cmd === 'update_shortcut_settings');
+    const saveOrder = vi.mocked(invoke).mock.invocationCallOrder[saveIdx];
+
+    expect(clearOrder).toBeLessThan(saveOrder);
+  });
+
   it('bare modifier + Hold-to-talk OFF → persists isolated_tap/toggle_recording/pressed', async () => {
     render(<GeneralSettings />);
     const editButton = await screen.findByRole('button', { name: /edit/i });

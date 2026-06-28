@@ -248,12 +248,17 @@ export function GeneralSettings() {
         const updatedBindings = existingPrimary
           ? existing.bindings.map((b) => (b.id === stableId ? newBinding : b))
           : [...existing.bindings, newBinding];
-        await invoke("update_shortcut_settings", {
-          settings: { bindings: updatedBindings },
-        });
+        // Clear the combo hotkey BEFORE saving the bare-modifier binding:
+        // update_shortcut_settings rebuilds the engine from settings.hotkey, and
+        // if the combo is still set the migration treats it as authoritative and
+        // disables the bare-modifier primary we just created (onboarding clears
+        // first for this exact reason).
         if (settings.hotkey) {
           await updateSettings({ hotkey: "" });
         }
+        await invoke("update_shortcut_settings", {
+          settings: { bindings: updatedBindings },
+        });
         setNativeBinding(newBinding);
         setIsEditingHotkey(false);
         setPendingHotkey("");
