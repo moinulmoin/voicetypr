@@ -10,6 +10,7 @@ import { UpdateAnnouncementDialog } from "./UpdateAnnouncementDialog";
 import { useReadiness } from "@/contexts/ReadinessContext";
 import { useSettings } from "@/contexts/SettingsContext";
 import { useEventCoordinator } from "@/hooks/useEventCoordinator";
+import { useInAppRecordingHotkey } from "@/hooks/useInAppRecordingHotkey";
 import { useModelManagementContext } from "@/contexts/ModelManagementContext";
 import { useModelAvailabilityContext } from "@/contexts/ModelAvailabilityContext";
 import { updateService } from "@/services/updateService";
@@ -41,6 +42,10 @@ export function AppContainer() {
 
   // Use the model management context for onboarding
   const modelManagement = useModelManagementContext();
+
+  // In-app fallback: toggle recording when the global hotkey is swallowed by a
+  // focused WebView2 text field (e.g. Ctrl+Space in the bug-report box).
+  useInAppRecordingHotkey();
 
   // Track explicit onboarding completion so recovery-driven onboarding doesn't trigger post-onboarding effects.
   const hasCompletedOnboarding = useRef(false);

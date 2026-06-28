@@ -67,6 +67,17 @@ vi.mock('@/contexts/SettingsContext', () => ({
     settings: mockSettings,
     refreshSettings: refreshSettingsMock,
   }),
+  useSetting: (key: string) => (mockSettings as Record<string, unknown>)[key],
+}));
+
+vi.mock('@/hooks/useRecording', () => ({
+  useRecording: () => ({
+    state: 'idle',
+    error: null,
+    isActive: false,
+    startRecording: vi.fn(),
+    stopRecording: vi.fn(),
+  }),
 }));
 
 vi.mock('@/contexts/LicenseContext', () => ({
