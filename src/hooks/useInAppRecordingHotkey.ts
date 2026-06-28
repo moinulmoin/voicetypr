@@ -61,6 +61,12 @@ export function useInAppRecordingHotkey(): void {
       if (event.isComposing) return;
       if (!isEditableTarget(event.target)) return;
 
+      // Only handle Ctrl/Cmd-class combos — the class the OS hook misses via
+      // IME inside our own text fields (e.g. Ctrl+Space). Bare keys and
+      // Shift/Alt-only combos can produce typed characters (onboarding allows a
+      // one-key shortcut), so leave them to the focused field's normal input.
+      if (!event.ctrlKey && !event.metaKey) return;
+
       const { hotkey: currentHotkey, recording: currentRecording } = latest.current;
       if (!currentHotkey || !eventMatchesShortcut(event, currentHotkey)) return;
 

@@ -132,4 +132,30 @@ describe("useInAppRecordingHotkey", () => {
 
     expect(mockRecording.startRecording).not.toHaveBeenCalled();
   });
+
+  it("leaves a bare-key hotkey to the field so typing still works", () => {
+    mockSettings.hotkey = "Space";
+    renderHook(() => useInAppRecordingHotkey());
+
+    const event = new KeyboardEvent("keydown", {
+      bubbles: true,
+      cancelable: true,
+      code: "Space",
+      key: " ",
+    });
+    const preventDefault = vi.spyOn(event, "preventDefault");
+    editable.dispatchEvent(event);
+
+    expect(mockRecording.startRecording).not.toHaveBeenCalled();
+    expect(preventDefault).not.toHaveBeenCalled();
+  });
+
+  it("ignores Shift-only combos that can produce typed characters", () => {
+    mockSettings.hotkey = "Shift+Space";
+    renderHook(() => useInAppRecordingHotkey());
+
+    fireHotkey(editable, { ctrlKey: false, shiftKey: true });
+
+    expect(mockRecording.startRecording).not.toHaveBeenCalled();
+  });
 });

@@ -3973,9 +3973,14 @@ pub async fn start_recording(
 
         // Check if already recording
         if recorder.is_recording() {
-            log::warn!("Already recording!");
+            // Idempotent: a redundant start — e.g. the in-app hotkey fallback
+            // racing the native hotkey path for a single press — is a harmless
+            // no-op, not an error, so neither toggle path surfaces a spurious
+            // RecordingState::Error. The recorder lock above serializes the two
+            // calls, so the loser reliably observes is_recording() == true here.
+            log::debug!("start_recording: already recording; treating as no-op");
             resume_media_if_needed();
-            return Err("Already recording".to_string());
+            return Ok(());
         }
 
         // Log the current audio device before starting
