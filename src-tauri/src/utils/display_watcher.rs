@@ -118,15 +118,16 @@ impl DisplayWatcher {
 #[cfg(target_os = "windows")]
 fn get_windows_monitor_info(app: &AppHandle) -> (usize, u32, u32) {
     // Returns (monitor_count, primary_width, primary_height)
-    if let Ok(monitors) = app.available_monitors() {
-        let count = monitors.len();
-        if let Ok(Some(primary)) = app.primary_monitor() {
+    crate::utils::monitor::catch_monitor_panic(|| {
+        let count = app.available_monitors().map(|m| m.len()).unwrap_or(0);
+        if let Some(primary) = app.primary_monitor().ok().flatten() {
             let size = primary.size();
-            return (count, size.width, size.height);
+            (count, size.width, size.height)
+        } else {
+            (count, 0, 0)
         }
-        return (count, 0, 0);
-    }
-    (0, 0, 0)
+    })
+    .unwrap_or((0, 0, 0))
 }
 
 impl Drop for DisplayWatcher {
