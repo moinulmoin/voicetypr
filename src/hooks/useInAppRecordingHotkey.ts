@@ -3,6 +3,7 @@ import { useEffect, useRef } from "react";
 import { useSetting } from "@/contexts/SettingsContext";
 import { useRecording } from "@/hooks/useRecording";
 import { createLogger } from "@/lib/logger";
+import { isMacOS } from "@/lib/platform";
 import { findActivePrimaryBinding } from "@/lib/shortcut-display";
 import { eventMatchesShortcut } from "@/lib/shortcut-event-match";
 import type {
@@ -68,6 +69,7 @@ function hasOtherModifierHeld(event: KeyboardEvent, spec: ModifierSpec): boolean
  */
 function tapToggleModifier(binding: ShortcutBinding | null): ModifierSpec | null {
   if (!binding?.modifier) return null;
+  if (!binding.enabled) return null;
   if (binding.action !== "toggle_recording") return null;
   if (binding.trigger_kind !== "isolated_tap") return null;
   return binding.modifier;
@@ -95,11 +97,13 @@ export function useInAppRecordingHotkey(): void {
   const recording = useRecording();
   const lastToggleRef = useRef(0);
 
-  // Active bare-modifier isolated-tap primary, loaded only when no combo hotkey
-  // is set (a combo primary leaves the bare-modifier binding inactive).
+  // Active bare-modifier isolated-tap primary. Loaded only on Windows and only
+  // when no combo hotkey is set: macOS's native engine handles bare-modifier
+  // taps in our own windows, where this keyup-based detector could stutter
+  // against it; and a combo primary leaves the bare-modifier binding inactive.
   const bareModifierRef = useRef<ModifierSpec | null>(null);
   useEffect(() => {
-    if (hotkey) {
+    if (hotkey || isMacOS) {
       bareModifierRef.current = null;
       return;
     }

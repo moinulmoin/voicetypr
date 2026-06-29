@@ -53,7 +53,7 @@ const bareControlBinding = {
   id: "onboarding-primary-hold",
   action: "toggle_recording",
   shortcut: "",
-  trigger: "pressed",
+  trigger: "pressed", // pass-through struct field; tapToggleModifier filters on trigger_kind/action only
   enabled: true,
   allow_risky_combo: false,
   trigger_kind: "isolated_tap",
@@ -72,6 +72,8 @@ function fireModifierTap(target: Element, init: KeyboardEventInit = {}): void {
 async function renderWithBareModifier(): Promise<void> {
   renderHook(() => useInAppRecordingHotkey());
   await act(async () => {
+    // Two microtask flushes: the invoke() promise resolves on the first, its
+    // .then() (which sets the bare-modifier ref) on the second.
     await Promise.resolve();
     await Promise.resolve();
   });
@@ -316,5 +318,50 @@ describe("useInAppRecordingHotkey", () => {
 
     expect(mockRecording.startRecording).not.toHaveBeenCalled();
     expect(mockRecording.stopRecording).not.toHaveBeenCalled();
+  });
+
+  it("does not activate the bare-modifier fallback when get_shortcut_settings fails", async () => {
+    mockSettings.hotkey = "";
+    mockInvoke.mockRejectedValue(new Error("backend unavailable"));
+    await renderWithBareModifier();
+
+    fireModifierTap(editable);
+
+    expect(mockRecording.startRecording).not.toHaveBeenCalled();
+  });
+
+  it("clears a pending tap on blur (no toggle on a later keyup)", async () => {
+    mockSettings.hotkey = "";
+    mockInvoke.mockResolvedValue({ bindings: [bareControlBinding] });
+    await renderWithBareModifier();
+
+    const opts = { bubbles: true, cancelable: true, code: "ControlLeft", key: "Control" };
+    editable.dispatchEvent(new KeyboardEvent("keydown", opts));
+    window.dispatchEvent(new Event("blur"));
+    editable.dispatchEvent(new KeyboardEvent("keyup", opts));
+
+    expect(mockRecording.startRecording).not.toHaveBeenCalled();
+  });
+
+  it("debounces a rapid second bare-modifier tap", async () => {
+    mockSettings.hotkey = "";
+    mockInvoke.mockResolvedValue({ bindings: [bareControlBinding] });
+    await renderWithBareModifier();
+
+    fireModifierTap(editable);
+    fireModifierTap(editable);
+
+    expect(mockRecording.startRecording).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not run the bare-modifier path on macOS (native engine handles it)", async () => {
+    platform.isMacOS = true;
+    mockSettings.hotkey = "";
+    mockInvoke.mockResolvedValue({ bindings: [bareControlBinding] });
+    await renderWithBareModifier();
+
+    fireModifierTap(editable);
+
+    expect(mockRecording.startRecording).not.toHaveBeenCalled();
   });
 });
