@@ -377,6 +377,7 @@ describe("useInAppRecordingHotkey", () => {
 
     expect(mockRecording.startRecording).not.toHaveBeenCalled();
   });
+
   it("reloads the bare-modifier binding when shortcut settings change in-session", async () => {
     mockSettings.hotkey = "";
     // Initially no bare binding → a tap does nothing.
