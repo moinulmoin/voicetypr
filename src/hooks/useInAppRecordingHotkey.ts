@@ -1,5 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
-import { useEffect, useRef } from "react";
+import { listen } from "@tauri-apps/api/event";
+import { useCallback, useEffect, useRef } from "react";
 import { useSetting } from "@/contexts/SettingsContext";
 import { useRecording } from "@/hooks/useRecording";
 import { createLogger } from "@/lib/logger";
@@ -102,27 +103,45 @@ export function useInAppRecordingHotkey(): void {
   // taps in our own windows, where this keyup-based detector could stutter
   // against it; and a combo primary leaves the bare-modifier binding inactive.
   const bareModifierRef = useRef<ModifierSpec | null>(null);
-  useEffect(() => {
-    if (hotkey || isMacOS) {
+  // Monotonic load token: only the most recent reload wins, so an in-flight
+  // load whose result resolves late can't clobber a fresher binding (e.g. a
+  // combo hotkey just set, or a second shortcut-settings-changed event).
+  const bareModifierLoadTokenRef = useRef(0);
+
+  /**
+   * Re-resolve the active bare-modifier isolated-tap primary from the backend.
+   * No-op on macOS and when a combo hotkey is set: macOS's native engine
+   * handles bare-modifier taps in our own windows (where this keyup-based
+   * detector could stutter against it), and a combo primary leaves the
+   * bare-modifier binding inactive. Called on mount and whenever `hotkey`
+   * changes, and again when the backend reports shortcut settings changed —
+   * so an in-session binding save refreshes the cached spec without an app
+   * restart (settings.hotkey alone may not change, since it can already be "").
+   */
+  const reloadBareModifier = useCallback((currentHotkey: string | undefined): void => {
+    if (currentHotkey || isMacOS) {
       bareModifierRef.current = null;
       return;
     }
-    let cancelled = false;
+    const token = ++bareModifierLoadTokenRef.current;
     invoke<ShortcutSettings>("get_shortcut_settings")
       .then((settings) => {
-        if (!cancelled) {
+        if (token === bareModifierLoadTokenRef.current) {
           bareModifierRef.current = tapToggleModifier(
             findActivePrimaryBinding(settings.bindings),
           );
         }
       })
       .catch(() => {
-        if (!cancelled) bareModifierRef.current = null;
+        if (token === bareModifierLoadTokenRef.current) {
+          bareModifierRef.current = null;
+        }
       });
-    return () => {
-      cancelled = true;
-    };
-  }, [hotkey]);
+  }, []);
+
+  useEffect(() => {
+    reloadBareModifier(hotkey);
+  }, [hotkey, reloadBareModifier]);
 
   // Keep the latest hotkey + recording controls in a ref so the listeners are
   // bound once and never re-attach on state changes. Updated in an effect (not
@@ -131,6 +150,31 @@ export function useInAppRecordingHotkey(): void {
   useEffect(() => {
     latest.current = { hotkey, recording };
   });
+
+  // Backend signals that shortcut settings were persisted (e.g. an in-session
+  // bare-modifier binding change). Re-resolve so the fallback picks up the new
+  // spec without a restart. Registered once; the handler reads the current
+  // hotkey from `latest` so it never closes over a stale combo value.
+  useEffect(() => {
+    if (isMacOS) return; // native engine handles bare-modifier taps on macOS
+    let unlisten: (() => void) | undefined;
+    let cancelled = false;
+    void listen("shortcut-settings-changed", () => {
+      reloadBareModifier(latest.current.hotkey);
+    }).then((unlistenFn) => {
+      // listen() resolved after unmount → unlisten right away to avoid a leak;
+      // otherwise hold the unlisten fn for cleanup.
+      if (cancelled) {
+        unlistenFn();
+      } else {
+        unlisten = unlistenFn;
+      }
+    });
+    return () => {
+      cancelled = true;
+      unlisten?.();
+    };
+  }, [reloadBareModifier]);
 
   useEffect(() => {
     // A pending lone-modifier tap: the code of the modifier pressed with no

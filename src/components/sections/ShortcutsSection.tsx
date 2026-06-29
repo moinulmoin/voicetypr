@@ -76,10 +76,10 @@ const MOD_LABELS: Record<string, string> = {
 // not here. Exclude these actions from the custom-shortcuts list so the recording
 // hotkey isn't shown/edited in two places and a duplicate recording binding can't
 // be created from this page.
-const PRIMARY_RECORDING_ACTIONS: ReadonlySet<string> = new Set([
-  "toggle_recording",
-  "hold_to_record",
-]);
+const PRIMARY_RECORDING_ACTIONS: Record<string, true> = {
+  toggle_recording: true,
+  hold_to_record: true,
+};
 
 function formatBindingDisplay(binding: ShortcutBinding): string {
   const kind = binding.trigger_kind ?? "combo";
@@ -167,7 +167,7 @@ export function ShortcutsSection() {
     const groups = new Map<string, ShortcutActionDefinition[]>();
 
     for (const action of actions) {
-      if (PRIMARY_RECORDING_ACTIONS.has(action.action)) {
+      if (PRIMARY_RECORDING_ACTIONS[action.action]) {
         continue; // primary recording hotkey is managed in General Settings
       }
       const existing = groups.get(action.section);

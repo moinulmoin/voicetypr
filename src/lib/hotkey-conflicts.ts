@@ -60,17 +60,17 @@ const LINUX_CONFLICTS: ConflictInfo[] = [
  * `CommandOrControl+Control+Q` while the reserved-shortcut table lists the
  * same lock-screen combo as `Control+CommandOrControl+Q`.
  */
-const MODIFIER_TOKENS = new Set([
-  'commandorcontrol',
-  'control',
-  'ctrl',
-  'alt',
-  'option',
-  'shift',
-  'win',
-  'super',
-  'meta',
-]);
+const MODIFIER_TOKENS: Record<string, true> = {
+  commandorcontrol: true,
+  control: true,
+  ctrl: true,
+  alt: true,
+  option: true,
+  shift: true,
+  win: true,
+  super: true,
+  meta: true,
+};
 
 /**
  * Return a canonical form of a hotkey: modifier tokens sorted alphabetically
@@ -87,7 +87,7 @@ function canonicalizeHotkey(hotkey: string): string {
   const modifiers: string[] = [];
   const keys: string[] = [];
   for (const token of tokens) {
-    if (MODIFIER_TOKENS.has(token)) {
+    if (MODIFIER_TOKENS[token]) {
       modifiers.push(token);
     } else {
       keys.push(token);

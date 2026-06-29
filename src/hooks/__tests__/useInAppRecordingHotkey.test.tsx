@@ -32,6 +32,18 @@ vi.mock("@tauri-apps/api/core", () => ({
   invoke: (...args: unknown[]) => mockInvoke(...args),
 }));
 
+const eventMock = vi.hoisted(() => ({
+  shortcutSettingsChangedHandler: null as null | (() => void),
+}));
+vi.mock("@tauri-apps/api/event", () => ({
+  listen: vi.fn((event: string, handler: () => void) => {
+    if (event === "shortcut-settings-changed") {
+      eventMock.shortcutSettingsChangedHandler = handler;
+    }
+    return Promise.resolve(() => {});
+  }),
+}));
+
 import { useInAppRecordingHotkey } from "@/hooks/useInAppRecordingHotkey";
 
 function fireHotkey(target: Element, init: KeyboardEventInit = {}): void {
@@ -92,6 +104,7 @@ describe("useInAppRecordingHotkey", () => {
     mockRecording.stopRecording.mockReset();
     mockInvoke.mockReset();
     mockInvoke.mockResolvedValue({ bindings: [] });
+    eventMock.shortcutSettingsChangedHandler = null;
     editable = document.createElement("textarea");
     nonEditable = document.createElement("div");
     document.body.append(editable, nonEditable);
@@ -364,4 +377,30 @@ describe("useInAppRecordingHotkey", () => {
 
     expect(mockRecording.startRecording).not.toHaveBeenCalled();
   });
+  it("reloads the bare-modifier binding when shortcut settings change in-session", async () => {
+    mockSettings.hotkey = "";
+    // Initially no bare binding → a tap does nothing.
+    mockInvoke.mockResolvedValue({ bindings: [] });
+    await renderWithBareModifier();
+
+    fireModifierTap(editable);
+
+    expect(mockRecording.startRecording).not.toHaveBeenCalled();
+    expect(mockRecording.stopRecording).not.toHaveBeenCalled();
+
+    // Backend now reports a bare-Control isolated_tap binding (in-session save).
+    mockInvoke.mockResolvedValue({ bindings: [bareControlBinding] });
+    await act(async () => {
+      eventMock.shortcutSettingsChangedHandler?.();
+      // Flush the reload's invoke().then() that sets the bare-modifier ref.
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    fireModifierTap(editable);
+
+    expect(mockRecording.startRecording).toHaveBeenCalledTimes(1);
+    expect(mockRecording.stopRecording).not.toHaveBeenCalled();
+  });
+
 });
