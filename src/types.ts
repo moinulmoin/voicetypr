@@ -43,6 +43,8 @@ export interface LocalModelInfo extends BaseModelInfo {
 
 export interface CloudModelInfo extends BaseModelInfo {
   kind: 'cloud';
+  /** Backend-sourced transcription model id used by this cloud provider. */
+  underlying_model?: string | null;
 }
 
 export type ModelInfo = LocalModelInfo | CloudModelInfo;
