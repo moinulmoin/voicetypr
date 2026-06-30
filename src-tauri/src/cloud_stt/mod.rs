@@ -78,6 +78,16 @@ impl CloudProvider {
             Self::Cohere => "Cohere",
         }
     }
+    /// Underlying transcription model id used by this provider (single source of truth).
+    pub fn model_name(self) -> &'static str {
+        match self {
+            Self::Soniox => soniox::MODEL,
+            Self::Openai => openai::MODEL,
+            Self::Groq => groq::MODEL,
+            Self::Deepgram => deepgram::MODEL,
+            Self::Cohere => cohere::MODEL,
+        }
+    }
 
     /// Display label for menus/history, e.g. `Soniox (Cloud)`.
     pub fn cloud_label(self) -> String {

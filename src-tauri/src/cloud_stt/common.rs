@@ -26,7 +26,10 @@ impl SttError {
     pub(crate) fn message(&self, provider_name: &str) -> String {
         match self {
             Self::Auth => format!("Invalid {} API key", provider_name),
-            Self::ModelUnavailable => format!("{}: model unavailable for this key", provider_name),
+            Self::ModelUnavailable => format!(
+                "{}: model unavailable for this API key — check the key's scopes and your plan/credits",
+                provider_name
+            ),
             Self::RateLimited => {
                 format!("{} rate limit reached. Try again shortly.", provider_name)
             }
@@ -40,7 +43,9 @@ impl SttError {
 
 pub(super) fn classify_status(status: reqwest::StatusCode) -> SttError {
     match status {
-        reqwest::StatusCode::UNAUTHORIZED | reqwest::StatusCode::FORBIDDEN => SttError::Auth,
+        reqwest::StatusCode::UNAUTHORIZED => SttError::Auth,
+        // 403 = valid key lacking scope or model access, not a bad key.
+        reqwest::StatusCode::FORBIDDEN => SttError::ModelUnavailable,
         reqwest::StatusCode::NOT_FOUND => SttError::ModelUnavailable,
         reqwest::StatusCode::REQUEST_TIMEOUT => SttError::Timeout,
         reqwest::StatusCode::TOO_MANY_REQUESTS => SttError::RateLimited,
@@ -155,7 +160,14 @@ where
 pub(super) async fn log_http_body(resp: reqwest::Response, label: &str) -> SttError {
     let status = resp.status();
     let err = classify_status(status);
-    log::warn!("{label}: HTTP {status}; response body suppressed for authenticated request");
+    // Body holds err_msg + a request id, never the key — safe to log, needed to diagnose.
+    let body = resp.text().await.unwrap_or_default();
+    let snippet: String = body.chars().take(500).collect();
+    if snippet.trim().is_empty() {
+        log::warn!("{label}: HTTP {status} (empty response body)");
+    } else {
+        log::warn!("{label}: HTTP {status}; response body: {snippet}");
+    }
     err
 }
 

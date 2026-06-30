@@ -589,6 +589,11 @@ export function ModelsSection({
                 <h3 className={cn("truncate text-sm font-semibold tracking-tight", isActive && "text-sage")}>
                   {provider?.displayName || provider?.providerName || getModelDisplayName(name, { [name]: model }) || name}
                 </h3>
+                {isCloudModel(model) && model.underlying_model && (
+                  <Badge variant="outline" className="gap-1 font-mono text-muted-foreground">
+                    {model.underlying_model}
+                  </Badge>
+                )}
                 {isActive && (
                   <Badge className="gap-1 bg-sage text-sage-foreground">
                     <CheckCircle className="size-3" />

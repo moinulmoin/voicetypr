@@ -4,7 +4,7 @@ use super::common::{self, AuthScheme};
 use std::path::Path;
 use tauri::AppHandle;
 
-pub(super) const MODEL: &str = "stt-async-v3";
+pub(super) const MODEL: &str = "stt-async-v5";
 
 const BASE: &str = "https://api.soniox.com/v1";
 
@@ -489,7 +489,7 @@ mod tests {
             false,
         );
 
-        assert_eq!(payload["model"].as_str(), Some("stt-async-v3"));
+        assert_eq!(payload["model"].as_str(), Some("stt-async-v5"));
         assert_eq!(payload["file_id"].as_str(), Some("file_123"));
         assert_eq!(
             payload["language_hints"].as_array().unwrap()[0].as_str(),
@@ -518,7 +518,7 @@ mod tests {
             false,
         );
 
-        assert_eq!(payload["model"].as_str(), Some("stt-async-v3"));
+        assert_eq!(payload["model"].as_str(), Some("stt-async-v5"));
         assert!(payload.get("language_hints").is_none());
         assert!(payload.get("context").is_none());
     }
