@@ -113,7 +113,8 @@ fn build_client(timeout: std::time::Duration) -> reqwest::Client {
     builder.build().unwrap_or_else(|_| reqwest::Client::new())
 }
 
-static SHARED_CLIENT: std::sync::LazyLock<reqwest::Client> = std::sync::LazyLock::new(|| build_client(REQUEST_TIMEOUT));
+static SHARED_CLIENT: std::sync::LazyLock<reqwest::Client> =
+    std::sync::LazyLock::new(|| build_client(REQUEST_TIMEOUT));
 
 pub(super) fn http_client() -> reqwest::Client {
     SHARED_CLIENT.clone()

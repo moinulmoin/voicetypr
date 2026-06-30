@@ -3911,10 +3911,19 @@ pub async fn start_recording(
         config.ai_enabled,
         config.current_model
     );
-    // Warm the active cloud provider's connection so transcription reuses a hot pool.
-    if let Some(provider) = crate::cloud_stt::CloudProvider::from_id(&config.current_engine) {
-        if crate::secure_store::secure_has(&app, provider.key_name()).unwrap_or(false) {
-            tokio::spawn(async move { provider.warm_up().await; });
+    // Warm the active cloud provider's connection so transcription reuses a hot pool (skipped when an online remote handles it).
+    let remote_online = {
+        let remote = app.state::<AsyncMutex<RemoteSettings>>();
+        let remote = remote.lock().await;
+        remote
+            .get_active_connection()
+            .is_some_and(|c| matches!(c.status, crate::remote::settings::ConnectionStatus::Online))
+    };
+    if !remote_online {
+        if let Some(provider) = crate::cloud_stt::CloudProvider::from_id(&config.current_engine) {
+            if crate::secure_store::secure_has(&app, provider.key_name()).unwrap_or(false) {
+                tokio::spawn(async move { provider.warm_up().await; });
+            }
         }
     }
     // Get app data directory for recordings
