@@ -185,6 +185,10 @@ pub fn update_shortcut_settings(
     let app_state = app.state::<AppState>();
     clear_active_custom_shortcut_state(&app_state);
 
+    // Notify the frontend so an in-session binding change refreshes the in-app
+    // bare-modifier fallback (and any other shortcut-derived state) without an
+    // app restart.
+    let _ = app.emit("shortcut-settings-changed", ());
     Ok(sanitized)
 }
 

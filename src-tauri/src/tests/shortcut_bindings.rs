@@ -503,8 +503,9 @@ fn legacy_binding_json_defaults_to_combo() {
 
 /// A Right-Option HoldToRecord binding (the onboarding default) validates correctly
 /// even when the primary hotkey field is explicitly empty (cleared by the user).
-/// This is the engine-kind path: it bypasses native engine, so no parse/conflict
-/// check is performed against the primary hotkey.
+/// This exercises the native-engine `ModifierHold` path: the bare modifier is the
+/// trigger, so there is no combo shortcut to parse or conflict-check against the
+/// primary hotkey.
 #[test]
 fn modifier_hold_right_option_validates_with_empty_primary() {
     let binding = ShortcutBinding {
