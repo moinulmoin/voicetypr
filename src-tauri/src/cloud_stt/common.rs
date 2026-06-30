@@ -113,8 +113,19 @@ fn build_client(timeout: std::time::Duration) -> reqwest::Client {
     builder.build().unwrap_or_else(|_| reqwest::Client::new())
 }
 
+static SHARED_CLIENT: std::sync::LazyLock<reqwest::Client> = std::sync::LazyLock::new(|| build_client(REQUEST_TIMEOUT));
+
 pub(super) fn http_client() -> reqwest::Client {
-    build_client(REQUEST_TIMEOUT)
+    SHARED_CLIENT.clone()
+}
+
+// Fire-and-forget: warm the shared pool's DNS+TCP+TLS for `origin`; result ignored.
+pub(super) async fn warm_origin(origin: &str) {
+    let _ = http_client()
+        .head(origin)
+        .timeout(std::time::Duration::from_secs(8))
+        .send()
+        .await;
 }
 
 /// The per-request deadline applied to **validation** traffic. Production uses
@@ -321,7 +332,7 @@ pub(super) async fn openai_compatible_transcribe(
 
 #[cfg(test)]
 mod tests {
-    use super::{get_validate, openai_compatible_transcribe, AuthScheme, SttError};
+    use super::{get_validate, openai_compatible_transcribe, warm_origin, AuthScheme, SttError};
     use std::io::Write;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::Arc;
@@ -759,5 +770,28 @@ mod tests {
             "validation took {elapsed:?}; the short deadline is not in effect"
         );
         assert_eq!(server.received_requests().await.unwrap().len(), 2);
+    }
+
+    #[tokio::test]
+    async fn warm_origin_sends_head_and_is_nonfatal_on_error() {
+        // 200: the HEAD goes out on the shared client and completes (not a no-op).
+        let server = MockServer::start().await;
+        Mock::given(method("HEAD"))
+            .respond_with(ResponseTemplate::new(200))
+            .expect(1)
+            .mount(&server)
+            .await;
+        warm_origin(&server.uri()).await;
+        assert_eq!(server.received_requests().await.unwrap().len(), 1);
+
+        // 500: fire-and-forget swallows the non-2xx; still exactly one request.
+        let server = MockServer::start().await;
+        Mock::given(method("HEAD"))
+            .respond_with(ResponseTemplate::new(500))
+            .expect(1)
+            .mount(&server)
+            .await;
+        warm_origin(&server.uri()).await;
+        assert_eq!(server.received_requests().await.unwrap().len(), 1);
     }
 }

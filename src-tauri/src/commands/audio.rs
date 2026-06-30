@@ -3911,6 +3911,12 @@ pub async fn start_recording(
         config.ai_enabled,
         config.current_model
     );
+    // Warm the active cloud provider's connection so transcription reuses a hot pool.
+    if let Some(provider) = crate::cloud_stt::CloudProvider::from_id(&config.current_engine) {
+        if crate::secure_store::secure_has(&app, provider.key_name()).unwrap_or(false) {
+            tokio::spawn(async move { provider.warm_up().await; });
+        }
+    }
     // Get app data directory for recordings
     let recordings_dir = match app.path().app_data_dir() {
         Ok(dir) => dir.join("recordings"),
