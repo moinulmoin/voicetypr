@@ -1170,13 +1170,14 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
 
                 // Calculate center-bottom position for pill/toast
                 let (pos_x, pos_y) = {
-                    let (screen_width, screen_height) = if let Ok(Some(monitor)) = app.primary_monitor() {
+                    let (screen_width, screen_height) = crate::utils::monitor::catch_monitor_panic(|| {
+                        let monitor = app.primary_monitor().ok().flatten()?;
                         let size = monitor.size();
                         let scale = monitor.scale_factor();
-                        (size.width as f64 / scale, size.height as f64 / scale)
-                    } else {
-                        (1440.0, 900.0) // Fallback
-                    };
+                        Some((size.width as f64 / scale, size.height as f64 / scale))
+                    })
+                    .flatten()
+                    .unwrap_or((1440.0, 900.0));
 
                     let pill_width = 80.0;  // Sized for 3-dot pill (active state with padding)
                     let pill_height = 40.0;
