@@ -3925,6 +3925,18 @@ pub async fn start_recording(
             }
         });
     }
+    // Warm the LLM enhancement connection too (runs post-transcription regardless of the STT engine).
+    if config.ai_enabled && !config.ai_provider.is_empty() {
+        let app = app.clone();
+        let provider_id = config.ai_provider.clone();
+        tokio::spawn(async move {
+            if provider_id == crate::ai::providers::PROVIDER_CUSTOM
+                || crate::commands::ai::ai_provider_has_key(&provider_id)
+            {
+                crate::commands::ai::warm_ai_provider(app, provider_id).await;
+            }
+        });
+    }
     // Get app data directory for recordings
     let recordings_dir = match app.path().app_data_dir() {
         Ok(dir) => dir.join("recordings"),
