@@ -1,3 +1,54 @@
+## [2.0.4](https://github.com/moinulmoin/voicetypr/compare/v2.0.3...v2.0.4) (2026-07-01)
+
+### Features
+
+* **stt, ai:** warm the active cloud STT and AI-enhancement provider's connection at recording start so the first request skips the DNS+TCP+TLS handshake, and reuse one pooled HTTP client across requests instead of rebuilding it per call — also speeds back-to-back dictations ([#106](https://github.com/moinulmoin/voicetypr/pull/106))
+
+
+## [2.0.3](https://github.com/moinulmoin/voicetypr/compare/v2.0.2...v2.0.3) (2026-06-30)
+
+### Bug Fixes
+
+* **cloud-stt:** fix Deepgram API-key validation (check the key via Deepgram's documented token endpoint, and surface a precise "model unavailable — check the key's scopes and your plan" message instead of a misleading "invalid key"), update Soniox to its current async model, and show the underlying transcription model on each cloud provider card ([#105](https://github.com/moinulmoin/voicetypr/pull/105))
+
+
+## [2.0.2](https://github.com/moinulmoin/voicetypr/compare/v2.0.1...v2.0.2) (2026-06-30)
+
+### Features
+
+* **hotkeys:** retire the global-shortcut plugin and unify all triggers — combos, bare-modifier holds, and isolated taps — on the native keytrigger engine ([#99](https://github.com/moinulmoin/voicetypr/pull/99))
+* **hotkeys:** in-app fallback for bare-modifier (isolated-tap) triggers, so a lone-modifier recording hotkey still fires while a Voicetypr text field is focused ([#103](https://github.com/moinulmoin/voicetypr/pull/103))
+* **tray:** theme-adaptive tray icon that matches the Windows light/dark taskbar ([#97](https://github.com/moinulmoin/voicetypr/pull/97))
+
+### Bug Fixes
+
+* **tray:** never crash on startup when the system tray fails to initialize (Windows `E_FAIL`) ([#96](https://github.com/moinulmoin/voicetypr/pull/96))
+* **telemetry:** ship Windows debug symbols (`.pdb`) so crash reports symbolicate to real frames ([#98](https://github.com/moinulmoin/voicetypr/pull/98))
+* **hotkeys:** arm an upgraded combo at startup and never consume bare modifiers on Windows ([#100](https://github.com/moinulmoin/voicetypr/pull/100))
+* **hotkeys:** clear the combo hotkey before saving a bare-modifier primary so recording can't double-fire ([#102](https://github.com/moinulmoin/voicetypr/pull/102))
+* **windows:** guard tao monitor queries against a stale-handle panic (`Os` error 1461) that could crash on a display change ([#104](https://github.com/moinulmoin/voicetypr/pull/104))
+
+
+## [2.0.1](https://github.com/moinulmoin/voicetypr/compare/v2.0.0...v2.0.1) (2026-06-25)
+
+### Features
+
+* **telemetry:** default crash/error reporting to opt-out (on by default), with clearer diagnostics-consent copy
+
+### Bug Fixes
+
+* **audio:** prevent a Windows recording crash from an unbounded WASAPI buffer size, and catch panics in the cpal input callback so a device hiccup can't abort the process
+* **audio:** bound recorder stop-teardown with a disconnect-independent finalize path
+* **keytrigger:** `catch_unwind` around the Windows low-level keyboard hook so a hook panic can't take down input
+* **transcription:** hard-timeout the in-process Whisper decode to prevent indefinite "Transcribing…" hangs, and abort the watchdog before remapping completed decodes
+* **hotkey:** single-tap (isolated-tap) triggers now work in onboarding, matching the Shortcuts page
+* **settings:** avoid a `WindowManager` state panic when changing the pill offset
+* **models:** keep a known model selected on startup and open native microphone settings; show animated progress for coarse Parakeet downloads
+* **parakeet:** surface sidecar stderr and honor force-download re-fetch
+* **onboarding:** expose the model Repair action for parity with the dashboard
+* **permissions:** route grant buttons to the native settings panes
+
+
 ## [2.0.0](https://github.com/moinulmoin/voicetypr/compare/v1.13.0...v2.0.0) (2026-06-25)
 
 ### Features
