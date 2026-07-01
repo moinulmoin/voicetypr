@@ -31,6 +31,17 @@ const CUSTOM_NO_AUTH_KEY: &str = "ai_custom_no_auth";
 const LEGACY_OPENAI_BASE_URL_KEY: &str = "ai_openai_base_url";
 const LEGACY_OPENAI_NO_AUTH_KEY: &str = "ai_openai_no_auth";
 
+// One pooled reqwest::Client shared across the LLM enhancement path so the connection pool stays hot across calls.
+static SHARED_AI_CLIENT: std::sync::LazyLock<reqwest::Client> = std::sync::LazyLock::new(|| {
+    reqwest::Client::builder()
+        .build()
+        .unwrap_or_else(|_| reqwest::Client::new())
+});
+
+fn shared_ai_client() -> reqwest::Client {
+    SHARED_AI_CLIENT.clone()
+}
+
 pub(crate) fn ai_provider_key_names() -> Vec<String> {
     launch_providers()
         .into_iter()
@@ -533,9 +544,7 @@ pub async fn validate_ai_api_key(
             None
         }
     });
-    let http_client = reqwest::Client::builder()
-        .build()
-        .map_err(|error| format!("Failed to build validation client: {error}"))?;
+    let http_client = shared_ai_client();
     let executor = AiExecutor::new(http_client, key_resolver, custom_base_url, no_auth);
     let request = AiPolishRequest {
         provider_id: provider.clone(),
@@ -868,6 +877,47 @@ fn custom_no_auth_from_settings(app: &tauri::AppHandle, has_key: bool) -> bool {
         .unwrap_or(!has_key)
 }
 
+// Native adapter endpoints are internal; hardcode best-effort origin hosts (a wrong host is a harmless no-op HEAD).
+fn native_origin(provider_id: &str) -> Option<&'static str> {
+    match catalog::adapter_name(provider_id)? {
+        "OpenAI" => Some("https://api.openai.com"),
+        "Anthropic" => Some("https://api.anthropic.com"),
+        "Gemini" => Some("https://generativelanguage.googleapis.com"),
+        _ => None,
+    }
+}
+
+fn url_origin(raw: &str) -> Option<String> {
+    let origin = reqwest::Url::parse(raw).ok()?.origin();
+    origin.is_tuple().then(|| origin.ascii_serialization())
+}
+
+pub(crate) fn ai_provider_origin(app: &tauri::AppHandle, provider_id: &str) -> Option<String> {
+    if provider_id == PROVIDER_CUSTOM {
+        // Mirror executor_for_provider: custom falls back to DEFAULT_OPENAI_BASE_URL when unset.
+        let base = custom_base_url_from_settings(app).unwrap_or_else(|| DEFAULT_OPENAI_BASE_URL.to_string());
+        return url_origin(&base);
+    }
+    native_origin(provider_id).map(str::to_string)
+}
+
+pub(crate) fn ai_provider_has_key(provider_id: &str) -> bool {
+    API_KEY_CACHE
+        .lock()
+        .map(|cache| cache.contains_key(&format!("ai_api_key_{provider_id}")))
+        .unwrap_or(false)
+}
+
+pub(crate) async fn warm_ai_provider(app: tauri::AppHandle, provider_id: String) {
+    if let Some(origin) = ai_provider_origin(&app, &provider_id) {
+        let _ = shared_ai_client()
+            .head(&origin)
+            .timeout(std::time::Duration::from_secs(8))
+            .send()
+            .await;
+    }
+}
+
 fn selected_ai_provider_and_model(
     app: &tauri::AppHandle,
 ) -> Result<(String, String), AiProviderError> {
@@ -969,9 +1019,7 @@ fn executor_for_provider(
     }
 
     let key_resolver: AiKeyResolver = Arc::new(move |provider_id| keys.get(provider_id).cloned());
-    let http_client = reqwest::Client::builder()
-        .build()
-        .map_err(|_| AiProviderError::Internal)?;
+    let http_client = shared_ai_client();
     Ok((
         AiExecutor::new(http_client, key_resolver, custom_base_url, custom_no_auth),
         runtime_provider,
@@ -1344,6 +1392,31 @@ mod tests {
         assert!(validate_provider_name("test provider").is_err());
         assert!(validate_provider_name("test@provider").is_err());
         assert!(validate_provider_name("").is_err());
+    }
+
+    #[test]
+    fn native_origin_maps_known_providers() {
+        assert_eq!(native_origin("openai"), Some("https://api.openai.com"));
+        assert_eq!(native_origin("anthropic"), Some("https://api.anthropic.com"));
+        assert_eq!(native_origin("gemini"), Some("https://generativelanguage.googleapis.com"));
+        assert_eq!(native_origin("custom"), None);
+    }
+
+    #[test]
+    fn url_origin_extracts_scheme_host_port() {
+        assert_eq!(
+            url_origin("https://api.example.com/v1"),
+            Some("https://api.example.com".to_string())
+        );
+        assert_eq!(
+            url_origin("http://localhost:8080/x"),
+            Some("http://localhost:8080".to_string())
+        );
+        assert_eq!(
+            url_origin("http://[::1]:11434/v1"),
+            Some("http://[::1]:11434".to_string())
+        );
+        assert_eq!(url_origin("not a url"), None);
     }
 
     #[test]

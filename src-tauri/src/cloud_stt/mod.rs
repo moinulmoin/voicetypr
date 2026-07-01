@@ -105,6 +105,22 @@ impl CloudProvider {
         }
     }
 
+    /// HTTPS origin whose connection transcription will reuse.
+    pub fn base_origin(self) -> &'static str {
+        match self {
+            Self::Soniox => "https://api.soniox.com",
+            Self::Openai => "https://api.openai.com",
+            Self::Groq => "https://api.groq.com",
+            Self::Deepgram => "https://api.deepgram.com",
+            Self::Cohere => "https://api.cohere.com",
+        }
+    }
+
+    /// Pre-warm the connection so the next transcription reuses a hot pool.
+    pub async fn warm_up(self) {
+        common::warm_origin(self.base_origin()).await;
+    }
+
     /// Catalog speed hint (0-9, higher = faster).
     pub fn speed_score(self) -> u8 {
         match self {
@@ -251,5 +267,14 @@ mod tests {
             );
             assert!(seen.insert(provider.key_name()), "duplicate key name");
         }
+    }
+
+    #[test]
+    fn base_origin_covers_each_provider() {
+        assert_eq!(CloudProvider::Soniox.base_origin(), "https://api.soniox.com");
+        assert_eq!(CloudProvider::Openai.base_origin(), "https://api.openai.com");
+        assert_eq!(CloudProvider::Groq.base_origin(), "https://api.groq.com");
+        assert_eq!(CloudProvider::Deepgram.base_origin(), "https://api.deepgram.com");
+        assert_eq!(CloudProvider::Cohere.base_origin(), "https://api.cohere.com");
     }
 }
