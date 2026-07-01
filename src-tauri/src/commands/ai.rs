@@ -888,17 +888,15 @@ fn native_origin(provider_id: &str) -> Option<&'static str> {
 }
 
 fn url_origin(raw: &str) -> Option<String> {
-    let url = reqwest::Url::parse(raw).ok()?;
-    let host = url.host_str()?;
-    Some(match url.port() {
-        Some(port) => format!("{}://{}:{}", url.scheme(), host, port),
-        None => format!("{}://{}", url.scheme(), host),
-    })
+    let origin = reqwest::Url::parse(raw).ok()?.origin();
+    origin.is_tuple().then(|| origin.ascii_serialization())
 }
 
 pub(crate) fn ai_provider_origin(app: &tauri::AppHandle, provider_id: &str) -> Option<String> {
     if provider_id == PROVIDER_CUSTOM {
-        return url_origin(&custom_base_url_from_settings(app)?);
+        // Mirror executor_for_provider: custom falls back to DEFAULT_OPENAI_BASE_URL when unset.
+        let base = custom_base_url_from_settings(app).unwrap_or_else(|| DEFAULT_OPENAI_BASE_URL.to_string());
+        return url_origin(&base);
     }
     native_origin(provider_id).map(str::to_string)
 }
@@ -1413,6 +1411,10 @@ mod tests {
         assert_eq!(
             url_origin("http://localhost:8080/x"),
             Some("http://localhost:8080".to_string())
+        );
+        assert_eq!(
+            url_origin("http://[::1]:11434/v1"),
+            Some("http://[::1]:11434".to_string())
         );
         assert_eq!(url_origin("not a url"), None);
     }
