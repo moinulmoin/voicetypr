@@ -94,6 +94,64 @@
 * **dev:** `pnpm tauri:dev` now reaps an orphaned previous dev process before launching, so a stale single-instance ghost from an interrupted session no longer makes the launch exit 143 — via a small cross-platform Node launcher (path-scoped `pkill` on macOS/Linux; Windows just launches). Docs now point at `pnpm tauri:dev`, which isolates the dev build from an installed one via the `.dev` identifier
 
 
+## [1.13.0](https://github.com/moinulmoin/voicetypr/compare/v1.12.10...v1.13.0) (2026-06-15)
+
+### Features
+
+* **recording:** replace destructive silence auto-stop with non-destructive warnings, so a quiet pause no longer discards in-progress audio ([31c3160](https://github.com/moinulmoin/voicetypr/commit/31c3160))
+* **bug-report:** collect full system specs (GPU, CPU, model) in bug reports for faster diagnosis ([929351d](https://github.com/moinulmoin/voicetypr/commit/929351d))
+
+### Bug Fixes
+
+* **recording:** recover from autonomous recorder stops that previously left recording stuck ([d33e669](https://github.com/moinulmoin/voicetypr/commit/d33e669))
+* **recording:** run stop cleanup on the recorder-error path so a failed recorder no longer hangs the session ([f008d67](https://github.com/moinulmoin/voicetypr/commit/f008d67))
+* **recording:** require sustained voice before treating audio as speech, reducing false starts from brief noise ([3363b7c](https://github.com/moinulmoin/voicetypr/commit/3363b7c))
+* **windows:** pause media that under-reports `IsPauseEnabled` during recording ([2bd683b](https://github.com/moinulmoin/voicetypr/commit/2bd683b))
+* **bug-report:** skip software DXGI adapters in GPU detection so the real GPU is reported ([6505574](https://github.com/moinulmoin/voicetypr/commit/6505574))
+* **recording:** default pause-media-during-recording to off ([e6acb22](https://github.com/moinulmoin/voicetypr/commit/e6acb22))
+
+
+## [1.12.10](https://github.com/moinulmoin/voicetypr/compare/v1.12.9...v1.12.10) (2026-06-10)
+
+### Bug Fixes
+
+* **transcription:** bound CPU Whisper so slow CPU-only systems no longer get stuck on "Transcribing"; cut short-dictation latency by dropping the hidden temperature-fallback retry, add timeout/cancellation for stuck native decodes, and show "No speech detected" for empty / `[SOUND]` / `[BLANK_AUDIO]` output ([63cd921](https://github.com/moinulmoin/voicetypr/commit/63cd921))
+
+### Chores
+
+* **ci:** pin Windows runners to VS 2022 to avoid VS 2026 CMake generator failures in whisper-rs-sys ([bfd7899](https://github.com/moinulmoin/voicetypr/commit/bfd7899))
+
+
+## [1.12.9](https://github.com/moinulmoin/voicetypr/compare/v1.12.8...v1.12.9) (2026-06-08)
+
+### Bug Fixes
+
+* **hotkey:** prevent repeated toggle-hotkey stops from a held shortcut producing empty recordings ([9fca33f](https://github.com/moinulmoin/voicetypr/commit/9fca33f))
+* **models:** repair model download verification so valid downloads are no longer rejected ([2ab4b0c](https://github.com/moinulmoin/voicetypr/commit/2ab4b0c))
+
+
+## [1.12.8](https://github.com/moinulmoin/voicetypr/compare/v1.12.7...v1.12.8) (2026-06-05)
+
+### Bug Fixes
+
+* **models:** keep model management responsive during downloads ([#89](https://github.com/moinulmoin/voicetypr/pull/89))
+
+
+## [1.12.7](https://github.com/moinulmoin/voicetypr/compare/v1.12.6...v1.12.7) (2026-06-05)
+
+### Bug Fixes
+
+* **windows:** repair model catalog downloads ([#87](https://github.com/moinulmoin/voicetypr/pull/87))
+* **windows:** warm the Vulkan sidecar more reliably and fix spacing ([#88](https://github.com/moinulmoin/voicetypr/pull/88))
+
+
+## [1.12.6](https://github.com/moinulmoin/voicetypr/compare/v1.12.5...v1.12.6) (2026-06-04)
+
+### Bug Fixes
+
+* **windows:** optimize transcription fallback so CPU-only recovery is more usable when GPU acceleration is unavailable ([#85](https://github.com/moinulmoin/voicetypr/pull/85))
+
+
 ## [1.12.5](https://github.com/moinulmoin/voicetypr/compare/v1.12.4...v1.12.5) (2026-06-02)
 
 ### Bug Fixes
