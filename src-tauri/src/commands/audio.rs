@@ -3867,6 +3867,15 @@ pub async fn start_recording(
             // chime clips the start of capture.
         }
     }
+    let streaming_tap_enabled = app
+        .store("settings")
+        .ok()
+        .and_then(|store| {
+            store
+                .get("streaming_tap_enabled")
+                .and_then(|value| value.as_bool())
+        })
+        .unwrap_or(false);
 
     // Pause system media if enabled (default: off)
     let mut resume_media_on_error = false;
@@ -3920,7 +3929,9 @@ pub async fn start_recording(
                 let guard = remote.lock().await;
                 guard.get_active_connection().is_some()
             };
-            if !remote_active && crate::secure_store::secure_has(&app, provider.key_name()).unwrap_or(false) {
+            if !remote_active
+                && crate::secure_store::secure_has(&app, provider.key_name()).unwrap_or(false)
+            {
                 provider.warm_up().await;
             }
         });
@@ -4084,79 +4095,38 @@ pub async fn start_recording(
         log_file_operation("RECORDING_START", audio_path_str, false, None, None);
 
         // Start recording and get side-channel receivers
-        let (audio_level_rx, silence_event_rx) =
-            match recorder.start_recording(audio_path_str, selected_microphone.clone()) {
-                Ok(_) => {
-                    log::debug!(
-                        "⏱️ [REC TIMING] recorder.start_recording returned Ok (+{}ms)",
-                        recording_start.elapsed().as_millis()
+        let recording_generation = current_recording_generation();
+        let cancellation_flag = app_state.should_cancel_recording.clone();
+        let stream_cancelled: Arc<dyn Fn() -> bool + Send + Sync> =
+            Arc::new(move || cancellation_flag.load(AtomicOrdering::SeqCst));
+        let (audio_level_rx, silence_event_rx) = match recorder.start_recording(
+            audio_path_str,
+            selected_microphone.clone(),
+            streaming_tap_enabled,
+            recording_generation,
+            stream_cancelled,
+        ) {
+            Ok(_) => {
+                log::debug!(
+                    "⏱️ [REC TIMING] recorder.start_recording returned Ok (+{}ms)",
+                    recording_start.elapsed().as_millis()
+                );
+                // Verify recording actually started
+                let is_recording = recorder.is_recording();
+
+                // Get receivers before potentially dropping recorder
+                let level_rx = recorder.take_audio_level_receiver();
+                let silence_rx = recorder.take_silence_event_receiver();
+
+                if !is_recording {
+                    drop(recorder); // Release the lock if we're erroring out
+                    log_failed(
+                        "RECORDER_INIT",
+                        "Recording failed to start after initialization",
                     );
-                    // Verify recording actually started
-                    let is_recording = recorder.is_recording();
-
-                    // Get receivers before potentially dropping recorder
-                    let level_rx = recorder.take_audio_level_receiver();
-                    let silence_rx = recorder.take_silence_event_receiver();
-
-                    if !is_recording {
-                        drop(recorder); // Release the lock if we're erroring out
-                        log_failed(
-                            "RECORDER_INIT",
-                            "Recording failed to start after initialization",
-                        );
-                        log_with_context(
-                            log::Level::Debug,
-                            "Recorder initialization failed",
-                            &[
-                                ("audio_path", audio_path_str),
-                                (
-                                    "init_time_ms",
-                                    recorder_init_start
-                                        .elapsed()
-                                        .as_millis()
-                                        .to_string()
-                                        .as_str(),
-                                ),
-                            ],
-                        );
-
-                        update_recording_state(
-                            &app,
-                            RecordingState::Error,
-                            Some("Microphone initialization failed".to_string()),
-                        );
-
-                        // Emit user-friendly error via pill toast
-                        pill_toast_with_suggestion(
-                        &app,
-                        "Microphone access failed",
-                        "Enable Microphone access in System Settings \u{25b8} Privacy & Security",
-                        1500,
-                        None,
-                    );
-
-                        resume_media_if_needed();
-                        return Err("Failed to start recording".to_string());
-                    } else {
-                        log_performance(
-                            "RECORDER_INIT",
-                            recorder_init_start.elapsed().as_millis() as u64,
-                            Some(&format!("file={}", audio_path_str)),
-                        );
-                        log::info!("✅ Recording started successfully");
-
-                        // Monitor system resources at recording start
-                        #[cfg(debug_assertions)]
-                        system_monitor::log_resources_before_operation("RECORDING_START");
-                    }
-
-                    (level_rx, silence_rx)
-                }
-                Err(e) => {
-                    log_failed("RECORDER_START", &e);
                     log_with_context(
                         log::Level::Debug,
-                        "Recorder start failed",
+                        "Recorder initialization failed",
                         &[
                             ("audio_path", audio_path_str),
                             (
@@ -4170,29 +4140,79 @@ pub async fn start_recording(
                         ],
                     );
 
-                    update_recording_state(&app, RecordingState::Error, Some(e.to_string()));
+                    update_recording_state(
+                        &app,
+                        RecordingState::Error,
+                        Some("Microphone initialization failed".to_string()),
+                    );
 
-                    // Provide specific error messages for common issues
-                    let (user_message, suggestion) =
-                        if e.contains("permission") || e.contains("access") {
-                            (
+                    // Emit user-friendly error via pill toast
+                    pill_toast_with_suggestion(
+                        &app,
+                        "Microphone access failed",
+                        "Enable Microphone access in System Settings \u{25b8} Privacy & Security",
+                        1500,
+                        None,
+                    );
+
+                    resume_media_if_needed();
+                    return Err("Failed to start recording".to_string());
+                } else {
+                    log_performance(
+                        "RECORDER_INIT",
+                        recorder_init_start.elapsed().as_millis() as u64,
+                        Some(&format!("file={}", audio_path_str)),
+                    );
+                    log::info!("✅ Recording started successfully");
+
+                    // Monitor system resources at recording start
+                    #[cfg(debug_assertions)]
+                    system_monitor::log_resources_before_operation("RECORDING_START");
+                }
+
+                (level_rx, silence_rx)
+            }
+            Err(e) => {
+                log_failed("RECORDER_START", &e);
+                log_with_context(
+                    log::Level::Debug,
+                    "Recorder start failed",
+                    &[
+                        ("audio_path", audio_path_str),
+                        (
+                            "init_time_ms",
+                            recorder_init_start
+                                .elapsed()
+                                .as_millis()
+                                .to_string()
+                                .as_str(),
+                        ),
+                    ],
+                );
+
+                update_recording_state(&app, RecordingState::Error, Some(e.to_string()));
+
+                // Provide specific error messages for common issues
+                let (user_message, suggestion) = if e.contains("permission") || e.contains("access")
+                {
+                    (
                         "Microphone permission denied",
                         "Enable Microphone access in System Settings \u{25b8} Privacy & Security",
                     )
-                        } else if e.contains("device") || e.contains("not found") {
-                            ("No microphone found", "Connect a microphone and try again")
-                        } else if e.contains("in use") || e.contains("busy") {
-                            ("Microphone busy", "Close other apps using the microphone")
-                        } else {
-                            ("Recording failed", "Try recording again")
-                        };
+                } else if e.contains("device") || e.contains("not found") {
+                    ("No microphone found", "Connect a microphone and try again")
+                } else if e.contains("in use") || e.contains("busy") {
+                    ("Microphone busy", "Close other apps using the microphone")
+                } else {
+                    ("Recording failed", "Try recording again")
+                };
 
-                    pill_toast_with_suggestion(&app, user_message, suggestion, 1500, None);
+                pill_toast_with_suggestion(&app, user_message, suggestion, 1500, None);
 
-                    resume_media_if_needed();
-                    return Err(e);
-                }
-            };
+                resume_media_if_needed();
+                return Err(e);
+            }
+        };
 
         // Release the recorder lock after successful start
         drop(recorder);

@@ -1,0 +1,472 @@
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::mpsc::{self, Receiver, RecvTimeoutError, SyncSender, TryRecvError, TrySendError};
+use std::sync::Arc;
+use std::thread;
+use std::time::{Duration, Instant};
+
+use crate::transcription::stream::StreamSessionGate;
+use crate::utils::logger::log_performance;
+
+pub const STREAM_QUEUE_CAPACITY: usize = 256;
+pub const STREAM_RECYCLE_CAPACITY: usize = STREAM_QUEUE_CAPACITY + 4;
+
+#[derive(Debug)]
+pub enum StreamTapMsg {
+    Frame(Vec<i16>),
+    Finalize,
+    #[allow(dead_code)] // Future streaming cancel wiring slice will construct this.
+    Cancel,
+}
+
+pub struct StreamTapRt {
+    tx: SyncSender<StreamTapMsg>,
+    pool_rx: Receiver<Vec<i16>>,
+    pool_tx: SyncSender<Vec<i16>>,
+    dropped: Arc<AtomicU64>,
+}
+
+impl StreamTapRt {
+    #[allow(dead_code)] // Future streaming diagnostics slice will read this accessor.
+    pub fn dropped(&self) -> u64 {
+        self.dropped.load(Ordering::Relaxed)
+    }
+}
+
+pub struct StreamTapHandle {
+    rt: StreamTapRt,
+    tx: SyncSender<StreamTapMsg>,
+    finalize_flag: Arc<AtomicBool>,
+    worker: thread::JoinHandle<StreamTapWorkerSummary>,
+}
+
+impl StreamTapHandle {
+    pub fn into_rt(self) -> (StreamTapRt, StreamTapFinalizer) {
+        (
+            self.rt,
+            StreamTapFinalizer {
+                tx: self.tx,
+                finalize_flag: self.finalize_flag,
+                worker: self.worker,
+            },
+        )
+    }
+}
+
+pub struct StreamTapFinalizer {
+    tx: SyncSender<StreamTapMsg>,
+    finalize_flag: Arc<AtomicBool>,
+    worker: thread::JoinHandle<StreamTapWorkerSummary>,
+}
+
+impl StreamTapFinalizer {
+    pub fn finalize(self) -> thread::JoinHandle<StreamTapWorkerSummary> {
+        self.finalize_flag.store(true, Ordering::SeqCst);
+        let _ = self.tx.try_send(StreamTapMsg::Finalize);
+        drop(self.tx);
+        self.worker
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StreamTapWorkerSummary {
+    pub generation: u64,
+    pub frames: u64,
+    pub samples: u64,
+    pub dropped: u64,
+    pub cancelled: bool,
+    pub stale: bool,
+}
+
+impl StreamTapWorkerSummary {
+    fn metadata(&self) -> String {
+        format!(
+            "frames={} samples={} dropped={} generation={} cancelled={} stale={}",
+            self.frames, self.samples, self.dropped, self.generation, self.cancelled, self.stale
+        )
+    }
+}
+
+pub fn spawn_noop_worker(
+    generation: u64,
+    chunk_capacity: usize,
+    cancelled: Arc<dyn Fn() -> bool + Send + Sync>,
+) -> StreamTapHandle {
+    let (tx, rx) = mpsc::sync_channel::<StreamTapMsg>(STREAM_QUEUE_CAPACITY);
+    let (pool_tx, pool_rx) = mpsc::sync_channel::<Vec<i16>>(STREAM_RECYCLE_CAPACITY);
+
+    for _ in 0..STREAM_RECYCLE_CAPACITY {
+        let _ = pool_tx.send(Vec::with_capacity(chunk_capacity));
+    }
+
+    let dropped = Arc::new(AtomicU64::new(0));
+    let finalize_flag = Arc::new(AtomicBool::new(false));
+    let worker_dropped = dropped.clone();
+    let worker_finalize_flag = finalize_flag.clone();
+    let worker_pool_tx = pool_tx.clone();
+    let worker_tx = tx.clone();
+    let worker = thread::spawn(move || {
+        run_noop_worker(
+            rx,
+            worker_pool_tx,
+            worker_dropped,
+            worker_finalize_flag,
+            generation,
+            cancelled,
+        )
+    });
+
+    StreamTapHandle {
+        rt: StreamTapRt {
+            tx: worker_tx,
+            pool_rx,
+            pool_tx,
+            dropped,
+        },
+        tx,
+        finalize_flag,
+        worker,
+    }
+}
+
+pub fn maybe_spawn_noop_worker(
+    enabled: bool,
+    generation: u64,
+    chunk_capacity: usize,
+    cancelled: Arc<dyn Fn() -> bool + Send + Sync>,
+) -> Option<StreamTapHandle> {
+    enabled.then(|| spawn_noop_worker(generation, chunk_capacity, cancelled))
+}
+
+pub fn enqueue_frame_rt(tap: &StreamTapRt, i16_samples: &[i16]) {
+    let mut chunk = match tap.pool_rx.try_recv() {
+        Ok(chunk) => chunk,
+        Err(TryRecvError::Empty | TryRecvError::Disconnected) => {
+            tap.dropped.fetch_add(1, Ordering::Relaxed);
+            return;
+        }
+    };
+
+    chunk.clear();
+    if i16_samples.len() > chunk.capacity() {
+        tap.dropped.fetch_add(1, Ordering::Relaxed);
+        let _ = tap.pool_tx.try_send(chunk);
+        return;
+    }
+
+    chunk.extend_from_slice(i16_samples);
+    match tap.tx.try_send(StreamTapMsg::Frame(chunk)) {
+        Ok(()) => {}
+        Err(TrySendError::Full(StreamTapMsg::Frame(mut chunk)))
+        | Err(TrySendError::Disconnected(StreamTapMsg::Frame(mut chunk))) => {
+            tap.dropped.fetch_add(1, Ordering::Relaxed);
+            chunk.clear();
+            let _ = tap.pool_tx.try_send(chunk);
+        }
+        Err(TrySendError::Full(StreamTapMsg::Finalize | StreamTapMsg::Cancel))
+        | Err(TrySendError::Disconnected(StreamTapMsg::Finalize | StreamTapMsg::Cancel)) => {
+            tap.dropped.fetch_add(1, Ordering::Relaxed);
+        }
+    }
+}
+
+pub fn run_noop_worker(
+    rx: Receiver<StreamTapMsg>,
+    pool_tx: SyncSender<Vec<i16>>,
+    dropped: Arc<AtomicU64>,
+    finalize_flag: Arc<AtomicBool>,
+    generation: u64,
+    cancelled: Arc<dyn Fn() -> bool + Send + Sync>,
+) -> StreamTapWorkerSummary {
+    run_noop_worker_observed(
+        NoopWorkerContext {
+            rx,
+            pool_tx,
+            dropped,
+            finalize_flag,
+            generation,
+            cancelled,
+            log_summary: true,
+        },
+        |_| {},
+    )
+}
+
+struct NoopWorkerContext {
+    rx: Receiver<StreamTapMsg>,
+    pool_tx: SyncSender<Vec<i16>>,
+    dropped: Arc<AtomicU64>,
+    finalize_flag: Arc<AtomicBool>,
+    generation: u64,
+    cancelled: Arc<dyn Fn() -> bool + Send + Sync>,
+    log_summary: bool,
+}
+
+fn run_noop_worker_observed<F>(
+    context: NoopWorkerContext,
+    mut on_frame: F,
+) -> StreamTapWorkerSummary
+where
+    F: FnMut(&[i16]),
+{
+    let NoopWorkerContext {
+        rx,
+        pool_tx,
+        dropped,
+        finalize_flag,
+        generation,
+        cancelled,
+        log_summary,
+    } = context;
+
+    let started = Instant::now();
+    let mut gate = StreamSessionGate::new(generation);
+    let mut frames = 0_u64;
+    let mut samples = 0_u64;
+    let mut cancelled_seen = false;
+    let mut stale_seen = false;
+
+    loop {
+        let msg = match rx.recv_timeout(Duration::from_millis(100)) {
+            Ok(msg) => msg,
+            Err(RecvTimeoutError::Disconnected) => break,
+            Err(RecvTimeoutError::Timeout) => {
+                stale_seen |= crate::commands::audio::recording_generation_is_stale(generation);
+                if finalize_flag.load(Ordering::SeqCst) || stale_seen || (cancelled)() {
+                    break;
+                }
+                continue;
+            }
+        };
+
+        stale_seen |= crate::commands::audio::recording_generation_is_stale(generation);
+        if stale_seen || (cancelled)() {
+            cancelled_seen |= (cancelled)();
+            match msg {
+                StreamTapMsg::Frame(mut chunk) => {
+                    chunk.clear();
+                    let _ = pool_tx.send(chunk);
+                }
+                StreamTapMsg::Finalize => break,
+                StreamTapMsg::Cancel => {
+                    cancelled_seen = true;
+                    break;
+                }
+            }
+            continue;
+        }
+
+        match msg {
+            StreamTapMsg::Frame(mut chunk) => {
+                let event = crate::transcription::stream::TranscriptionStreamEvent::Partial {
+                    session_id: generation,
+                    revision: frames + 1,
+                    committed: String::new(),
+                    tentative: String::new(),
+                };
+                if matches!(
+                    gate.admit(&event),
+                    crate::transcription::stream::Admit::Accept
+                ) {
+                    on_frame(&chunk);
+                    frames += 1;
+                    samples += chunk.len() as u64;
+                }
+                chunk.clear();
+                let _ = pool_tx.send(chunk);
+            }
+            StreamTapMsg::Finalize => break,
+            StreamTapMsg::Cancel => {
+                cancelled_seen = true;
+                break;
+            }
+        }
+    }
+
+    let summary = StreamTapWorkerSummary {
+        generation,
+        frames: if cancelled_seen || stale_seen {
+            0
+        } else {
+            frames
+        },
+        samples: if cancelled_seen || stale_seen {
+            0
+        } else {
+            samples
+        },
+        dropped: dropped.load(Ordering::Relaxed),
+        cancelled: cancelled_seen,
+        stale: stale_seen,
+    };
+
+    if log_summary {
+        log_performance(
+            "STREAM_TAP",
+            started.elapsed().as_millis() as u64,
+            Some(&summary.metadata()),
+        );
+    }
+
+    summary
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::commands::audio::begin_recording_generation;
+
+    fn not_cancelled() -> Arc<dyn Fn() -> bool + Send + Sync> {
+        Arc::new(|| false)
+    }
+
+    fn test_context(
+        rx: Receiver<StreamTapMsg>,
+        pool_tx: SyncSender<Vec<i16>>,
+        dropped: Arc<AtomicU64>,
+        finalize_flag: Arc<AtomicBool>,
+        generation: u64,
+    ) -> NoopWorkerContext {
+        NoopWorkerContext {
+            rx,
+            pool_tx,
+            dropped,
+            finalize_flag,
+            generation,
+            cancelled: not_cancelled(),
+            log_summary: false,
+        }
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn fifo_ordering_frames_before_finalize() {
+        let generation = begin_recording_generation();
+        let (tx, rx) = mpsc::sync_channel(STREAM_QUEUE_CAPACITY);
+        let (pool_tx, _pool_rx) = mpsc::sync_channel(STREAM_RECYCLE_CAPACITY);
+        let dropped = Arc::new(AtomicU64::new(0));
+        let finalize_flag = Arc::new(AtomicBool::new(false));
+
+        tx.try_send(StreamTapMsg::Frame(vec![1, 2])).unwrap();
+        tx.try_send(StreamTapMsg::Frame(vec![3])).unwrap();
+        tx.try_send(StreamTapMsg::Frame(vec![4, 5, 6])).unwrap();
+        finalize_flag.store(true, Ordering::SeqCst);
+        tx.try_send(StreamTapMsg::Finalize).unwrap();
+        drop(tx);
+
+        let mut observed = Vec::new();
+        let summary = run_noop_worker_observed(
+            test_context(rx, pool_tx, dropped, finalize_flag, generation),
+            |frame| observed.push(frame.to_vec()),
+        );
+
+        assert_eq!(observed, vec![vec![1, 2], vec![3], vec![4, 5, 6]]);
+        assert_eq!(summary.frames, 3);
+        assert_eq!(summary.samples, 6);
+    }
+
+    #[test]
+    fn queue_overflow_drops_never_block() {
+        let (tx, _rx) = mpsc::sync_channel(STREAM_QUEUE_CAPACITY);
+        let (pool_tx, pool_rx) = mpsc::sync_channel(STREAM_RECYCLE_CAPACITY);
+        let (writer_tx, writer_rx) = mpsc::sync_channel::<Vec<i16>>(1);
+        let dropped = Arc::new(AtomicU64::new(0));
+        for _ in 0..STREAM_RECYCLE_CAPACITY {
+            pool_tx.send(Vec::with_capacity(8)).unwrap();
+        }
+        for _ in 0..STREAM_QUEUE_CAPACITY {
+            tx.try_send(StreamTapMsg::Frame(Vec::new())).unwrap();
+        }
+        writer_tx.try_send(vec![9, 9, 9]).unwrap();
+        let tap = StreamTapRt {
+            tx,
+            pool_rx,
+            pool_tx,
+            dropped,
+        };
+
+        enqueue_frame_rt(&tap, &[1, 2, 3]);
+
+        assert_eq!(tap.dropped(), 1);
+        assert_eq!(writer_rx.try_recv().unwrap(), vec![9, 9, 9]);
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn cancel_drains_and_discards_without_content_summary() {
+        let generation = begin_recording_generation();
+        let (tx, rx) = mpsc::sync_channel(STREAM_QUEUE_CAPACITY);
+        let (pool_tx, _pool_rx) = mpsc::sync_channel(STREAM_RECYCLE_CAPACITY);
+        let dropped = Arc::new(AtomicU64::new(0));
+        let finalize_flag = Arc::new(AtomicBool::new(false));
+
+        tx.try_send(StreamTapMsg::Frame(vec![1, 2, 3])).unwrap();
+        tx.try_send(StreamTapMsg::Cancel).unwrap();
+        drop(tx);
+
+        let summary = run_noop_worker_observed(
+            test_context(rx, pool_tx, dropped, finalize_flag, generation),
+            |_| {},
+        );
+
+        assert!(summary.cancelled);
+        assert_eq!(summary.frames, 0);
+        assert_eq!(summary.samples, 0);
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn pool_recycle_round_trip_and_exhaustion_drops_without_allocating() {
+        let generation = begin_recording_generation();
+        let handle = spawn_noop_worker(generation, 4, not_cancelled());
+        let (rt, finalizer) = handle.into_rt();
+
+        enqueue_frame_rt(&rt, &[1, 2, 3, 4]);
+        let worker = finalizer.finalize();
+        let summary = worker.join().unwrap();
+
+        assert_eq!(summary.frames, 1);
+        assert_eq!(summary.samples, 4);
+        assert_eq!(rt.pool_rx.try_iter().count(), STREAM_RECYCLE_CAPACITY);
+
+        let (tx, _rx) = mpsc::sync_channel(STREAM_QUEUE_CAPACITY);
+        let (pool_tx, pool_rx) = mpsc::sync_channel(STREAM_RECYCLE_CAPACITY);
+        let dropped = Arc::new(AtomicU64::new(0));
+        let exhausted = StreamTapRt {
+            tx,
+            pool_rx,
+            pool_tx,
+            dropped,
+        };
+        enqueue_frame_rt(&exhausted, &[1]);
+        assert_eq!(exhausted.dropped(), 1);
+    }
+
+    #[test]
+    fn flag_off_is_inert_and_spawns_no_worker() {
+        assert!(maybe_spawn_noop_worker(false, 0, 4, not_cancelled()).is_none());
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn stale_generation_discards_frames() {
+        let stale_generation = begin_recording_generation();
+        let _new_generation = begin_recording_generation();
+        let (tx, rx) = mpsc::sync_channel(STREAM_QUEUE_CAPACITY);
+        let (pool_tx, _pool_rx) = mpsc::sync_channel(STREAM_RECYCLE_CAPACITY);
+        let dropped = Arc::new(AtomicU64::new(0));
+        let finalize_flag = Arc::new(AtomicBool::new(true));
+
+        tx.try_send(StreamTapMsg::Frame(vec![1, 2, 3])).unwrap();
+        tx.try_send(StreamTapMsg::Finalize).unwrap();
+        drop(tx);
+
+        let summary = run_noop_worker_observed(
+            test_context(rx, pool_tx, dropped, finalize_flag, stale_generation),
+            |_| {},
+        );
+
+        assert!(summary.stale);
+        assert_eq!(summary.frames, 0);
+        assert_eq!(summary.samples, 0);
+    }
+}

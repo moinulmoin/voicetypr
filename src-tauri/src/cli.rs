@@ -437,6 +437,9 @@ async fn run_record(app: &tauri::AppHandle, args: RecordArgs) -> Result<(), Box<
             .to_str()
             .ok_or_else(|| "Invalid recording path".to_string())?,
         settings.selected_microphone.clone(),
+        false,
+        0,
+        std::sync::Arc::new(|| false),
     )?;
     eprintln!("Recording… stop by silence.");
     let stop_message = recorder.wait_for_recording_end()?;
