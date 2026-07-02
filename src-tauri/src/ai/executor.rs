@@ -72,11 +72,23 @@ impl AiExecutor {
             match result {
                 Ok(output_text) => {
                     let cleaned = sanitize_ai_output(&output_text, request.input_text.len());
-                    if cleaned.trim().is_empty() {
+                    let validated = match validate_ai_output(&cleaned, &request.input_text) {
+                        Ok(output) => output,
+                        Err(error) if attempt == 0 => {
+                            attempt += 1;
+                            log::warn!(
+                                "AI cleanup response failed validation; retrying once category={:?}",
+                                error
+                            );
+                            continue;
+                        }
+                        Err(error) => return Err(error),
+                    };
+                    if validated.trim().is_empty() {
                         return Err(AiProviderError::BadResponse);
                     }
                     return Ok(AiPolishResult {
-                        output_text: cleaned,
+                        output_text: validated,
                         provider_id: request.provider_id,
                         model_id: request.model_id,
                         duration_ms: start.elapsed().as_millis().min(u128::from(u64::MAX)) as u64,
@@ -141,6 +153,132 @@ fn should_retry(error: &AiProviderError) -> bool {
     )
 }
 
+fn validate_ai_output(output: &str, input: &str) -> Result<String, AiProviderError> {
+    let cleaned = strip_wrapping_quotes(
+        strip_known_preamble(strip_wrapping_quotes(
+            strip_markdown_fence(output).trim(),
+            input,
+        )),
+        input,
+    )
+    .trim()
+    .to_string();
+
+    if cleaned.is_empty()
+        || starts_with_refusal_or_commentary(&cleaned)
+        || has_anomalous_cleanup_length(&cleaned, input)
+    {
+        Err(AiProviderError::BadResponse)
+    } else {
+        Ok(cleaned)
+    }
+}
+
+fn strip_markdown_fence(output: &str) -> &str {
+    let trimmed = output.trim();
+    if !trimmed.starts_with("```") {
+        return trimmed;
+    }
+
+    let Some(first_newline) = trimmed.find('\n') else {
+        return trimmed;
+    };
+    let body_and_close = &trimmed[first_newline + 1..];
+    let Some(close_start) = body_and_close.rfind("```") else {
+        return trimmed;
+    };
+    if body_and_close[close_start + 3..].trim().is_empty() {
+        body_and_close[..close_start].trim()
+    } else {
+        trimmed
+    }
+}
+
+fn strip_wrapping_quotes<'a>(output: &'a str, input: &str) -> &'a str {
+    let trimmed = output.trim();
+    let input_trimmed = input.trim();
+    if is_wrapped_in_quotes(input_trimmed).is_some() {
+        return trimmed;
+    }
+
+    match is_wrapped_in_quotes(trimmed) {
+        Some((open_len, close_len)) => trimmed[open_len..trimmed.len() - close_len].trim(),
+        None => trimmed,
+    }
+}
+
+fn is_wrapped_in_quotes(text: &str) -> Option<(usize, usize)> {
+    let pairs = [
+        ('"', '"'),
+        ('\'', '\''),
+        ('\u{201c}', '\u{201d}'),
+        ('\u{2018}', '\u{2019}'),
+    ];
+    pairs.iter().find_map(|(open, close)| {
+        if text.starts_with(*open) && text.ends_with(*close) && text.len() > open.len_utf8() {
+            Some((open.len_utf8(), close.len_utf8()))
+        } else {
+            None
+        }
+    })
+}
+
+fn strip_known_preamble(output: &str) -> &str {
+    let Some((first_line, rest)) = output.split_once('\n') else {
+        return output;
+    };
+    let normalized = first_line
+        .trim()
+        .trim_matches(|ch: char| ch == '"' || ch == '\'' || ch.is_whitespace())
+        .to_ascii_lowercase();
+    let normalized = normalized.trim_end_matches(':').trim();
+    let known = [
+        "here is the fixed text",
+        "here's the fixed text",
+        "here is the cleaned text",
+        "here's the cleaned text",
+        "here is the corrected text",
+        "here's the corrected text",
+        "here is the polished text",
+        "here's the polished text",
+        "sure, here is the fixed text",
+        "sure, here's the fixed text",
+        "sure, here is the cleaned text",
+        "sure, here's the cleaned text",
+        "sure, here is the corrected text",
+        "sure, here's the corrected text",
+        "sure, here is the polished text",
+        "sure, here's the polished text",
+        "sure",
+    ];
+
+    if known.contains(&normalized) {
+        rest.trim()
+    } else {
+        output
+    }
+}
+
+fn starts_with_refusal_or_commentary(output: &str) -> bool {
+    let lower = output.trim_start().to_ascii_lowercase();
+    lower.starts_with("i can't")
+        || lower.starts_with("i cannot")
+        || lower.starts_with("i'm sorry")
+        || lower.starts_with("i am sorry")
+}
+
+fn has_anomalous_cleanup_length(output: &str, input: &str) -> bool {
+    let input_len = input.trim().len();
+    let output_len = output.trim().len();
+    if input_len < 80 {
+        output_len > 4096
+    } else if input_len >= 256 {
+        output_len >= input_len.saturating_mul(4).saturating_sub(32)
+    } else {
+        output_len > input_len.saturating_mul(12).max(4096)
+    }
+}
+
 /// Sanitize a model's cleanup response before it is returned for auto-typing.
 ///
 /// Drops control characters except `\n` and `\t` (carriage returns collapse to
@@ -150,8 +288,9 @@ fn should_retry(error: &AiProviderError) -> bool {
 fn sanitize_ai_output(output: &str, input_byte_len: usize) -> String {
     // 4x covers normal cleanup/translation; the floor keeps short inputs (whose
     // cleaned form can be several times larger) from being clipped.
-    const MIN_OUTPUT_CAP: usize = 4096;
-    let cap = input_byte_len.saturating_mul(4).max(MIN_OUTPUT_CAP);
+    let cap = input_byte_len
+        .saturating_mul(4)
+        .max(usize::try_from(super::contract::AI_OUTPUT_MIN_TOKEN_CAP).unwrap_or(4096) * 4);
 
     let mut sanitized = String::with_capacity(output.len().min(cap));
     let mut chars = output.chars().peekable();
@@ -194,4 +333,57 @@ fn is_bidi_override(ch: char) -> bool {
             | '\u{202A}'..='\u{202E}'       // LRE / RLE / PDF / LRO / RLO
             | '\u{2066}'..='\u{2069}'       // LRI / RLI / FSI / PDI
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn validate_strips_known_preamble_followed_by_newline() {
+        let output = "Here is the fixed text:\nMeet me at 4.";
+        assert_eq!(
+            validate_ai_output(output, "meet me at four").unwrap(),
+            "Meet me at 4."
+        );
+    }
+
+    #[test]
+    fn validate_strips_markdown_fence() {
+        let output = "```text\nMeet me at 4.\n```";
+        assert_eq!(
+            validate_ai_output(output, "meet me at four").unwrap(),
+            "Meet me at 4."
+        );
+    }
+
+    #[test]
+    fn validate_strips_wrapping_quotes_when_input_was_not_quoted() {
+        let output = "\"Meet me at 4.\"";
+        assert_eq!(
+            validate_ai_output(output, "meet me at four").unwrap(),
+            "Meet me at 4."
+        );
+    }
+
+    #[test]
+    fn validate_preserves_wrapping_quotes_when_input_was_quoted() {
+        let output = "\"Meet me at 4.\"";
+        assert_eq!(
+            validate_ai_output(output, "\"meet me at four\"").unwrap(),
+            "\"Meet me at 4.\""
+        );
+    }
+
+    #[test]
+    fn validate_rejects_refusal_commentary() {
+        let error = validate_ai_output("I'm sorry, I can't do that.", "hello").unwrap_err();
+        assert!(matches!(error, AiProviderError::BadResponse));
+    }
+
+    #[test]
+    fn validate_keeps_identity_output_unchanged() {
+        let output = "Already clean.";
+        assert_eq!(validate_ai_output(output, output).unwrap(), output);
+    }
 }
