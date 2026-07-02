@@ -1576,6 +1576,9 @@ pub(crate) async fn warm_whisper_gpu_sidecar_on_model_preload(
     }
 }
 
+// TODO(arch-review): collapse into a request struct when the whisper dispatch
+// seam is restructured (audio_ctx param from plan 032 pushed this to 8 args).
+#[allow(clippy::too_many_arguments)]
 pub(crate) async fn transcribe_whisper_with_acceleration<F>(
     app: &AppHandle,
     model_path: &Path,
