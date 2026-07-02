@@ -1,6 +1,7 @@
 use std::borrow::Cow;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, OnceLock};
+use std::time::Instant;
 
 use active_win_pos_rs::get_active_window;
 use regex::{Regex, RegexBuilder};
@@ -243,6 +244,15 @@ pub struct ContextHint {
     pub app_name: Option<String>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub struct WritingStageTimings {
+    pub deterministic_ms: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ai_polish_ms: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub insertion_ms: Option<u64>,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct WritingResult {
     pub raw_text: String,
@@ -256,6 +266,8 @@ pub struct WritingResult {
     pub warnings: Vec<WritingWarning>,
     #[serde(default)]
     pub context_hint: Option<ContextHint>,
+    #[serde(default)]
+    pub stage_timings: WritingStageTimings,
     #[serde(skip)]
     pub ai_error: Option<AiProviderError>,
 }
@@ -1854,7 +1866,7 @@ struct SmartFormattingRequest<'a> {
 
 async fn run_smart_formatting(
     request: SmartFormattingRequest<'_>,
-) -> Result<String, AiProviderError> {
+) -> Result<(String, u64), AiProviderError> {
     let options = crate::ai::EnhancementOptions {
         preset: request.profile.mode.into(),
     };
@@ -1865,11 +1877,13 @@ async fn run_smart_formatting(
         request.text,
         &options,
         Some(request.output_language.as_str()),
+        request.transcript_language.as_deref(),
         ai_context.as_deref(),
     )
     .await
     {
-        Ok(enhanced) => {
+        Ok(result) => {
+            let enhanced = result.output_text;
             if enhanced.trim().is_empty() {
                 return Err(AiProviderError::BadResponse);
             }
@@ -1906,22 +1920,22 @@ async fn run_smart_formatting(
                 );
             }
 
-            Ok(enhanced)
+            Ok((enhanced, result.duration_ms))
         }
         Err(error) => Err(error),
     }
 }
 
 fn resolve_smart_formatting_outcome(
-    result: Result<String, AiProviderError>,
+    result: Result<(String, u64), AiProviderError>,
     library_text: &str,
     needs_output_language_transform: bool,
     _transcript_language: Option<&str>,
     output_language: &str,
     warnings: &mut Vec<WritingWarning>,
-) -> Result<(String, Option<AiProviderError>), WritingError> {
+) -> Result<(String, Option<AiProviderError>, Option<u64>), WritingError> {
     match result {
-        Ok(text) => Ok((text, None)),
+        Ok((text, ai_polish_ms)) => Ok((text, None, Some(ai_polish_ms))),
         Err(error) if needs_output_language_transform => Err(WritingError::TranslationFailed {
             target_language: output_language.to_string(),
             detail: user_facing_message(&error).to_string(),
@@ -1935,7 +1949,7 @@ fn resolve_smart_formatting_outcome(
                 ),
             });
 
-            Ok((library_text.to_string(), Some(error)))
+            Ok((library_text.to_string(), Some(error), None))
         }
     }
 }
@@ -1959,6 +1973,7 @@ pub async fn process_transcription(
     let mut output_language = resolve_output_language(&profile, &transcription);
     let mut applied_operations = Vec::new();
     let mut warnings = Vec::new();
+    let deterministic_start = Instant::now();
     let cleaned_text = sanitize_transcript(&transcription.raw_text);
     if cleaned_text.as_ref() != transcription.raw_text {
         applied_operations.push(AppliedWritingOperation {
@@ -1977,6 +1992,14 @@ pub async fn process_transcription(
         &settings,
         transcript_language.as_deref(),
         &mut applied_operations,
+    );
+    let deterministic_ms = deterministic_start
+        .elapsed()
+        .as_millis()
+        .min(u128::from(u64::MAX)) as u64;
+    log::info!(
+        "transcription_stage_timing stage=deterministic duration_ms={}",
+        deterministic_ms
     );
 
     // When the transcript language is known, a transform is needed iff it differs
@@ -2007,6 +2030,7 @@ pub async fn process_transcription(
     let should_run_ai = can_run_ai_formatting && !library_result.literal_locked;
 
     let mut ai_error = None;
+    let mut ai_polish_ms = None;
     let mut final_text = if library_result.literal_locked {
         if needs_output_language_transform {
             record_output_language_transform_fallback(
@@ -2019,7 +2043,7 @@ pub async fn process_transcription(
         }
         library_result.text.clone()
     } else if should_run_ai {
-        let (text, error) = resolve_smart_formatting_outcome(
+        let (text, error, duration_ms) = resolve_smart_formatting_outcome(
             run_smart_formatting(SmartFormattingRequest {
                 app,
                 text: &library_result.text,
@@ -2039,6 +2063,13 @@ pub async fn process_transcription(
             &mut warnings,
         )?;
         ai_error = error;
+        ai_polish_ms = duration_ms;
+        if let Some(duration_ms) = ai_polish_ms {
+            log::info!(
+                "transcription_stage_timing stage=ai_polish duration_ms={}",
+                duration_ms
+            );
+        }
         text
     } else {
         library_result.text.clone()
@@ -2062,6 +2093,11 @@ pub async fn process_transcription(
         applied_operations,
         warnings,
         context_hint: active_app,
+        stage_timings: WritingStageTimings {
+            deterministic_ms,
+            ai_polish_ms,
+            insertion_ms: None,
+        },
         ai_error,
     })
 }
@@ -2227,8 +2263,8 @@ mod tests {
     fn test_resolve_smart_formatting_outcome_preserves_success() {
         let mut warnings = Vec::new();
         let output_language = "en".to_string();
-        let (out, error) = resolve_smart_formatting_outcome(
-            Ok("formatted".to_string()),
+        let (out, error, duration_ms) = resolve_smart_formatting_outcome(
+            Ok(("formatted".to_string(), 123)),
             "library",
             false,
             None,
@@ -2239,6 +2275,7 @@ mod tests {
 
         assert_eq!(out, "formatted");
         assert_eq!(error, None);
+        assert_eq!(duration_ms, Some(123));
         assert!(warnings.is_empty());
     }
 
@@ -2276,7 +2313,7 @@ mod tests {
     fn test_resolve_smart_formatting_outcome_falls_back_without_translation() {
         let mut warnings = Vec::new();
         let output_language = "en".to_string();
-        let (out, error) = resolve_smart_formatting_outcome(
+        let (out, error, duration_ms) = resolve_smart_formatting_outcome(
             Err(AiProviderError::Timeout),
             "library text",
             false,
@@ -2288,6 +2325,7 @@ mod tests {
 
         assert_eq!(out, "library text");
         assert_eq!(error, Some(AiProviderError::Timeout));
+        assert_eq!(duration_ms, None);
         assert_eq!(warnings.len(), 1);
         assert_eq!(warnings[0].code, "ai_formatting_failed");
         assert!(warnings[0].message.contains("timed out"));

@@ -1132,11 +1132,27 @@ fn build_writing_history_metadata(
             "context_hint".into(),
             serde_json::to_value(&wr.context_hint).unwrap_or(serde_json::Value::Null),
         );
+        map.insert(
+            "stage_timings".into(),
+            serde_json::to_value(&wr.stage_timings).unwrap_or(serde_json::Value::Null),
+        );
         if wr.ai_applied && wr.raw_text != wr.final_text {
             map.insert("original_text".into(), wr.raw_text.clone().into());
         }
     }
     serde_json::Value::Object(map)
+}
+
+fn record_insertion_timing(metadata: &mut Option<serde_json::Value>, insertion_ms: u64) {
+    let Some(serde_json::Value::Object(map)) = metadata.as_mut() else {
+        return;
+    };
+    let stage_timings = map
+        .entry("stage_timings".to_string())
+        .or_insert_with(|| serde_json::Value::Object(serde_json::Map::new()));
+    if let serde_json::Value::Object(stage_map) = stage_timings {
+        stage_map.insert("insertion_ms".to_string(), insertion_ms.into());
+    }
 }
 
 /// Metadata marking a history row whose required AI translation failed: the saved
@@ -1706,6 +1722,11 @@ mod tests {
             }],
             warnings: vec![],
             context_hint: None,
+            stage_timings: crate::writing::WritingStageTimings {
+                deterministic_ms: 12,
+                ai_polish_ms: Some(34),
+                insertion_ms: None,
+            },
             ai_error: None,
         };
 
@@ -1714,6 +1735,8 @@ mod tests {
         assert!(metadata.get("raw_text").is_none());
         assert!(metadata.get("final_text").is_none());
         assert_eq!(metadata["original_text"], "raw transcript");
+        assert_eq!(metadata["stage_timings"]["deterministic_ms"], 12);
+        assert_eq!(metadata["stage_timings"]["ai_polish_ms"], 34);
     }
 
     #[test]
@@ -1738,6 +1761,7 @@ mod tests {
             applied_operations: vec![],
             warnings: vec![],
             context_hint: None,
+            stage_timings: crate::writing::WritingStageTimings::default(),
             ai_error: None,
         };
 
@@ -1767,6 +1791,7 @@ mod tests {
             applied_operations: vec![],
             warnings: vec![],
             context_hint: None,
+            stage_timings: crate::writing::WritingStageTimings::default(),
             ai_error: None,
         };
 
@@ -1810,6 +1835,7 @@ mod tests {
                     .to_string(),
             }],
             context_hint: None,
+            stage_timings: crate::writing::WritingStageTimings::default(),
             ai_error: Some(crate::ai::error::AiProviderError::Timeout),
         };
 
@@ -2241,6 +2267,7 @@ mod tests {
             context_hint: Some(crate::writing::ContextHint {
                 app_name: Some("Finder".into()),
             }),
+            stage_timings: crate::writing::WritingStageTimings::default(),
             ai_error: None,
         }
     }
@@ -5347,7 +5374,7 @@ pub async fn stop_recording(
 
                 tokio::spawn(async move {
                     // 1. Process the transcription and enhancement
-                    let (final_text, writing_metadata, should_deliver) =
+                    let (final_text, mut writing_metadata, should_deliver) =
                         match crate::writing::process_transcription(
                             app_for_process.clone(),
                             transcription_for_process.clone(),
@@ -5583,6 +5610,7 @@ pub async fn stop_recording(
                             update_recording_state(&app_for_process, RecordingState::Idle, None);
                             return;
                         };
+                        let insertion_start = Instant::now();
                         match insert_future.await {
                             Ok(_) => log::debug!("Text inserted at cursor successfully"),
                             Err(e) => {
@@ -5610,6 +5638,16 @@ pub async fn stop_recording(
                                 }
                             }
                         }
+                        let insertion_ms = insertion_start
+                            .elapsed()
+                            .as_millis()
+                            .min(u128::from(u64::MAX))
+                            as u64;
+                        log::info!(
+                            "transcription_stage_timing stage=insertion method=auto_paste duration_ms={}",
+                            insertion_ms
+                        );
+                        record_insertion_timing(&mut writing_metadata, insertion_ms);
                     } else {
                         // Auto-paste disabled: copy to clipboard and notify
                         let copy_result = persist_if_current(&app_state, task_generation, || {
@@ -5626,6 +5664,7 @@ pub async fn stop_recording(
                             update_recording_state(&app_for_process, RecordingState::Idle, None);
                             return;
                         };
+                        let insertion_start = Instant::now();
                         match copy_future.await {
                             Ok(_) => {
                                 log::debug!("Text copied to clipboard (auto-paste disabled)");
@@ -5636,6 +5675,16 @@ pub async fn stop_recording(
                                 pill_toast(&app_for_process, "Copy failed", 1500);
                             }
                         }
+                        let insertion_ms = insertion_start
+                            .elapsed()
+                            .as_millis()
+                            .min(u128::from(u64::MAX))
+                            as u64;
+                        log::info!(
+                            "transcription_stage_timing stage=insertion method=clipboard duration_ms={}",
+                            insertion_ms
+                        );
+                        record_insertion_timing(&mut writing_metadata, insertion_ms);
                     }
 
                     // Recheck (Race 3) IMMEDIATELY before history save: a cancel
