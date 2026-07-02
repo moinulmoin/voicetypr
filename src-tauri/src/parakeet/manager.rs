@@ -13,11 +13,10 @@ use super::messages::{
     ParakeetCommand, ParakeetResponse, ParakeetStreamConfig, ParakeetVocabularyTerm,
 };
 use super::models::{get_available_models, ParakeetModelDefinition, AVAILABLE_MODELS};
-use super::sidecar::ParakeetClient;
-use crate::utils::logger::log_performance;
 use super::sidecar::{
     ParakeetClient, ParakeetStreamHandle, ParakeetStreamOpenRequest, ParakeetStreamPartial,
 };
+use crate::utils::logger::log_performance;
 
 #[derive(Debug, Clone, Serialize)]
 pub struct ParakeetModelStatus {
