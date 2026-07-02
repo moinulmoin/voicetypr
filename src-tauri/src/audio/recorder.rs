@@ -8,6 +8,7 @@ use std::time::{Duration, Instant};
 
 use super::level_meter::AudioLevelMeter;
 use super::silence_detector::{SilenceDetector, SilenceDetectorEvent};
+use super::stream_tap::{self, StreamTapRt, StreamTapSinkFactory};
 
 // Type-safe recording size limits
 pub struct RecordingSize;
@@ -238,6 +239,10 @@ impl AudioRecorder {
         &mut self,
         output_path: &str,
         device_name: Option<String>,
+        streaming_tap_enabled: bool,
+        recording_generation: u64,
+        stream_cancelled: Arc<dyn Fn() -> bool + Send + Sync>,
+        stream_sink_factory: Option<StreamTapSinkFactory>,
     ) -> Result<(), String> {
         log::info!(
             "AudioRecorder::start_recording called with path: {}",
@@ -302,6 +307,9 @@ impl AudioRecorder {
             log::info!("======================================");
 
             let config = device.default_input_config().map_err(|e| e.to_string())?;
+            let stream_sink = stream_sink_factory
+                .as_ref()
+                .and_then(|factory| factory(config.sample_rate().0, config.channels()));
 
             log::info!(
                 "Audio config: sample_rate={} Hz, channels={}, format={:?}",
@@ -353,6 +361,19 @@ impl AudioRecorder {
             let writer_bytes = bytes_written.clone();
             let writer_dropped = dropped_chunks.clone();
             let stop_tx_for_size = stop_tx_clone.clone();
+            let (stream_tap_rt, stream_tap_finalizer) = if let Some(handle) =
+                stream_tap::maybe_spawn_noop_worker(
+                    streaming_tap_enabled,
+                    recording_generation,
+                    chunk_capacity,
+                    stream_cancelled,
+                    stream_sink,
+                ) {
+                let (rt, finalizer) = handle.into_rt();
+                (Some(rt), Some(finalizer))
+            } else {
+                (None, None)
+            };
             // Disconnect-independent finalize signal. The RT callback holds a
             // `writer_tx` clone that can outlive stop on the Windows
             // stream-drop-timeout path, so neither a `Full` `Finalize` send nor
@@ -469,6 +490,7 @@ impl AudioRecorder {
                 let level_meter_clone = level_meter.clone();
                 let stop_requested_clone = stop_requested.clone();
                 let callback_drained_clone = callback_drained.clone();
+                let stream_tap_rt: Option<StreamTapRt> = stream_tap_rt;
 
                 move |f32_samples: &[f32], i16_samples: &[i16]| {
                     // A panic in this real-time path would unwind into CPAL's
@@ -498,6 +520,9 @@ impl AudioRecorder {
                                         }
                                         Err(TrySendError::Full(WriterMsg::Finalize)) => {}
                                         Err(TrySendError::Disconnected(_)) => {}
+                                    }
+                                    if let Some(tap) = stream_tap_rt.as_ref() {
+                                        stream_tap::enqueue_frame_rt(tap, i16_samples);
                                     }
                                 }
                                 callback_drained_clone.store(true, Ordering::SeqCst);
@@ -543,6 +568,9 @@ impl AudioRecorder {
                             }
                             Err(TrySendError::Full(WriterMsg::Finalize)) => {}
                             Err(TrySendError::Disconnected(_)) => {}
+                        }
+                        if let Some(tap) = stream_tap_rt.as_ref() {
+                            stream_tap::enqueue_frame_rt(tap, i16_samples);
                         }
                     }));
                 }
@@ -693,6 +721,7 @@ impl AudioRecorder {
             finalize_flag.store(true, Ordering::SeqCst);
             let _ = writer_tx.try_send(WriterMsg::Finalize);
             drop(writer_tx);
+            let stream_tap_worker = stream_tap_finalizer.map(|finalizer| finalizer.finalize());
 
             // Bound the writer join so a slow/hung writer cannot block teardown
             // indefinitely. On timeout the worker is detached — hound's
@@ -702,6 +731,9 @@ impl AudioRecorder {
             // [`join_writer_bounded`].
             let writer_result = join_writer_bounded(writer_handle, WRITER_JOIN_TIMEOUT);
 
+            if let Some(worker) = stream_tap_worker {
+                let _ = worker.join();
+            }
             writer_result?;
 
             // Check if any errors occurred during recording after preserving writer integrity

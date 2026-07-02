@@ -2,6 +2,9 @@ use std::env;
 use std::error::Error;
 use std::io::BufRead;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 
 use clap::{Args, Parser, Subcommand};
 use serde_json::json;
@@ -17,6 +20,7 @@ use crate::commands::license::check_license_status;
 use crate::commands::model::get_model_status;
 use crate::commands::remote::load_remote_settings;
 use crate::commands::settings::get_settings;
+use crate::parakeet::messages::ParakeetStreamConfig;
 use crate::parakeet::ParakeetManager;
 use crate::remote::client::{
     self, RemoteServerConnection, TranscriptionRequest, TranscriptionSource,
@@ -47,6 +51,9 @@ enum CliCommand {
     Transcribe(TranscribeArgs),
     /// Record from the microphone until silence, then transcribe the result.
     Record(RecordArgs),
+    /// Replay a WAV through the hidden Parakeet streaming prototype and print timing spans.
+    #[command(hide = true, name = "stream-bench")]
+    StreamBench(StreamBenchArgs),
 }
 
 impl CliCommand {
@@ -58,6 +65,7 @@ impl CliCommand {
             CliCommand::Models(a) => a.json,
             CliCommand::Transcribe(a) => a.json,
             CliCommand::Record(a) => a.json,
+            CliCommand::StreamBench(_) => true,
         }
     }
 }
@@ -132,6 +140,19 @@ struct RecordArgs {
     json: bool,
 }
 
+#[derive(Args, Debug, Clone)]
+struct StreamBenchArgs {
+    /// Path to an i16 WAV file to replay at real-time pace.
+    #[arg(long)]
+    file: PathBuf,
+    /// Parakeet model to use; defaults to the app's selected model.
+    #[arg(long)]
+    model: Option<String>,
+    /// Use .streaming with hypothesisChunkSeconds tuned to 0.5.
+    #[arg(long)]
+    tuned_hypothesis_500ms: bool,
+}
+
 pub fn maybe_run_from_env_with_context(
     context: tauri::Context<tauri::Wry>,
 ) -> Result<bool, Box<dyn Error>> {
@@ -140,7 +161,12 @@ pub fn maybe_run_from_env_with_context(
         return Ok(false);
     };
     let is_help_or_version = matches!(first_arg, "-h" | "--help" | "help" | "-V" | "--version");
-    if !is_help_or_version && !matches!(first_arg, "status" | "models" | "transcribe" | "record") {
+    if !is_help_or_version
+        && !matches!(
+            first_arg,
+            "status" | "models" | "transcribe" | "record" | "stream-bench"
+        )
+    {
         return Ok(false);
     }
 
@@ -189,6 +215,7 @@ pub fn maybe_run_from_env_with_context(
             CliCommand::Models(args) => run_models(&app_handle, args).await?,
             CliCommand::Transcribe(args) => run_transcribe(&app_handle, args).await?,
             CliCommand::Record(args) => run_record(&app_handle, args).await?,
+            CliCommand::StreamBench(args) => run_stream_bench(&app_handle, args).await?,
         }
 
         Ok::<(), Box<dyn Error>>(())
@@ -445,6 +472,10 @@ async fn run_record(app: &tauri::AppHandle, args: RecordArgs) -> Result<(), Box<
             .to_str()
             .ok_or_else(|| "Invalid recording path".to_string())?,
         settings.selected_microphone.clone(),
+        false,
+        0,
+        std::sync::Arc::new(|| false),
+        None,
     )?;
     eprintln!("Recording… stop by silence.");
     let stop_message = recorder.wait_for_recording_end()?;
@@ -484,6 +515,124 @@ async fn run_record(app: &tauri::AppHandle, args: RecordArgs) -> Result<(), Box<
         println!("{}", payload["text"].as_str().unwrap_or_default());
     }
     recording_guard.delete_on_drop = true;
+    Ok(())
+}
+
+#[derive(Default)]
+struct StreamBenchState {
+    first_partial_ms: Option<u128>,
+    first_confirmed_ms: Option<u128>,
+    partials: u64,
+    confirmed_partials: u64,
+}
+
+async fn run_stream_bench(
+    app: &tauri::AppHandle,
+    args: StreamBenchArgs,
+) -> Result<(), Box<dyn Error>> {
+    if !args.file.exists() {
+        return Err(format!("Audio file not found: {}", args.file.display()).into());
+    }
+
+    let settings = get_settings(app.clone()).await?;
+    let model = args
+        .model
+        .clone()
+        .or_else(|| (!settings.current_model.is_empty()).then_some(settings.current_model.clone()))
+        .ok_or_else(|| "No model specified and no model is selected in the app.".to_string())?;
+
+    let mut reader = hound::WavReader::open(&args.file)?;
+    let spec = reader.spec();
+    if spec.sample_format != hound::SampleFormat::Int || spec.bits_per_sample != 16 {
+        return Err("stream-bench currently accepts only 16-bit PCM WAV input".into());
+    }
+    if spec.sample_rate == 0 || spec.channels == 0 {
+        return Err("Invalid WAV sample rate or channel count".into());
+    }
+    let samples = reader.samples::<i16>().collect::<Result<Vec<_>, _>>()?;
+    let total_frames = samples.len() / usize::from(spec.channels);
+    let duration_ms = ((total_frames as f64 / f64::from(spec.sample_rate)) * 1000.0).round() as u64;
+
+    let config = if args.tuned_hypothesis_500ms {
+        ParakeetStreamConfig::tuned_hypothesis_500ms()
+    } else {
+        ParakeetStreamConfig::streaming()
+    };
+
+    let parakeet_manager = app.state::<ParakeetManager>();
+    parakeet_manager
+        .load_model(app, &model)
+        .await
+        .map_err(|error| format!("Failed to load Parakeet model: {}", error))?;
+
+    let started = Instant::now();
+    let state = Arc::new(Mutex::new(StreamBenchState::default()));
+    let callback_state = state.clone();
+    let callback_started = started;
+    let handle = parakeet_manager
+        .open_stream(
+            app.clone(),
+            &model,
+            spec.sample_rate,
+            spec.channels,
+            Some(config.clone()),
+            move |partial| {
+                if let Ok(mut state) = callback_state.lock() {
+                    state.partials += 1;
+                    let elapsed = callback_started.elapsed().as_millis();
+                    if state.first_partial_ms.is_none() {
+                        state.first_partial_ms = Some(elapsed);
+                    }
+                    if partial.is_confirmed {
+                        state.confirmed_partials += 1;
+                        if state.first_confirmed_ms.is_none() {
+                            state.first_confirmed_ms = Some(elapsed);
+                        }
+                    }
+                }
+            },
+        )
+        .await
+        .map_err(|error| format!("Failed to open Parakeet stream: {}", error))?;
+
+    let chunk_frames = (spec.sample_rate / 10).max(1) as usize;
+    let chunk_samples = chunk_frames * usize::from(spec.channels);
+    let sent_samples = AtomicU64::new(0);
+    for chunk in samples.chunks(chunk_samples) {
+        handle
+            .send_chunk(chunk)
+            .map_err(|error| format!("Failed to send stream audio chunk: {}", error))?;
+        let frames = chunk.len() / usize::from(spec.channels);
+        sent_samples.fetch_add(chunk.len() as u64, Ordering::Relaxed);
+        tokio::time::sleep(Duration::from_secs_f64(
+            frames as f64 / f64::from(spec.sample_rate),
+        ))
+        .await;
+    }
+
+    let final_text = handle
+        .finalize()
+        .await
+        .map_err(|error| format!("Failed to finalize Parakeet stream: {}", error))?;
+    let final_ms = started.elapsed().as_millis();
+    let state = state.lock().map_err(|_| "stream bench state poisoned")?;
+
+    let payload = json!({
+        "model": model,
+        "file": args.file,
+        "config": if args.tuned_hypothesis_500ms { "tuned_hypothesis_500ms" } else { "streaming" },
+        "sample_rate": spec.sample_rate,
+        "channels": spec.channels,
+        "duration_ms": duration_ms,
+        "sent_samples": sent_samples.load(Ordering::Relaxed),
+        "partials": state.partials,
+        "confirmed_partials": state.confirmed_partials,
+        "first_partial_ms": state.first_partial_ms,
+        "first_confirmed_ms": state.first_confirmed_ms,
+        "final_ms": final_ms,
+        "final": final_text,
+    });
+    println!("{}", serde_json::to_string_pretty(&payload)?);
     Ok(())
 }
 

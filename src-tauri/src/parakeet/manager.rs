@@ -9,10 +9,15 @@ use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager};
 
 use super::error::ParakeetError;
-use super::messages::{ParakeetCommand, ParakeetResponse, ParakeetVocabularyTerm};
+use super::messages::{
+    ParakeetCommand, ParakeetResponse, ParakeetStreamConfig, ParakeetVocabularyTerm,
+};
 use super::models::{get_available_models, ParakeetModelDefinition, AVAILABLE_MODELS};
 use super::sidecar::ParakeetClient;
 use crate::utils::logger::log_performance;
+use super::sidecar::{
+    ParakeetClient, ParakeetStreamHandle, ParakeetStreamOpenRequest, ParakeetStreamPartial,
+};
 
 #[derive(Debug, Clone, Serialize)]
 pub struct ParakeetModelStatus {
@@ -197,6 +202,38 @@ impl ParakeetManager {
         model_name: &str,
     ) -> Option<&'static ParakeetModelDefinition> {
         AVAILABLE_MODELS.iter().find(|m| m.id == model_name)
+    }
+
+    pub async fn open_stream(
+        &self,
+        app: AppHandle,
+        model_name: &str,
+        sample_rate: u32,
+        channels: u16,
+        config: Option<ParakeetStreamConfig>,
+        partial_callback: impl FnMut(ParakeetStreamPartial) + Send + 'static,
+    ) -> Result<ParakeetStreamHandle, String> {
+        let Some(definition) = self.get_model_definition(model_name) else {
+            return Err(format!("Unknown Parakeet model: {model_name}"));
+        };
+        if !self.is_model_downloaded(definition) {
+            return Err(format!("Parakeet model is not downloaded: {model_name}"));
+        }
+
+        self.client
+            .open_stream(
+                ParakeetStreamOpenRequest {
+                    app,
+                    model_id: definition.id.to_string(),
+                    model_version: Some(Self::model_version_for(definition).to_string()),
+                    sample_rate,
+                    channels,
+                    config,
+                },
+                partial_callback,
+            )
+            .await
+            .map_err(|error| error.to_string())
     }
 
     pub fn model_dir(&self, model_name: &str) -> PathBuf {

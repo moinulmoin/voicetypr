@@ -2,6 +2,7 @@ pub mod capabilities;
 pub mod error;
 pub mod executor;
 pub mod request;
+pub mod stream;
 
 use serde::{Deserialize, Serialize};
 

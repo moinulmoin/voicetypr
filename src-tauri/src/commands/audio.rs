@@ -4,6 +4,7 @@ use tauri::{AppHandle, Emitter, Manager, State};
 use crate::ai::error::{user_facing_message, AiProviderError};
 use crate::audio::recorder::AudioRecorder;
 use crate::audio::silence_detector::SilenceDetectorEvent;
+use crate::audio::stream_tap::{StreamTapSink, StreamTapSinkFactory};
 use crate::commands::settings::{
     get_settings, normalize_final_text_language, normalize_speech_language_for_model,
     normalize_transcription_task, recording_retention_days_from_store, resolve_pill_indicator_mode,
@@ -12,7 +13,8 @@ use crate::commands::settings::{
 use crate::license::LicenseState;
 use crate::media::MediaPauseController;
 use crate::parakeet::manager::ParakeetTranscriptionOptions;
-use crate::parakeet::messages::{ParakeetResponse, ParakeetSegment};
+use crate::parakeet::messages::{ParakeetResponse, ParakeetSegment, ParakeetStreamConfig};
+use crate::parakeet::sidecar::ParakeetStreamHandle;
 use crate::parakeet::ParakeetManager;
 use crate::provider_capabilities::ProviderEngine;
 use crate::remote::client::{
@@ -25,6 +27,9 @@ use crate::transcription::executor::transcribe_with_app;
 use crate::transcription::request::{
     AudioFormatHint, CancellationToken, CleanupPolicy, EngineSelection, RequestContext,
     TimeoutPolicy, TranscriptionAudio, TranscriptionRequest,
+};
+use crate::transcription::stream::{
+    StreamSessionGate, TranscriptionStreamEvent, TRANSCRIPTION_STREAM_EVENT,
 };
 use crate::transcription::{
     TranscriptionJob, TranscriptionResult, TranscriptionSegment, TranscriptionSource,
@@ -68,6 +73,212 @@ static MEDIA_CONTROLLER: Lazy<MediaPauseController> = Lazy::new(MediaPauseContro
 /// cancellation flag for its own attempt. SeqCst keeps the bump (start),
 /// capture (stop/spawn) and check (deliver) linearizable.
 static RECORDING_GENERATION: AtomicU64 = AtomicU64::new(0);
+
+struct ParakeetPreviewStreamSink {
+    app: AppHandle,
+    handle: ParakeetStreamHandle,
+    session_id: u64,
+    revision: Arc<AtomicU64>,
+    gate: Arc<Mutex<StreamSessionGate>>,
+    started: Instant,
+}
+
+impl ParakeetPreviewStreamSink {
+    fn next_revision(&self) -> u64 {
+        self.revision.fetch_add(1, AtomicOrdering::SeqCst) + 1
+    }
+
+    fn emit(&self, event: TranscriptionStreamEvent) {
+        emit_parakeet_stream_event(&self.app, &self.gate, event);
+    }
+}
+
+impl StreamTapSink for ParakeetPreviewStreamSink {
+    fn send_frame(&mut self, samples: &[i16]) {
+        if let Err(error) = self.handle.send_chunk(samples) {
+            log::warn!("Failed to enqueue Parakeet stream audio chunk: {}", error);
+        }
+    }
+
+    fn finalize(&mut self) -> Option<String> {
+        match tauri::async_runtime::block_on(self.handle.finalize()) {
+            Ok(text) => {
+                log_performance(
+                    "PARAKEET_STREAM_FINAL",
+                    self.started.elapsed().as_millis() as u64,
+                    Some("source=preview"),
+                );
+                self.emit(TranscriptionStreamEvent::Final {
+                    session_id: self.session_id,
+                    revision: self.next_revision(),
+                    text: text.clone(),
+                });
+                Some(text)
+            }
+            Err(error) => {
+                self.emit(TranscriptionStreamEvent::Error {
+                    session_id: self.session_id,
+                    revision: self.next_revision(),
+                    error: error.to_string(),
+                });
+                log::warn!("Parakeet stream finalization failed: {}", error);
+                None
+            }
+        }
+    }
+
+    fn cancel(&mut self) {
+        self.handle.cancel();
+        self.emit(TranscriptionStreamEvent::Cancelled {
+            session_id: self.session_id,
+            revision: self.next_revision(),
+        });
+    }
+}
+
+fn emit_parakeet_stream_event(
+    app: &AppHandle,
+    gate: &Arc<Mutex<StreamSessionGate>>,
+    event: TranscriptionStreamEvent,
+) {
+    let admitted = gate
+        .lock()
+        .map(|mut gate| gate.admit(&event))
+        .unwrap_or(crate::transcription::stream::Admit::StaleSession);
+    if !matches!(admitted, crate::transcription::stream::Admit::Accept) {
+        log::debug!("Dropping stale Parakeet stream event: {:?}", admitted);
+        return;
+    }
+    if let Err(error) = emit_to_window(app, "pill", TRANSCRIPTION_STREAM_EVENT, event) {
+        log::warn!("Failed to emit Parakeet stream event: {}", error);
+    }
+}
+
+fn build_parakeet_stream_sink_factory(
+    app: &AppHandle,
+    config: &RecordingConfig,
+    streaming_tap_enabled: bool,
+    streaming_engine_enabled: bool,
+    recording_generation: u64,
+) -> Option<StreamTapSinkFactory> {
+    if !streaming_tap_enabled
+        || !streaming_engine_enabled
+        || config.current_engine != "parakeet"
+        || config.current_model.is_empty()
+    {
+        return None;
+    }
+
+    let app = app.clone();
+    let model_name = config.current_model.clone();
+    Some(Arc::new(move |sample_rate, channels| {
+        let app_for_stream = app.clone();
+        let model_name_for_stream = model_name.clone();
+        let gate = Arc::new(Mutex::new(StreamSessionGate::new(recording_generation)));
+        let revision = Arc::new(AtomicU64::new(0));
+        let committed = Arc::new(Mutex::new(String::new()));
+        let first_partial_logged = Arc::new(AtomicBool::new(false));
+        let first_confirmed_logged = Arc::new(AtomicBool::new(false));
+        let started = Instant::now();
+
+        let callback_app = app_for_stream.clone();
+        let callback_gate = gate.clone();
+        let callback_revision = revision.clone();
+        let callback_committed = committed.clone();
+        let callback_first_partial_logged = first_partial_logged.clone();
+        let callback_first_confirmed_logged = first_confirmed_logged.clone();
+
+        let opened = tauri::async_runtime::block_on(async move {
+            let parakeet_manager = app_for_stream.state::<ParakeetManager>();
+            parakeet_manager
+                .load_model(&app_for_stream, &model_name_for_stream)
+                .await
+                .map_err(|error| error.to_string())?;
+            parakeet_manager
+                .open_stream(
+                    app_for_stream.clone(),
+                    &model_name_for_stream,
+                    sample_rate,
+                    channels,
+                    Some(ParakeetStreamConfig::streaming()),
+                    move |partial| {
+                        if !callback_first_partial_logged.swap(true, AtomicOrdering::SeqCst) {
+                            log_performance(
+                                "PARAKEET_STREAM_FIRST_PARTIAL",
+                                started.elapsed().as_millis() as u64,
+                                Some("source=preview"),
+                            );
+                        }
+
+                        let mut committed_guard = match callback_committed.lock() {
+                            Ok(guard) => guard,
+                            Err(_) => {
+                                log::warn!("Parakeet stream committed guard poisoned");
+                                return;
+                            }
+                        };
+
+                        let (committed_text, tentative_text) = if partial.is_confirmed {
+                            if !callback_first_confirmed_logged.swap(true, AtomicOrdering::SeqCst) {
+                                log_performance(
+                                    "PARAKEET_STREAM_FIRST_CONFIRMED",
+                                    started.elapsed().as_millis() as u64,
+                                    Some("source=preview"),
+                                );
+                            }
+                            if !StreamSessionGate::assert_committed_monotonic(
+                                &committed_guard,
+                                &partial.text,
+                            ) {
+                                log::warn!("Rejected non-monotonic Parakeet committed stream text");
+                                return;
+                            }
+                            *committed_guard = partial.text.clone();
+                            (committed_guard.clone(), String::new())
+                        } else {
+                            (committed_guard.clone(), partial.text)
+                        };
+                        drop(committed_guard);
+
+                        let event = TranscriptionStreamEvent::Partial {
+                            session_id: recording_generation,
+                            revision: callback_revision.fetch_add(1, AtomicOrdering::SeqCst) + 1,
+                            committed: committed_text,
+                            tentative: tentative_text,
+                        };
+                        emit_parakeet_stream_event(&callback_app, &callback_gate, event);
+                    },
+                )
+                .await
+        });
+
+        match opened {
+            Ok(handle) => {
+                emit_parakeet_stream_event(
+                    &app,
+                    &gate,
+                    TranscriptionStreamEvent::Started {
+                        session_id: recording_generation,
+                        engine: "parakeet".to_string(),
+                        revision: 0,
+                    },
+                );
+                Some(Box::new(ParakeetPreviewStreamSink {
+                    app: app.clone(),
+                    handle,
+                    session_id: recording_generation,
+                    revision,
+                    gate,
+                    started,
+                }) as Box<dyn StreamTapSink>)
+            }
+            Err(error) => {
+                log::warn!("Failed to open Parakeet preview stream: {}", error);
+                None
+            }
+        }
+    }))
+}
 
 /// Open a new recording generation. Called at the top of `start_recording`
 /// before `Starting` is published, so every stop/cancel and spawned
@@ -3873,6 +4084,24 @@ pub async fn start_recording(
             // chime clips the start of capture.
         }
     }
+    let streaming_tap_enabled = app
+        .store("settings")
+        .ok()
+        .and_then(|store| {
+            store
+                .get("streaming_tap_enabled")
+                .and_then(|value| value.as_bool())
+        })
+        .unwrap_or(false);
+    let streaming_engine_enabled = app
+        .store("settings")
+        .ok()
+        .and_then(|store| {
+            store
+                .get("streaming_engine_enabled")
+                .and_then(|value| value.as_bool())
+        })
+        .unwrap_or(false);
 
     // Pause system media if enabled (default: off)
     let mut resume_media_on_error = false;
@@ -4092,79 +4321,46 @@ pub async fn start_recording(
         log_file_operation("RECORDING_START", audio_path_str, false, None, None);
 
         // Start recording and get side-channel receivers
-        let (audio_level_rx, silence_event_rx) =
-            match recorder.start_recording(audio_path_str, selected_microphone.clone()) {
-                Ok(_) => {
-                    log::debug!(
-                        "⏱️ [REC TIMING] recorder.start_recording returned Ok (+{}ms)",
-                        recording_start.elapsed().as_millis()
+        let recording_generation = current_recording_generation();
+        let cancellation_flag = app_state.should_cancel_recording.clone();
+        let stream_cancelled: Arc<dyn Fn() -> bool + Send + Sync> =
+            Arc::new(move || cancellation_flag.load(AtomicOrdering::SeqCst));
+        let stream_sink_factory = build_parakeet_stream_sink_factory(
+            &app,
+            &config,
+            streaming_tap_enabled,
+            streaming_engine_enabled,
+            recording_generation,
+        );
+        let (audio_level_rx, silence_event_rx) = match recorder.start_recording(
+            audio_path_str,
+            selected_microphone.clone(),
+            streaming_tap_enabled,
+            recording_generation,
+            stream_cancelled,
+            stream_sink_factory,
+        ) {
+            Ok(_) => {
+                log::debug!(
+                    "⏱️ [REC TIMING] recorder.start_recording returned Ok (+{}ms)",
+                    recording_start.elapsed().as_millis()
+                );
+                // Verify recording actually started
+                let is_recording = recorder.is_recording();
+
+                // Get receivers before potentially dropping recorder
+                let level_rx = recorder.take_audio_level_receiver();
+                let silence_rx = recorder.take_silence_event_receiver();
+
+                if !is_recording {
+                    drop(recorder); // Release the lock if we're erroring out
+                    log_failed(
+                        "RECORDER_INIT",
+                        "Recording failed to start after initialization",
                     );
-                    // Verify recording actually started
-                    let is_recording = recorder.is_recording();
-
-                    // Get receivers before potentially dropping recorder
-                    let level_rx = recorder.take_audio_level_receiver();
-                    let silence_rx = recorder.take_silence_event_receiver();
-
-                    if !is_recording {
-                        drop(recorder); // Release the lock if we're erroring out
-                        log_failed(
-                            "RECORDER_INIT",
-                            "Recording failed to start after initialization",
-                        );
-                        log_with_context(
-                            log::Level::Debug,
-                            "Recorder initialization failed",
-                            &[
-                                ("audio_path", audio_path_str),
-                                (
-                                    "init_time_ms",
-                                    recorder_init_start
-                                        .elapsed()
-                                        .as_millis()
-                                        .to_string()
-                                        .as_str(),
-                                ),
-                            ],
-                        );
-
-                        update_recording_state(
-                            &app,
-                            RecordingState::Error,
-                            Some("Microphone initialization failed".to_string()),
-                        );
-
-                        // Emit user-friendly error via pill toast
-                        pill_toast_with_suggestion(
-                        &app,
-                        "Microphone access failed",
-                        "Enable Microphone access in System Settings \u{25b8} Privacy & Security",
-                        1500,
-                        None,
-                    );
-
-                        resume_media_if_needed();
-                        return Err("Failed to start recording".to_string());
-                    } else {
-                        log_performance(
-                            "RECORDER_INIT",
-                            recorder_init_start.elapsed().as_millis() as u64,
-                            Some(&format!("file={}", audio_path_str)),
-                        );
-                        log::info!("✅ Recording started successfully");
-
-                        // Monitor system resources at recording start
-                        #[cfg(debug_assertions)]
-                        system_monitor::log_resources_before_operation("RECORDING_START");
-                    }
-
-                    (level_rx, silence_rx)
-                }
-                Err(e) => {
-                    log_failed("RECORDER_START", &e);
                     log_with_context(
                         log::Level::Debug,
-                        "Recorder start failed",
+                        "Recorder initialization failed",
                         &[
                             ("audio_path", audio_path_str),
                             (
@@ -4178,29 +4374,79 @@ pub async fn start_recording(
                         ],
                     );
 
-                    update_recording_state(&app, RecordingState::Error, Some(e.to_string()));
+                    update_recording_state(
+                        &app,
+                        RecordingState::Error,
+                        Some("Microphone initialization failed".to_string()),
+                    );
 
-                    // Provide specific error messages for common issues
-                    let (user_message, suggestion) =
-                        if e.contains("permission") || e.contains("access") {
-                            (
+                    // Emit user-friendly error via pill toast
+                    pill_toast_with_suggestion(
+                        &app,
+                        "Microphone access failed",
+                        "Enable Microphone access in System Settings \u{25b8} Privacy & Security",
+                        1500,
+                        None,
+                    );
+
+                    resume_media_if_needed();
+                    return Err("Failed to start recording".to_string());
+                } else {
+                    log_performance(
+                        "RECORDER_INIT",
+                        recorder_init_start.elapsed().as_millis() as u64,
+                        Some(&format!("file={}", audio_path_str)),
+                    );
+                    log::info!("✅ Recording started successfully");
+
+                    // Monitor system resources at recording start
+                    #[cfg(debug_assertions)]
+                    system_monitor::log_resources_before_operation("RECORDING_START");
+                }
+
+                (level_rx, silence_rx)
+            }
+            Err(e) => {
+                log_failed("RECORDER_START", &e);
+                log_with_context(
+                    log::Level::Debug,
+                    "Recorder start failed",
+                    &[
+                        ("audio_path", audio_path_str),
+                        (
+                            "init_time_ms",
+                            recorder_init_start
+                                .elapsed()
+                                .as_millis()
+                                .to_string()
+                                .as_str(),
+                        ),
+                    ],
+                );
+
+                update_recording_state(&app, RecordingState::Error, Some(e.to_string()));
+
+                // Provide specific error messages for common issues
+                let (user_message, suggestion) = if e.contains("permission") || e.contains("access")
+                {
+                    (
                         "Microphone permission denied",
                         "Enable Microphone access in System Settings \u{25b8} Privacy & Security",
                     )
-                        } else if e.contains("device") || e.contains("not found") {
-                            ("No microphone found", "Connect a microphone and try again")
-                        } else if e.contains("in use") || e.contains("busy") {
-                            ("Microphone busy", "Close other apps using the microphone")
-                        } else {
-                            ("Recording failed", "Try recording again")
-                        };
+                } else if e.contains("device") || e.contains("not found") {
+                    ("No microphone found", "Connect a microphone and try again")
+                } else if e.contains("in use") || e.contains("busy") {
+                    ("Microphone busy", "Close other apps using the microphone")
+                } else {
+                    ("Recording failed", "Try recording again")
+                };
 
-                    pill_toast_with_suggestion(&app, user_message, suggestion, 1500, None);
+                pill_toast_with_suggestion(&app, user_message, suggestion, 1500, None);
 
-                    resume_media_if_needed();
-                    return Err(e);
-                }
-            };
+                resume_media_if_needed();
+                return Err(e);
+            }
+        };
 
         // Release the recorder lock after successful start
         drop(recorder);
