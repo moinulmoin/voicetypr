@@ -36,7 +36,13 @@ import { getErrorMessage } from "@/utils/error";
 import { getCloudProviderByModel } from "@/lib/cloudProviders";
 import { cn } from "@/lib/utils";
 import { getModelDisplayName, humanizeModelId } from "@/lib/model-display";
-import { ModelInfo, SpeechModelEngine, isCloudModel, isLocalModel } from "@/types";
+import {
+  ActiveStreamCapabilities,
+  ModelInfo,
+  SpeechModelEngine,
+  isCloudModel,
+  isLocalModel,
+} from "@/types";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import {
@@ -58,6 +64,7 @@ import { AddServerModal } from "./AddServerModal";
 import { createLogger } from "@/lib/logger";
 
 const log = createLogger("models");
+const EOU_MODEL_ID = "parakeet-eou-live-preview";
 
 interface ModelsSectionProps {
   models: [string, ModelInfo][];
@@ -120,6 +127,9 @@ export function ModelsSection({
   const [selectedDiscoveredServer, setSelectedDiscoveredServer] = useState<DiscoveredRemoteServer | null>(null);
   const [isDiscoveringServers, setIsDiscoveringServers] = useState(false);
   const [sourceFilter, setSourceFilter] = useState<"all" | "local" | "cloud" | "remote">("all");
+  const [streamCapabilities, setStreamCapabilities] = useState<ActiveStreamCapabilities | null>(null);
+  const [isActivatingLivePreview, setIsActivatingLivePreview] = useState(false);
+  const [livePreviewProgress, setLivePreviewProgress] = useState<number | null>(null);
 
   const { availableToUse, availableToSetup } = useMemo(() => {
     const useList: [string, ModelInfo][] = [];
@@ -164,6 +174,8 @@ export function ModelsSection({
   const currentEngine = (settings?.current_model_engine ?? "whisper") as SpeechModelEngine;
   const currentModelName = settings?.current_model ?? "";
   const languageValue = settings?.speech_language ?? "en";
+  const transcriptionMode = settings?.transcription_mode ?? "regular";
+  const supportsLivePreview = streamCapabilities?.capabilities.supports_streaming === true;
 
   const isEnglishOnlyModel = useMemo(() => {
     if (!settings) return false;
@@ -186,6 +198,76 @@ export function ModelsSection({
       }
     },
     [updateSettings],
+  );
+
+  const refreshStreamCapabilities = useCallback(async () => {
+    try {
+      const capabilities = await invoke<ActiveStreamCapabilities>("get_active_stream_capabilities");
+      setStreamCapabilities(capabilities);
+    } catch (error) {
+      log.warn("Failed to load stream capabilities:", error);
+      setStreamCapabilities(null);
+    }
+  }, []);
+
+  useEffect(() => {
+    void refreshStreamCapabilities();
+  }, [refreshStreamCapabilities, currentEngine, currentModelName]);
+
+  useEffect(() => {
+    const unlisten = listen<{
+      model: string;
+      progress: number;
+      phase?: string | null;
+    }>("download-progress", (event) => {
+      if (event.payload.model === EOU_MODEL_ID) {
+        setLivePreviewProgress(Math.min(100, Math.max(0, event.payload.progress)));
+      }
+    });
+    return () => {
+      unlisten.then((fn) => fn());
+    };
+  }, []);
+
+  const handleTranscriptionModeChange = useCallback(
+    async (value: string) => {
+      if (!value || value === transcriptionMode) return;
+      if (value === "regular") {
+        try {
+          await updateSettings({ transcription_mode: "regular" });
+          await refreshSettings();
+          await refreshStreamCapabilities();
+        } catch (error) {
+          log.error("Failed to switch transcription mode:", error);
+          toast.error("Failed to switch transcription mode");
+        }
+        return;
+      }
+
+      setIsActivatingLivePreview(true);
+      setLivePreviewProgress(streamCapabilities?.eou_model_downloaded ? 100 : 0);
+      try {
+        await invoke("activate_live_preview");
+        await refreshSettings();
+        await refreshStreamCapabilities();
+        toast.success("Live preview enabled");
+      } catch (error) {
+        await refreshSettings();
+        await refreshStreamCapabilities();
+        const message = getErrorMessage(error, "Live preview could not be enabled");
+        toast.error(message);
+      } finally {
+        setIsActivatingLivePreview(false);
+        setLivePreviewProgress(null);
+      }
+    },
+    [
+      refreshSettings,
+      refreshStreamCapabilities,
+      streamCapabilities?.eou_model_downloaded,
+      transcriptionMode,
+      updateSettings,
+    ],
   );
 
   // Remote servers management
@@ -710,6 +792,49 @@ export function ModelsSection({
           }
         />
       </SettingsCard>
+
+      {supportsLivePreview && (
+        <SettingsCard
+          icon={Zap}
+          title="Transcription mode"
+          description="Live preview is English-only for now; your final text still uses your selected model."
+        >
+          <SettingRow
+            title="Mode"
+            description="Regular waits for the final transcript. Live preview shows local Parakeet text while you speak."
+            control={
+              <div className="flex flex-col items-end gap-2">
+                <ToggleGroup
+                  type="single"
+                  variant="outline"
+                  size="sm"
+                  spacing={0}
+                  value={transcriptionMode}
+                  onValueChange={(value) => {
+                    void handleTranscriptionModeChange(value);
+                  }}
+                  aria-label="Transcription mode"
+                  disabled={isActivatingLivePreview}
+                  className="[&_[data-state=on]]:!bg-sage-bg [&_[data-state=on]]:!text-sage [&_[data-state=on]]:!border-sage/50 [&_[data-state=on]]:font-medium"
+                >
+                  <ToggleGroupItem value="regular">Regular</ToggleGroupItem>
+                  <ToggleGroupItem value="live_preview">Live preview (English)</ToggleGroupItem>
+                </ToggleGroup>
+                {isActivatingLivePreview && (
+                  <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                    <Spinner className="size-3.5" />
+                    <span>
+                      {livePreviewProgress !== null && livePreviewProgress < 100
+                        ? `Downloading EOU model ${Math.round(livePreviewProgress)}%`
+                        : "Verifying EOU model"}
+                    </span>
+                  </div>
+                )}
+              </div>
+            }
+          />
+        </SettingsCard>
+      )}
 
       <div className="flex flex-wrap items-center justify-between gap-3">
         <ToggleGroup

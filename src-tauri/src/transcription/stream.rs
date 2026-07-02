@@ -77,6 +77,8 @@ impl EngineStreamCapabilities {
     };
 
     pub const WHISPER: Self = Self::FINAL_ONLY;
+    // Dormant until upstream FluidAudio EOU produces non-empty transcripts again.
+    // See plans/042-eou-streaming-live-preview.md for the 2026-07-02 evidence.
     pub const PARAKEET: Self = Self::FINAL_ONLY;
     pub const SONIOX: Self = Self::FINAL_ONLY;
     pub const OPENAI: Self = Self::FINAL_ONLY;
@@ -241,7 +243,7 @@ mod tests {
     }
 
     #[test]
-    fn final_only_capability_shape_for_every_current_engine() {
+    fn capability_shape_for_every_current_engine() {
         let engines = [
             ProviderEngine::Whisper,
             ProviderEngine::Parakeet,

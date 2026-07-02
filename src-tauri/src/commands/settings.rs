@@ -30,6 +30,8 @@ pub const DEFAULT_INDICATOR_OFFSET: u32 = 10;
 pub const TRANSCRIPTION_TASK_TRANSCRIBE: &str = "transcribe";
 pub const TRANSCRIPTION_TASK_TRANSLATE_TO_ENGLISH: &str = "translate_to_english";
 pub const FINAL_TEXT_LANGUAGE_SAME_AS_TRANSCRIPT: &str = "same_as_transcript";
+pub const TRANSCRIPTION_MODE_REGULAR: &str = "regular";
+pub const TRANSCRIPTION_MODE_LIVE_PREVIEW: &str = "live_preview";
 
 #[derive(Serialize, Deserialize, Clone)]
 pub struct Settings {
@@ -73,6 +75,9 @@ pub struct Settings {
     // Transcription hardware acceleration: "auto" | "gpu" | "cpu"
     #[serde(default = "default_transcription_acceleration")]
     pub transcription_acceleration: String,
+    // Product-facing streaming preview mode: "regular" | "live_preview"
+    #[serde(default = "default_transcription_mode")]
+    pub transcription_mode: String,
 }
 
 impl Default for Settings {
@@ -107,12 +112,24 @@ impl Default for Settings {
             save_recordings: false,              // Default to not saving recordings
             recording_retention_days: Some(30),  // Default cleanup period when saving is enabled
             transcription_acceleration: "auto".to_string(),
+            transcription_mode: TRANSCRIPTION_MODE_REGULAR.to_string(),
         }
     }
 }
 
 fn default_transcription_acceleration() -> String {
     "auto".to_string()
+}
+
+fn default_transcription_mode() -> String {
+    TRANSCRIPTION_MODE_REGULAR.to_string()
+}
+
+pub fn normalize_transcription_mode(value: Option<&str>) -> String {
+    match value {
+        Some(TRANSCRIPTION_MODE_LIVE_PREVIEW) => TRANSCRIPTION_MODE_LIVE_PREVIEW.to_string(),
+        _ => TRANSCRIPTION_MODE_REGULAR.to_string(),
+    }
 }
 
 pub fn normalize_stored_transcription_acceleration(value: Option<&str>) -> String {
@@ -476,6 +493,12 @@ pub async fn get_settings(app: AppHandle) -> Result<Settings, String> {
                 .and_then(|v| v.as_str().map(|s| s.to_string()))
                 .as_deref(),
         ),
+        transcription_mode: normalize_transcription_mode(
+            store
+                .get("transcription_mode")
+                .and_then(|v| v.as_str().map(|s| s.to_string()))
+                .as_deref(),
+        ),
     };
     let normalized_speech_language = normalize_speech_language_for_model(
         &settings.current_model_engine,
@@ -568,6 +591,8 @@ pub async fn save_settings(app: AppHandle, settings: Settings) -> Result<(), Str
     );
     let normalized_transcription_acceleration =
         normalize_stored_transcription_acceleration(Some(&settings.transcription_acceleration));
+    let normalized_transcription_mode =
+        normalize_transcription_mode(Some(&settings.transcription_mode));
 
     let normalized_hotkey = normalize_shortcut_keys(&settings.hotkey);
     if !normalized_hotkey.is_empty() {
@@ -690,6 +715,7 @@ pub async fn save_settings(app: AppHandle, settings: Settings) -> Result<(), Str
         "transcription_acceleration",
         json!(&normalized_transcription_acceleration),
     );
+    store.set("transcription_mode", json!(&normalized_transcription_mode));
 
     // Network sharing settings
     if let Some(port) = settings.sharing_port {

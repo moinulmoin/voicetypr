@@ -20,7 +20,7 @@ use crate::commands::license::check_license_status;
 use crate::commands::model::get_model_status;
 use crate::commands::remote::load_remote_settings;
 use crate::commands::settings::get_settings;
-use crate::parakeet::messages::ParakeetStreamConfig;
+use crate::parakeet::messages::{ParakeetStreamConfig, ParakeetStreamEngine};
 use crate::parakeet::ParakeetManager;
 use crate::remote::client::{
     self, RemoteServerConnection, TranscriptionRequest, TranscriptionSource,
@@ -148,6 +148,12 @@ struct StreamBenchArgs {
     /// Parakeet model to use; defaults to the app's selected model.
     #[arg(long)]
     model: Option<String>,
+    /// Streaming engine to benchmark: sliding_window or eou.
+    #[arg(long, default_value = "sliding_window")]
+    engine: String,
+    /// EOU chunk size in milliseconds: 160, 320, or 1280.
+    #[arg(long, default_value_t = 320)]
+    chunk_ms: u16,
     /// Use .streaming with hypothesisChunkSeconds tuned to 0.5.
     #[arg(long)]
     tuned_hypothesis_500ms: bool,
@@ -553,6 +559,15 @@ async fn run_stream_bench(
     let total_frames = samples.len() / usize::from(spec.channels);
     let duration_ms = ((total_frames as f64 / f64::from(spec.sample_rate)) * 1000.0).round() as u64;
 
+    let engine = match args.engine.as_str() {
+        "sliding_window" => ParakeetStreamEngine::SlidingWindow,
+        "eou" => ParakeetStreamEngine::Eou,
+        other => return Err(format!("Unsupported stream engine: {other}").into()),
+    };
+    if matches!(engine, ParakeetStreamEngine::Eou) && !matches!(args.chunk_ms, 160 | 320 | 1280) {
+        return Err("--chunk-ms must be 160, 320, or 1280 for --engine eou".into());
+    }
+
     let config = if args.tuned_hypothesis_500ms {
         ParakeetStreamConfig::tuned_hypothesis_500ms()
     } else {
@@ -564,6 +579,18 @@ async fn run_stream_bench(
         .load_model(app, &model)
         .await
         .map_err(|error| format!("Failed to load Parakeet model: {}", error))?;
+    if matches!(engine, ParakeetStreamEngine::Eou) {
+        let status = parakeet_manager
+            .eou_model_status(app, args.chunk_ms)
+            .await
+            .map_err(|error| format!("Failed to check EOU model status: {}", error))?;
+        if !status.downloaded {
+            parakeet_manager
+                .download_eou_model(app, args.chunk_ms, |_downloaded, _total, _phase| {})
+                .await
+                .map_err(|error| format!("Failed to download EOU model: {}", error))?;
+        }
+    }
 
     let started = Instant::now();
     let state = Arc::new(Mutex::new(StreamBenchState::default()));
@@ -571,11 +598,15 @@ async fn run_stream_bench(
     let callback_started = started;
     let handle = parakeet_manager
         .open_stream(
-            app.clone(),
-            &model,
-            spec.sample_rate,
-            spec.channels,
-            Some(config.clone()),
+            crate::parakeet::manager::ParakeetStreamRequest {
+                app: app.clone(),
+                model_name: &model,
+                sample_rate: spec.sample_rate,
+                channels: spec.channels,
+                engine,
+                chunk_ms: matches!(engine, ParakeetStreamEngine::Eou).then_some(args.chunk_ms),
+                config: (!matches!(engine, ParakeetStreamEngine::Eou)).then_some(config.clone()),
+            },
             move |partial| {
                 if let Ok(mut state) = callback_state.lock() {
                     state.partials += 1;
@@ -616,10 +647,15 @@ async fn run_stream_bench(
         .map_err(|error| format!("Failed to finalize Parakeet stream: {}", error))?;
     let final_ms = started.elapsed().as_millis();
     let state = state.lock().map_err(|_| "stream bench state poisoned")?;
+    if state.partials == 0 && final_text.trim().is_empty() {
+        return Err("stream-bench produced no partials and an empty final transcript".into());
+    }
 
     let payload = json!({
         "model": model,
         "file": args.file,
+        "engine": args.engine,
+        "chunk_ms": if matches!(engine, ParakeetStreamEngine::Eou) { Some(args.chunk_ms) } else { None },
         "config": if args.tuned_hypothesis_500ms { "tuned_hypothesis_500ms" } else { "streaming" },
         "sample_rate": spec.sample_rate,
         "channels": spec.channels,

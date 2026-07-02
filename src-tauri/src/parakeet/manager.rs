@@ -10,7 +10,8 @@ use tauri::{AppHandle, Emitter, Manager};
 
 use super::error::ParakeetError;
 use super::messages::{
-    ParakeetCommand, ParakeetResponse, ParakeetStreamConfig, ParakeetVocabularyTerm,
+    ParakeetCommand, ParakeetResponse, ParakeetStreamConfig, ParakeetStreamEngine,
+    ParakeetVocabularyTerm,
 };
 use super::models::{get_available_models, ParakeetModelDefinition, AVAILABLE_MODELS};
 use super::sidecar::{
@@ -32,6 +33,13 @@ pub struct ParakeetModelStatus {
     pub engine: String,
 }
 
+#[derive(Debug, Clone, Serialize)]
+pub struct ParakeetEouModelStatus {
+    pub chunk_ms: u16,
+    pub downloaded: bool,
+    pub path: Option<String>,
+}
+
 #[derive(Debug, Clone)]
 pub struct ParakeetTranscriptionOptions {
     pub language: Option<String>,
@@ -39,6 +47,8 @@ pub struct ParakeetTranscriptionOptions {
     pub custom_vocabulary: Vec<ParakeetVocabularyTerm>,
     pub cancel_flag: Option<Arc<AtomicBool>>,
 }
+
+const EOU_MODEL_SIZE_BYTES: u64 = 250 * 1024 * 1024;
 
 impl ParakeetTranscriptionOptions {
     pub fn new(
@@ -100,6 +110,16 @@ fn model_files_complete(model_dir: &Path, definition: &ParakeetModelDefinition) 
         let path = model_dir.join(file.filename);
         path.exists()
     })
+}
+
+pub struct ParakeetStreamRequest<'a> {
+    pub app: AppHandle,
+    pub model_name: &'a str,
+    pub sample_rate: u32,
+    pub channels: u16,
+    pub engine: ParakeetStreamEngine,
+    pub chunk_ms: Option<u16>,
+    pub config: Option<ParakeetStreamConfig>,
 }
 
 impl ParakeetManager {
@@ -205,13 +225,18 @@ impl ParakeetManager {
 
     pub async fn open_stream(
         &self,
-        app: AppHandle,
-        model_name: &str,
-        sample_rate: u32,
-        channels: u16,
-        config: Option<ParakeetStreamConfig>,
+        request: ParakeetStreamRequest<'_>,
         partial_callback: impl FnMut(ParakeetStreamPartial) + Send + 'static,
     ) -> Result<ParakeetStreamHandle, String> {
+        let ParakeetStreamRequest {
+            app,
+            model_name,
+            sample_rate,
+            channels,
+            engine,
+            chunk_ms,
+            config,
+        } = request;
         let Some(definition) = self.get_model_definition(model_name) else {
             return Err(format!("Unknown Parakeet model: {model_name}"));
         };
@@ -227,6 +252,8 @@ impl ParakeetManager {
                     model_version: Some(Self::model_version_for(definition).to_string()),
                     sample_rate,
                     channels,
+                    engine,
+                    chunk_ms,
                     config,
                 },
                 partial_callback,
@@ -338,6 +365,93 @@ impl ParakeetManager {
             }
             Err(e) => Err(format!("Failed to communicate with sidecar: {}", e)),
             _ => Err("Unexpected response from sidecar".to_string()),
+        }
+    }
+
+    pub async fn eou_model_status(
+        &self,
+        app: &AppHandle,
+        chunk_ms: u16,
+    ) -> Result<ParakeetEouModelStatus, ParakeetError> {
+        match self
+            .send_command(app, &ParakeetCommand::EouModelStatus { chunk_ms })
+            .await?
+        {
+            ParakeetResponse::EouModelStatus {
+                chunk_ms,
+                downloaded,
+                path,
+            } => Ok(ParakeetEouModelStatus {
+                chunk_ms,
+                downloaded,
+                path,
+            }),
+            ParakeetResponse::Error { code, message, .. } => {
+                Err(ParakeetError::SidecarError { code, message })
+            }
+            other => Err(ParakeetError::SidecarError {
+                code: "unexpected_response".to_string(),
+                message: format!("Unexpected EOU status response: {:?}", other),
+            }),
+        }
+    }
+
+    pub async fn download_eou_model(
+        &self,
+        app: &AppHandle,
+        chunk_ms: u16,
+        mut progress_callback: impl FnMut(u64, u64, Option<String>) + Send + 'static,
+    ) -> Result<(), String> {
+        let mut last_downloaded = 0;
+        match self
+            .send_command_with_progress_and_cancel(
+                app,
+                &ParakeetCommand::DownloadEouModel { chunk_ms },
+                None,
+                |progress, phase| {
+                    let progress = progress.clamp(0.0, 1.0) as f64;
+                    let downloaded = (EOU_MODEL_SIZE_BYTES as f64 * progress).round() as u64;
+                    last_downloaded = downloaded;
+                    progress_callback(downloaded, EOU_MODEL_SIZE_BYTES, phase.map(str::to_string));
+                },
+            )
+            .await
+        {
+            Ok(ParakeetResponse::Ok { .. }) => {
+                if last_downloaded < EOU_MODEL_SIZE_BYTES {
+                    progress_callback(
+                        EOU_MODEL_SIZE_BYTES,
+                        EOU_MODEL_SIZE_BYTES,
+                        Some("complete".to_string()),
+                    );
+                }
+                Ok(())
+            }
+            Ok(ParakeetResponse::Error { code, message, .. }) => {
+                Err(format!("Failed to download EOU model: {code}: {message}"))
+            }
+            Ok(other) => Err(format!("Unexpected EOU download response: {other:?}")),
+            Err(error) => Err(format!("Failed to communicate with sidecar: {error}")),
+        }
+    }
+
+    pub async fn warmup_eou(&self, app: &AppHandle, chunk_ms: u16) -> Result<(), ParakeetError> {
+        match self
+            .send_command(app, &ParakeetCommand::WarmupEou { chunk_ms })
+            .await?
+        {
+            ParakeetResponse::Warmed { warmed: true, .. } => Ok(()),
+            ParakeetResponse::Warmed { error, .. } => Err(ParakeetError::SidecarError {
+                code: "eou_warmup_failed".to_string(),
+                message: error.unwrap_or_else(|| "EOU warmup failed".to_string()),
+            }),
+            ParakeetResponse::Error { code, message, .. } => {
+                Err(ParakeetError::SidecarError { code, message })
+            }
+            other => Err(ParakeetError::SidecarError {
+                code: "unexpected_response".to_string(),
+                message: format!("Unexpected EOU warmup response: {:?}", other),
+            }),
         }
     }
 

@@ -1,7 +1,9 @@
 #![allow(dead_code)]
 
 use super::error::ParakeetError;
-use super::messages::{ParakeetCommand, ParakeetResponse, ParakeetStreamConfig};
+use super::messages::{
+    ParakeetCommand, ParakeetResponse, ParakeetStreamConfig, ParakeetStreamEngine,
+};
 use base64::{engine::general_purpose, Engine as _};
 use log::{debug, error, warn};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -45,6 +47,8 @@ pub struct ParakeetStreamOpenRequest {
     pub model_version: Option<String>,
     pub sample_rate: u32,
     pub channels: u16,
+    pub engine: ParakeetStreamEngine,
+    pub chunk_ms: Option<u16>,
     pub config: Option<ParakeetStreamConfig>,
 }
 
@@ -610,6 +614,8 @@ impl ParakeetClient {
             model_version,
             sample_rate,
             channels,
+            engine,
+            chunk_ms,
             config,
         } = request;
         let (control_tx, mut control_rx) =
@@ -630,6 +636,9 @@ impl ParakeetClient {
                         if let Some(tx) = ready_tx.take() {
                             let _ = tx.send(Err(error));
                         }
+                        if let Some(tx) = final_tx.take() {
+                            let _ = tx.send(Err(ParakeetError::Terminated));
+                        }
                         return;
                     }
                 }
@@ -637,6 +646,9 @@ impl ParakeetClient {
 
             let Some(sidecar) = guard.as_mut() else {
                 if let Some(tx) = ready_tx.take() {
+                    let _ = tx.send(Err(ParakeetError::Terminated));
+                }
+                if let Some(tx) = final_tx.take() {
                     let _ = tx.send(Err(ParakeetError::Terminated));
                 }
                 return;
@@ -647,11 +659,16 @@ impl ParakeetClient {
                 model_version,
                 sample_rate,
                 channels,
+                engine,
+                chunk_ms,
                 config,
             };
             if let Err(error) = write_command_to_child(&mut sidecar.child, &start_command) {
                 if let Some(tx) = ready_tx.take() {
                     let _ = tx.send(Err(error));
+                }
+                if let Some(tx) = final_tx.take() {
+                    let _ = tx.send(Err(ParakeetError::Terminated));
                 }
                 return;
             }
@@ -677,6 +694,12 @@ impl ParakeetClient {
                     }
                     Ok(ParakeetResponse::Error { code, message, .. }) => {
                         if let Some(tx) = ready_tx.take() {
+                            let _ = tx.send(Err(ParakeetError::SidecarError {
+                                code: code.clone(),
+                                message: message.clone(),
+                            }));
+                        }
+                        if let Some(tx) = final_tx.take() {
                             let _ = tx.send(Err(ParakeetError::SidecarError { code, message }));
                         }
                         return;
@@ -685,6 +708,9 @@ impl ParakeetClient {
                     Err(error) => {
                         if let Some(tx) = ready_tx.take() {
                             let _ = tx.send(Err(error));
+                        }
+                        if let Some(tx) = final_tx.take() {
+                            let _ = tx.send(Err(ParakeetError::Terminated));
                         }
                         return;
                     }

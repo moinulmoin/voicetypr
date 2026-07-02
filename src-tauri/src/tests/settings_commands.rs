@@ -28,6 +28,7 @@ mod tests {
         assert!(settings.auto_paste_transcription); // Default to true
         assert!(!settings.save_recordings);
         assert_eq!(settings.recording_retention_days, Some(30));
+        assert_eq!(settings.transcription_mode, "regular");
     }
 
     #[test]
@@ -62,6 +63,7 @@ mod tests {
             save_recordings: true,
             recording_retention_days: Some(7),
             transcription_acceleration: "auto".to_string(),
+            transcription_mode: "regular".to_string(),
         };
 
         // Test serialization
@@ -144,6 +146,7 @@ mod tests {
             save_recordings: true,
             recording_retention_days: None,
             transcription_acceleration: "auto".to_string(),
+            transcription_mode: "regular".to_string(),
         };
 
         let cloned = settings.clone();
@@ -840,6 +843,7 @@ mod tests {
             save_recordings: true,
             recording_retention_days: None,
             transcription_acceleration: "gpu".to_string(),
+            transcription_mode: "regular".to_string(),
         };
 
         let json = serde_json::to_string(&original).unwrap();

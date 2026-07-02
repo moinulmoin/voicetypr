@@ -13,7 +13,9 @@ use crate::commands::settings::{
 use crate::license::LicenseState;
 use crate::media::MediaPauseController;
 use crate::parakeet::manager::ParakeetTranscriptionOptions;
-use crate::parakeet::messages::{ParakeetResponse, ParakeetSegment, ParakeetStreamConfig};
+use crate::parakeet::messages::{
+    ParakeetResponse, ParakeetSegment, ParakeetStreamConfig, ParakeetStreamEngine,
+};
 use crate::parakeet::sidecar::ParakeetStreamHandle;
 use crate::parakeet::ParakeetManager;
 use crate::provider_capabilities::ProviderEngine;
@@ -159,6 +161,7 @@ fn build_parakeet_stream_sink_factory(
     config: &RecordingConfig,
     streaming_tap_enabled: bool,
     streaming_engine_enabled: bool,
+    live_preview_mode: bool,
     recording_generation: u64,
 ) -> Option<StreamTapSinkFactory> {
     if !streaming_tap_enabled
@@ -188,6 +191,11 @@ fn build_parakeet_stream_sink_factory(
         let callback_first_partial_logged = first_partial_logged.clone();
         let callback_first_confirmed_logged = first_confirmed_logged.clone();
 
+        let stream_engine = if live_preview_mode {
+            ParakeetStreamEngine::Eou
+        } else {
+            ParakeetStreamEngine::SlidingWindow
+        };
         let opened = tauri::async_runtime::block_on(async move {
             let parakeet_manager = app_for_stream.state::<ParakeetManager>();
             parakeet_manager
@@ -196,11 +204,17 @@ fn build_parakeet_stream_sink_factory(
                 .map_err(|error| error.to_string())?;
             parakeet_manager
                 .open_stream(
-                    app_for_stream.clone(),
-                    &model_name_for_stream,
-                    sample_rate,
-                    channels,
-                    Some(ParakeetStreamConfig::streaming()),
+                    crate::parakeet::manager::ParakeetStreamRequest {
+                        app: app_for_stream.clone(),
+                        model_name: &model_name_for_stream,
+                        sample_rate,
+                        channels,
+                        engine: stream_engine,
+                        chunk_ms: matches!(stream_engine, ParakeetStreamEngine::Eou)
+                            .then_some(320),
+                        config: matches!(stream_engine, ParakeetStreamEngine::SlidingWindow)
+                            .then_some(ParakeetStreamConfig::streaming()),
+                    },
                     move |partial| {
                         if !callback_first_partial_logged.swap(true, AtomicOrdering::SeqCst) {
                             log_performance(
@@ -4087,24 +4101,29 @@ pub async fn start_recording(
             // chime clips the start of capture.
         }
     }
-    let streaming_tap_enabled = app
+    let (streaming_tap_enabled, streaming_engine_enabled, live_preview_mode) = app
         .store("settings")
         .ok()
-        .and_then(|store| {
-            store
+        .map(|store| {
+            let live_preview_mode = store
+                .get("transcription_mode")
+                .and_then(|value| value.as_str().map(|value| value == "live_preview"))
+                .unwrap_or(false);
+            let dev_tap_enabled = store
                 .get("streaming_tap_enabled")
                 .and_then(|value| value.as_bool())
-        })
-        .unwrap_or(false);
-    let streaming_engine_enabled = app
-        .store("settings")
-        .ok()
-        .and_then(|store| {
-            store
+                .unwrap_or(false);
+            let dev_engine_enabled = store
                 .get("streaming_engine_enabled")
                 .and_then(|value| value.as_bool())
+                .unwrap_or(false);
+            (
+                live_preview_mode || dev_tap_enabled,
+                live_preview_mode || dev_engine_enabled,
+                live_preview_mode,
+            )
         })
-        .unwrap_or(false);
+        .unwrap_or((false, false, false));
 
     // Pause system media if enabled (default: off)
     let mut resume_media_on_error = false;
@@ -4325,6 +4344,9 @@ pub async fn start_recording(
 
         // Start recording and get side-channel receivers
         let recording_generation = current_recording_generation();
+        let parakeet_streaming_enabled = config.current_engine == "parakeet";
+        let streaming_tap_enabled = streaming_tap_enabled && parakeet_streaming_enabled;
+        let streaming_engine_enabled = streaming_engine_enabled && parakeet_streaming_enabled;
         let cancellation_flag = app_state.should_cancel_recording.clone();
         let stream_cancelled: Arc<dyn Fn() -> bool + Send + Sync> =
             Arc::new(move || cancellation_flag.load(AtomicOrdering::SeqCst));
@@ -4333,6 +4355,7 @@ pub async fn start_recording(
             &config,
             streaming_tap_enabled,
             streaming_engine_enabled,
+            live_preview_mode,
             recording_generation,
         );
         let (audio_level_rx, silence_event_rx) = match recorder.start_recording(
