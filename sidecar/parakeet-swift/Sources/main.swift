@@ -338,6 +338,7 @@ struct ParakeetSidecar {
                         sendError("missing_audio_path", message: "audio_path is required", encoder: encoder)
                     }
 
+
                 case "warmup":
                     await warmup(encoder: encoder)
 
@@ -631,6 +632,75 @@ struct ParakeetSidecar {
 
         guard let manager = asrManager else {
             finish(warmed: false, error: "Parakeet engine is not initialized")
+            return
+        }
+
+        do {
+            let fileURL = try writeWarmupSilenceWav()
+            warmupURL = fileURL
+            var decoderState = TdtDecoderState.make(decoderLayers: await manager.decoderLayerCount)
+            _ = try await withLibraryStdoutRedirected {
+                try await manager.transcribe(fileURL, decoderState: &decoderState)
+            }
+            finish(warmed: true)
+        } catch {
+            finish(warmed: false, error: error.localizedDescription)
+        }
+
+        if let warmupURL {
+            do {
+                try FileManager.default.removeItem(at: warmupURL)
+            } catch {
+                log("⚠️ Failed to delete warmup wav: \(error.localizedDescription)")
+            }
+        }
+
+        log("───────────────────────────────────────────────────────")
+    }
+
+    static func writeWarmupSilenceWav() throws -> URL {
+        let fileURL = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("voicetypr-parakeet-warmup-\(UUID().uuidString).wav")
+        let sampleRate: UInt32 = 16_000
+        let channels: UInt16 = 1
+        let bitsPerSample: UInt16 = 32
+        let formatCode: UInt16 = 3 // IEEE float
+        let durationSeconds: UInt32 = 1
+        let samples = Int(sampleRate * durationSeconds)
+        let dataBytes = UInt32(samples * MemoryLayout<Float32>.size)
+        let byteRate = sampleRate * UInt32(channels) * UInt32(bitsPerSample / 8)
+        let blockAlign = channels * (bitsPerSample / 8)
+
+        var data = Data()
+        data.append(contentsOf: "RIFF".utf8)
+        appendUInt32LE(36 + dataBytes, to: &data)
+        data.append(contentsOf: "WAVE".utf8)
+        data.append(contentsOf: "fmt ".utf8)
+        appendUInt32LE(16, to: &data)
+        appendUInt16LE(formatCode, to: &data)
+        appendUInt16LE(channels, to: &data)
+        appendUInt32LE(sampleRate, to: &data)
+        appendUInt32LE(byteRate, to: &data)
+        appendUInt16LE(blockAlign, to: &data)
+        appendUInt16LE(bitsPerSample, to: &data)
+        data.append(contentsOf: "data".utf8)
+        appendUInt32LE(dataBytes, to: &data)
+        data.append(Data(repeating: 0, count: Int(dataBytes)))
+
+        try data.write(to: fileURL, options: .atomic)
+        return fileURL
+    }
+
+    static func appendUInt32LE(_ value: UInt32, to data: inout Data) {
+        var little = value.littleEndian
+        withUnsafeBytes(of: &little) { data.append(contentsOf: $0) }
+    }
+
+    static func appendUInt16LE(_ value: UInt16, to data: inout Data) {
+        var little = value.littleEndian
+        withUnsafeBytes(of: &little) { data.append(contentsOf: $0) }
+    }
+
     static func isHeavyCommandBlockedDuringStream(_ commandType: String?) -> Bool {
         switch commandType {
         case "load_model", "download_model", "unload_model", "delete_model", "transcribe", "download_ctc_models", "diarize", "start_stream":
@@ -710,71 +780,6 @@ struct ParakeetSidecar {
         }
 
         do {
-            let fileURL = try writeWarmupSilenceWav()
-            warmupURL = fileURL
-            var decoderState = TdtDecoderState.make(decoderLayers: await manager.decoderLayerCount)
-            _ = try await withLibraryStdoutRedirected {
-                try await manager.transcribe(fileURL, decoderState: &decoderState)
-            }
-            finish(warmed: true)
-        } catch {
-            finish(warmed: false, error: error.localizedDescription)
-        }
-
-        if let warmupURL {
-            do {
-                try FileManager.default.removeItem(at: warmupURL)
-            } catch {
-                log("⚠️ Failed to delete warmup wav: \(error.localizedDescription)")
-            }
-        }
-
-        log("───────────────────────────────────────────────────────")
-    }
-
-    static func writeWarmupSilenceWav() throws -> URL {
-        let fileURL = URL(fileURLWithPath: NSTemporaryDirectory())
-            .appendingPathComponent("voicetypr-parakeet-warmup-\(UUID().uuidString).wav")
-        let sampleRate: UInt32 = 16_000
-        let channels: UInt16 = 1
-        let bitsPerSample: UInt16 = 32
-        let formatCode: UInt16 = 3 // IEEE float
-        let durationSeconds: UInt32 = 1
-        let samples = Int(sampleRate * durationSeconds)
-        let dataBytes = UInt32(samples * MemoryLayout<Float32>.size)
-        let byteRate = sampleRate * UInt32(channels) * UInt32(bitsPerSample / 8)
-        let blockAlign = channels * (bitsPerSample / 8)
-
-        var data = Data()
-        data.append(contentsOf: "RIFF".utf8)
-        appendUInt32LE(36 + dataBytes, to: &data)
-        data.append(contentsOf: "WAVE".utf8)
-        data.append(contentsOf: "fmt ".utf8)
-        appendUInt32LE(16, to: &data)
-        appendUInt16LE(formatCode, to: &data)
-        appendUInt16LE(channels, to: &data)
-        appendUInt32LE(sampleRate, to: &data)
-        appendUInt32LE(byteRate, to: &data)
-        appendUInt16LE(blockAlign, to: &data)
-        appendUInt16LE(bitsPerSample, to: &data)
-        data.append(contentsOf: "data".utf8)
-        appendUInt32LE(dataBytes, to: &data)
-        data.append(Data(repeating: 0, count: Int(dataBytes)))
-
-        try data.write(to: fileURL, options: .atomic)
-        return fileURL
-    }
-
-    static func appendUInt16LE(_ value: UInt16, to data: inout Data) {
-        var little = value.littleEndian
-        withUnsafeBytes(of: &little) { data.append(contentsOf: $0) }
-    }
-
-    static func appendUInt32LE(_ value: UInt32, to data: inout Data) {
-        var little = value.littleEndian
-        withUnsafeBytes(of: &little) { data.append(contentsOf: $0) }
-    }
-
             let manager = SlidingWindowAsrManager(config: streamingConfig(from: command))
             try await manager.loadModels(models)
             try await manager.startStreaming(source: .microphone)
