@@ -395,6 +395,7 @@ impl RealTranscriptionContext {
                 spoken_language,
                 translate_to_english,
                 context,
+                None,
                 || false,
             )
             .map_err(|e| format!("Whisper transcription failed: {}", e))

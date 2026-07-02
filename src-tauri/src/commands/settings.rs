@@ -764,7 +764,20 @@ pub async fn save_settings(app: AppHandle, settings: Settings) -> Result<(), Str
             tokio::spawn(async move {
                 let parakeet_manager = app_clone.state::<ParakeetManager>();
                 match parakeet_manager.load_model(&app_clone, &model_name).await {
-                    Ok(_) => log::info!("Successfully preloaded new model: {}", model_name),
+                    Ok(_) => {
+                        log::info!("Successfully preloaded new model: {}", model_name);
+                        match parakeet_manager.warmup(&app_clone).await {
+                            Ok(Some(ms)) => log::info!(
+                                "Successfully warmed new Parakeet model '{}' in {}ms",
+                                model_name,
+                                ms
+                            ),
+                            Ok(None) => {
+                                log::info!("Parakeet warmup skipped for '{}'", model_name)
+                            }
+                            Err(e) => log::warn!("Failed to warm new Parakeet model: {}", e),
+                        }
+                    }
                     Err(e) => log::warn!("Failed to preload new model: {}", e),
                 }
             });

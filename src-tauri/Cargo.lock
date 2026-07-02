@@ -8767,7 +8767,7 @@ dependencies = [
 
 [[package]]
 name = "voicetypr"
-version = "2.0.0"
+version = "2.0.4"
 dependencies = [
  "active-win-pos-rs",
  "aes-gcm",

@@ -87,6 +87,12 @@ struct TranscribeArgs {
     /// Engine override ("whisper" or "parakeet"); defaults to the selected model's engine.
     #[arg(long)]
     engine: Option<String>,
+    /// Override the app's speech_language setting for this transcription run.
+    #[arg(long)]
+    language: Option<String>,
+    /// Override Whisper audio context for this transcription run. Only applies when present.
+    #[arg(long)]
+    audio_ctx: Option<i32>,
     /// Transcribe via a remote Voicetypr server given as host:port (e.g. 192.168.1.10:47842) instead of locally.
     #[arg(long)]
     server: Option<String>,
@@ -399,6 +405,8 @@ async fn run_transcribe(
             args.file.to_string_lossy().to_string(),
             model.clone(),
             engine.clone(),
+            args.language.clone(),
+            args.audio_ctx,
         )
         .await?;
         json!({ "text": t.text, "words": t.words, "metadata": t.metadata, "model": model, "engine": engine })
@@ -463,6 +471,8 @@ async fn run_record(app: &tauri::AppHandle, args: RecordArgs) -> Result<(), Box<
             output_path.to_string_lossy().to_string(),
             model.clone(),
             engine.clone(),
+            None,
+            None,
         )
         .await?;
         json!({ "text": t.text, "words": t.words, "metadata": t.metadata, "model": model, "engine": engine, "stop_reason": stop_message })

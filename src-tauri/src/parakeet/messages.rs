@@ -65,6 +65,7 @@ pub enum ParakeetCommand {
     },
     Status {},
     DownloadCtcModels {},
+    Warmup {},
     DeleteModel {
         #[serde(skip_serializing_if = "Option::is_none")]
         model_id: Option<String>,
@@ -75,6 +76,7 @@ pub enum ParakeetCommand {
 }
 
 pub const SHORT_REQUEST_TIMEOUT_SECS: u64 = 30;
+pub const WARMUP_TIMEOUT_SECS: u64 = 60;
 pub const LOAD_MODEL_TIMEOUT_SECS: u64 = 300;
 pub const DOWNLOAD_MODEL_TIMEOUT_SECS: u64 = 60 * 60;
 pub const TRANSCRIBE_TIMEOUT_SECS: u64 = 180;
@@ -89,6 +91,7 @@ impl ParakeetCommand {
             Self::Diarize { .. } => "diarize",
             Self::Status { .. } => "status",
             Self::DownloadCtcModels { .. } => "download_ctc_models",
+            Self::Warmup { .. } => "warmup",
             Self::DeleteModel { .. } => "delete_model",
             Self::Shutdown { .. } => "shutdown",
         }
@@ -104,6 +107,7 @@ impl ParakeetCommand {
                 transcribe_timeout_secs(audio_path)
             }
             Self::DownloadCtcModels { .. } => DOWNLOAD_MODEL_TIMEOUT_SECS,
+            Self::Warmup { .. } => WARMUP_TIMEOUT_SECS,
             Self::Status { .. }
             | Self::Shutdown { .. }
             | Self::DeleteModel { .. }
@@ -201,6 +205,13 @@ pub enum ParakeetResponse {
         language: Option<String>,
         #[serde(default)]
         duration: Option<f32>,
+    },
+    #[serde(rename_all = "camelCase")]
+    Warmed {
+        warmed: bool,
+        ms: u64,
+        #[serde(default)]
+        error: Option<String>,
     },
 }
 

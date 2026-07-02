@@ -1103,6 +1103,9 @@ fn build_writing_history_metadata(
     if let Some(v) = transcription.timings.processing_duration_ms {
         map.insert("processing_duration_ms".into(), v.into());
     }
+    if let Some(v) = transcription.timings.spans_ms.as_ref() {
+        map.insert("timings_ms".into(), v.clone());
+    }
     map.insert("diarized".into(), transcription.words.is_some().into());
     if let Some(wr) = writing {
         map.insert(
@@ -1369,6 +1372,7 @@ pub(crate) async fn transcribe_whisper_with_acceleration<F>(
     language: Option<&str>,
     translate: bool,
     initial_prompt: Option<&str>,
+    audio_ctx: Option<i32>,
     should_cancel: F,
 ) -> Result<WhisperTranscriptionOutput, String>
 where
@@ -1381,7 +1385,7 @@ where
     let mut preserve_gpu_status = false;
 
     #[cfg(target_os = "windows")]
-    if mode != "cpu" {
+    if mode != "cpu" && audio_ctx.is_none() {
         if should_cancel() {
             return Err("Transcription cancelled".to_string());
         }
@@ -1446,6 +1450,7 @@ where
             language.as_deref(),
             translate,
             initial_prompt.as_deref(),
+            audio_ctx,
             should_cancel_for_decode,
         )
     })
@@ -2225,6 +2230,7 @@ mod tests {
             timings: TranscriptionTimings {
                 audio_duration_ms: Some(5000),
                 processing_duration_ms: Some(1200),
+                spans_ms: None,
             },
         }
     }
@@ -3920,7 +3926,9 @@ pub async fn start_recording(
                 let guard = remote.lock().await;
                 guard.get_active_connection().is_some()
             };
-            if !remote_active && crate::secure_store::secure_has(&app, provider.key_name()).unwrap_or(false) {
+            if !remote_active
+                && crate::secure_store::secure_has(&app, provider.key_name()).unwrap_or(false)
+            {
                 provider.warm_up().await;
             }
         });
@@ -6299,7 +6307,7 @@ pub async fn transcribe_audio_file(
     model_name: String,
     model_engine: Option<String>,
 ) -> Result<UploadTranscription, String> {
-    transcribe_audio_file_impl(app, file_path, model_name, model_engine, true).await
+    transcribe_audio_file_impl(app, file_path, model_name, model_engine, true, None, None).await
 }
 
 pub async fn transcribe_audio_file_for_cli(
@@ -6307,8 +6315,19 @@ pub async fn transcribe_audio_file_for_cli(
     file_path: String,
     model_name: String,
     model_engine: Option<String>,
+    language_override: Option<String>,
+    audio_ctx: Option<i32>,
 ) -> Result<UploadTranscription, String> {
-    transcribe_audio_file_impl(app, file_path, model_name, model_engine, false).await
+    transcribe_audio_file_impl(
+        app,
+        file_path,
+        model_name,
+        model_engine,
+        false,
+        language_override,
+        audio_ctx,
+    )
+    .await
 }
 
 async fn transcribe_audio_file_impl(
@@ -6317,6 +6336,8 @@ async fn transcribe_audio_file_impl(
     model_name: String,
     model_engine: Option<String>,
     validate_requirements: bool,
+    language_override: Option<String>,
+    audio_ctx: Option<i32>,
 ) -> Result<UploadTranscription, String> {
     log::info!(
         "[UPLOAD] transcribe_audio_file START | file_path={:?}, model_name={}, engine_hint={:?}",
@@ -6368,10 +6389,12 @@ async fn transcribe_audio_file_impl(
         .get("translate_to_english")
         .and_then(|v| v.as_bool())
         .unwrap_or(false);
-    let language = store
-        .get("speech_language")
-        .and_then(|v| v.as_str().map(|s| s.to_string()))
-        .unwrap_or(legacy_speech_language);
+    let language = language_override.unwrap_or_else(|| {
+        store
+            .get("speech_language")
+            .and_then(|v| v.as_str().map(|s| s.to_string()))
+            .unwrap_or(legacy_speech_language)
+    });
     let ai_enabled = store
         .get("ai_enabled")
         .and_then(|v| v.as_bool())
@@ -6430,6 +6453,7 @@ async fn transcribe_audio_file_impl(
                 Some(&language),
                 translate_to_english,
                 initial_prompt.as_deref(),
+                audio_ctx,
                 || false,
             )
             .await?;
@@ -6438,6 +6462,12 @@ async fn transcribe_audio_file_impl(
                 .with_segments(output.segments)
                 .with_audio_duration_ms(Some(output.audio_duration_ms))
                 .with_processing_duration_ms(Some(output.processing_duration_ms))
+                .with_span_timings_ms(serde_json::json!({
+                    "preprocessing": output.timings.preprocessing_ms,
+                    "inference": output.timings.inference_ms,
+                    "extraction": output.timings.extraction_ms,
+                    "total": output.timings.total_ms,
+                }))
         }
         ActiveEngineSelection::Parakeet { model_name } => {
             // Normalize to Whisper/Parakeet contract first
@@ -6480,10 +6510,18 @@ async fn transcribe_audio_file_impl(
                     segments,
                     language,
                     duration,
-                }) => TranscriptionResult::new(&transcription_job, text)
-                    .with_transcript_language(language)
-                    .with_segments(parakeet_segments_to_transcription_segments(segments))
-                    .with_audio_duration_ms(seconds_to_duration_ms(duration)),
+                }) => {
+                    let timings = parakeet_manager.latest_timing_snapshot();
+                    TranscriptionResult::new(&transcription_job, text)
+                        .with_transcript_language(language)
+                        .with_segments(parakeet_segments_to_transcription_segments(segments))
+                        .with_audio_duration_ms(seconds_to_duration_ms(duration))
+                        .with_span_timings_ms(serde_json::json!({
+                            "model_load": timings.model_load_ms,
+                            "inference": timings.inference_ms,
+                            "total": timings.total_ms,
+                        }))
+                }
                 Ok(other) => {
                     return Err(format!("Unexpected Parakeet response: {:?}", other));
                 }
@@ -6769,6 +6807,7 @@ pub async fn transcribe_audio(
                 Some(language.as_str()),
                 translate_to_english,
                 initial_prompt.as_deref(),
+                None,
                 || false,
             )
             .await?;
