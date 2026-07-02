@@ -1,111 +1,207 @@
-import { act, render, screen } from '@testing-library/react';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { emitMockEvent } from '@/test/setup';
-import { RecordingPill } from './RecordingPill';
+import { fireEvent, getByRole, getByTestId, getByText, queryByText, waitFor } from "@testing-library/react";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createRecordingPill, type RecordingPillController } from "@/pill";
 
-const { audioBarsMock, mockRecording, mockSettings } = vi.hoisted(() => ({
-  audioBarsMock: vi.fn(),
-  mockRecording: { state: 'idle' },
-  mockSettings: {
-    pill_indicator_mode: 'when_recording',
-    pill_indicator_offset: 10,
-  } as Record<string, unknown>,
-}));
+type PillIndicatorMode = "never" | "always" | "when_recording";
+type Handler = (event: { payload: unknown }) => void;
 
-vi.mock('@/components/AudioBars', () => ({
-  AudioBars: (props: { audioLevel?: number; state: string }) => {
-    audioBarsMock(props);
-    return (
-      <div
-        data-audio-level={props.audioLevel}
-        data-state={props.state}
-        data-testid="audio-bars"
-      />
-    );
-  },
-}));
+let root: HTMLDivElement;
+let controller: RecordingPillController | undefined;
+let pillIndicatorMode: PillIndicatorMode;
+let listeners: Map<string, Set<Handler>>;
+let invokeMock: ReturnType<typeof vi.fn>;
 
-vi.mock('@/hooks/useRecording', () => ({
-  useRecording: () => mockRecording,
-}));
+function createTestPill() {
+  controller = createRecordingPill(root, {
+    invoke: invokeMock as never,
+    listen: vi.fn((event: string, handler: Handler) => {
+      if (!listeners.has(event)) {
+        listeners.set(event, new Set());
+      }
+      listeners.get(event)?.add(handler);
 
-vi.mock('@/contexts/SettingsContext', () => ({
-  useSetting: (key: string) => mockSettings[key],
-}));
+      return Promise.resolve(() => {
+        listeners.get(event)?.delete(handler);
+      });
+    }) as never,
+  });
+}
 
-describe('RecordingPill', () => {
+function emitMockEvent(event: string, payload?: unknown) {
+  listeners.get(event)?.forEach((handler) => {
+    handler({ payload });
+  });
+}
+
+function pillRoot() {
+  return root.querySelector(".pill-root") as HTMLDivElement;
+}
+
+function pillSurface() {
+  return root.querySelector(".pill-surface") as HTMLDivElement;
+}
+
+describe("RecordingPill", () => {
   beforeEach(() => {
-    audioBarsMock.mockClear();
-    mockRecording.state = 'idle';
-    mockSettings.pill_indicator_mode = 'when_recording';
-  });
+    vi.useRealTimers();
+    listeners = new Map();
+    pillIndicatorMode = "when_recording";
+    invokeMock = vi.fn((command: string) => {
+      if (command === "get_settings") {
+        return Promise.resolve({ pill_indicator_mode: pillIndicatorMode });
+      }
 
-  it('hides the pill when mode is never', () => {
-    mockSettings.pill_indicator_mode = 'never';
-    render(<RecordingPill />);
-    expect(screen.queryByTestId('audio-bars')).not.toBeInTheDocument();
-  });
+      if (command === "cancel_recording") {
+        return Promise.resolve(true);
+      }
 
-  it('hides the pill when idle and mode is when_recording', () => {
-    mockSettings.pill_indicator_mode = 'when_recording';
-    mockRecording.state = 'idle';
-    render(<RecordingPill />);
-    expect(screen.queryByTestId('audio-bars')).not.toBeInTheDocument();
-  });
-
-  it('shows the pill when recording and mode is when_recording', () => {
-    mockSettings.pill_indicator_mode = 'when_recording';
-    mockRecording.state = 'recording';
-    render(<RecordingPill />);
-    expect(screen.getByTestId('audio-bars')).toHaveAttribute('data-state', 'listening');
-  });
-
-  it('shows the pill when idle and mode is always', () => {
-    mockSettings.pill_indicator_mode = 'always';
-    mockRecording.state = 'idle';
-    render(<RecordingPill />);
-    expect(screen.getByTestId('audio-bars')).toHaveAttribute('data-state', 'idle');
-  });
-
-  it('maps transcribing and stopping backend states to transcribing bars', () => {
-    mockSettings.pill_indicator_mode = 'always';
-    mockRecording.state = 'transcribing';
-    const { rerender } = render(<RecordingPill />);
-    expect(screen.getByTestId('audio-bars')).toHaveAttribute('data-state', 'transcribing');
-
-    mockRecording.state = 'stopping';
-    rerender(<RecordingPill />);
-    expect(screen.getByTestId('audio-bars')).toHaveAttribute('data-state', 'transcribing');
-  });
-
-  it('gives formatting feedback precedence over recording and transcribing states', () => {
-    mockSettings.pill_indicator_mode = 'always';
-    mockRecording.state = 'recording';
-    const { rerender } = render(<RecordingPill />);
-
-    act(() => {
-      emitMockEvent('enhancing-started', undefined);
-    });
-    expect(screen.getByTestId('audio-bars')).toHaveAttribute('data-state', 'formatting');
-
-    mockRecording.state = 'transcribing';
-    rerender(<RecordingPill />);
-    expect(screen.getByTestId('audio-bars')).toHaveAttribute('data-state', 'formatting');
-
-    act(() => {
-      emitMockEvent('enhancing-completed', undefined);
-    });
-    expect(screen.getByTestId('audio-bars')).toHaveAttribute('data-state', 'transcribing');
-  });
-
-  it('passes through audio levels while listening', () => {
-    mockRecording.state = 'recording';
-    render(<RecordingPill />);
-
-    act(() => {
-      emitMockEvent('audio-level', 0.42);
+      return Promise.resolve(null);
     });
 
-    expect(screen.getByTestId('audio-bars')).toHaveAttribute('data-audio-level', '0.42');
+    root = document.createElement("div");
+    document.body.append(root);
+  });
+
+  afterEach(() => {
+    controller?.destroy();
+    controller = undefined;
+    root.remove();
+    vi.clearAllTimers();
+    vi.useRealTimers();
+  });
+
+  it("hides while idle when the indicator mode is when_recording", async () => {
+    createTestPill();
+
+    await waitFor(() => {
+      expect(invokeMock).toHaveBeenCalledWith("get_settings");
+    });
+
+    expect(pillRoot()).toHaveAttribute("data-visible", "false");
+    expect(pillSurface()).not.toBeVisible();
+  });
+
+  it("shows idle dots when the indicator mode is always", async () => {
+    pillIndicatorMode = "always";
+    createTestPill();
+
+    await waitFor(() => {
+      expect(getByTestId(root, "pill-dots")).toBeVisible();
+    });
+    expect(pillRoot()).toHaveAttribute("data-state", "idle");
+  });
+
+  it("re-reads indicator mode on settings-changed", async () => {
+    createTestPill();
+
+    await waitFor(() => {
+      expect(invokeMock).toHaveBeenCalledWith("get_settings");
+    });
+
+    pillIndicatorMode = "always";
+    emitMockEvent("settings-changed");
+
+    await waitFor(() => {
+      expect(getByTestId(root, "pill-dots")).toBeVisible();
+    });
+  });
+
+  it("shows listening bars, timer, and cancel button while recording", () => {
+    vi.useFakeTimers();
+    createTestPill();
+
+    emitMockEvent("recording-state-changed", { state: "recording", error: null });
+
+    expect(getByTestId(root, "pill-bars")).toHaveAttribute("data-state", "listening");
+    expect(getByText(root, "0:00")).toBeVisible();
+    expect(getByRole(root, "button", { name: "Cancel recording" })).toHaveTextContent("×");
+
+    vi.advanceTimersByTime(3000);
+
+    expect(getByText(root, "0:03")).toBeVisible();
+  });
+
+  it("listens to audio-level only while listening", () => {
+    createTestPill();
+
+    emitMockEvent("audio-level", 0.75);
+    expect(pillRoot()).toHaveAttribute("data-state", "idle");
+
+    emitMockEvent("recording-started");
+    emitMockEvent("audio-level", 0.75);
+
+    const firstBar = getByTestId(root, "pill-bars").querySelector("span");
+    expect(firstBar).toHaveStyle({ transform: "scaleY(0.466)" });
+  });
+
+  it("invokes cancel_recording once until state changes", async () => {
+    createTestPill();
+    await waitFor(() => {
+      expect(invokeMock).toHaveBeenCalledWith("get_settings");
+    });
+    invokeMock.mockClear();
+
+    emitMockEvent("recording-started");
+
+    const cancelButton = getByRole(root, "button", { name: "Cancel recording" });
+    fireEvent.click(cancelButton);
+    fireEvent.click(cancelButton);
+
+    expect(invokeMock).toHaveBeenCalledTimes(1);
+    expect(invokeMock).toHaveBeenCalledWith("cancel_recording");
+    expect(cancelButton).toBeDisabled();
+  });
+
+  it("maps stopping and transcribing to the transcribing label", () => {
+    createTestPill();
+
+    emitMockEvent("recording-state-changed", { state: "stopping", error: null });
+
+    expect(getByText(root, "Transcribing…")).toBeVisible();
+    expect(root.querySelector(".pill-text-primary")).toHaveTextContent("Transcribing…");
+    expect(root.querySelector(".pill-text-secondary")).toHaveTextContent("");
+
+    emitMockEvent("recording-state-changed", { state: "transcribing", error: null });
+
+    expect(getByText(root, "Transcribing…")).toBeVisible();
+  });
+
+  it("gives formatting feedback precedence until enhancement completes", () => {
+    createTestPill();
+
+    emitMockEvent("transcription-started");
+    expect(getByText(root, "Transcribing…")).toBeVisible();
+
+    emitMockEvent("enhancing-started");
+    expect(getByText(root, "Polishing…")).toBeVisible();
+
+    emitMockEvent("enhancing-completed");
+    expect(getByText(root, "Transcribing…")).toBeVisible();
+  });
+
+  it("flashes recording-too-short errors briefly", () => {
+    vi.useFakeTimers();
+    createTestPill();
+
+    emitMockEvent("recording-too-short", "Recording shorter than 1 second");
+
+    expect(getByText(root, "Recording shorter than 1 second")).toBeVisible();
+
+    vi.advanceTimersByTime(1500);
+
+    expect(queryByText(root, "Recording shorter than 1 second")).not.toBeInTheDocument();
+  });
+
+  it("flashes recording-state error messages briefly", () => {
+    vi.useFakeTimers();
+    createTestPill();
+
+    emitMockEvent("recording-state-changed", { state: "error", error: "Mic unavailable" });
+
+    expect(getByText(root, "Mic unavailable")).toBeVisible();
+
+    vi.advanceTimersByTime(1500);
+
+    expect(queryByText(root, "Mic unavailable")).not.toBeInTheDocument();
   });
 });

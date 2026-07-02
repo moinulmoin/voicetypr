@@ -1179,8 +1179,8 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
                     .flatten()
                     .unwrap_or((1440.0, 900.0));
 
-                    let pill_width = 80.0;  // Sized for 3-dot pill (active state with padding)
-                    let pill_height = 40.0;
+                    let pill_width = 260.0;
+                    let pill_height = 64.0;
                     let bottom_offset = 10.0;  // Distance from bottom of screen
 
                     let x = (screen_width - pill_width) / 2.0;
@@ -1205,7 +1205,8 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
                         .skip_taskbar(true)
                         .transparent(true)
                         .shadow(false)  // Prevent window shadow on macOS
-                        .inner_size(80.0, 40.0)  // Sized for 3-dot pill (active state with padding)
+                        .inner_size(260.0, 64.0)
+                        .accept_first_mouse(true)
                         .position(pos_x, pos_y)
                         .visible(true)  // Always visible (controlled by show_pill_indicator setting)
                         .focused(false);  // Don't steal focus
@@ -1236,7 +1237,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
                 // Create toast window for feedback messages (positioned above pill) - all platforms
                 let toast_width = 400.0;
                 let toast_height = 80.0;
-                let pill_width = 80.0;
+                let pill_width = 260.0;
                 let gap = 8.0; // Gap between pill and toast
 
                 // Center toast above pill

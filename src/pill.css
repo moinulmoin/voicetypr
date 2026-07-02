@@ -1,0 +1,201 @@
+html,
+body,
+#root {
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  background: transparent;
+  overflow: hidden;
+}
+
+body {
+  font-family:
+    Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI",
+    sans-serif;
+}
+
+button {
+  font: inherit;
+}
+
+.pill-root {
+  position: fixed;
+  inset: 0;
+  box-sizing: border-box;
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  padding-bottom: 6px;
+  pointer-events: none;
+  color: #f7f7f8;
+}
+
+.pill-surface {
+  box-sizing: border-box;
+  display: flex;
+  min-width: 42px;
+  height: 32px;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid rgb(255 255 255 / 0.1);
+  border-radius: 999px;
+  background: #14171c;
+  box-shadow: 0 8px 28px rgb(0 0 0 / 0.18);
+  transition:
+    width 150ms ease,
+    min-width 150ms ease,
+    padding 150ms ease,
+    background-color 150ms ease,
+    border-color 150ms ease;
+  user-select: none;
+}
+
+.pill-root[data-state="idle"] .pill-surface {
+  min-width: 42px;
+  padding: 0 12px;
+}
+
+.pill-root[data-state="listening"] .pill-surface {
+  min-width: 136px;
+  padding: 0 7px 0 12px;
+}
+
+.pill-root[data-state="transcribing"] .pill-surface,
+.pill-root[data-state="formatting"] .pill-surface {
+  min-width: 156px;
+  padding: 0 14px;
+}
+
+.pill-root[data-state="error"] .pill-surface {
+  max-width: 238px;
+  min-width: 138px;
+  padding: 0 14px;
+  border-color: rgb(248 113 113 / 0.34);
+  background: #28171a;
+  color: #fecaca;
+}
+
+.pill-dots,
+.pill-bars,
+.pill-status {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.pill-dots {
+  gap: 5px;
+}
+
+.pill-dots span {
+  width: 5px;
+  height: 5px;
+  border-radius: 999px;
+  background: rgb(255 255 255 / 0.62);
+}
+
+.pill-bars {
+  height: 18px;
+  gap: 2px;
+}
+
+.pill-bar {
+  width: 2px;
+  height: 18px;
+  border-radius: 999px;
+  background: oklch(0.78 0.1 155);
+  transform-origin: center;
+  transition: transform 90ms linear;
+}
+
+.pill-status {
+  gap: 9px;
+  white-space: nowrap;
+}
+
+.pill-text-pair {
+  display: inline-flex;
+  min-width: 0;
+  align-items: center;
+  gap: 4px;
+}
+
+.pill-text-secondary:empty {
+  display: none;
+}
+
+.pill-status-listening {
+  gap: 10px;
+}
+
+.pill-status-label {
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 1;
+  letter-spacing: 0;
+}
+
+.pill-status-error {
+  min-width: 0;
+  overflow: hidden;
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 1;
+  letter-spacing: 0;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pill-timer {
+  min-width: 31px;
+  font-variant-numeric: tabular-nums;
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1;
+  color: rgb(255 255 255 / 0.9);
+  letter-spacing: 0;
+}
+
+.pill-cancel {
+  display: inline-flex;
+  width: 22px;
+  height: 22px;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  border-radius: 999px;
+  background: rgb(255 255 255 / 0.09);
+  color: rgb(255 255 255 / 0.88);
+  cursor: default;
+  font-size: 15px;
+  line-height: 1;
+  pointer-events: auto;
+  transition:
+    background-color 120ms ease,
+    color 120ms ease,
+    opacity 120ms ease;
+}
+
+.pill-cancel:hover {
+  background: rgb(255 255 255 / 0.15);
+  color: white;
+}
+
+.pill-cancel:disabled {
+  opacity: 0.52;
+}
+
+.pill-spinner {
+  width: 12px;
+  height: 12px;
+  border: 2px solid rgb(255 255 255 / 0.24);
+  border-top-color: oklch(0.78 0.1 155);
+  border-radius: 999px;
+  animation: pill-spin 720ms linear infinite;
+}
+
+@keyframes pill-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
