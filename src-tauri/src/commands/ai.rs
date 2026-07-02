@@ -5,10 +5,7 @@ use crate::ai::executor::AiExecutor;
 use crate::ai::genai_runtime::AiKeyResolver;
 use crate::ai::providers::{launch_providers, PROVIDER_CUSTOM};
 use crate::ai::EnhancementOptions;
-use crate::commands::audio::pill_toast;
 use crate::commands::settings::{
-    normalize_final_text_language, normalize_speech_language_for_model,
-    normalize_transcription_task, task_uses_translate_to_english,
     FINAL_TEXT_LANGUAGE_SAME_AS_TRANSCRIPT, TRANSCRIPTION_TASK_TRANSCRIBE,
 };
 use crate::secure_store;
@@ -115,11 +112,6 @@ fn check_has_api_key<R: tauri::Runtime>(
     }
 }
 
-// Normalize base URL to a Chat Completions endpoint. Base should include version (e.g., .../v1).
-fn normalize_chat_completions_url(base: &str) -> String {
-    let b = base.trim_end_matches('/');
-    format!("{}/chat/completions", b)
-}
 /// Validate a custom OpenAI-compatible base URL.
 ///
 /// This is a minimal link-local DENYLIST, not an allowlist: localhost,
@@ -187,48 +179,42 @@ async fn run_openai_chat_probe(
     client: &reqwest::Client,
     base_url: &str,
     model: &str,
-    auth_header: Option<&str>,
+    api_key: Option<&str>,
+    no_auth: bool,
 ) -> Result<(), String> {
-    let url = normalize_chat_completions_url(base_url);
-    let payload = serde_json::json!({
-        "model": model,
-        "messages": [
-            {"role": "system", "content": "Reply with OK."},
-            {"role": "user", "content": "ping"}
-        ],
-        "stream": false
+    let key = api_key.map(str::to_string);
+    let key_resolver: AiKeyResolver = Arc::new(move |provider_id| {
+        if provider_id == PROVIDER_CUSTOM {
+            key.clone()
+        } else {
+            None
+        }
     });
-    let mut req = client
-        .post(&url)
-        .header("Content-Type", "application/json")
-        .json(&payload);
-    if let Some(header) = auth_header {
-        req = req.header("Authorization", header);
-    }
-    let response = req
-        .send()
+    let executor = AiExecutor::new(client.clone(), key_resolver, base_url.to_string(), no_auth);
+    let request = AiPolishRequest {
+        provider_id: PROVIDER_CUSTOM.to_string(),
+        model_id: model.to_string(),
+        input_text: "ping".to_string(),
+        prompt: "Reply with OK.".to_string(),
+        timeout_ms: 10_000,
+    };
+
+    executor
+        .polish(request, tokio_util::sync::CancellationToken::new())
         .await
-        .map_err(|e| format!("Network error: {}", e))?;
-    let status = response.status();
-    let body = response.text().await.unwrap_or_default();
-    if !status.is_success() {
-        return Err(match status.as_u16() {
-            401 | 403 => "Invalid API key (the endpoint rejected the credentials).".to_string(),
-            404 => "Endpoint or model not found (HTTP 404).".to_string(),
-            429 => "Rate limited by the provider (HTTP 429).".to_string(),
-            _ => format!("Endpoint returned HTTP {}", status.as_u16()),
-        });
-    }
-    let value = serde_json::from_str::<serde_json::Value>(&body)
-        .map_err(|_| "The endpoint did not return a JSON chat-completion response.".to_string())?;
-    if value
-        .pointer("/choices/0/message/content")
-        .and_then(|v| v.as_str())
-        .is_none()
-    {
-        return Err("The endpoint response is not OpenAI chat-completions compatible.".to_string());
-    }
-    Ok(())
+        .map(|_| ())
+        .map_err(|error| match error {
+            AiProviderError::InvalidApiKey => {
+                "Invalid API key (the endpoint rejected the credentials).".to_string()
+            }
+            AiProviderError::InvalidModel => "Endpoint or model not found.".to_string(),
+            AiProviderError::RateLimited => "Rate limited by the provider.".to_string(),
+            AiProviderError::Network => "Network error".to_string(),
+            AiProviderError::BadResponse => {
+                "The endpoint response is not OpenAI chat-completions compatible.".to_string()
+            }
+            other => user_facing_message(&other).to_string(),
+        })
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -575,17 +561,17 @@ pub async fn test_openai_endpoint(
             .unwrap_or(true);
 
     let client = reqwest::Client::new();
-    let auth_header = if no_auth {
+    let api_key = if no_auth {
         None
     } else {
         let key = api_key.unwrap_or_default();
         if key.trim().is_empty() {
             return Err("API key is required (leave empty to use no authentication)".to_string());
         }
-        Some(format!("Bearer {}", key.trim()))
+        Some(key.trim().to_string())
     };
 
-    run_openai_chat_probe(&client, &base_url, &model, auth_header.as_deref())
+    run_openai_chat_probe(&client, &base_url, &model, api_key.as_deref(), no_auth)
         .await
         .map_err(|error| {
             log::error!(
@@ -978,13 +964,13 @@ fn executor_for_provider(
     ))
 }
 
-async fn polish_text_with_prompt_typed(
+async fn polish_text_with_prompt_result_typed(
     app: &tauri::AppHandle,
     text: &str,
     model: String,
     provider: String,
     prompt: String,
-) -> Result<String, AiProviderError> {
+) -> Result<crate::ai::contract::AiPolishResult, AiProviderError> {
     let (executor, runtime_provider) = executor_for_provider(app, &provider)?;
     let request = AiPolishRequest {
         provider_id: runtime_provider.clone(),
@@ -1003,7 +989,7 @@ async fn polish_text_with_prompt_typed(
         result.output_text.len(),
         result.duration_ms
     );
-    Ok(result.output_text)
+    Ok(result)
 }
 
 pub async fn polish_text_typed(
@@ -1011,178 +997,17 @@ pub async fn polish_text_typed(
     text: &str,
     options: &crate::ai::EnhancementOptions,
     output_language: Option<&str>,
+    transcript_language: Option<&str>,
     context: Option<&str>,
-) -> Result<String, crate::ai::error::AiProviderError> {
+) -> Result<crate::ai::contract::AiPolishResult, crate::ai::error::AiProviderError> {
     let (provider, model) = selected_ai_provider_and_model(app)?;
-    let prompt = crate::ai::prompts::build_enhancement_prompt(context, options, output_language);
-    polish_text_with_prompt_typed(app, text, model, provider, prompt).await
-}
-
-pub(crate) async fn enhance_transcription_internal(
-    text: String,
-    transcript_language: Option<String>,
-    ai_enabled_override: Option<bool>,
-    output_language_override: Option<String>,
-    context_override: Option<String>,
-    preset_override: Option<crate::ai::prompts::EnhancementPreset>,
-    app: tauri::AppHandle,
-) -> Result<String, String> {
-    if text.trim().is_empty() {
-        log::debug!("Skipping enhancement for empty text");
-        return Ok(text);
-    }
-
-    let force_formatting = ai_enabled_override == Some(true);
-    let enabled = {
-        let store = app.store("settings").map_err(|e| e.to_string())?;
-        ai_enabled_override.unwrap_or_else(|| {
-            store
-                .get("ai_enabled")
-                .and_then(|v| v.as_bool())
-                .unwrap_or(false)
-        })
-    };
-
-    if !enabled {
-        log::debug!("AI enhancement is disabled");
-        return Ok(text);
-    }
-
-    let stored_options = get_enhancement_options_for_ai_enabled(app.clone(), enabled)
-        .await
-        .unwrap_or_else(|_| EnhancementOptions::default_for_ai_enabled(enabled));
-    let enhancement_options =
-        crate::ai::prompts::effective_enhancement_options(&stored_options, preset_override);
-
-    if !enhancement_options.preset.requires_ai_formatting() {
-        if force_formatting {
-            return Err("Personal Dictation does not use AI formatting".to_string());
-        }
-        log::debug!("Skipping AI formatting for Personal Dictation");
-        return Ok(text);
-    }
-
-    let (provider, model) = match selected_ai_provider_and_model(&app) {
-        Ok(selection) => selection,
-        Err(error) => {
-            log::warn!(
-                "AI enhancement skipped: category={}",
-                user_facing_message(&error)
-            );
-            if force_formatting {
-                return Err(user_facing_message(&error).to_string());
-            }
-            return Ok(text);
-        }
-    };
-
-    let language = if let Some(output_language) = output_language_override {
-        Some(output_language)
-    } else {
-        let lang_store = app.store("settings").map_err(|e| e.to_string())?;
-        let legacy_speech_language = lang_store
-            .get("language")
-            .and_then(|v| v.as_str().map(|s| s.to_string()))
-            .unwrap_or_else(|| "en".to_string());
-        let legacy_translate_to_english = lang_store
-            .get("translate_to_english")
-            .and_then(|v| v.as_bool())
-            .unwrap_or(false);
-        let raw_speech_language = lang_store
-            .get("speech_language")
-            .and_then(|v| v.as_str().map(|s| s.to_string()))
-            .unwrap_or(legacy_speech_language);
-        let current_model = lang_store
-            .get("current_model")
-            .and_then(|v| v.as_str().map(|s| s.to_string()))
-            .unwrap_or_default();
-        let current_model_engine = lang_store
-            .get("current_model_engine")
-            .and_then(|v| v.as_str().map(|s| s.to_string()))
-            .unwrap_or_else(|| "whisper".to_string());
-        let speech_language = normalize_speech_language_for_model(
-            &current_model_engine,
-            &current_model,
-            &raw_speech_language,
-        );
-        let stored_transcription_task = lang_store
-            .get("transcription_task")
-            .and_then(|v| v.as_str().map(|s| s.to_string()));
-        let transcription_task = normalize_transcription_task(
-            stored_transcription_task.as_deref(),
-            legacy_translate_to_english,
-        );
-        let stored_final_text_language = lang_store
-            .get("final_text_language")
-            .and_then(|v| v.as_str().map(|s| s.to_string()));
-        let final_text_language = normalize_final_text_language(
-            stored_final_text_language.as_deref(),
-            &transcription_task,
-        );
-
-        if final_text_language == FINAL_TEXT_LANGUAGE_SAME_AS_TRANSCRIPT {
-            if let Some(transcript_language) = transcript_language {
-                Some(transcript_language)
-            } else if task_uses_translate_to_english(&transcription_task) {
-                Some("en".to_string())
-            } else {
-                Some(speech_language)
-            }
-        } else {
-            Some(final_text_language)
-        }
-    };
-
-    log::info!(
-        "Enhancing text with {} model {} (length: {}, options: {:?}, language: {:?})",
-        provider,
-        model,
-        text.len(),
-        enhancement_options,
-        language
-    );
-    let prompt = crate::ai::prompts::build_enhancement_prompt(
-        context_override.as_deref(),
-        &enhancement_options,
-        language.as_deref(),
-    );
-
-    match polish_text_with_prompt_typed(&app, &text, model, provider, prompt).await {
-        Ok(enhanced_text) => Ok(enhanced_text),
-        Err(error) => {
-            log::warn!(
-                "AI formatting failed: category={}",
-                user_facing_message(&error)
-            );
-            pill_toast(&app, "Formatting failed", 1500);
-            if force_formatting {
-                Err(user_facing_message(&error).to_string())
-            } else {
-                Ok(text)
-            }
-        }
-    }
-}
-
-#[tauri::command]
-pub async fn enhance_transcription(
-    text: String,
-    transcript_language: Option<String>,
-    ai_enabled_override: Option<bool>,
-    output_language_override: Option<String>,
-    context_override: Option<String>,
-    app: tauri::AppHandle,
-) -> Result<String, String> {
-    enhance_transcription_internal(
-        text,
+    let prompt = crate::ai::prompts::build_enhancement_prompt_for_transcript_language(
+        context,
+        options,
+        output_language,
         transcript_language,
-        ai_enabled_override,
-        output_language_override,
-        context_override,
-        None,
-        app,
-    )
-    .await
+    );
+    polish_text_with_prompt_result_typed(app, text, model, provider, prompt).await
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -1470,7 +1295,7 @@ mod tests {
             .await;
 
         let client = reqwest::Client::new();
-        let result = run_openai_chat_probe(&client, &server.uri(), "test-model", None).await;
+        let result = run_openai_chat_probe(&client, &server.uri(), "test-model", None, true).await;
         assert!(result.is_ok(), "expected Ok, got: {:?}", result);
     }
 
@@ -1487,7 +1312,7 @@ mod tests {
             .await;
 
         let client = reqwest::Client::new();
-        let result = run_openai_chat_probe(&client, &server.uri(), "test-model", None).await;
+        let result = run_openai_chat_probe(&client, &server.uri(), "test-model", None, true).await;
         let err = result.unwrap_err();
         assert!(
             err.contains("Invalid API key"),
@@ -1516,7 +1341,7 @@ mod tests {
             .await;
 
         let client = reqwest::Client::new();
-        let result = run_openai_chat_probe(&client, &server.uri(), "test-model", None).await;
+        let result = run_openai_chat_probe(&client, &server.uri(), "test-model", None, true).await;
         assert!(result.is_err(), "expected Err for non-chat JSON shape");
     }
 
@@ -1533,7 +1358,7 @@ mod tests {
             .await;
 
         let client = reqwest::Client::new();
-        let result = run_openai_chat_probe(&client, &server.uri(), "test-model", None).await;
+        let result = run_openai_chat_probe(&client, &server.uri(), "test-model", None, true).await;
         assert!(result.is_err(), "expected Err for non-JSON response");
     }
 

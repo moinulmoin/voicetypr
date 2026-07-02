@@ -223,8 +223,8 @@ use commands::remote::load_remote_settings;
 use commands::telemetry::{get_telemetry_status, report_frontend_error, set_telemetry_consent};
 use commands::{
     ai::{
-        cache_ai_api_key, clear_ai_api_key_cache, disable_ai_enhancement, enhance_transcription,
-        get_ai_settings, get_ai_settings_for_provider, get_enhancement_options, get_openai_config,
+        cache_ai_api_key, clear_ai_api_key_cache, disable_ai_enhancement, get_ai_settings,
+        get_ai_settings_for_provider, get_enhancement_options, get_openai_config,
         get_writing_settings, list_ai_providers, list_provider_models, set_openai_config,
         test_openai_endpoint, update_ai_settings, update_enhancement_options,
         update_writing_settings, validate_ai_api_key,
@@ -1413,7 +1413,6 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             test_openai_endpoint,
             clear_ai_api_key_cache,
             update_ai_settings,
-            enhance_transcription,
             disable_ai_enhancement,
             get_enhancement_options,
             update_enhancement_options,
