@@ -60,6 +60,12 @@ button {
   padding: 0 7px 0 12px;
 }
 
+.pill-root[data-state="listening"] .pill-surface:has(.pill-preview:not([hidden])) {
+  width: 238px;
+  height: 44px;
+  padding: 5px 7px 5px 12px;
+}
+
 .pill-root[data-state="transcribing"] .pill-surface,
 .pill-root[data-state="formatting"] .pill-surface {
   min-width: 156px;
@@ -125,7 +131,50 @@ button {
 }
 
 .pill-status-listening {
+  flex-direction: column;
   gap: 10px;
+}
+
+.pill-listening-controls {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+}
+
+.pill-preview {
+  box-sizing: border-box;
+  display: block;
+  width: 206px;
+  min-width: 0;
+  overflow: hidden;
+  font-size: 11px;
+  font-weight: 500;
+  line-height: 1;
+  letter-spacing: 0;
+  text-align: right;
+  white-space: nowrap;
+  direction: rtl;
+  mask-image: linear-gradient(to right, transparent, black 18px);
+}
+
+.pill-preview[hidden] {
+  display: none;
+}
+
+.pill-committed,
+.pill-tentative {
+  direction: ltr;
+  unicode-bidi: plaintext;
+}
+
+.pill-committed {
+  color: rgb(255 255 255 / 0.9);
+}
+
+.pill-tentative {
+  color: rgb(255 255 255 / 0.55);
+  font-style: italic;
 }
 
 .pill-status-label {

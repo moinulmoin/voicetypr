@@ -1,5 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
+import { TRANSCRIPTION_STREAM_EVENT, type TranscriptionStreamEvent } from "@/types/streaming";
 import "./pill.css";
 
 type BackendRecordingState =
@@ -16,6 +17,8 @@ type PillIndicatorMode = "never" | "always" | "when_recording";
 
 interface SettingsPayload {
   pill_indicator_mode?: PillIndicatorMode;
+  streaming_preview_enabled?: boolean;
+  streaming_preview_demo?: boolean;
 }
 
 interface RecordingStatePayload {
@@ -30,6 +33,9 @@ interface TauriEvent<T> {
 type UnlistenFn = () => void;
 type ListenFn = <T>(event: string, handler: (event: TauriEvent<T>) => void) => Promise<UnlistenFn>;
 type InvokeFn = <T = unknown>(command: string) => Promise<T>;
+type TimeoutHandle = number | ReturnType<typeof setTimeout>;
+type TimeoutFn = (handler: () => void, timeout: number) => TimeoutHandle;
+type ClearTimeoutFn = (timeout: TimeoutHandle) => void;
 
 export interface RecordingPillController {
   destroy: () => void;
@@ -38,6 +44,8 @@ export interface RecordingPillController {
 interface RecordingPillDeps {
   invoke?: InvokeFn;
   listen?: ListenFn;
+  setTimeout?: TimeoutFn;
+  clearTimeout?: ClearTimeoutFn;
 }
 
 interface PillDom {
@@ -47,6 +55,10 @@ interface PillDom {
   bars: HTMLDivElement;
   barSpans: HTMLSpanElement[];
   listening: HTMLDivElement;
+  listeningControls: HTMLDivElement;
+  preview: HTMLDivElement;
+  committed: HTMLSpanElement;
+  tentative: HTMLSpanElement;
   timer: HTMLSpanElement;
   cancel: HTMLButtonElement;
   transcribing: HTMLDivElement;
@@ -130,13 +142,22 @@ function createPillDom(rootElement: HTMLElement): PillDom {
   });
 
   const listening = createEl("div", "pill-status pill-status-listening");
+  const preview = createEl("div", "pill-preview");
+  preview.dataset.testid = "pill-preview";
+  const committed = createEl("span", "pill-committed");
+  committed.dataset.testid = "pill-committed";
+  const tentative = createEl("span", "pill-tentative");
+  tentative.dataset.testid = "pill-tentative";
+  preview.append(committed, tentative);
+  const listeningControls = createEl("div", "pill-listening-controls");
   const timer = createEl("span", "pill-timer");
   timer.setAttribute("aria-label", "Recording elapsed time");
   const cancel = createEl("button", "pill-cancel");
   cancel.type = "button";
   cancel.setAttribute("aria-label", "Cancel recording");
   cancel.textContent = "×";
-  listening.append(bars, timer, cancel);
+  listeningControls.append(bars, timer, cancel);
+  listening.append(preview, listeningControls);
 
   const transcribing = createEl("div", "pill-status pill-status-label");
   transcribing.setAttribute("role", "status");
@@ -164,6 +185,10 @@ function createPillDom(rootElement: HTMLElement): PillDom {
     bars,
     barSpans,
     listening,
+    listeningControls,
+    preview,
+    committed,
+    tentative,
     timer,
     cancel,
     transcribing,
@@ -202,9 +227,13 @@ export function createRecordingPill(
 ): RecordingPillController {
   const tauriInvoke = deps.invoke ?? invoke;
   const tauriListen = deps.listen ?? listen;
+  const scheduleTimeout = deps.setTimeout ?? setTimeout;
+  const cancelTimeout = deps.clearTimeout ?? clearTimeout;
   const dom = createPillDom(rootElement);
 
   let mode: PillIndicatorMode = "when_recording";
+  let streamingPreviewEnabled = false;
+  let streamingPreviewDemo = false;
   let pillState: PillState = "idle";
   let isFormatting = false;
   let audioLevel = 0;
@@ -212,9 +241,16 @@ export function createRecordingPill(
   let errorMessage: string | null = null;
   let isCancelling = false;
   let isDestroyed = false;
-  let errorTimeout: ReturnType<typeof setTimeout> | undefined;
+  let errorTimeout: TimeoutHandle | undefined;
   let timerInterval: ReturnType<typeof setInterval> | undefined;
   let audioUnlisten: UnlistenFn | undefined;
+  let streamUnlisten: UnlistenFn | undefined;
+  let activeStreamSessionId: number | null = null;
+  let lastStreamRevision = -1;
+  let streamPreviewVisible = false;
+  let committedWarned = false;
+  let demoRunId = 0;
+  let demoTimeouts: TimeoutHandle[] = [];
   const unlisteners: UnlistenFn[] = [];
 
   const visibleState = (): VisibleState =>
@@ -237,6 +273,7 @@ export function createRecordingPill(
     setHidden(dom.transcribing, state !== "transcribing");
     setHidden(dom.formatting, state !== "formatting");
     setHidden(dom.error, state !== "error");
+    setHidden(dom.preview, state !== "listening" || !streamPreviewVisible);
 
     dom.timer.textContent = formatElapsed(elapsedSeconds);
     dom.cancel.disabled = isCancelling;
@@ -272,6 +309,124 @@ export function createRecordingPill(
     }
   };
 
+  const clearDemo = () => {
+    demoRunId += 1;
+    demoTimeouts.forEach((timeout) => cancelTimeout(timeout));
+    demoTimeouts = [];
+  };
+
+  const resetStreamPreview = () => {
+    activeStreamSessionId = null;
+    lastStreamRevision = -1;
+    streamPreviewVisible = false;
+    dom.committed.textContent = "";
+    dom.tentative.textContent = "";
+    clearDemo();
+  };
+
+  const applyStreamText = (committed: string, tentative: string) => {
+    const previousCommitted = dom.committed.textContent ?? "";
+    if (committed.startsWith(previousCommitted)) {
+      dom.committed.textContent = previousCommitted + committed.slice(previousCommitted.length);
+    } else {
+      if (!committedWarned) {
+        committedWarned = true;
+        console.warn("Streaming preview committed text was non-monotonic; replacing text.");
+      }
+      dom.committed.textContent = committed;
+    }
+    dom.tentative.textContent = tentative;
+    streamPreviewVisible = committed.length > 0 || tentative.length > 0;
+  };
+
+  const isFreshStreamEvent = (event: TranscriptionStreamEvent) => {
+    if (activeStreamSessionId !== null && event.session_id !== activeStreamSessionId) {
+      return false;
+    }
+    if (event.revision <= lastStreamRevision) {
+      return false;
+    }
+    return true;
+  };
+
+  const handleStreamEvent = (event: TranscriptionStreamEvent) => {
+    if (isDestroyed || !streamingPreviewEnabled || visibleState() !== "listening") return;
+    if (!isFreshStreamEvent(event)) return;
+
+    activeStreamSessionId = event.session_id;
+    lastStreamRevision = event.revision;
+
+    if (event.type === "partial") {
+      applyStreamText(event.committed, event.tentative);
+      render();
+      return;
+    }
+
+    if (event.type === "started") {
+      streamPreviewVisible = false;
+      dom.committed.textContent = "";
+      dom.tentative.textContent = "";
+      render();
+      return;
+    }
+
+    if (event.type === "final" || event.type === "cancelled" || event.type === "error") {
+      resetStreamPreview();
+      render();
+    }
+  };
+
+  const startDemo = () => {
+    if (!streamingPreviewEnabled || !streamingPreviewDemo || visibleState() !== "listening") return;
+
+    clearDemo();
+    const runId = demoRunId;
+    const sessionId = Date.now();
+    const staleSessionId = sessionId + 1;
+    const steps: Array<{ delay: number; event: TranscriptionStreamEvent }> = [
+      { delay: 0, event: { type: "started", session_id: sessionId, engine: "demo", revision: 0 } },
+      { delay: 90, event: { type: "partial", session_id: sessionId, revision: 1, committed: "Launch", tentative: "ing" } },
+      { delay: 180, event: { type: "partial", session_id: sessionId, revision: 2, committed: "Launching ", tentative: "the" } },
+      { delay: 270, event: { type: "partial", session_id: sessionId, revision: 4, committed: "Launching the ", tentative: "stream" } },
+      { delay: 360, event: { type: "partial", session_id: sessionId, revision: 3, committed: "ignored", tentative: "stale" } },
+      { delay: 450, event: { type: "partial", session_id: staleSessionId, revision: 5, committed: "ignored session", tentative: "" } },
+      { delay: 540, event: { type: "partial", session_id: sessionId, revision: 5, committed: "Launching the stream ", tentative: "preview" } },
+      { delay: 630, event: { type: "partial", session_id: sessionId, revision: 6, committed: "Launching the stream preview", tentative: "" } },
+      { delay: 720, event: { type: "final", session_id: sessionId, revision: 7, text: "Launching the stream preview" } },
+    ];
+
+    demoTimeouts = steps.map(({ delay, event }) =>
+      scheduleTimeout(() => {
+        if (runId === demoRunId) handleStreamEvent(event);
+      }, delay),
+    );
+  };
+
+  const stopStreamListener = () => {
+    streamUnlisten?.();
+    streamUnlisten = undefined;
+  };
+
+  const syncStreamListener = () => {
+    if (!streamingPreviewEnabled) {
+      stopStreamListener();
+      resetStreamPreview();
+      render();
+      return;
+    }
+    if (streamUnlisten) return;
+
+    void tauriListen<TranscriptionStreamEvent>(TRANSCRIPTION_STREAM_EVENT, (event) => {
+      handleStreamEvent(event.payload);
+    }).then((unlisten) => {
+      if (isDestroyed || !streamingPreviewEnabled) {
+        unlisten();
+      } else {
+        streamUnlisten = unlisten;
+      }
+    });
+  };
+
   const startTimer = () => {
     if (timerInterval) return;
 
@@ -285,11 +440,13 @@ export function createRecordingPill(
     if (visibleState() === "listening") {
       startAudioListener();
       startTimer();
+      startDemo();
       return;
     }
 
     stopAudioListener();
     stopTimer();
+    resetStreamPreview();
   };
 
   const resetActiveState = () => {
@@ -308,12 +465,12 @@ export function createRecordingPill(
   };
 
   const flashError = (message: string) => {
-    if (errorTimeout) clearTimeout(errorTimeout);
+    if (errorTimeout) cancelTimeout(errorTimeout);
     errorMessage = message;
     syncListeningEffects();
     render();
 
-    errorTimeout = setTimeout(() => {
+    errorTimeout = scheduleTimeout(() => {
       errorMessage = null;
       errorTimeout = undefined;
       syncListeningEffects();
@@ -326,10 +483,16 @@ export function createRecordingPill(
       const settings = await tauriInvoke<SettingsPayload>("get_settings");
       if (isDestroyed) return;
       mode = normalizeMode(settings.pill_indicator_mode);
+      streamingPreviewEnabled = settings.streaming_preview_enabled === true;
+      streamingPreviewDemo = settings.streaming_preview_demo === true;
     } catch {
       if (isDestroyed) return;
       mode = "when_recording";
+      streamingPreviewEnabled = false;
+      streamingPreviewDemo = false;
     }
+    syncStreamListener();
+    if (visibleState() === "listening") startDemo();
     render();
   };
 
@@ -414,9 +577,11 @@ export function createRecordingPill(
   return {
     destroy: () => {
       isDestroyed = true;
-      if (errorTimeout) clearTimeout(errorTimeout);
+      if (errorTimeout) cancelTimeout(errorTimeout);
       stopTimer();
       stopAudioListener();
+      stopStreamListener();
+      clearDemo();
       unlisteners.forEach((unlisten) => unlisten());
       rootElement.replaceChildren();
     },
