@@ -1,9 +1,9 @@
 #[cfg(test)]
 mod behavior_tests {
     use crate::ai::prompts::{
-        build_enhancement_prompt, effective_enhancement_options, get_language_name,
-        migrate_preset_str, parse_enhancement_options_from_value, EnhancementOptions,
-        EnhancementPreset,
+        build_enhancement_prompt, build_enhancement_prompt_for_transcript_language,
+        get_language_name, migrate_preset_str,
+        parse_enhancement_options_from_value, EnhancementOptions, EnhancementPreset,
     };
 
     const ALL_PRESETS: &[EnhancementPreset] = &[
@@ -109,6 +109,25 @@ mod behavior_tests {
         assert!(build_enhancement_prompt(None, &opts, Some("ja")).contains("written Japanese"));
         // None defaults to English.
         assert!(build_enhancement_prompt(None, &opts, None).contains("written English"));
+    }
+
+    #[test]
+    fn translation_prompt_adds_explicit_instruction_when_languages_differ() {
+        let opts = options(EnhancementPreset::CleanDictation);
+        let prompt =
+            build_enhancement_prompt_for_transcript_language(None, &opts, Some("es"), Some("en"));
+        assert!(prompt.contains("written Spanish"));
+        assert!(
+            prompt.contains("The dictation may be in another language; translate it into Spanish.")
+        );
+    }
+
+    #[test]
+    fn same_language_prompt_does_not_add_translation_instruction() {
+        let opts = options(EnhancementPreset::CleanDictation);
+        let prompt =
+            build_enhancement_prompt_for_transcript_language(None, &opts, Some("en"), Some("en"));
+        assert!(!prompt.contains("translate it into"));
     }
 
     // De-dup proof: built prompt does NOT contain the transcript text.
@@ -281,48 +300,23 @@ mod behavior_tests {
         assert!(prompt.contains("make it read well"));
     }
 
+    // A Message preset carries the Message transform marker.
     #[test]
-    fn test_effective_enhancement_options_prefers_override() {
-        let stored = EnhancementOptions {
-            preset: EnhancementPreset::PersonalDictation,
+    fn message_preset_uses_message_transform() {
+        let effective = EnhancementOptions {
+            preset: EnhancementPreset::Message,
         };
-        let effective = effective_enhancement_options(&stored, Some(EnhancementPreset::Message));
-
-        assert_eq!(effective.preset, EnhancementPreset::Message);
-        assert!(effective.preset.requires_ai_formatting());
-    }
-
-    #[test]
-    fn test_effective_enhancement_options_keeps_global_personal_without_override() {
-        let stored = EnhancementOptions {
-            preset: EnhancementPreset::PersonalDictation,
-        };
-        let effective = effective_enhancement_options(&stored, None);
-
-        assert_eq!(effective.preset, EnhancementPreset::PersonalDictation);
-        assert!(!effective.preset.requires_ai_formatting());
-    }
-
-    // A forced Message preset overrides a global Personal preset and carries the
-    // Message transform marker.
-    #[test]
-    fn forced_message_preset_uses_message_transform_with_global_personal() {
-        let stored = EnhancementOptions {
-            preset: EnhancementPreset::PersonalDictation,
-        };
-        let effective = effective_enhancement_options(&stored, Some(EnhancementPreset::Message));
         let prompt = build_enhancement_prompt(None, &effective, None);
 
         assert!(prompt.contains("make it a short message"));
     }
 
-    // A manual Personal preset (no override) skips every formatting transform.
+    // A Personal preset skips every formatting transform.
     #[test]
-    fn manual_personal_preset_skips_formatting_transform() {
-        let stored = EnhancementOptions {
+    fn personal_preset_skips_formatting_transform() {
+        let effective = EnhancementOptions {
             preset: EnhancementPreset::PersonalDictation,
         };
-        let effective = effective_enhancement_options(&stored, None);
         let prompt = build_enhancement_prompt(None, &effective, None);
 
         assert!(!prompt.contains("make it a short message"));
