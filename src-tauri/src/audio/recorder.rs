@@ -268,7 +268,7 @@ impl AudioRecorder {
         let stop_tx_clone = stop_tx.clone();
 
         // Create audio level channel (f64 for EBU R128 loudness values)
-        let (audio_level_tx, audio_level_rx) = mpsc::channel::<f64>();
+        let (audio_level_tx, audio_level_rx) = mpsc::sync_channel::<f64>(8);
         let (silence_event_tx, silence_event_rx) = mpsc::sync_channel::<SilenceDetectorEvent>(8);
         // Spawn recording thread
         let thread_handle = thread::spawn(move || -> Result<String, String> {
@@ -779,7 +779,7 @@ impl AudioRecorder {
                         Err(_) => return Err("Recording thread panicked".to_string()),
                     }
                 }
-                std::thread::sleep(Duration::from_millis(100));
+                std::thread::sleep(Duration::from_millis(5));
             }
 
             // If we get here, the thread didn't finish within timeout
