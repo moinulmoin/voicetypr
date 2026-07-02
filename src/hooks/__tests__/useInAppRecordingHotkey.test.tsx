@@ -72,11 +72,42 @@ const bareControlBinding = {
   modifier: { modifier: "control", side: "either" },
 };
 
+const holdControlBinding = {
+  ...bareControlBinding,
+  action: "hold_to_record",
+  trigger: "hold",
+  trigger_kind: "modifier_hold",
+};
+
 // Dispatch a clean lone-modifier tap (keydown then keyup, same physical key).
 function fireModifierTap(target: Element, init: KeyboardEventInit = {}): void {
   const opts = { bubbles: true, cancelable: true, code: "ControlLeft", key: "Control", ...init };
   target.dispatchEvent(new KeyboardEvent("keydown", opts));
   target.dispatchEvent(new KeyboardEvent("keyup", opts));
+}
+
+function fireModifierDown(target: Element, init: KeyboardEventInit = {}): void {
+  target.dispatchEvent(
+    new KeyboardEvent("keydown", {
+      bubbles: true,
+      cancelable: true,
+      code: "ControlLeft",
+      key: "Control",
+      ...init,
+    }),
+  );
+}
+
+function fireModifierUp(target: Element, init: KeyboardEventInit = {}): void {
+  target.dispatchEvent(
+    new KeyboardEvent("keyup", {
+      bubbles: true,
+      cancelable: true,
+      code: "ControlLeft",
+      key: "Control",
+      ...init,
+    }),
+  );
 }
 
 // Render the hook and flush the async get_shortcut_settings load so the
@@ -307,16 +338,36 @@ describe("useInAppRecordingHotkey", () => {
     expect(mockRecording.startRecording).not.toHaveBeenCalled();
   });
 
-  it("ignores a push-to-talk (modifier_hold) binding — tap path is toggle-only", async () => {
+  it("starts on keydown and stops on keyup for a push-to-talk modifier_hold binding", async () => {
     mockSettings.hotkey = "";
     mockInvoke.mockResolvedValue({
-      bindings: [{ ...bareControlBinding, action: "hold_to_record", trigger_kind: "modifier_hold" }],
+      bindings: [holdControlBinding],
     });
     await renderWithBareModifier();
 
-    fireModifierTap(editable);
+    fireModifierDown(editable);
 
-    expect(mockRecording.startRecording).not.toHaveBeenCalled();
+    expect(mockRecording.startRecording).toHaveBeenCalledTimes(1);
+    expect(mockRecording.stopRecording).not.toHaveBeenCalled();
+
+    mockRecording.state = "recording";
+    fireModifierUp(editable);
+
+    expect(mockRecording.stopRecording).toHaveBeenCalledTimes(1);
+  });
+
+  it("suppresses auto-repeat keydowns for a push-to-talk modifier_hold binding", async () => {
+    mockSettings.hotkey = "";
+    mockInvoke.mockResolvedValue({
+      bindings: [holdControlBinding],
+    });
+    await renderWithBareModifier();
+
+    fireModifierDown(editable);
+    fireModifierDown(editable, { repeat: true });
+    fireModifierDown(editable, { repeat: true });
+
+    expect(mockRecording.startRecording).toHaveBeenCalledTimes(1);
   });
 
   it("bails if recording state changed between keydown and keyup", async () => {
@@ -402,6 +453,27 @@ describe("useInAppRecordingHotkey", () => {
 
     expect(mockRecording.startRecording).toHaveBeenCalledTimes(1);
     expect(mockRecording.stopRecording).not.toHaveBeenCalled();
+  });
+
+  it("rearms from shortcut-settings-changed even when the cached hotkey is stale", async () => {
+    mockSettings.hotkey = "CommandOrControl+Shift+Space";
+    mockInvoke.mockResolvedValue({ bindings: [] });
+    await renderWithBareModifier();
+
+    fireModifierTap(editable);
+
+    expect(mockRecording.startRecording).not.toHaveBeenCalled();
+
+    mockInvoke.mockResolvedValue({ bindings: [bareControlBinding] });
+    await act(async () => {
+      eventMock.shortcutSettingsChangedHandler?.();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    fireModifierTap(editable);
+
+    expect(mockRecording.startRecording).toHaveBeenCalledTimes(1);
   });
 
 });

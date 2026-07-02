@@ -259,6 +259,7 @@ export const OnboardingDesktop = function OnboardingDesktop({
   const [holdToTalk, setHoldToTalk] = useState(false);
   const [skipConfirmActive, setSkipConfirmActive] = useState(false);
   const skipConfirmTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const sampleTextareaRef = useRef<HTMLTextAreaElement | null>(null);
 
   useEffect(() => {
     sourceConfirmedRef.current = sourceConfirmed;
@@ -292,6 +293,17 @@ export const OnboardingDesktop = function OnboardingDesktop({
     },
     [],
   );
+  const focusSampleTextarea = useCallback(() => {
+    window.setTimeout(() => {
+      sampleTextareaRef.current?.focus();
+    }, 0);
+  }, []);
+
+  useEffect(() => {
+    if (currentStep === "first_transcription") {
+      focusSampleTextarea();
+    }
+  }, [currentStep, focusSampleTextarea]);
 
   const permissions = {
     microphone: {
@@ -830,11 +842,13 @@ export const OnboardingDesktop = function OnboardingDesktop({
     resetSkipConfirm();
     setSampleError(null);
     setSampleTranscript(null);
+    focusSampleTextarea();
     await recording.startRecording();
   };
 
   const stopSampleRecording = async () => {
     setSampleError(null);
+    focusSampleTextarea();
     await recording.stopRecording();
   };
 
@@ -1451,6 +1465,7 @@ export const OnboardingDesktop = function OnboardingDesktop({
                 ) : null}
 
                 <Textarea
+                  ref={sampleTextareaRef}
                   key={currentSampleTranscript ?? "empty"}
                   defaultValue={currentSampleTranscript ?? ""}
                   placeholder="Your transcription will appear here as you speak."
