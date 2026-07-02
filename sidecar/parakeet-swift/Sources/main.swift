@@ -182,6 +182,13 @@ struct StreamCancelledResponse: Encodable {
     let type: String = "stream_cancelled"
 }
 
+struct EouModelStatusResponse: Encodable {
+    let type: String = "eou_model_status"
+    let chunkMs: Int
+    let downloaded: Bool
+    let path: String?
+}
+
 struct ErrorResponse: Encodable {
     let type: String = "error"
     let code: String
@@ -227,6 +234,7 @@ enum SupportedModelVersion: String, CaseIterable {
 @MainActor var downloadedVersions = Set<SupportedModelVersion>()
 @MainActor var cachedCtcModels: CtcModels?
 @MainActor var cachedCtcTokenizer: CtcTokenizer?
+@MainActor var cachedEouManagers: [Int: StreamingEouAsrManager] = [:]
 
 func ctcVocabularyReady() -> Bool {
     let directory = CtcModels.defaultCacheDirectory(for: .ctc110m)
@@ -238,14 +246,21 @@ func ctcVocabularyReady() -> Bool {
 
 @MainActor
 final class ActiveStreamSession {
-    let manager: SlidingWindowAsrManager
+    enum Engine {
+        case slidingWindow(SlidingWindowAsrManager)
+        case eou(StreamingEouAsrManager)
+    }
+
+    let engine: Engine
     let sampleRate: Double
     let channels: Int
     let encoder: JSONEncoder
     var forwarder: Task<Void, Never>?
+    var committedPrefix = ""
+    var latestPartial = ""
 
-    init(manager: SlidingWindowAsrManager, sampleRate: Double, channels: Int, encoder: JSONEncoder) {
-        self.manager = manager
+    init(engine: Engine, sampleRate: Double, channels: Int, encoder: JSONEncoder) {
+        self.engine = engine
         self.sampleRate = sampleRate
         self.channels = channels
         self.encoder = encoder
@@ -344,6 +359,18 @@ struct ParakeetSidecar {
 
                 case "download_ctc_models":
                     await downloadCtcModels(encoder: encoder)
+
+                case "eou_model_status":
+                    let chunkMs = json["chunk_ms"] as? Int ?? 320
+                    await eouModelStatus(chunkMs: chunkMs, encoder: encoder)
+
+                case "download_eou_model":
+                    let chunkMs = json["chunk_ms"] as? Int ?? 320
+                    await downloadEouModel(chunkMs: chunkMs, encoder: encoder)
+
+                case "warmup_eou":
+                    let chunkMs = json["chunk_ms"] as? Int ?? 320
+                    await warmupEou(chunkMs: chunkMs, encoder: encoder)
 
                 case "diarize":
                     if let audioPath = json["audio_path"] as? String {
@@ -703,7 +730,7 @@ struct ParakeetSidecar {
 
     static func isHeavyCommandBlockedDuringStream(_ commandType: String?) -> Bool {
         switch commandType {
-        case "load_model", "download_model", "unload_model", "delete_model", "transcribe", "download_ctc_models", "diarize", "start_stream":
+        case "load_model", "download_model", "unload_model", "delete_model", "transcribe", "download_ctc_models", "download_eou_model", "warmup_eou", "diarize", "start_stream":
             return true
         default:
             return false
@@ -750,6 +777,184 @@ struct ParakeetSidecar {
         return nil
     }
 
+    static func eouChunkSize(from chunkMs: Int) -> StreamingChunkSize? {
+        switch chunkMs {
+        case 160:
+            return .ms160
+        case 320:
+            return .ms320
+        case 1280:
+            return .ms1280
+        default:
+            return nil
+        }
+    }
+
+    static func eouRepo(from chunkMs: Int) -> Repo? {
+        switch chunkMs {
+        case 160:
+            return .parakeetEou160
+        case 320:
+            return .parakeetEou320
+        case 1280:
+            return .parakeetEou1280
+        default:
+            return nil
+        }
+    }
+
+    static func eouRepoFolderName(chunkMs: Int) -> String? {
+        eouRepo(from: chunkMs)?.folderName
+    }
+
+    static func eouModelsRootDirectory() -> URL? {
+        FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)
+            .first?
+            .appendingPathComponent("FluidAudio", isDirectory: true)
+            .appendingPathComponent("Models", isDirectory: true)
+            .appendingPathComponent("parakeet-eou-streaming", isDirectory: true)
+    }
+
+    static func eouCanonicalModelDirectory(chunkMs: Int) -> URL? {
+        guard let root = eouModelsRootDirectory(),
+              let repoFolderName = eouRepoFolderName(chunkMs: chunkMs) else {
+            return nil
+        }
+        return root.appendingPathComponent(repoFolderName, isDirectory: true)
+    }
+
+    static func eouLegacyFlatModelDirectory(chunkMs: Int) -> URL? {
+        guard eouChunkSize(from: chunkMs) != nil else {
+            return nil
+        }
+        return FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)
+            .first?
+            .appendingPathComponent("FluidAudio", isDirectory: true)
+            .appendingPathComponent("Models", isDirectory: true)
+            .appendingPathComponent("parakeet-eou-streaming", isDirectory: true)
+            .appendingPathComponent("\(chunkMs)ms", isDirectory: true)
+    }
+
+    static func eouRequiredModelsExist(in directory: URL) -> Bool {
+        let required = [
+            "streaming_encoder.mlmodelc",
+            "decoder.mlmodelc",
+            "joint_decision.mlmodelc",
+            "vocab.json",
+        ]
+        return required.allSatisfy { name in
+            FileManager.default.fileExists(atPath: directory.appendingPathComponent(name).path)
+        }
+    }
+
+    static func eouResolvedModelDirectory(chunkMs: Int) -> URL? {
+        guard let canonical = eouCanonicalModelDirectory(chunkMs: chunkMs) else {
+            return nil
+        }
+        if eouRequiredModelsExist(in: canonical) {
+            return canonical
+        }
+        if let legacy = eouLegacyFlatModelDirectory(chunkMs: chunkMs),
+           eouRequiredModelsExist(in: legacy) {
+            return legacy
+        }
+        return canonical
+    }
+
+    static func eouModelDownloaded(chunkMs: Int) -> (downloaded: Bool, path: String?) {
+        guard let directory = eouResolvedModelDirectory(chunkMs: chunkMs) else {
+            return (false, nil)
+        }
+        let downloaded = eouRequiredModelsExist(in: directory)
+        return (downloaded, downloaded ? directory.path : nil)
+    }
+
+    static func eouModelStatus(chunkMs: Int, encoder: JSONEncoder) async {
+        guard eouChunkSize(from: chunkMs) != nil else {
+            sendError("invalid_chunk_ms", message: "chunk_ms must be 160, 320, or 1280", encoder: encoder)
+            return
+        }
+        let status = eouModelDownloaded(chunkMs: chunkMs)
+        sendResponse(
+            EouModelStatusResponse(chunkMs: chunkMs, downloaded: status.downloaded, path: status.path),
+            encoder: encoder
+        )
+    }
+
+    static func loadCachedEouManager(chunkMs: Int) async throws -> StreamingEouAsrManager {
+        if let manager = cachedEouManagers[chunkMs] {
+            return manager
+        }
+        guard let chunkSize = eouChunkSize(from: chunkMs),
+              let directory = eouResolvedModelDirectory(chunkMs: chunkMs) else {
+            throw NSError(domain: "VoicetyprParakeet", code: 1, userInfo: [NSLocalizedDescriptionKey: "chunk_ms must be 160, 320, or 1280"])
+        }
+        let status = eouModelDownloaded(chunkMs: chunkMs)
+        guard status.downloaded else {
+            throw NSError(domain: "VoicetyprParakeet", code: 2, userInfo: [NSLocalizedDescriptionKey: "Parakeet EOU \(chunkMs)ms model is not downloaded"])
+        }
+        let manager = StreamingEouAsrManager(chunkSize: chunkSize)
+        try await withLibraryStdoutRedirected {
+            try await manager.loadModels(from: directory)
+        }
+        cachedEouManagers[chunkMs] = manager
+        return manager
+    }
+
+    static func downloadEouModel(chunkMs: Int, encoder: JSONEncoder) async {
+        guard let chunkSize = eouChunkSize(from: chunkMs) else {
+            sendError("invalid_chunk_ms", message: "chunk_ms must be 160, 320, or 1280", encoder: encoder)
+            return
+        }
+        do {
+            let manager = StreamingEouAsrManager(chunkSize: chunkSize)
+            let progressHandler: DownloadUtils.ProgressHandler = { progress in
+                sendProgress(progress, encoder: encoder)
+            }
+            guard let rootDirectory = eouModelsRootDirectory() else {
+                sendError("eou_model_download_failed", message: "Failed to resolve EOU model cache directory", encoder: encoder)
+                return
+            }
+            try await withLibraryStdoutRedirected {
+                try await manager.loadModels(to: rootDirectory, configuration: nil, progressHandler: progressHandler)
+            }
+            cachedEouManagers[chunkMs] = manager
+            sendResponse(OkResponse(command: "download_eou_model"), encoder: encoder)
+        } catch {
+            sendError("eou_model_download_failed", message: "Failed to download EOU model: \(error.localizedDescription)", encoder: encoder)
+        }
+    }
+
+    static func makeSilenceBuffer(sampleRate: Double = 16_000, durationSeconds: Double = 1.0) -> AVAudioPCMBuffer? {
+        let frames = AVAudioFrameCount(sampleRate * durationSeconds)
+        guard let format = AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: sampleRate, channels: 1, interleaved: false),
+              let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: frames) else {
+            return nil
+        }
+        buffer.frameLength = frames
+        return buffer
+    }
+
+    static func warmupEou(chunkMs: Int, encoder: JSONEncoder) async {
+        let startTime = Date()
+        do {
+            let manager = try await loadCachedEouManager(chunkMs: chunkMs)
+            guard let buffer = makeSilenceBuffer() else {
+                sendResponse(WarmedResponse(warmed: false, ms: 0, error: "Failed to create warmup buffer"), encoder: encoder)
+                return
+            }
+            await manager.reset()
+            try await manager.appendAudio(buffer)
+            try await manager.processBufferedAudio()
+            _ = try await manager.finish()
+            let elapsedMs = Int(Date().timeIntervalSince(startTime) * 1000.0)
+            sendResponse(WarmedResponse(warmed: true, ms: elapsedMs, error: nil), encoder: encoder)
+        } catch {
+            let elapsedMs = Int(Date().timeIntervalSince(startTime) * 1000.0)
+            sendResponse(WarmedResponse(warmed: false, ms: elapsedMs, error: error.localizedDescription), encoder: encoder)
+        }
+    }
+
     static func startStream(command: [String: Any], encoder: JSONEncoder) async {
         guard activeStreamSession == nil else {
             sendError("stream_busy", message: "A Parakeet stream is already active", encoder: encoder)
@@ -779,30 +984,78 @@ struct ParakeetSidecar {
             return
         }
 
+        let engine = (command["engine"] as? String) ?? "sliding_window"
+
         do {
-            let manager = SlidingWindowAsrManager(config: streamingConfig(from: command))
-            try await manager.loadModels(models)
-            try await manager.startStreaming(source: .microphone)
-            let session = ActiveStreamSession(
-                manager: manager,
-                sampleRate: sampleRate,
-                channels: channels,
-                encoder: encoder
-            )
-            session.forwarder = Task {
-                for await update in await manager.transcriptionUpdates {
-                    sendResponse(
-                        StreamPartialResponse(
-                            text: update.text,
-                            isConfirmed: update.isConfirmed,
-                            confidence: update.confidence
-                        ),
-                        encoder: encoder
-                    )
+            switch engine {
+            case "eou":
+                let chunkMs = command["chunk_ms"] as? Int ?? 320
+                let manager = try await loadCachedEouManager(chunkMs: chunkMs)
+                await manager.reset()
+                let session = ActiveStreamSession(
+                    engine: .eou(manager),
+                    sampleRate: sampleRate,
+                    channels: channels,
+                    encoder: encoder
+                )
+                await manager.setPartialCallback { transcript in
+                    Task { @MainActor in
+                        guard let active = activeStreamSession else { return }
+                        active.latestPartial = transcript
+                        let tentative: String
+                        if transcript.hasPrefix(active.committedPrefix) {
+                            tentative = String(transcript.dropFirst(active.committedPrefix.count))
+                        } else {
+                            tentative = transcript
+                        }
+                        sendResponse(
+                            StreamPartialResponse(text: tentative, isConfirmed: false, confidence: 0.0),
+                            encoder: encoder
+                        )
+                    }
                 }
+                await manager.setEouCallback { transcript in
+                    Task { @MainActor in
+                        guard let active = activeStreamSession else { return }
+                        active.committedPrefix = transcript
+                        active.latestPartial = transcript
+                        sendResponse(
+                            StreamPartialResponse(text: transcript, isConfirmed: true, confidence: 1.0),
+                            encoder: encoder
+                        )
+                    }
+                }
+                activeStreamSession = session
+                sendResponse(StreamStartedResponse(), encoder: encoder)
+
+            case "sliding_window":
+                let manager = SlidingWindowAsrManager(config: streamingConfig(from: command))
+                try await manager.loadModels(models)
+                try await manager.startStreaming(source: .microphone)
+                let session = ActiveStreamSession(
+                    engine: .slidingWindow(manager),
+                    sampleRate: sampleRate,
+                    channels: channels,
+                    encoder: encoder
+                )
+                session.forwarder = Task {
+                    for await update in await manager.transcriptionUpdates {
+                        sendResponse(
+                            StreamPartialResponse(
+                                text: update.text,
+                                isConfirmed: update.isConfirmed,
+                                confidence: update.confidence
+                            ),
+                            encoder: encoder
+                        )
+                    }
+                }
+                activeStreamSession = session
+                sendResponse(StreamStartedResponse(), encoder: encoder)
+
+            default:
+                sendError("invalid_stream_engine", message: "engine must be \"sliding_window\" or \"eou\"", encoder: encoder)
             }
-            activeStreamSession = session
-            sendResponse(StreamStartedResponse(), encoder: encoder)
         } catch {
             sendError("stream_start_failed", message: "Failed to start stream: \(error.localizedDescription)", encoder: encoder)
         }
@@ -827,7 +1080,19 @@ struct ParakeetSidecar {
             return
         }
 
-        await session.manager.streamAudio(buffer)
+        switch session.engine {
+        case .slidingWindow(let manager):
+            await manager.streamAudio(buffer)
+        case .eou(let manager):
+            do {
+                try await manager.appendAudio(buffer)
+                try await manager.processBufferedAudio()
+                let toks = await manager.getRawTokenStrings()
+                log("DBG-EOU frames=\(buffer.frameLength) tokens=\(toks.count) sample='\(toks.suffix(5).joined(separator: "|"))'")
+            } catch {
+                sendError("stream_chunk_failed", message: "Failed to process stream chunk: \(error.localizedDescription)", encoder: encoder)
+            }
+        }
         // Fire-and-forget command: no response on success.
     }
 
@@ -839,7 +1104,13 @@ struct ParakeetSidecar {
         activeStreamSession = nil
 
         do {
-            let finalText = try await session.manager.finish()
+            let finalText: String
+            switch session.engine {
+            case .slidingWindow(let manager):
+                finalText = try await manager.finish()
+            case .eou(let manager):
+                finalText = try await manager.finish()
+            }
             session.forwarder?.cancel()
             sendResponse(StreamFinalResponse(text: finalText), encoder: encoder)
         } catch {
@@ -856,7 +1127,12 @@ struct ParakeetSidecar {
             return
         }
         activeStreamSession = nil
-        await session.manager.cancel()
+        switch session.engine {
+        case .slidingWindow(let manager):
+            await manager.cancel()
+        case .eou(let manager):
+            await manager.reset()
+        }
         session.forwarder?.cancel()
         if emitResponse {
             sendResponse(StreamCancelledResponse(), encoder: encoder)

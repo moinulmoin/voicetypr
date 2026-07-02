@@ -17,6 +17,7 @@ type PillIndicatorMode = "never" | "always" | "when_recording";
 
 interface SettingsPayload {
   pill_indicator_mode?: PillIndicatorMode;
+  transcription_mode?: "regular" | "live_preview";
   streaming_preview_enabled?: boolean;
   streaming_preview_demo?: boolean;
 }
@@ -483,7 +484,9 @@ export function createRecordingPill(
       const settings = await tauriInvoke<SettingsPayload>("get_settings");
       if (isDestroyed) return;
       mode = normalizeMode(settings.pill_indicator_mode);
-      streamingPreviewEnabled = settings.streaming_preview_enabled === true;
+      streamingPreviewEnabled =
+        settings.transcription_mode === "live_preview" ||
+        settings.streaming_preview_enabled === true;
       streamingPreviewDemo = settings.streaming_preview_demo === true;
     } catch {
       if (isDestroyed) return;

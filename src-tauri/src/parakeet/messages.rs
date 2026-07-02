@@ -66,12 +66,25 @@ pub enum ParakeetCommand {
     Status {},
     DownloadCtcModels {},
     Warmup {},
+    EouModelStatus {
+        chunk_ms: u16,
+    },
+    DownloadEouModel {
+        chunk_ms: u16,
+    },
+    WarmupEou {
+        chunk_ms: u16,
+    },
     StartStream {
         model_id: String,
         #[serde(skip_serializing_if = "Option::is_none")]
         model_version: Option<String>,
         sample_rate: u32,
         channels: u16,
+        #[serde(default = "default_stream_engine")]
+        engine: ParakeetStreamEngine,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        chunk_ms: Option<u16>,
         #[serde(skip_serializing_if = "Option::is_none")]
         config: Option<ParakeetStreamConfig>,
     },
@@ -106,6 +119,9 @@ impl ParakeetCommand {
             Self::Status { .. } => "status",
             Self::DownloadCtcModels { .. } => "download_ctc_models",
             Self::Warmup { .. } => "warmup",
+            Self::EouModelStatus { .. } => "eou_model_status",
+            Self::DownloadEouModel { .. } => "download_eou_model",
+            Self::WarmupEou { .. } => "warmup_eou",
             Self::StartStream { .. } => "start_stream",
             Self::AudioChunk { .. } => "audio_chunk",
             Self::FinalizeStream { .. } => "finalize_stream",
@@ -124,9 +140,13 @@ impl ParakeetCommand {
             Self::Transcribe { audio_path, .. } | Self::Diarize { audio_path } => {
                 transcribe_timeout_secs(audio_path)
             }
-            Self::DownloadCtcModels { .. } => DOWNLOAD_MODEL_TIMEOUT_SECS,
+            Self::DownloadCtcModels { .. } | Self::DownloadEouModel { .. } => {
+                DOWNLOAD_MODEL_TIMEOUT_SECS
+            }
             Self::Warmup { .. } => WARMUP_TIMEOUT_SECS,
+            Self::WarmupEou { .. } => WARMUP_TIMEOUT_SECS,
             Self::Status { .. }
+            | Self::EouModelStatus { .. }
             | Self::Shutdown { .. }
             | Self::StartStream { .. }
             | Self::AudioChunk { .. }
@@ -136,6 +156,17 @@ impl ParakeetCommand {
             | Self::UnloadModel { .. } => SHORT_REQUEST_TIMEOUT_SECS,
         }
     }
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ParakeetStreamEngine {
+    SlidingWindow,
+    Eou,
+}
+
+fn default_stream_engine() -> ParakeetStreamEngine {
+    ParakeetStreamEngine::SlidingWindow
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -242,6 +273,12 @@ pub enum ParakeetResponse {
         progress: f32,
         #[serde(default)]
         phase: Option<String>,
+    },
+    #[serde(rename_all = "camelCase")]
+    EouModelStatus {
+        chunk_ms: u16,
+        downloaded: bool,
+        path: Option<String>,
     },
     #[serde(rename_all = "camelCase")]
     StreamStarted {},
