@@ -8,7 +8,7 @@ use std::time::{Duration, Instant};
 
 use super::level_meter::AudioLevelMeter;
 use super::silence_detector::{SilenceDetector, SilenceDetectorEvent};
-use super::stream_tap::{self, StreamTapRt};
+use super::stream_tap::{self, StreamTapRt, StreamTapSinkFactory};
 
 // Type-safe recording size limits
 pub struct RecordingSize;
@@ -242,6 +242,7 @@ impl AudioRecorder {
         streaming_tap_enabled: bool,
         recording_generation: u64,
         stream_cancelled: Arc<dyn Fn() -> bool + Send + Sync>,
+        stream_sink_factory: Option<StreamTapSinkFactory>,
     ) -> Result<(), String> {
         log::info!(
             "AudioRecorder::start_recording called with path: {}",
@@ -306,6 +307,9 @@ impl AudioRecorder {
             log::info!("======================================");
 
             let config = device.default_input_config().map_err(|e| e.to_string())?;
+            let stream_sink = stream_sink_factory
+                .as_ref()
+                .and_then(|factory| factory(config.sample_rate().0, config.channels()));
 
             log::info!(
                 "Audio config: sample_rate={} Hz, channels={}, format={:?}",
@@ -363,6 +367,7 @@ impl AudioRecorder {
                     recording_generation,
                     chunk_capacity,
                     stream_cancelled,
+                    stream_sink,
                 ) {
                 let (rt, finalizer) = handle.into_rt();
                 (Some(rt), Some(finalizer))

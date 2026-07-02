@@ -25,6 +25,15 @@ pub struct StreamTapRt {
     dropped: Arc<AtomicU64>,
 }
 
+pub trait StreamTapSink: Send {
+    fn send_frame(&mut self, samples: &[i16]);
+    fn finalize(&mut self) -> Option<String>;
+    fn cancel(&mut self);
+}
+
+pub type StreamTapSinkFactory =
+    Arc<dyn Fn(u32, u16) -> Option<Box<dyn StreamTapSink>> + Send + Sync>;
+
 impl StreamTapRt {
     #[allow(dead_code)] // Future streaming diagnostics slice will read this accessor.
     pub fn dropped(&self) -> u64 {
@@ -90,6 +99,7 @@ pub fn spawn_noop_worker(
     generation: u64,
     chunk_capacity: usize,
     cancelled: Arc<dyn Fn() -> bool + Send + Sync>,
+    sink: Option<Box<dyn StreamTapSink>>,
 ) -> StreamTapHandle {
     let (tx, rx) = mpsc::sync_channel::<StreamTapMsg>(STREAM_QUEUE_CAPACITY);
     let (pool_tx, pool_rx) = mpsc::sync_channel::<Vec<i16>>(STREAM_RECYCLE_CAPACITY);
@@ -112,6 +122,7 @@ pub fn spawn_noop_worker(
             worker_finalize_flag,
             generation,
             cancelled,
+            sink,
         )
     });
 
@@ -133,8 +144,9 @@ pub fn maybe_spawn_noop_worker(
     generation: u64,
     chunk_capacity: usize,
     cancelled: Arc<dyn Fn() -> bool + Send + Sync>,
+    sink: Option<Box<dyn StreamTapSink>>,
 ) -> Option<StreamTapHandle> {
-    enabled.then(|| spawn_noop_worker(generation, chunk_capacity, cancelled))
+    enabled.then(|| spawn_noop_worker(generation, chunk_capacity, cancelled, sink))
 }
 
 pub fn enqueue_frame_rt(tap: &StreamTapRt, i16_samples: &[i16]) {
@@ -176,6 +188,7 @@ pub fn run_noop_worker(
     finalize_flag: Arc<AtomicBool>,
     generation: u64,
     cancelled: Arc<dyn Fn() -> bool + Send + Sync>,
+    sink: Option<Box<dyn StreamTapSink>>,
 ) -> StreamTapWorkerSummary {
     run_noop_worker_observed(
         NoopWorkerContext {
@@ -185,6 +198,7 @@ pub fn run_noop_worker(
             finalize_flag,
             generation,
             cancelled,
+            sink,
             log_summary: true,
         },
         |_| {},
@@ -198,6 +212,7 @@ struct NoopWorkerContext {
     finalize_flag: Arc<AtomicBool>,
     generation: u64,
     cancelled: Arc<dyn Fn() -> bool + Send + Sync>,
+    sink: Option<Box<dyn StreamTapSink>>,
     log_summary: bool,
 }
 
@@ -215,6 +230,7 @@ where
         finalize_flag,
         generation,
         cancelled,
+        mut sink,
         log_summary,
     } = context;
 
@@ -249,6 +265,9 @@ where
                 StreamTapMsg::Finalize => break,
                 StreamTapMsg::Cancel => {
                     cancelled_seen = true;
+                    if let Some(sink) = sink.as_mut() {
+                        sink.cancel();
+                    }
                     break;
                 }
             }
@@ -268,15 +287,26 @@ where
                     crate::transcription::stream::Admit::Accept
                 ) {
                     on_frame(&chunk);
+                    if let Some(sink) = sink.as_mut() {
+                        sink.send_frame(&chunk);
+                    }
                     frames += 1;
                     samples += chunk.len() as u64;
                 }
                 chunk.clear();
                 let _ = pool_tx.send(chunk);
             }
-            StreamTapMsg::Finalize => break,
+            StreamTapMsg::Finalize => {
+                if let Some(sink) = sink.as_mut() {
+                    let _ = sink.finalize();
+                }
+                break;
+            }
             StreamTapMsg::Cancel => {
                 cancelled_seen = true;
+                if let Some(sink) = sink.as_mut() {
+                    sink.cancel();
+                }
                 break;
             }
         }
@@ -333,6 +363,7 @@ mod tests {
             finalize_flag,
             generation,
             cancelled: not_cancelled(),
+            sink: None,
             log_summary: false,
         }
     }
@@ -417,7 +448,7 @@ mod tests {
     #[serial_test::serial]
     fn pool_recycle_round_trip_and_exhaustion_drops_without_allocating() {
         let generation = begin_recording_generation();
-        let handle = spawn_noop_worker(generation, 4, not_cancelled());
+        let handle = spawn_noop_worker(generation, 4, not_cancelled(), None);
         let (rt, finalizer) = handle.into_rt();
 
         enqueue_frame_rt(&rt, &[1, 2, 3, 4]);
@@ -443,7 +474,7 @@ mod tests {
 
     #[test]
     fn flag_off_is_inert_and_spawns_no_worker() {
-        assert!(maybe_spawn_noop_worker(false, 0, 4, not_cancelled()).is_none());
+        assert!(maybe_spawn_noop_worker(false, 0, 4, not_cancelled(), None).is_none());
     }
 
     #[test]

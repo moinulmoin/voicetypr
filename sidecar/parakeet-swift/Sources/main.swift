@@ -1,33 +1,37 @@
 import Foundation
 import Darwin
+@preconcurrency import AVFoundation
 import FluidAudio
 
 // Keep a duplicate of the real protocol stdout so progress events still reach
 // Tauri while native library calls temporarily redirect STDOUT_FILENO.
 
 let protocolStdoutFileDescriptor = dup(STDOUT_FILENO)
+let protocolWriteQueue = DispatchQueue(label: "com.voicetypr.parakeet.protocol-writes")
 
 func writeProtocolLine(_ line: String) {
-    let outputFileDescriptor = protocolStdoutFileDescriptor >= 0 ? protocolStdoutFileDescriptor : STDOUT_FILENO
-    var data = Data(line.utf8)
-    data.append(0x0A)
+    protocolWriteQueue.sync {
+        let outputFileDescriptor = protocolStdoutFileDescriptor >= 0 ? protocolStdoutFileDescriptor : STDOUT_FILENO
+        var data = Data(line.utf8)
+        data.append(0x0A)
 
-    data.withUnsafeBytes { buffer in
-        guard let baseAddress = buffer.baseAddress else {
-            return
-        }
-
-        var bytesWritten = 0
-        while bytesWritten < buffer.count {
-            let result = Darwin.write(
-                outputFileDescriptor,
-                baseAddress.advanced(by: bytesWritten),
-                buffer.count - bytesWritten
-            )
-            if result <= 0 {
+        data.withUnsafeBytes { buffer in
+            guard let baseAddress = buffer.baseAddress else {
                 return
             }
-            bytesWritten += result
+
+            var bytesWritten = 0
+            while bytesWritten < buffer.count {
+                let result = Darwin.write(
+                    outputFileDescriptor,
+                    baseAddress.advanced(by: bytesWritten),
+                    buffer.count - bytesWritten
+                )
+                if result <= 0 {
+                    return
+                }
+                bytesWritten += result
+            }
         }
     }
 }
@@ -151,6 +155,33 @@ struct ProgressResponse: Encodable {
     let phase: String
 }
 
+struct StreamStartedResponse: Encodable {
+    let type: String = "stream_started"
+}
+
+struct StreamPartialResponse: Encodable {
+    let type: String = "stream_partial"
+    let text: String
+    let isConfirmed: Bool
+    let confidence: Float
+
+    enum CodingKeys: String, CodingKey {
+        case type
+        case text
+        case isConfirmed = "is_confirmed"
+        case confidence
+    }
+}
+
+struct StreamFinalResponse: Encodable {
+    let type: String = "stream_final"
+    let text: String
+}
+
+struct StreamCancelledResponse: Encodable {
+    let type: String = "stream_cancelled"
+}
+
 struct ErrorResponse: Encodable {
     let type: String = "error"
     let code: String
@@ -183,6 +214,7 @@ enum SupportedModelVersion: String, CaseIterable {
 
 // Global ASR manager state
 @MainActor var asrManager: AsrManager?
+@MainActor var loadedAsrModels: AsrModels?
 @MainActor var isModelLoaded = false
 @MainActor var loadedModelVersion: SupportedModelVersion?
 @MainActor var downloadedVersions = Set<SupportedModelVersion>()
@@ -196,6 +228,24 @@ func ctcVocabularyReady() -> Bool {
         && FileManager.default.fileExists(atPath: tokenizerURL.path)
 }
 @MainActor var cachedCtcSpotter: CtcKeywordSpotter?
+
+@MainActor
+final class ActiveStreamSession {
+    let manager: SlidingWindowAsrManager
+    let sampleRate: Double
+    let channels: Int
+    let encoder: JSONEncoder
+    var forwarder: Task<Void, Never>?
+
+    init(manager: SlidingWindowAsrManager, sampleRate: Double, channels: Int, encoder: JSONEncoder) {
+        self.manager = manager
+        self.sampleRate = sampleRate
+        self.channels = channels
+        self.encoder = encoder
+    }
+}
+
+@MainActor var activeStreamSession: ActiveStreamSession?
 @MainActor
 @main
 struct ParakeetSidecar {
@@ -235,7 +285,13 @@ struct ParakeetSidecar {
                     continue
                 }
 
-                switch json["type"] as? String {
+                let commandType = json["type"] as? String
+                if activeStreamSession != nil && isHeavyCommandBlockedDuringStream(commandType) {
+                    sendError("stream_busy", message: "Parakeet streaming session is active; finish or cancel it before running this command", encoder: encoder)
+                    continue
+                }
+
+                switch commandType {
                 case "load_model", "download_model":
                     guard let version = parseModelVersion(json["model_version"]) else {
                         sendError("invalid_model_version", message: "model_version must be \"v2\" or \"v3\"", encoder: encoder)
@@ -286,6 +342,18 @@ struct ParakeetSidecar {
                         sendError("missing_audio_path", message: "audio_path is required", encoder: encoder)
                     }
 
+                case "start_stream":
+                    await startStream(command: json, encoder: encoder)
+
+                case "audio_chunk":
+                    await receiveStreamAudioChunk(command: json, encoder: encoder)
+
+                case "finalize_stream":
+                    await finalizeStream(encoder: encoder)
+
+                case "cancel_stream":
+                    await cancelStream(encoder: encoder)
+
                 case "status":
                     sendResponse(
                         StatusResponse(
@@ -296,6 +364,9 @@ struct ParakeetSidecar {
                     )
 
                 case "shutdown":
+                    if activeStreamSession != nil {
+                        await cancelStream(encoder: encoder, emitResponse: false)
+                    }
                     await unloadModel()
                     exit(0)
 
@@ -389,6 +460,7 @@ struct ParakeetSidecar {
             }
             log("✅ AsrManager initialized successfully")
             asrManager = manager
+            loadedAsrModels = models
 
             isModelLoaded = true
             loadedModelVersion = version
@@ -407,8 +479,12 @@ struct ParakeetSidecar {
     }
 
     static func unloadModel() async {
+        if activeStreamSession != nil {
+            await cancelStream(encoder: JSONEncoder(), emitResponse: false)
+        }
         await asrManager?.cleanup()
         asrManager = nil
+        loadedAsrModels = nil
         isModelLoaded = false
         loadedModelVersion = nil
     }
@@ -521,6 +597,206 @@ struct ParakeetSidecar {
         log("───────────────────────────────────────────────────────")
     }
 
+    static func isHeavyCommandBlockedDuringStream(_ commandType: String?) -> Bool {
+        switch commandType {
+        case "load_model", "download_model", "unload_model", "delete_model", "transcribe", "download_ctc_models", "diarize", "start_stream":
+            return true
+        default:
+            return false
+        }
+    }
+
+    static func streamingConfig(from command: [String: Any]) -> SlidingWindowAsrConfig {
+        let rawConfig = command["config"]
+        let base: SlidingWindowAsrConfig
+        if let configName = rawConfig as? String, configName == "default" {
+            base = .default
+        } else {
+            base = .streaming
+        }
+
+        guard let object = rawConfig as? [String: Any] else {
+            return base
+        }
+
+        let chunkSeconds = object["chunk_seconds"] as? Double ?? base.chunkSeconds
+        let hypothesisChunkSeconds = object["hypothesis_chunk_seconds"] as? Double ?? base.hypothesisChunkSeconds
+        let leftContextSeconds = object["left_context_seconds"] as? Double ?? base.leftContextSeconds
+        let rightContextSeconds = object["right_context_seconds"] as? Double ?? base.rightContextSeconds
+        let minContextForConfirmation = object["min_context_for_confirmation"] as? Double ?? base.minContextForConfirmation
+        let confirmationThreshold = object["confirmation_threshold"] as? Double ?? base.confirmationThreshold
+
+        return SlidingWindowAsrConfig(
+            chunkSeconds: chunkSeconds,
+            hypothesisChunkSeconds: hypothesisChunkSeconds,
+            leftContextSeconds: leftContextSeconds,
+            rightContextSeconds: rightContextSeconds,
+            minContextForConfirmation: minContextForConfirmation,
+            confirmationThreshold: confirmationThreshold
+        )
+    }
+
+    static func doubleValue(_ value: Any?) -> Double? {
+        if let double = value as? Double {
+            return double
+        }
+        if let int = value as? Int {
+            return Double(int)
+        }
+        return nil
+    }
+
+    static func startStream(command: [String: Any], encoder: JSONEncoder) async {
+        guard activeStreamSession == nil else {
+            sendError("stream_busy", message: "A Parakeet stream is already active", encoder: encoder)
+            return
+        }
+        guard isModelLoaded, let models = loadedAsrModels else {
+            sendError("model_not_loaded", message: "Parakeet model must be loaded before streaming", encoder: encoder)
+            return
+        }
+        if let requestedVersion = parseModelVersion(command["model_version"]),
+           let loadedVersion = loadedModelVersion,
+           requestedVersion != loadedVersion {
+            sendError("model_mismatch", message: "Loaded model is \(loadedVersion.rawValue), requested \(requestedVersion.rawValue)", encoder: encoder)
+            return
+        }
+        if let requestedModel = command["model_id"] as? String,
+           let loadedModel = loadedModelVersion?.modelIdentifier,
+           requestedModel != loadedModel {
+            sendError("model_mismatch", message: "Loaded model is \(loadedModel), requested \(requestedModel)", encoder: encoder)
+            return
+        }
+
+        let sampleRate = doubleValue(command["sample_rate"]) ?? 0
+        let channels = command["channels"] as? Int ?? 0
+        guard sampleRate > 0, channels > 0 else {
+            sendError("invalid_stream_format", message: "start_stream requires positive sample_rate and channels", encoder: encoder)
+            return
+        }
+
+        do {
+            let manager = SlidingWindowAsrManager(config: streamingConfig(from: command))
+            try await manager.loadModels(models)
+            try await manager.startStreaming(source: .microphone)
+            let session = ActiveStreamSession(
+                manager: manager,
+                sampleRate: sampleRate,
+                channels: channels,
+                encoder: encoder
+            )
+            session.forwarder = Task {
+                for await update in await manager.transcriptionUpdates {
+                    sendResponse(
+                        StreamPartialResponse(
+                            text: update.text,
+                            isConfirmed: update.isConfirmed,
+                            confidence: update.confidence
+                        ),
+                        encoder: encoder
+                    )
+                }
+            }
+            activeStreamSession = session
+            sendResponse(StreamStartedResponse(), encoder: encoder)
+        } catch {
+            sendError("stream_start_failed", message: "Failed to start stream: \(error.localizedDescription)", encoder: encoder)
+        }
+    }
+
+    static func receiveStreamAudioChunk(command: [String: Any], encoder: JSONEncoder) async {
+        guard let session = activeStreamSession else {
+            sendError("stream_not_active", message: "No active stream session", encoder: encoder)
+            return
+        }
+        guard let pcmBase64 = command["pcm_b64"] as? String,
+              let data = Data(base64Encoded: pcmBase64) else {
+            sendError("invalid_audio_chunk", message: "audio_chunk requires base64 pcm_b64", encoder: encoder)
+            return
+        }
+        guard let buffer = makePcmBuffer(
+            fromLittleEndianI16: data,
+            sampleRate: session.sampleRate,
+            channels: session.channels
+        ) else {
+            sendError("invalid_audio_chunk", message: "audio_chunk payload is not aligned to i16 channels", encoder: encoder)
+            return
+        }
+
+        await session.manager.streamAudio(buffer)
+        // Fire-and-forget command: no response on success.
+    }
+
+    static func finalizeStream(encoder: JSONEncoder) async {
+        guard let session = activeStreamSession else {
+            sendError("stream_not_active", message: "No active stream session", encoder: encoder)
+            return
+        }
+        activeStreamSession = nil
+
+        do {
+            let finalText = try await session.manager.finish()
+            session.forwarder?.cancel()
+            sendResponse(StreamFinalResponse(text: finalText), encoder: encoder)
+        } catch {
+            session.forwarder?.cancel()
+            sendError("stream_finalize_failed", message: "Failed to finalize stream: \(error.localizedDescription)", encoder: encoder)
+        }
+    }
+
+    static func cancelStream(encoder: JSONEncoder, emitResponse: Bool = true) async {
+        guard let session = activeStreamSession else {
+            if emitResponse {
+                sendResponse(StreamCancelledResponse(), encoder: encoder)
+            }
+            return
+        }
+        activeStreamSession = nil
+        await session.manager.cancel()
+        session.forwarder?.cancel()
+        if emitResponse {
+            sendResponse(StreamCancelledResponse(), encoder: encoder)
+        }
+    }
+
+    static func makePcmBuffer(
+        fromLittleEndianI16 data: Data,
+        sampleRate: Double,
+        channels: Int
+    ) -> AVAudioPCMBuffer? {
+        guard channels > 0, data.count % (MemoryLayout<Int16>.size * channels) == 0 else {
+            return nil
+        }
+        let frameCount = data.count / (MemoryLayout<Int16>.size * channels)
+        guard frameCount > 0,
+              let format = AVAudioFormat(
+                commonFormat: .pcmFormatFloat32,
+                sampleRate: sampleRate,
+                channels: AVAudioChannelCount(channels),
+                interleaved: false
+              ),
+              let buffer = AVAudioPCMBuffer(
+                pcmFormat: format,
+                frameCapacity: AVAudioFrameCount(frameCount)
+              ),
+              let channelData = buffer.floatChannelData else {
+            return nil
+        }
+
+        data.withUnsafeBytes { rawBuffer in
+            let bytes = rawBuffer.bindMemory(to: UInt8.self)
+            for frame in 0..<frameCount {
+                for channel in 0..<channels {
+                    let sampleIndex = (frame * channels + channel) * 2
+                    let raw = UInt16(bytes[sampleIndex]) | (UInt16(bytes[sampleIndex + 1]) << 8)
+                    let signed = Int16(bitPattern: raw)
+                    channelData[channel][frame] = Float(signed) / Float(Int16.max)
+                }
+            }
+        }
+        buffer.frameLength = AVAudioFrameCount(frameCount)
+        return buffer
+    }
 
     static func downloadCtcModels(encoder: JSONEncoder) async {
         log("───────────────────────────────────────────────────────")
@@ -756,4 +1032,3 @@ struct ParakeetSidecar {
         }
     }
 }
-

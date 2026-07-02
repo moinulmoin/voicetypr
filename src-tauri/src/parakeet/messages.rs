@@ -65,6 +65,20 @@ pub enum ParakeetCommand {
     },
     Status {},
     DownloadCtcModels {},
+    StartStream {
+        model_id: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        model_version: Option<String>,
+        sample_rate: u32,
+        channels: u16,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        config: Option<ParakeetStreamConfig>,
+    },
+    AudioChunk {
+        pcm_b64: String,
+    },
+    FinalizeStream {},
+    CancelStream {},
     DeleteModel {
         #[serde(skip_serializing_if = "Option::is_none")]
         model_id: Option<String>,
@@ -89,6 +103,10 @@ impl ParakeetCommand {
             Self::Diarize { .. } => "diarize",
             Self::Status { .. } => "status",
             Self::DownloadCtcModels { .. } => "download_ctc_models",
+            Self::StartStream { .. } => "start_stream",
+            Self::AudioChunk { .. } => "audio_chunk",
+            Self::FinalizeStream { .. } => "finalize_stream",
+            Self::CancelStream { .. } => "cancel_stream",
             Self::DeleteModel { .. } => "delete_model",
             Self::Shutdown { .. } => "shutdown",
         }
@@ -106,8 +124,42 @@ impl ParakeetCommand {
             Self::DownloadCtcModels { .. } => DOWNLOAD_MODEL_TIMEOUT_SECS,
             Self::Status { .. }
             | Self::Shutdown { .. }
+            | Self::StartStream { .. }
+            | Self::AudioChunk { .. }
+            | Self::FinalizeStream { .. }
+            | Self::CancelStream { .. }
             | Self::DeleteModel { .. }
             | Self::UnloadModel { .. } => SHORT_REQUEST_TIMEOUT_SECS,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ParakeetStreamConfig {
+    pub chunk_seconds: f64,
+    pub hypothesis_chunk_seconds: f64,
+    pub left_context_seconds: f64,
+    pub right_context_seconds: f64,
+    pub min_context_for_confirmation: f64,
+    pub confirmation_threshold: f64,
+}
+
+impl ParakeetStreamConfig {
+    pub fn streaming() -> Self {
+        Self {
+            chunk_seconds: 11.0,
+            hypothesis_chunk_seconds: 1.0,
+            left_context_seconds: 2.0,
+            right_context_seconds: 2.0,
+            min_context_for_confirmation: 10.0,
+            confirmation_threshold: 0.80,
+        }
+    }
+
+    pub fn tuned_hypothesis_500ms() -> Self {
+        Self {
+            hypothesis_chunk_seconds: 0.5,
+            ..Self::streaming()
         }
     }
 }
@@ -187,6 +239,19 @@ pub enum ParakeetResponse {
         #[serde(default)]
         phase: Option<String>,
     },
+    #[serde(rename_all = "camelCase")]
+    StreamStarted {},
+    #[serde(rename_all = "snake_case")]
+    StreamPartial {
+        text: String,
+        is_confirmed: bool,
+        #[serde(default)]
+        confidence: Option<f32>,
+    },
+    #[serde(rename_all = "camelCase")]
+    StreamFinal { text: String },
+    #[serde(rename_all = "camelCase")]
+    StreamCancelled {},
     #[serde(rename_all = "camelCase")]
     Diarization {
         #[serde(default)]
