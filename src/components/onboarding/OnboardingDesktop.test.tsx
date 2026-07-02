@@ -1,6 +1,6 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { OnboardingDesktop } from "./OnboardingDesktop";
 
 const {
@@ -126,6 +126,18 @@ const renderOnboarding = () =>
     />,
   );
 
+const navigateToFirstTranscription = async (
+  user: ReturnType<typeof userEvent.setup>,
+) => {
+  await user.click(screen.getByRole("button", { name: /start setup/i }));
+  await user.click(screen.getByText("Use this device"));
+  await user.click(screen.getByRole("button", { name: /continue/i }));
+  await user.click(screen.getByRole("button", { name: /continue/i }));
+  await user.click(screen.getByRole("button", { name: /continue/i }));
+  await user.click(screen.getByRole("button", { name: /save hotkey/i }));
+  return screen.findByRole("button", { name: /review result/i });
+};
+
 beforeEach(() => {
   vi.clearAllMocks();
   Object.assign(platformMock, { isMacOS: true, isWindows: false, isLinux: false });
@@ -183,6 +195,10 @@ beforeEach(() => {
   });
 });
 
+afterEach(() => {
+  vi.useRealTimers();
+});
+
 describe("OnboardingDesktop", () => {
   it("requires a successful first transcription before completing onboarding", async () => {
     const user = userEvent.setup();
@@ -222,6 +238,77 @@ describe("OnboardingDesktop", () => {
     expect(updateSettingsMock).toHaveBeenCalledWith({ onboarding_completed: true });
     expect(onCompleteMock).toHaveBeenCalledTimes(1);
     expect(onCompleteMock).toHaveBeenCalledWith(undefined);
+  });
+
+  it("requires two skip clicks before leaving first transcription", async () => {
+    const user = userEvent.setup();
+    renderOnboarding();
+
+    await navigateToFirstTranscription(user);
+
+    await user.click(screen.getByRole("button", { name: /skip for now/i }));
+
+    expect(screen.getByRole("button", { name: /review result/i })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /skip without testing/i })).toBeInTheDocument();
+    expect(screen.getByText("You can test anytime from the main window.")).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: /skip without testing/i }));
+
+    expect(screen.getByText(/your first transcription/i)).toBeInTheDocument();
+  });
+
+  it("reverts skip confirmation after the timeout", async () => {
+    const user = userEvent.setup();
+    renderOnboarding();
+
+    await navigateToFirstTranscription(user);
+
+    vi.useFakeTimers();
+    fireEvent.click(screen.getByRole("button", { name: /skip for now/i }));
+
+    expect(screen.getByRole("button", { name: /skip without testing/i })).toBeInTheDocument();
+
+    act(() => {
+      vi.advanceTimersByTime(5_000);
+    });
+
+    expect(screen.getByRole("button", { name: /skip for now/i })).toBeInTheDocument();
+    expect(screen.queryByText("You can test anytime from the main window.")).not.toBeInTheDocument();
+  });
+
+  it("completes onboarding from the confirmed skip path", async () => {
+    const user = userEvent.setup();
+    renderOnboarding();
+
+    await navigateToFirstTranscription(user);
+
+    await user.click(screen.getByRole("button", { name: /skip for now/i }));
+    await user.click(screen.getByRole("button", { name: /skip without testing/i }));
+    await user.click(screen.getByRole("button", { name: /continue/i }));
+    await user.click(screen.getByRole("button", { name: /maybe later/i }));
+
+    expect(updateSettingsMock).toHaveBeenCalledWith({ onboarding_completed: true });
+    expect(onCompleteMock).toHaveBeenCalledTimes(1);
+    expect(onCompleteMock).toHaveBeenCalledWith(undefined);
+  });
+
+  it("hides the skip button after a successful sample transcription", async () => {
+    const user = userEvent.setup();
+    renderOnboarding();
+
+    const reviewButton = await navigateToFirstTranscription(user);
+
+    expect(screen.getByRole("button", { name: /skip for now/i })).toBeInTheDocument();
+
+    emit("transcription-added", {
+      text: "Successful onboarding sample.",
+      model: "base.en",
+      timestamp: "2026-05-18T00:00:00Z",
+    });
+
+    await waitFor(() => expect(reviewButton).toBeEnabled());
+    expect(screen.queryByRole("button", { name: /skip for now/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /skip without testing/i })).not.toBeInTheDocument();
   });
 
   it("routes to the License tab when the user already has a license", async () => {
