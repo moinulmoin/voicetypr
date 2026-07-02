@@ -1,4 +1,4 @@
-use super::contract::AiPolishRequest;
+use super::contract::{output_token_cap_for_input, AiPolishRequest};
 use super::error::{map_http_status, map_reqwest_error, AiProviderError, MappedAiProviderError};
 use super::genai_runtime::AiKeyResolver;
 use super::providers::PROVIDER_CUSTOM;
@@ -36,6 +36,8 @@ impl OpenAiCompatibleRuntime {
                 { "role": "system", "content": request.prompt },
                 { "role": "user", "content": request.input_text }
             ],
+            "temperature": 0.2,
+            "max_tokens": output_token_cap_for_input(request.input_text.len()),
             "stream": false
         });
         let mut builder = self.client.post(url).json(&payload);
