@@ -1888,6 +1888,15 @@ async fn perform_startup_checks(app: tauri::AppHandle) {
             match parakeet_manager.load_model(&app, &model_name).await {
                 Ok(_) => {
                     log::info!("✅ Parakeet model '{}' autoloaded from cache", model_name);
+                    match parakeet_manager.warmup(&app).await {
+                        Ok(Some(ms)) => {
+                            log::info!("✅ Parakeet model '{}' warmed in {}ms", model_name, ms)
+                        }
+                        Ok(None) => log::info!("Parakeet warmup skipped for '{}'", model_name),
+                        Err(err) => {
+                            log::warn!("Failed to warm Parakeet model '{}': {}", model_name, err)
+                        }
+                    }
                 }
                 Err(err) => {
                     log::warn!(

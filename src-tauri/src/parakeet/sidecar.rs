@@ -5,7 +5,7 @@ use super::messages::{ParakeetCommand, ParakeetResponse};
 use log::{debug, error, warn};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tauri::async_runtime::{Receiver, RwLock};
 use tauri::AppHandle;
 use tauri_plugin_shell::{
@@ -13,6 +13,8 @@ use tauri_plugin_shell::{
     ShellExt,
 };
 use tokio::sync::RwLockWriteGuard;
+
+use crate::utils::logger::log_performance;
 
 fn extract_json_payload(raw: &str) -> Option<&str> {
     let start = raw.find('{')?;
@@ -119,6 +121,7 @@ pub struct ParakeetSidecar {
 
 impl ParakeetSidecar {
     pub async fn spawn(app: &AppHandle, binary_name: &str) -> Result<Self, ParakeetError> {
+        let spawn_start = Instant::now();
         // In Tauri v2, use the shell plugin and pass just the filename.
         // The externalBin entry in tauri.conf.json must include this binary.
         let (rx, child) = app
@@ -127,6 +130,11 @@ impl ParakeetSidecar {
             .map_err(|e| ParakeetError::SpawnError(e.to_string()))?
             .spawn()
             .map_err(|e| ParakeetError::SpawnError(e.to_string()))?;
+        log_performance(
+            "PARAKEET_SPAWN",
+            spawn_start.elapsed().as_millis() as u64,
+            Some(&format!("binary={binary_name}")),
+        );
 
         log::info!(
             "Spawned Parakeet sidecar pid={} name={}",

@@ -21,6 +21,15 @@ pub struct WhisperTranscriptionOutput {
     pub segments: Vec<crate::transcription::TranscriptionSegment>,
     pub audio_duration_ms: u64,
     pub processing_duration_ms: u64,
+    pub timings: WhisperTranscriptionTimings,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct WhisperTranscriptionTimings {
+    pub preprocessing_ms: u64,
+    pub inference_ms: u64,
+    pub extraction_ms: u64,
+    pub total_ms: u64,
 }
 
 impl Transcriber {
@@ -275,6 +284,7 @@ impl Transcriber {
             language,
             translate,
             None,
+            None,
             should_cancel,
         )
     }
@@ -285,6 +295,7 @@ impl Transcriber {
         language: Option<&str>,
         translate: bool,
         initial_prompt: Option<&str>,
+        audio_ctx: Option<i32>,
         should_cancel: F,
     ) -> Result<WhisperTranscriptionOutput, String>
     where
@@ -572,6 +583,11 @@ impl Transcriber {
 
         params.set_initial_prompt(initial_prompt.unwrap_or(""));
 
+        if let Some(audio_ctx) = audio_ctx {
+            log::info!("[PERFORMANCE] Using custom Whisper audio_ctx={}", audio_ctx);
+            params.set_audio_ctx(audio_ctx);
+        }
+
         params.set_temperature(if self.cpu_profile { 0.0 } else { 0.2 });
         params.set_temperature_inc(0.2); // Increase by 0.2 on fallback (default)
         params.set_max_initial_ts(1.0); // Limit initial timestamp search
@@ -620,14 +636,15 @@ impl Transcriber {
         let should_cancel_for_abort = should_cancel.clone();
         params.set_abort_callback_safe(should_cancel_for_abort);
 
+        let inference_ms;
         match state.full(params, &resampled_audio) {
             Ok(_) => {
                 let inference_time = inference_start.elapsed();
-                let inference_ms = inference_time.as_millis();
+                inference_ms = inference_time.as_millis() as u64;
 
                 log_performance(
                     "WHISPER_INFERENCE",
-                    inference_ms as u64,
+                    inference_ms,
                     Some(&format!(
                         "audio_duration={:.2}s, samples={}",
                         duration_seconds, samples_count
@@ -773,6 +790,12 @@ impl Transcriber {
             segments,
             audio_duration_ms: (duration_seconds * 1000.0) as u64,
             processing_duration_ms: total_time.as_millis() as u64,
+            timings: WhisperTranscriptionTimings {
+                preprocessing_ms: preprocessing_time,
+                inference_ms,
+                extraction_ms: extraction_time,
+                total_ms: total_time.as_millis() as u64,
+            },
         })
     }
 }
