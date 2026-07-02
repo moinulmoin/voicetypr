@@ -9,13 +9,13 @@ fn main() {
     // Build Swift Parakeet sidecar on macOS
     #[cfg(target_os = "macos")]
     {
-        println!("cargo:warning=Building Swift Parakeet sidecar...");
-
         let sidecar_dir = std::path::Path::new("../sidecar/parakeet-swift");
         let build_script = sidecar_dir.join("build.sh");
         let dist_dir = sidecar_dir.join("dist");
 
         if build_script.exists() {
+            println!("Building Swift Parakeet sidecar...");
+
             // Ensure dist directory exists
             std::fs::create_dir_all(&dist_dir).ok();
 
@@ -35,7 +35,7 @@ fn main() {
                             String::from_utf8_lossy(&output.stderr)
                         );
                     } else {
-                        println!("cargo:warning=Swift sidecar built successfully");
+                        println!("Swift sidecar built successfully");
 
                         // Verify the binary exists
                         let target_triple = std::env::var("TARGET")
@@ -45,7 +45,7 @@ fn main() {
 
                         if binary_path.exists() {
                             println!(
-                                "cargo:warning=Parakeet sidecar binary verified at: {}",
+                                "Parakeet sidecar binary verified at: {}",
                                 binary_path.display()
                             );
                         } else {
