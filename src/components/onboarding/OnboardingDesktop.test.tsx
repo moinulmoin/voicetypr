@@ -224,6 +224,26 @@ describe("OnboardingDesktop", () => {
     expect(onCompleteMock).toHaveBeenCalledWith(undefined);
   });
 
+  it("focuses the sample textarea on the first transcription step and after sample buttons", async () => {
+    const user = userEvent.setup();
+    renderOnboarding();
+
+    await user.click(screen.getByRole("button", { name: /start setup/i }));
+    await user.click(screen.getByText("Use this device"));
+    await user.click(screen.getByRole("button", { name: /continue/i }));
+    await user.click(screen.getByRole("button", { name: /continue/i }));
+    await user.click(screen.getByRole("button", { name: /continue/i }));
+    await user.click(screen.getByRole("button", { name: /save hotkey/i }));
+
+    const textarea = await screen.findByPlaceholderText(
+      "Your transcription will appear here as you speak.",
+    );
+    await waitFor(() => expect(textarea).toHaveFocus());
+
+    await user.click(screen.getByRole("button", { name: /start sample/i }));
+    await waitFor(() => expect(textarea).toHaveFocus());
+  });
+
   it("routes to the License tab when the user already has a license", async () => {
     const user = userEvent.setup();
     renderOnboarding();
