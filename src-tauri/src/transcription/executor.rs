@@ -26,15 +26,15 @@ use tempfile::NamedTempFile;
 
 pub(crate) const LOCAL_ENGINE_TIMEOUT_GRACE: Duration = Duration::from_secs(2);
 
-use crate::commands::audio::{
-    compile_parakeet_custom_vocabulary_for_transcription,
-    parakeet_segments_to_transcription_segments, resolve_engine_for_model,
-    transcribe_whisper_with_acceleration, transcription_watchdog_budget, ActiveEngineSelection,
-};
 use crate::parakeet::manager::{ParakeetManager, ParakeetTranscriptionOptions};
 use crate::parakeet::messages::ParakeetResponse;
 use crate::provider_capabilities::ProviderEngine;
 use crate::secure_store::secure_get;
+use crate::transcription::engines::{
+    compile_parakeet_custom_vocabulary_for_transcription,
+    parakeet_segments_to_transcription_segments, resolve_engine_for_model,
+    transcribe_whisper_with_acceleration, transcription_watchdog_budget, ActiveEngineSelection,
+};
 use crate::transcription::error::{
     from_local_engine_string, from_stt_error, TranscriptionError, TranscriptionErrorCode,
 };
