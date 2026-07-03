@@ -275,6 +275,37 @@ pub fn next_ai_enabled(current: bool, can_enable: bool) -> Option<bool> {
     }
 }
 
+fn clean_dictation_options() -> serde_json::Value {
+    serde_json::json!({ "preset": "CleanDictation" })
+}
+
+fn personal_dictation_options() -> serde_json::Value {
+    serde_json::json!({ "preset": "PersonalDictation" })
+}
+
+/// Pure decision: when enabling Polish, should the stored global preset be
+/// promoted to Clean? True only when the stored preset resolves to the no-AI
+/// PersonalDictation — otherwise ai_enabled=true would persist while the
+/// effective preset stays Personal and nothing actually polishes. A missing
+/// preset (defaults to Clean when enabled) or any AI/reshaping preset is left
+/// untouched.
+pub fn should_bump_preset_to_clean_on_enable(stored_preset: Option<&str>) -> bool {
+    match stored_preset {
+        Some(preset) => {
+            !crate::ai::prompts::migrate_preset_str(preset, true).requires_ai_formatting()
+        }
+        None => false,
+    }
+}
+
+fn stored_global_preset_is_personal(app: &AppHandle) -> Result<bool, String> {
+    let store = app.store("settings").map_err(|e| e.to_string())?;
+    let raw = store
+        .get("enhancement_options")
+        .and_then(|value| value.get("preset").and_then(|p| p.as_str().map(String::from)));
+    Ok(should_bump_preset_to_clean_on_enable(raw.as_deref()))
+}
+
 pub async fn toggle_ai_formatting(app: AppHandle) -> Result<(), String> {
     use crate::commands::ai::get_ai_settings;
     let ai_settings = get_ai_settings(app.clone()).await?;
@@ -283,10 +314,22 @@ pub async fn toggle_ai_formatting(app: AppHandle) -> Result<(), String> {
 
     match next_ai_enabled(current, can_enable) {
         Some(true) => {
+            // Enabling ai_enabled alone is not enough to polish: the resolver
+            // only runs AI when the effective preset requires it, so a preset
+            // left at PersonalDictation means "on but never polishing." Move the
+            // global preset in lockstep with the switch (mirrors the Polish
+            // screen toggle) so the tray and shortcut can't persist an
+            // on-but-inert state. Clean is the only "on" global preset now —
+            // reshaping is per-app, so only bump when the stored preset is the
+            // no-AI PersonalDictation.
+            let bump_to_clean = stored_global_preset_is_personal(&app)?;
             crate::commands::settings::persist_settings_and_invalidate(
                 &app,
-                |store| {
+                move |store| {
                     store.set("ai_enabled", serde_json::Value::Bool(true));
+                    if bump_to_clean {
+                        store.set("enhancement_options", clean_dictation_options());
+                    }
                     Ok(())
                 },
                 std::convert::identity,
@@ -300,6 +343,7 @@ pub async fn toggle_ai_formatting(app: AppHandle) -> Result<(), String> {
                 &app,
                 |store| {
                     store.set("ai_enabled", serde_json::Value::Bool(false));
+                    store.set("enhancement_options", personal_dictation_options());
                     Ok(())
                 },
                 std::convert::identity,
