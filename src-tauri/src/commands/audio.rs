@@ -12,10 +12,7 @@ use crate::commands::settings::{
 };
 use crate::license::LicenseState;
 use crate::media::MediaPauseController;
-use crate::parakeet::manager::ParakeetTranscriptionOptions;
-use crate::parakeet::messages::{
-    ParakeetResponse, ParakeetSegment, ParakeetStreamConfig, ParakeetStreamEngine,
-};
+use crate::parakeet::messages::{ParakeetResponse, ParakeetStreamConfig, ParakeetStreamEngine};
 use crate::parakeet::sidecar::ParakeetStreamHandle;
 use crate::parakeet::ParakeetManager;
 use crate::provider_capabilities::ProviderEngine;
@@ -24,12 +21,9 @@ use crate::remote::client::{
     TranscriptionRequest as RemoteTranscriptionRequest, TranscriptionSource as RemoteTimeoutSource,
 };
 use crate::remote::settings::RemoteSettings;
-use crate::transcription::error::{
-    from_local_engine_string, TranscriptionError, TranscriptionErrorCode,
-};
+use crate::transcription::error::{TranscriptionError, TranscriptionErrorCode};
 use crate::transcription::executor::{
-    effective_parakeet_audio_duration_ms, ensure_cloud_task_supported, transcribe_with_app,
-    watchdog_budget_for, LOCAL_ENGINE_TIMEOUT_GRACE,
+    ensure_cloud_task_supported, transcribe_with_app, watchdog_budget_for,
 };
 use crate::transcription::request::{
     AudioFormatHint, CancellationToken, CleanupPolicy, EngineSelection, RequestContext,
@@ -51,11 +45,10 @@ use crate::{
 use cpal::traits::{DeviceTrait, HostTrait};
 use once_cell::sync::Lazy;
 use serde_json;
-use std::future::Future;
 use std::panic::{RefUnwindSafe, UnwindSafe};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant};
+use std::time::Instant;
 use tauri::async_runtime::{Mutex as AsyncMutex, RwLock as AsyncRwLock};
 use tauri_plugin_store::StoreExt;
 use uuid::Uuid;
@@ -1120,102 +1113,11 @@ fn build_transcription_job(
     )
 }
 
-fn upload_timeout_error(source: TranscriptionSource) -> TranscriptionError {
-    TranscriptionError::new(
-        TranscriptionErrorCode::Timeout,
-        source,
-        "Transcription timed out",
-    )
-}
-
 fn upload_error_to_string(error: TranscriptionError) -> String {
     if error.code == TranscriptionErrorCode::Timeout {
         return error.user_message;
     }
     error.detail.unwrap_or(error.user_message)
-}
-
-async fn run_upload_local_engine_with_timeout<T, Fut>(
-    run: Fut,
-    budget: Option<Duration>,
-    cancellation: CancellationToken,
-    source: TranscriptionSource,
-) -> Result<T, TranscriptionError>
-where
-    Fut: Future<Output = Result<T, TranscriptionError>>,
-{
-    let timed_out = Arc::new(AtomicBool::new(false));
-    let watchdog = budget.map(|deadline| {
-        let cancellation = cancellation.clone();
-        let timed_out = timed_out.clone();
-        tokio::spawn(async move {
-            tokio::time::sleep(deadline).await;
-            timed_out.store(true, AtomicOrdering::SeqCst);
-            cancellation.cancel();
-            log::warn!(
-                "Upload transcription watchdog timed out after {} seconds",
-                deadline.as_secs()
-            );
-        })
-    });
-
-    let result = match budget {
-        Some(deadline) => {
-            let hard_deadline = deadline.saturating_add(LOCAL_ENGINE_TIMEOUT_GRACE);
-            match tokio::time::timeout(hard_deadline, run).await {
-                Ok(result) => result,
-                Err(_) => {
-                    timed_out.store(true, AtomicOrdering::SeqCst);
-                    cancellation.cancel();
-                    Err(upload_timeout_error(source))
-                }
-            }
-        }
-        None => run.await,
-    };
-
-    if let Some(handle) = watchdog {
-        handle.abort();
-    }
-
-    if matches!(
-        &result,
-        Err(error) if error.code == TranscriptionErrorCode::Timeout
-    ) {
-        return result;
-    }
-
-    if timed_out.load(AtomicOrdering::SeqCst) {
-        Err(upload_timeout_error(source))
-    } else {
-        result
-    }
-}
-
-async fn run_upload_cloud_with_timeout<T, Fut>(
-    run: Fut,
-    budget: Option<Duration>,
-    source: TranscriptionSource,
-) -> Result<T, TranscriptionError>
-where
-    Fut: Future<Output = Result<T, String>>,
-{
-    let result = match budget {
-        Some(deadline) => match tokio::time::timeout(deadline, run).await {
-            Ok(result) => result,
-            Err(_) => return Err(upload_timeout_error(source)),
-        },
-        None => run.await,
-    };
-
-    result.map_err(|error| {
-        TranscriptionError::new(
-            TranscriptionErrorCode::EngineFailed,
-            source,
-            "Cloud transcription failed",
-        )
-        .with_detail(error)
-    })
 }
 
 /// Build a [`TranscriptionRequest`] for the desktop record→insert hot path from an
@@ -1260,6 +1162,8 @@ fn build_desktop_transcription_request(
         timeout: TimeoutPolicy::Interactive,
         cancellation,
         initial_prompt,
+        audio_ctx: None,
+        speed_mode_override: None,
     })
 }
 
@@ -1293,22 +1197,6 @@ fn is_non_speech_transcript(raw: &str) -> bool {
             | "(music)"
             | "(noise)"
     )
-}
-
-fn build_parakeet_upload_transcription_result(
-    job: &TranscriptionJob,
-    text: String,
-    segments: Vec<ParakeetSegment>,
-    language: Option<String>,
-    duration: Option<f32>,
-    input_path: &Path,
-    span_timings_ms: serde_json::Value,
-) -> TranscriptionResult {
-    TranscriptionResult::new(job, text)
-        .with_transcript_language(language)
-        .with_segments(parakeet_segments_to_transcription_segments(segments))
-        .with_audio_duration_ms(effective_parakeet_audio_duration_ms(duration, input_path))
-        .with_span_timings_ms(span_timings_ms)
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
@@ -1667,14 +1555,12 @@ fn transcription_task_header_value(task: crate::transcription::TranscriptionTask
 mod tests {
     use super::{
         ai_failure_category, ai_failure_notice, ai_failure_payload, begin_recording_generation,
-        build_failed_transcription_row, build_parakeet_upload_transcription_result,
-        build_remote_server_error_payload, build_remote_transcription_result,
-        build_remote_upload_transcription_request, build_transcription_job,
-        build_translation_failed_history_metadata, build_writing_history_metadata,
-        classify_local_failure, emit_recording_too_short_feedback, finalize_in_flight_audio,
-        is_ai_auth_error, is_non_speech_transcript, persist_if_current,
+        build_failed_transcription_row, build_remote_server_error_payload,
+        build_remote_transcription_result, build_remote_upload_transcription_request,
+        build_transcription_job, build_translation_failed_history_metadata,
+        build_writing_history_metadata, classify_local_failure, emit_recording_too_short_feedback,
+        finalize_in_flight_audio, is_ai_auth_error, is_non_speech_transcript, persist_if_current,
         plan_desktop_writing_success, recording_license_state, remote_server_error_pill_message,
-        run_upload_cloud_with_timeout, run_upload_local_engine_with_timeout,
         set_in_flight_transcription_audio, should_hide_pill_when_idle, silence_event_runs_in_state,
         silence_timeout_disposition, stop_should_reset_to_idle,
         sync_retranscription_failure_metadata, take_in_flight_transcription_audio,
@@ -1688,19 +1574,14 @@ mod tests {
     use crate::remote::client::{
         calculate_timeout_ms, RemoteClientError, RemoteEndpoint, TranscriptionSource,
     };
-    use crate::transcription::error::{TranscriptionError, TranscriptionErrorCode};
+    use crate::transcription::error::TranscriptionErrorCode;
     use crate::transcription::executor::ensure_cloud_task_supported;
-    use crate::transcription::request::CancellationToken;
     use crate::{AppState, RecordingState};
-    use hound::{SampleFormat, WavSpec, WavWriter};
     use reqwest::StatusCode;
     use std::fs;
-    use std::path::Path;
     use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
     use std::sync::{Arc, Mutex};
-    use std::time::Duration;
     use tauri::{Listener, Manager};
-    use tempfile::NamedTempFile;
 
     fn cached_license(status: LicenseState) -> CachedLicense {
         CachedLicense::new(LicenseStatus {
@@ -1710,23 +1591,6 @@ mod tests {
             license_key: None,
             expires_at: None,
         })
-    }
-
-    fn write_silent_wav(path: &Path, sample_rate: u32, channels: u16, secs: f32) {
-        let spec = WavSpec {
-            channels,
-            sample_rate,
-            bits_per_sample: 16,
-            sample_format: SampleFormat::Int,
-        };
-        let mut writer = WavWriter::create(path, spec).unwrap();
-        let frames = (secs * sample_rate as f32) as usize;
-        for _ in 0..frames {
-            for _ in 0..channels {
-                writer.write_sample(0i16).unwrap();
-            }
-        }
-        writer.finalize().unwrap();
     }
 
     #[test]
@@ -1823,79 +1687,6 @@ mod tests {
             Some("Recording shorter than 0.5 seconds")
         );
         assert_eq!(events[0]["duration_ms"].as_u64(), Some(1000));
-    }
-
-    #[tokio::test]
-    async fn upload_local_timeout_returns_timeout_and_cancels_engine() {
-        let cancellation = CancellationToken::new();
-        let engine_cancellation = cancellation.clone();
-
-        let result = run_upload_local_engine_with_timeout(
-            async move {
-                while !engine_cancellation.is_cancelled() {
-                    tokio::time::sleep(Duration::from_millis(1)).await;
-                }
-                Err::<(), _>(TranscriptionError::new(
-                    TranscriptionErrorCode::Cancelled,
-                    crate::transcription::TranscriptionSource::AudioFile,
-                    "Transcription cancelled",
-                ))
-            },
-            Some(Duration::from_millis(5)),
-            cancellation.clone(),
-            crate::transcription::TranscriptionSource::AudioFile,
-        )
-        .await;
-
-        assert!(cancellation.is_cancelled());
-        assert_eq!(result.unwrap_err().code, TranscriptionErrorCode::Timeout);
-    }
-
-    #[tokio::test]
-    async fn upload_cloud_timeout_returns_timeout() {
-        let result = run_upload_cloud_with_timeout(
-            async {
-                tokio::time::sleep(Duration::from_millis(200)).await;
-                Ok::<_, String>(())
-            },
-            Some(Duration::from_millis(5)),
-            crate::transcription::TranscriptionSource::AudioFile,
-        )
-        .await;
-
-        assert_eq!(result.unwrap_err().code, TranscriptionErrorCode::Timeout);
-    }
-
-    #[test]
-    fn parakeet_upload_duration_zero_falls_back_to_wav_header() {
-        let tmp = NamedTempFile::new().unwrap();
-        write_silent_wav(tmp.path(), 16_000, 1, 1.0);
-        let job = build_transcription_job(
-            crate::transcription::TranscriptionSource::AudioFile,
-            "parakeet",
-            "parakeet-tdt-0.6b-v2",
-            Some("en".to_string()),
-            false,
-        );
-
-        let result = build_parakeet_upload_transcription_result(
-            &job,
-            "hello".to_string(),
-            vec![],
-            Some("en".to_string()),
-            Some(0.0),
-            tmp.path(),
-            serde_json::json!({ "total": 10 }),
-        );
-
-        let duration_ms = result
-            .timings
-            .audio_duration_ms
-            .expect("duration should fall back to WAV header");
-        assert!(
-            (990..=1010).contains(&duration_ms),
-            "expected ~1000ms, got {duration_ms}"
-        );
     }
 
     #[test]
@@ -6478,9 +6269,73 @@ pub async fn transcribe_audio_file_for_cli(
     .await
 }
 
-// TODO(arch #16, Wave 3): this parallel upload dispatch gets rewritten to take a
-// TranscriptionRequest and route through the executor — bundling args is throwaway
-// until then. See docs/review/2026-07-03-arch-roadmap.md.
+async fn normalize_upload_audio_for_cloud(
+    app: &AppHandle,
+    recordings_dir: &Path,
+    wav_path: &Path,
+) -> Result<NormalizedTempFile, String> {
+    log::debug!("[UPLOAD] Normalizing to WAV for cloud transcription...");
+    let ts = chrono::Local::now().format("%Y%m%d_%H%M%S");
+    let out_path = recordings_dir.join(format!("normalized_{}.wav", ts));
+    crate::ffmpeg::normalize_streaming(app, wav_path, &out_path)
+        .await
+        .map_err(|e| format!("Audio normalization (ffmpeg) failed: {}", e))?;
+    Ok(NormalizedTempFile::new(out_path))
+}
+
+fn cloud_provider_supports_diarized_words(provider: crate::cloud_stt::CloudProvider) -> bool {
+    matches!(
+        provider,
+        crate::cloud_stt::CloudProvider::Deepgram | crate::cloud_stt::CloudProvider::Soniox
+    )
+}
+
+async fn maybe_return_diarized_cloud_upload(
+    app: &AppHandle,
+    provider: crate::cloud_stt::CloudProvider,
+    audio_path: &Path,
+    language: &str,
+    transcription_job: &TranscriptionJob,
+) -> Result<Option<UploadTranscription>, String> {
+    if !cloud_provider_supports_diarized_words(provider) {
+        return Ok(None);
+    }
+
+    let budget = watchdog_budget_for(audio_path, &TimeoutPolicy::Upload);
+    let transcribe = provider.transcribe_diarized(app, audio_path, Some(language));
+    let cloud_transcript = match budget {
+        Some(deadline) => tokio::time::timeout(deadline, transcribe)
+            .await
+            .map_err(|_| "Transcription timed out".to_string())?,
+        None => transcribe.await,
+    }?;
+
+    if cloud_transcript.words.is_empty() {
+        log::debug!(
+            "[UPLOAD] {} diarized probe returned plain transcript ({} chars); routing through executor",
+            provider.display_name(),
+            cloud_transcript.text.len()
+        );
+        return Ok(None);
+    }
+
+    let words = cloud_transcript.words;
+    let text = group_words_into_speaker_text(&words);
+    log::info!(
+        "[UPLOAD] Diarized cloud transcript: {} words, {} chars",
+        words.len(),
+        text.len()
+    );
+    let mut diarized_result = TranscriptionResult::new(transcription_job, text.clone());
+    diarized_result.words = Some(words.clone());
+    let metadata = Some(build_writing_history_metadata(&diarized_result, None));
+    Ok(Some(UploadTranscription {
+        text,
+        words: Some(words),
+        metadata,
+    }))
+}
+
 #[allow(clippy::too_many_arguments)]
 async fn transcribe_audio_file_impl(
     app: AppHandle,
@@ -6584,273 +6439,142 @@ async fn transcribe_audio_file_impl(
         translate_to_english,
     );
 
-    // For cloud providers, skip normalization and send original wav_path
-    let transcription_result = match engine_selection {
-        ActiveEngineSelection::Whisper { model_path, .. } => {
-            // Normalize to Whisper contract
-            log::debug!("[UPLOAD] Normalizing to Whisper WAV (16k mono s16)...");
-            let normalized_file = NormalizedTempFile::new({
-                let ts = chrono::Local::now().format("%Y%m%d_%H%M%S");
-                let out_path = recordings_dir.join(format!("normalized_{}.wav", ts));
-                crate::ffmpeg::normalize_streaming(&app, &wav_path, &out_path)
-                    .await
-                    .map_err(|e| format!("Audio normalization (ffmpeg) failed: {}", e))?;
-                out_path
-            });
-            log::info!("[UPLOAD] Normalized WAV at {:?}", normalized_file.path());
-            let initial_prompt = compile_whisper_initial_prompt(&app, Some(&language));
-            let cancellation = CancellationToken::new();
-            let cancel_for_whisper = cancellation.clone();
-            let budget = watchdog_budget_for(normalized_file.path(), &TimeoutPolicy::Upload);
-            run_upload_local_engine_with_timeout(
-                async {
-                    let output = transcribe_whisper_with_acceleration(
-                        &app,
-                        &model_path,
-                        normalized_file.path(),
-                        Some(&language),
-                        translate_to_english,
-                        initial_prompt.as_deref(),
-                        audio_ctx,
-                        speed_mode_override,
-                        move || cancel_for_whisper.is_cancelled(),
-                    )
-                    .await
-                    .map_err(|e| from_local_engine_string(&e, TranscriptionSource::AudioFile))?;
-                    Ok(
-                        TranscriptionResult::new(&transcription_job, output.raw_text)
-                            .with_transcript_language(output.transcript_language)
-                            .with_segments(output.segments)
-                            .with_audio_duration_ms(Some(output.audio_duration_ms))
-                            .with_processing_duration_ms(Some(output.processing_duration_ms))
-                            .with_span_timings_ms(serde_json::json!({
-                                "preprocessing": output.timings.preprocessing_ms,
-                                "inference": output.timings.inference_ms,
-                                "extraction": output.timings.extraction_ms,
-                                "total": output.timings.total_ms,
-                            })),
-                    )
-                },
-                budget,
-                cancellation,
-                TranscriptionSource::AudioFile,
-            )
-            .await
-            .map_err(upload_error_to_string)?
-        }
-        ActiveEngineSelection::Parakeet { model_name } => {
-            // Normalize to Whisper/Parakeet contract first
-            log::debug!("[UPLOAD] Normalizing to Whisper WAV (16k mono s16)...");
-            let normalized_file = NormalizedTempFile::new({
-                let ts = chrono::Local::now().format("%Y%m%d_%H%M%S");
-                let out_path = recordings_dir.join(format!("normalized_{}.wav", ts));
-                crate::ffmpeg::normalize_streaming(&app, &wav_path, &out_path)
-                    .await
-                    .map_err(|e| format!("Audio normalization (ffmpeg) failed: {}", e))?;
-                out_path
-            });
-            log::info!("[UPLOAD] Normalized WAV at {:?}", normalized_file.path());
-            let parakeet_manager = app.state::<ParakeetManager>();
-            let cancellation = CancellationToken::new();
-            let cancel_flag = cancellation.as_arc();
+    let transcription_result = if let ActiveEngineSelection::Remote {
+        server_id,
+        server_name,
+        host,
+        port,
+        password,
+        ..
+    } = &engine_selection
+    {
+        // Normalize to Whisper contract (16k mono s16 WAV) for remote transcription
+        log::debug!("[UPLOAD] Normalizing to Whisper WAV for remote transcription...");
+        let normalized_file = NormalizedTempFile::new({
+            let ts = chrono::Local::now().format("%Y%m%d_%H%M%S");
+            let out_path = recordings_dir.join(format!("normalized_{}.wav", ts));
+            crate::ffmpeg::normalize_streaming(&app, &wav_path, &out_path)
+                .await
+                .map_err(|e| format!("Audio normalization (ffmpeg) failed: {}", e))?;
+            out_path
+        });
+        log::info!("[UPLOAD] Normalized WAV at {:?}", normalized_file.path());
 
-            let custom_vocabulary =
-                compile_parakeet_custom_vocabulary_for_transcription(&app, Some(&language));
-            let budget = watchdog_budget_for(normalized_file.path(), &TimeoutPolicy::Upload);
-
-            run_upload_local_engine_with_timeout(
-                async {
-                    parakeet_manager
-                        .load_model_with_cancel(&app, &model_name, Some(cancel_flag.clone()))
-                        .await
-                        .map_err(|e| {
-                            from_local_engine_string(
-                                &format!("Failed to load Parakeet model: {}", e),
-                                TranscriptionSource::AudioFile,
-                            )
-                        })?;
-
-                    match parakeet_manager
-                        .transcribe_with_custom_vocabulary(
-                            &app,
-                            &model_name,
-                            normalized_file.path().to_path_buf(),
-                            ParakeetTranscriptionOptions {
-                                language: Some(language.clone()),
-                                translate: translate_to_english,
-                                custom_vocabulary,
-                                cancel_flag: Some(cancel_flag),
-                            },
-                        )
-                        .await
-                    {
-                        Ok(ParakeetResponse::Transcription {
-                            text,
-                            segments,
-                            language,
-                            duration,
-                        }) => {
-                            let timings = parakeet_manager.latest_timing_snapshot();
-                            Ok(build_parakeet_upload_transcription_result(
-                                &transcription_job,
-                                text,
-                                segments,
-                                language,
-                                duration,
-                                normalized_file.path(),
-                                serde_json::json!({
-                                    "model_load": timings.model_load_ms,
-                                    "inference": timings.inference_ms,
-                                    "total": timings.total_ms,
-                                }),
-                            ))
-                        }
-                        Ok(other) => Err(from_local_engine_string(
-                            &format!("Unexpected Parakeet response: {:?}", other),
-                            TranscriptionSource::AudioFile,
-                        )),
-                        Err(err) => Err(from_local_engine_string(
-                            &format!("Parakeet transcription failed: {}", err),
-                            TranscriptionSource::AudioFile,
-                        )),
-                    }
-                },
-                budget,
-                cancellation,
-                TranscriptionSource::AudioFile,
-            )
-            .await
-            .map_err(upload_error_to_string)?
-        }
-        ActiveEngineSelection::Cloud { provider, .. } => {
-            ensure_cloud_task_supported(
-                provider,
-                translate_to_english,
-                TranscriptionSource::AudioFile,
-            )
-            .map_err(upload_error_to_string)?;
-            log::debug!("[UPLOAD] Normalizing to WAV for cloud transcription...");
-            let normalized_file = NormalizedTempFile::new({
-                let ts = chrono::Local::now().format("%Y%m%d_%H%M%S");
-                let out_path = recordings_dir.join(format!("normalized_{}.wav", ts));
-                crate::ffmpeg::normalize_streaming(&app, &wav_path, &out_path)
-                    .await
-                    .map_err(|e| format!("Audio normalization (ffmpeg) failed: {}", e))?;
-                out_path
-            });
-            let budget = watchdog_budget_for(normalized_file.path(), &TimeoutPolicy::Upload);
-            let cloud_transcript = run_upload_cloud_with_timeout(
-                provider.transcribe_diarized(&app, normalized_file.path(), Some(&language)),
-                budget,
-                TranscriptionSource::AudioFile,
-            )
-            .await
-            .map_err(upload_error_to_string)?;
-
-            // If the provider returned speaker-attributed words, group them and
-            // return directly — no AI polish for diarized uploads.
-            if !cloud_transcript.words.is_empty() {
-                let words = cloud_transcript.words;
-                let text = group_words_into_speaker_text(&words);
-                log::info!(
-                    "[UPLOAD] Diarized cloud transcript: {} words, {} chars",
-                    words.len(),
-                    text.len()
-                );
-                let mut diarized_result =
-                    TranscriptionResult::new(&transcription_job, text.clone());
-                diarized_result.words = Some(words.clone());
-                let metadata = Some(build_writing_history_metadata(&diarized_result, None));
-                return Ok(UploadTranscription {
-                    text,
-                    words: Some(words),
-                    metadata,
-                });
-            }
-
-            let cloud_job = build_transcription_job(
-                TranscriptionSource::AudioFile,
-                transcription_job.engine.clone(),
-                transcription_job.model.clone(),
-                transcription_job.spoken_language.clone(),
-                false,
-            );
-            TranscriptionResult::new(&cloud_job, cloud_transcript.text)
-        }
-        ActiveEngineSelection::Remote {
-            server_id,
+        log::info!(
+            "🌐 [Remote Upload] Starting transcription to '{}' ({}:{})",
             server_name,
             host,
-            port,
-            password,
-            ..
-        } => {
-            // Normalize to Whisper contract (16k mono s16 WAV) for remote transcription
-            log::debug!("[UPLOAD] Normalizing to Whisper WAV for remote transcription...");
-            let normalized_file = NormalizedTempFile::new({
-                let ts = chrono::Local::now().format("%Y%m%d_%H%M%S");
-                let out_path = recordings_dir.join(format!("normalized_{}.wav", ts));
-                crate::ffmpeg::normalize_streaming(&app, &wav_path, &out_path)
-                    .await
-                    .map_err(|e| format!("Audio normalization (ffmpeg) failed: {}", e))?;
-                out_path
-            });
-            log::info!("[UPLOAD] Normalized WAV at {:?}", normalized_file.path());
+            port
+        );
 
-            log::info!(
-                "🌐 [Remote Upload] Starting transcription to '{}' ({}:{})",
-                server_name,
-                host,
-                port
-            );
+        let audio_data = std::fs::read(normalized_file.path())
+            .map_err(|e| format!("Failed to read audio file: {}", e))?;
 
-            // Read the normalized audio file
-            let audio_data = std::fs::read(normalized_file.path())
-                .map_err(|e| format!("Failed to read audio file: {}", e))?;
+        let audio_size_kb = audio_data.len() as f64 / 1024.0;
+        log::info!(
+            "🌐 [Remote Upload] Sending {:.1} KB audio to '{}'",
+            audio_size_kb,
+            server_name
+        );
 
-            let audio_size_kb = audio_data.len() as f64 / 1024.0;
-            log::info!(
-                "🌐 [Remote Upload] Sending {:.1} KB audio to '{}'",
-                audio_size_kb,
-                server_name
-            );
+        let server_conn = RemoteServerConnection::new(host.clone(), *port, password.clone());
 
-            // Create HTTP client connection
-            let server_conn = RemoteServerConnection::new(host.clone(), port, password.clone());
+        let request_context = crate::commands::remote::resolve_remote_request_context(
+            &app,
+            server_id,
+            transcription_job.spoken_language.as_deref(),
+        )
+        .await;
 
-            let request_context = crate::commands::remote::resolve_remote_request_context(
-                &app,
-                &server_id,
-                transcription_job.spoken_language.as_deref(),
-            )
-            .await;
+        let (request, timeout_ms) = build_remote_upload_transcription_request(
+            normalized_file.path(),
+            audio_data,
+            Some(&transcription_job),
+            request_context,
+        );
 
-            let (request, timeout_ms) = build_remote_upload_transcription_request(
-                normalized_file.path(),
-                audio_data,
-                Some(&transcription_job),
-                request_context,
-            );
+        let response = client::transcribe_audio(&server_conn, request, timeout_ms)
+            .await
+            .map_err(|e| {
+                log::warn!(
+                    "🌐 [Remote Upload] Remote transcription FAILED to '{}': {}",
+                    server_name,
+                    e
+                );
+                e.to_string()
+            })?;
 
-            let response = client::transcribe_audio(&server_conn, request, timeout_ms)
-                .await
-                .map_err(|e| {
-                    log::warn!(
-                        "🌐 [Remote Upload] Remote transcription FAILED to '{}': {}",
-                        server_name,
-                        e
-                    );
-                    e.to_string()
-                })?;
+        log::info!(
+            "🌐 [Remote Upload] Transcription COMPLETED from '{}': {} chars received",
+            server_name,
+            response.text.len()
+        );
 
-            log::info!(
-                "🌐 [Remote Upload] Transcription COMPLETED from '{}': {} chars received",
-                server_name,
-                response.text.len()
-            );
-
-            build_remote_transcription_result(&transcription_job, response)
-        }
+        build_remote_transcription_result(&transcription_job, response)
+    } else {
+        let mut _executor_audio_guard: Option<NormalizedTempFile> = None;
+        let (executor_audio_path, format_hint) = match &engine_selection {
+            ActiveEngineSelection::Cloud { provider, .. } => {
+                ensure_cloud_task_supported(
+                    *provider,
+                    translate_to_english,
+                    TranscriptionSource::AudioFile,
+                )
+                .map_err(upload_error_to_string)?;
+                let normalized_file =
+                    normalize_upload_audio_for_cloud(&app, &recordings_dir, &wav_path).await?;
+                if let Some(diarized) = maybe_return_diarized_cloud_upload(
+                    &app,
+                    *provider,
+                    normalized_file.path(),
+                    &language,
+                    &transcription_job,
+                )
+                .await?
+                {
+                    return Ok(diarized);
+                }
+                let path = normalized_file.path().to_path_buf();
+                _executor_audio_guard = Some(normalized_file);
+                (path, Some(AudioFormatHint::Wav))
+            }
+            _ => (wav_path.clone(), None),
+        };
+        let engine =
+            ProviderEngine::from_engine_str(engine_selection.engine_name()).ok_or_else(|| {
+                format!(
+                    "Unknown transcription engine: {}",
+                    engine_selection.engine_name()
+                )
+            })?;
+        let initial_prompt = if matches!(engine_selection, ActiveEngineSelection::Whisper { .. }) {
+            compile_whisper_initial_prompt(&app, Some(&language))
+        } else {
+            None
+        };
+        let request = TranscriptionRequest {
+            source: TranscriptionSource::AudioFile,
+            audio: TranscriptionAudio::Path {
+                path: executor_audio_path,
+                format_hint,
+                cleanup: CleanupPolicy::CallerOwns,
+            },
+            engine: EngineSelection::Explicit {
+                engine,
+                model: engine_selection.model_name().to_string(),
+            },
+            spoken_language: Some(language.clone()),
+            task: transcription_job.task,
+            context: RequestContext::default(),
+            timeout: TimeoutPolicy::Upload,
+            cancellation: CancellationToken::new(),
+            initial_prompt,
+            audio_ctx,
+            speed_mode_override,
+        };
+        transcribe_with_app(&app, request)
+            .await
+            .map_err(upload_error_to_string)?
     };
 
     log::info!(

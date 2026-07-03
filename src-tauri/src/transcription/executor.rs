@@ -194,18 +194,29 @@ async fn route_once(
                 language,
                 translate,
                 request.initial_prompt.as_deref(),
-                None,
-                None,
+                request.audio_ctx,
+                request.speed_mode_override,
                 move || token.is_cancelled(),
             )
             .await
             .map_err(|e| from_local_engine_string(&e, source))?;
 
-            Ok(TranscriptionResult::new(job, output.raw_text)
+            let result = TranscriptionResult::new(job, output.raw_text)
                 .with_transcript_language(output.transcript_language)
                 .with_segments(output.segments)
                 .with_audio_duration_ms(Some(output.audio_duration_ms))
-                .with_processing_duration_ms(Some(output.processing_duration_ms)))
+                .with_processing_duration_ms(Some(output.processing_duration_ms));
+            let result = if matches!(source, TranscriptionSource::AudioFile) {
+                result.with_span_timings_ms(serde_json::json!({
+                    "preprocessing": output.timings.preprocessing_ms,
+                    "inference": output.timings.inference_ms,
+                    "extraction": output.timings.extraction_ms,
+                    "total": output.timings.total_ms,
+                }))
+            } else {
+                result
+            };
+            Ok(result)
         }
         ActiveEngineSelection::Parakeet { model_name } => {
             let manager = app.state::<ParakeetManager>();
@@ -250,10 +261,25 @@ async fn route_once(
                     segments,
                     language,
                     duration,
-                }) => Ok(TranscriptionResult::new(job, text)
-                    .with_transcript_language(language)
-                    .with_segments(parakeet_segments_to_transcription_segments(segments))
-                    .with_audio_duration_ms(effective_parakeet_audio_duration_ms(duration, input_path))),
+                }) => {
+                    let timings = manager.latest_timing_snapshot();
+                    let result = TranscriptionResult::new(job, text)
+                        .with_transcript_language(language)
+                        .with_segments(parakeet_segments_to_transcription_segments(segments))
+                        .with_audio_duration_ms(effective_parakeet_audio_duration_ms(
+                            duration, input_path,
+                        ));
+                    let result = if matches!(source, TranscriptionSource::AudioFile) {
+                        result.with_span_timings_ms(serde_json::json!({
+                            "model_load": timings.model_load_ms,
+                            "inference": timings.inference_ms,
+                            "total": timings.total_ms,
+                        }))
+                    } else {
+                        result
+                    };
+                    Ok(result)
+                }
                 Ok(ParakeetResponse::Error { code, message, .. }) => Err(TranscriptionError::new(
                     TranscriptionErrorCode::EngineFailed,
                     source,
