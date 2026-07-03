@@ -2,7 +2,7 @@ use crate::commands::key_normalizer::is_typing_safe_single_key;
 use crate::commands::shortcuts::{
     decode_shortcut_settings_value, hold_shortcut_transition, is_single_key_shortcut,
     next_ai_enabled, normalized_custom_shortcut_conflict, pressed_shortcut_should_run,
-    should_bump_preset_to_clean_on_enable,
+    should_normalize_preset_to_clean_on_enable,
     validate_shortcut_settings, CustomHoldTransition, ExistingShortcutStrings, ModifierKind,
     ModifierSpec, ShortcutAction, ShortcutBinding, ShortcutSettings, ShortcutTrigger, SideKind,
     TriggerKind, MAX_SINGLE_KEY_BINDINGS,
@@ -339,16 +339,26 @@ fn next_ai_enabled_toggles_correctly() {
 }
 
 #[test]
-fn enabling_polish_promotes_only_a_personal_preset_to_clean() {
-    // A Personal preset would leave Polish "on but inert" — promote it to Clean.
-    assert!(should_bump_preset_to_clean_on_enable(Some("PersonalDictation")));
-    // Presets that already run AI (or legacy reshaping presets) are left alone.
-    assert!(!should_bump_preset_to_clean_on_enable(Some("CleanDictation")));
-    assert!(!should_bump_preset_to_clean_on_enable(Some("Notes")));
-    // "Default" resolves to Clean when enabled, so no promotion needed.
-    assert!(!should_bump_preset_to_clean_on_enable(Some("Default")));
-    // A missing preset defaults to Clean on enable — nothing to promote.
-    assert!(!should_bump_preset_to_clean_on_enable(None));
+fn enabling_polish_normalizes_any_non_clean_preset_to_clean() {
+    // A Personal preset would leave Polish "on but inert" — normalize to Clean.
+    assert!(should_normalize_preset_to_clean_on_enable(Some(
+        "PersonalDictation"
+    )));
+    // Legacy global reshaping presets must NOT survive a tray/shortcut enable
+    // (the Polish-screen migration only runs on the screen) — normalize them.
+    assert!(should_normalize_preset_to_clean_on_enable(Some("Notes")));
+    assert!(should_normalize_preset_to_clean_on_enable(Some("Writing")));
+    assert!(should_normalize_preset_to_clean_on_enable(Some("Message")));
+    assert!(should_normalize_preset_to_clean_on_enable(Some("Code")));
+    // Legacy aliases resolve to a reshaping preset too — normalize.
+    assert!(should_normalize_preset_to_clean_on_enable(Some("Coding")));
+    // Already-Clean is left alone.
+    assert!(!should_normalize_preset_to_clean_on_enable(Some(
+        "CleanDictation"
+    )));
+    // "Default" and a missing preset both resolve to Clean when enabled.
+    assert!(!should_normalize_preset_to_clean_on_enable(Some("Default")));
+    assert!(!should_normalize_preset_to_clean_on_enable(None));
 }
 
 #[test]
