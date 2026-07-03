@@ -931,6 +931,34 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
                             }
                         });
                     }
+                    else if event_id == "polish_on" || event_id == "polish_off" {
+                        let app_handle = app.app_handle().clone();
+                        let desired_enabled = event_id == "polish_on";
+                        tauri::async_runtime::spawn(async move {
+                            let current_enabled = app_handle
+                                .store("settings")
+                                .ok()
+                                .and_then(|store| store.get("ai_enabled"))
+                                .and_then(|value| value.as_bool())
+                                .unwrap_or(false);
+
+                            if current_enabled != desired_enabled {
+                                match crate::commands::shortcuts::toggle_ai_formatting(app_handle.clone()).await {
+                                    Ok(()) => {
+                                        log::info!("Polish toggled from tray to requested state: {}", desired_enabled);
+                                    }
+                                    Err(e) => {
+                                        log::error!("Failed to toggle Polish from tray: {}", e);
+                                        let _ = app_handle.emit("tray-action-error", &format!("Failed to change Polish: {}", e));
+                                    }
+                                }
+                            }
+
+                            if let Err(e) = crate::commands::settings::update_tray_menu(app_handle.clone()).await {
+                                log::warn!("Failed to refresh tray after Polish change: {}", e);
+                            }
+                        });
+                    }
                     else if event_id == "copy_last_transcription" {
                         let app_handle = app.app_handle().clone();
                         tauri::async_runtime::spawn(async move {
