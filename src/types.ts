@@ -116,6 +116,8 @@ export interface AppSettings {
   recording_retention_days?: number | null; // null = keep forever
   // Transcription acceleration (Windows only; stored-but-ignored on other platforms)
   transcription_acceleration?: TranscriptionAcceleration;
+  // Whisper speed mode is applied only on Apple-Silicon Metal.
+  whisper_speed_mode?: boolean;
   transcription_mode?: TranscriptionMode;
 }
 

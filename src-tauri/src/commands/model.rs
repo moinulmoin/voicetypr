@@ -1147,7 +1147,8 @@ pub async fn preload_model(
     {
         let cache_state = app.state::<AsyncMutex<TranscriberCache>>();
         let mut cache = cache_state.lock().await;
-        cache.get_or_create(&model_path)?;
+        let speed_mode = crate::commands::settings::read_whisper_speed_mode(&app);
+        cache.get_or_create(&model_path, speed_mode)?;
     }
 
     log::info!("Model '{}' preloaded successfully", model_name);

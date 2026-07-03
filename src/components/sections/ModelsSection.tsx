@@ -30,6 +30,7 @@ import {
   SettingsPage,
 } from "@/components/settings/settings-ui";
 import { Spinner } from "@/components/ui/spinner";
+import { Switch } from "@/components/ui/switch";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { useSettings } from "@/contexts/SettingsContext";
 import { getErrorMessage } from "@/utils/error";
@@ -175,6 +176,8 @@ export function ModelsSection({
   const currentModelName = settings?.current_model ?? "";
   const languageValue = settings?.speech_language ?? "en";
   const transcriptionMode = settings?.transcription_mode ?? "regular";
+  const whisperSpeedMode = settings?.whisper_speed_mode ?? false;
+  const showSpeedModeRecommendation = currentEngine === "whisper" && whisperSpeedMode;
   const supportsLivePreview = streamCapabilities?.capabilities.supports_streaming === true;
 
   const isEnglishOnlyModel = useMemo(() => {
@@ -195,6 +198,18 @@ export function ModelsSection({
       } catch (error) {
         log.error("Failed to update spoken language:", error);
         toast.error("Failed to update spoken language");
+      }
+    },
+    [updateSettings],
+  );
+
+  const handleWhisperSpeedModeChange = useCallback(
+    async (checked: boolean) => {
+      try {
+        await updateSettings({ whisper_speed_mode: checked });
+      } catch (error) {
+        log.error("Failed to update Whisper speed mode:", error);
+        toast.error("Failed to update speed mode");
       }
     },
     [updateSettings],
@@ -793,6 +808,25 @@ export function ModelsSection({
         />
       </SettingsCard>
 
+      {currentEngine === "whisper" && (
+        <SettingsCard icon={Zap} title="Whisper performance">
+          <SettingRow
+            title="Speed mode"
+            description="Faster transcription (flash attention); pairs best with Large v3 Turbo."
+            control={
+              <Switch
+                id="whisper-speed-mode"
+                checked={whisperSpeedMode}
+                onCheckedChange={(checked) => {
+                  void handleWhisperSpeedModeChange(checked);
+                }}
+                aria-label="Speed mode"
+              />
+            }
+          />
+        </SettingsCard>
+      )}
+
       {supportsLivePreview && (
         <SettingsCard
           icon={Zap}
@@ -883,6 +917,7 @@ export function ModelsSection({
                         await clearActiveRemote();
                         void onSelect(modelName);
                       }}
+                      speedModeRecommended={showSpeedModeRecommendation && name === "large-v3-turbo"}
                       showSelectButton={model.downloaded}
                       isSelected={!activeRemoteServer && currentModel === name}
                     />
@@ -930,6 +965,7 @@ export function ModelsSection({
                           await clearActiveRemote();
                           void onSelect(modelName);
                         }}
+                        speedModeRecommended={showSpeedModeRecommendation && name === "large-v3-turbo"}
                         showSelectButton={model.downloaded}
                         isSelected={!activeRemoteServer && currentModel === name}
                       />

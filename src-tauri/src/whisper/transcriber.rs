@@ -33,7 +33,7 @@ pub struct WhisperTranscriptionTimings {
 }
 
 impl Transcriber {
-    pub fn new(model_path: &Path) -> Result<Self, String> {
+    pub fn new(model_path: &Path, speed_mode: bool) -> Result<Self, String> {
         let init_start = Instant::now();
         let model_path_str = model_path
             .to_str()
@@ -48,6 +48,9 @@ impl Transcriber {
                 ("platform", std::env::consts::OS),
             ],
         );
+
+        #[cfg(not(target_os = "macos"))]
+        let _ = speed_mode;
 
         // Log model file info
         if let Ok(metadata) = std::fs::metadata(model_path) {
@@ -85,6 +88,10 @@ impl Transcriber {
                 ctx_params.use_gpu(false);
             } else {
                 ctx_params.use_gpu(true);
+                if speed_mode {
+                    ctx_params.flash_attn(true);
+                    log::info!("[PERFORMANCE] Whisper speed mode enabled (Metal flash attention)");
+                }
             }
 
             let metal_start = Instant::now();
@@ -488,6 +495,16 @@ impl Transcriber {
             resampled_audio.len() as f32 / 16_000_f32
         );
 
+        let samples_count = resampled_audio.len();
+        let duration_seconds = samples_count as f32 / 16_000_f32;
+
+        // Check minimum duration (0.5 seconds)
+        if duration_seconds < 0.5 {
+            let error = "Recording too short".to_string();
+            log::warn!("[TRANSCRIPTION_DEBUG] {}", error);
+            return Err(error);
+        }
+
         let mut params = if self.cpu_profile {
             log::info!("[PERFORMANCE] Using CPU fast transcription profile");
             FullParams::new(SamplingStrategy::Greedy { best_of: 1 })
@@ -583,9 +600,27 @@ impl Transcriber {
 
         params.set_initial_prompt(initial_prompt.unwrap_or(""));
 
-        if let Some(audio_ctx) = audio_ctx {
-            log::info!("[PERFORMANCE] Using custom Whisper audio_ctx={}", audio_ctx);
-            params.set_audio_ctx(audio_ctx);
+        let effective_audio_ctx = audio_ctx.or_else(|| adaptive_audio_ctx(samples_count));
+        match (audio_ctx, effective_audio_ctx) {
+            (Some(custom_ctx), _) => {
+                log::info!(
+                    "[PERFORMANCE] Using custom Whisper audio_ctx={}",
+                    custom_ctx
+                );
+            }
+            (None, Some(adaptive_ctx)) => {
+                log::info!(
+                    "[PERFORMANCE] Using adaptive Whisper audio_ctx={} for {:.2}s audio",
+                    adaptive_ctx,
+                    duration_seconds
+                );
+            }
+            (None, None) => {
+                log::info!("[PERFORMANCE] Using full Whisper audio context");
+            }
+        }
+        if let Some(effective_audio_ctx) = effective_audio_ctx {
+            params.set_audio_ctx(effective_audio_ctx);
         }
 
         params.set_temperature(if self.cpu_profile { 0.0 } else { 0.2 });
@@ -604,16 +639,6 @@ impl Transcriber {
 
             error
         })?;
-
-        let samples_count = resampled_audio.len();
-        let duration_seconds = samples_count as f32 / 16_000_f32;
-
-        // Check minimum duration (0.5 seconds)
-        if duration_seconds < 0.5 {
-            let error = "Recording too short".to_string();
-            log::warn!("[TRANSCRIPTION_DEBUG] {}", error);
-            return Err(error);
-        }
 
         log_audio_metrics("WHISPER_INPUT", 0.0, 0.0, duration_seconds, None);
 
@@ -800,6 +825,32 @@ impl Transcriber {
     }
 }
 
+fn adaptive_audio_ctx(samples: usize) -> Option<i32> {
+    const SAMPLE_RATE: usize = 16_000;
+    const POSITIONS_PER_SECOND: usize = 50;
+    const TAIL_PAD_POSITIONS: usize = 50;
+    const CONTEXT_MULTIPLE: usize = 64;
+    // Floor raised 256 -> 512 after the WER gate caught a repetition hallucination
+    // at ctx=256 on short clips (e.g. de-2s duplicated the whole sentence); ctx>=384
+    // is clean, 512 gives margin. Still ~2.5-4x faster than the full 1500 window.
+    const MIN_CONTEXT: usize = 512;
+    const FULL_CONTEXT_THRESHOLD: usize = 1_500;
+
+    let positions = samples
+        .saturating_mul(POSITIONS_PER_SECOND)
+        .saturating_add(SAMPLE_RATE - 1)
+        / SAMPLE_RATE;
+    let needed = positions.saturating_add(TAIL_PAD_POSITIONS);
+    let rounded = needed.saturating_add(CONTEXT_MULTIPLE - 1) / CONTEXT_MULTIPLE * CONTEXT_MULTIPLE;
+    let ctx = rounded.max(MIN_CONTEXT);
+
+    if ctx >= FULL_CONTEXT_THRESHOLD {
+        None
+    } else {
+        Some(ctx as i32)
+    }
+}
+
 /// Convert multi-channel audio to mono by averaging all channels
 ///
 /// # Arguments
@@ -845,6 +896,31 @@ fn convert_multichannel_to_mono(audio: &[f32], channels: usize) -> Result<Vec<f3
     );
 
     Ok(mono_audio)
+}
+
+#[cfg(test)]
+mod adaptive_audio_ctx_tests {
+    use super::adaptive_audio_ctx;
+
+    const SAMPLE_RATE: usize = 16_000;
+
+    #[test]
+    fn adaptive_audio_ctx_uses_floor_for_very_short_audio() {
+        assert_eq!(adaptive_audio_ctx(SAMPLE_RATE), Some(512));
+        assert_eq!(adaptive_audio_ctx(SAMPLE_RATE * 2), Some(512));
+    }
+
+    #[test]
+    fn adaptive_audio_ctx_rounds_up_with_tail_pad() {
+        assert_eq!(adaptive_audio_ctx(SAMPLE_RATE * 5), Some(512)); // floored
+        assert_eq!(adaptive_audio_ctx(SAMPLE_RATE * 27), Some(1408));
+    }
+
+    #[test]
+    fn adaptive_audio_ctx_keeps_full_context_for_long_audio() {
+        assert_eq!(adaptive_audio_ctx(SAMPLE_RATE * 30), None);
+        assert_eq!(adaptive_audio_ctx(SAMPLE_RATE * 60), None);
+    }
 }
 
 #[cfg(test)]
