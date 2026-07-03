@@ -1,4 +1,4 @@
-import { useState, useCallback } from "react";
+import { useState, useCallback, useRef } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import type { AIProviderModel } from "@/types/providers";
 import { createLogger } from "@/lib/logger";
@@ -9,7 +9,7 @@ interface UseProviderModelsReturn {
   models: AIProviderModel[];
   loading: boolean;
   error: string | null;
-  fetchModels: () => Promise<void>;
+  fetchModels: () => Promise<AIProviderModel[]>;
   clearModels: () => void;
 }
 
@@ -22,34 +22,43 @@ export function useProviderModels(providerId: string): UseProviderModelsReturn {
   const [models, setModels] = useState<AIProviderModel[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const inFlightRef = useRef<Promise<AIProviderModel[]> | null>(null);
 
   const fetchModels = useCallback(async () => {
     // Don't fetch for custom provider (user defines model in config)
     if (providerId === "custom") {
-      return;
+      return [];
     }
 
     // Don't refetch if already loading
-    if (loading) {
-      return;
+    if (inFlightRef.current) {
+      return inFlightRef.current;
     }
 
     setLoading(true);
     setError(null);
 
-    try {
-      const fetchedModels = await invoke<AIProviderModel[]>("list_provider_models", {
-        provider: providerId,
-      });
-      setModels(fetchedModels);
-    } catch (err) {
-      const errorMessage = err instanceof Error ? err.message : String(err);
-      setError(errorMessage);
-      log.error(`Failed to fetch models for ${providerId}:`, err);
-    } finally {
-      setLoading(false);
-    }
-  }, [providerId, loading]);
+    const request = (async () => {
+      try {
+        const fetchedModels = await invoke<AIProviderModel[]>("list_provider_models", {
+          provider: providerId,
+        });
+        setModels(fetchedModels);
+        return fetchedModels;
+      } catch (err) {
+        const errorMessage = err instanceof Error ? err.message : String(err);
+        setError(errorMessage);
+        log.error(`Failed to fetch models for ${providerId}:`, err);
+        return [];
+      } finally {
+        inFlightRef.current = null;
+        setLoading(false);
+      }
+    })();
+
+    inFlightRef.current = request;
+    return request;
+  }, [providerId]);
 
   const clearModels = useCallback(() => {
     setModels([]);
@@ -73,34 +82,44 @@ export function useAllProviderModels() {
   const [modelsMap, setModelsMap] = useState<Record<string, AIProviderModel[]>>({});
   const [loadingMap, setLoadingMap] = useState<Record<string, boolean>>({});
   const [errorMap, setErrorMap] = useState<Record<string, string | null>>({});
+  const inFlightMapRef = useRef<Record<string, Promise<AIProviderModel[]> | undefined>>({});
 
-  const fetchModels = useCallback(async (providerId: string) => {
+  const fetchModels = useCallback(async (providerId: string): Promise<AIProviderModel[]> => {
     // Don't fetch for custom provider
     if (providerId === "custom") {
-      return;
+      return [];
     }
 
     // Don't refetch if already loading
-    if (loadingMap[providerId]) {
-      return;
+    const inFlightRequest = inFlightMapRef.current[providerId];
+    if (inFlightRequest) {
+      return inFlightRequest;
     }
 
     setLoadingMap(prev => ({ ...prev, [providerId]: true }));
     setErrorMap(prev => ({ ...prev, [providerId]: null }));
 
-    try {
-      const fetchedModels = await invoke<AIProviderModel[]>("list_provider_models", {
-        provider: providerId,
-      });
-      setModelsMap(prev => ({ ...prev, [providerId]: fetchedModels }));
-    } catch (err) {
-      const errorMessage = err instanceof Error ? err.message : String(err);
-      setErrorMap(prev => ({ ...prev, [providerId]: errorMessage }));
-      log.error(`Failed to fetch models for ${providerId}:`, err);
-    } finally {
-      setLoadingMap(prev => ({ ...prev, [providerId]: false }));
-    }
-  }, [loadingMap]);
+    const request = (async () => {
+      try {
+        const fetchedModels = await invoke<AIProviderModel[]>("list_provider_models", {
+          provider: providerId,
+        });
+        setModelsMap(prev => ({ ...prev, [providerId]: fetchedModels }));
+        return fetchedModels;
+      } catch (err) {
+        const errorMessage = err instanceof Error ? err.message : String(err);
+        setErrorMap(prev => ({ ...prev, [providerId]: errorMessage }));
+        log.error(`Failed to fetch models for ${providerId}:`, err);
+        return [];
+      } finally {
+        delete inFlightMapRef.current[providerId];
+        setLoadingMap(prev => ({ ...prev, [providerId]: false }));
+      }
+    })();
+
+    inFlightMapRef.current[providerId] = request;
+    return request;
+  }, []);
 
   const getModels = useCallback((providerId: string): AIProviderModel[] => {
     return modelsMap[providerId] || [];

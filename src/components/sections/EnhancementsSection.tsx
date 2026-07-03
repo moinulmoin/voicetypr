@@ -13,6 +13,7 @@ import {
 import { Button } from "@/components/ui/button";
 import {
   Field,
+  FieldDescription,
   FieldGroup,
   FieldLegend,
   FieldSet,
@@ -80,6 +81,17 @@ const RESHAPING_PRESETS = new Set<EnhancementPreset>([
   "Message",
   "Code",
 ]);
+const GUIDED_PROVIDER_IDS = ["anthropic", "openai", "gemini"] as const;
+const GUIDED_PROVIDER_LABELS: Record<(typeof GUIDED_PROVIDER_IDS)[number], string> = {
+  anthropic: "Anthropic",
+  openai: "OpenAI",
+  gemini: "Google",
+};
+
+const isGuidedProviderId = (
+  providerId: string,
+): providerId is (typeof GUIDED_PROVIDER_IDS)[number] =>
+  GUIDED_PROVIDER_IDS.includes(providerId as (typeof GUIDED_PROVIDER_IDS)[number]);
 
 const hasShownReshapeMigrationNotice = () => {
   try {
@@ -115,7 +127,6 @@ export function EnhancementsSection() {
   const [providers, setProviders] = useState<AIProviderConfig[]>([]);
 
   const [providerSearch, setProviderSearch] = useState("");
-  const [showAdvancedProviders, setShowAdvancedProviders] = useState(false);
   const [advancedOpen, setAdvancedOpen] = useState(false);
 
   const [showApiKeyModal, setShowApiKeyModal] = useState(false);
@@ -125,6 +136,7 @@ export function EnhancementsSection() {
   );
   const [customModelName, setCustomModelName] = useState<string>("");
   const [selectedProvider, setSelectedProvider] = useState<string>("");
+  const [guidedSetupProvider, setGuidedSetupProvider] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [providerApiKeys, setProviderApiKeys] = useState<Record<string, boolean>>({});
   const [enhancementOptions, setEnhancementOptions] = useState<{
@@ -452,11 +464,70 @@ export function EnhancementsSection() {
     }
   };
 
+  const resolveRecommendedModel = async (providerId: string) => {
+    const cachedModels = getModels(providerId);
+    let models = cachedModels;
+
+    if (!cachedModels.some((model) => model.recommended)) {
+      const fetchedModels = await fetchModels(providerId);
+      models = fetchedModels?.length > 0 ? fetchedModels : getModels(providerId);
+    }
+
+    return models.find((model) => model.recommended) ?? null;
+  };
+
+  const enablePolishForProviderModel = async (
+    providerId: string,
+    modelId: string,
+    modelsByProvider: Record<string, string>,
+  ) => {
+    await invoke("update_ai_settings", {
+      enabled: true,
+      provider: providerId,
+      model: modelId,
+    });
+
+    setAISettings((prev) => ({
+      ...prev,
+      enabled: true,
+      provider: providerId,
+      model: modelId,
+      hasApiKey: true,
+      modelsByProvider: {
+        ...prev.modelsByProvider,
+        ...modelsByProvider,
+        [providerId]: modelId,
+      },
+    }));
+    setProviderApiKeys((prev) => ({ ...prev, [providerId]: true }));
+    setAiModelNeedsReselection(false);
+
+    if (enhancementOptions.preset !== "CleanDictation") {
+      await persistEnhancementOptions({ preset: "CleanDictation" });
+    }
+  };
+
+  const enableGuidedProvider = async (
+    providerId: string,
+    modelsByProvider: Record<string, string>,
+  ) => {
+    const recommendedModel = await resolveRecommendedModel(providerId);
+    if (!recommendedModel) {
+      setAdvancedOpen(true);
+      toast.error("No recommended model was available. Choose a model in Advanced.");
+      return false;
+    }
+
+    await enablePolishForProviderModel(providerId, recommendedModel.id, modelsByProvider);
+    toast.success("Polish on");
+    return true;
+  };
+
   const handleToggleEnabled = async (enabled: boolean) => {
     const hasActiveProviderKey = Boolean(providerApiKeys[aiSettings.provider]);
 
     if (enabled && (!hasActiveProviderKey || !aiSettings.model)) {
-      toast.error("Please select a provider, add an API key, and select a model before turning on Polish");
+      toast.error("Polish is not set up yet. Connect an AI to turn it on.");
       return;
     }
 
@@ -516,6 +587,32 @@ export function EnhancementsSection() {
     }
   };
 
+  const handleGuidedProviderConnect = async (providerId: string) => {
+    setGuidedSetupProvider(providerId);
+    setSelectedProvider(providerId);
+
+    if (!providerApiKeys[providerId]) {
+      await handleSetupApiKey(providerId);
+      return;
+    }
+
+    setIsLoading(true);
+    try {
+      const providerSettings = normalizeAISettings(
+        await invoke<AISettingsResponse>("get_ai_settings_for_provider", {
+          provider: providerId,
+        }),
+      );
+      await enableGuidedProvider(providerId, providerSettings.modelsByProvider);
+    } catch (error) {
+      const message = getErrorMessage(error, "Failed to turn on Polish");
+      toast.error(message);
+    } finally {
+      setIsLoading(false);
+      setGuidedSetupProvider(null);
+    }
+  };
+
   const handleApiKeySubmit = async (apiKey: string) => {
     setIsLoading(true);
     try {
@@ -527,17 +624,46 @@ export function EnhancementsSection() {
         }),
       );
       const rememberedModel = providerSettings.model || "";
+      const modelsByProvider = {
+        ...providerSettings.modelsByProvider,
+        ...(rememberedModel ? { [selectedProvider]: rememberedModel } : {}),
+      };
+      const shouldAutoEnable = guidedSetupProvider === selectedProvider;
+
       setProviderApiKeys((prev) => ({ ...prev, [selectedProvider]: true }));
-      setAISettings((prev) => ({
-        ...prev,
-        provider: selectedProvider,
-        enabled: prev.provider === selectedProvider ? prev.enabled : false,
-        model: rememberedModel,
-        hasApiKey: true,
-        modelsByProvider: providerSettings.modelsByProvider,
-      }));
+
+      if (shouldAutoEnable) {
+        const didEnable = await enableGuidedProvider(selectedProvider, modelsByProvider);
+        if (!didEnable) {
+          setAISettings((prev) => ({
+            ...prev,
+            provider: selectedProvider,
+            enabled: false,
+            model: rememberedModel,
+            hasApiKey: true,
+            modelsByProvider: {
+              ...prev.modelsByProvider,
+              ...modelsByProvider,
+            },
+          }));
+        }
+      } else {
+        setAISettings((prev) => ({
+          ...prev,
+          provider: selectedProvider,
+          enabled: prev.provider === selectedProvider ? prev.enabled : false,
+          model: rememberedModel,
+          hasApiKey: true,
+          modelsByProvider: {
+            ...prev.modelsByProvider,
+            ...modelsByProvider,
+          },
+        }));
+        toast.success("API key saved securely");
+      }
+
       setShowApiKeyModal(false);
-      toast.success("API key saved securely");
+      setGuidedSetupProvider(null);
     } catch (error) {
       const message = getErrorMessage(error, "Failed to save API key");
       toast.error(message);
@@ -591,7 +717,6 @@ export function EnhancementsSection() {
     }
   };
 
-  const hasAnyValidConfig = Object.values(providerApiKeys).some(Boolean);
   const isUsingCustomProvider = aiSettings.provider === "custom";
   const hasSelectedModel = Boolean(
     aiSettings.provider &&
@@ -616,21 +741,20 @@ export function EnhancementsSection() {
     providers.find((provider) => provider.id === aiSettings.provider)?.name ||
     aiSettings.provider;
 
-  const visibleProviders = useMemo(
-    () => providers.filter((provider) => showAdvancedProviders || provider.status !== "hidden"),
-    [providers, showAdvancedProviders],
-  );
-  const hasHiddenProviders = useMemo(
-    () => providers.some((provider) => provider.status === "hidden"),
+  const guidedProviders = useMemo(
+    () =>
+      GUIDED_PROVIDER_IDS.map((providerId) =>
+        providers.find((provider) => provider.id === providerId),
+      ).filter((provider): provider is AIProviderConfig => Boolean(provider)),
     [providers],
   );
   const providerQuery = providerSearch.trim().toLowerCase();
   const filteredProviders = useMemo(() => {
     if (!providerQuery) {
-      return visibleProviders;
+      return providers;
     }
 
-    return visibleProviders.filter((provider) => {
+    return providers.filter((provider) => {
       const providerMatches = provider.name.toLowerCase().includes(providerQuery);
       const customModelMatches =
         provider.isCustom && customModelName.toLowerCase().includes(providerQuery);
@@ -639,9 +763,10 @@ export function EnhancementsSection() {
       );
       return providerMatches || customModelMatches || modelsMatch;
     });
-  }, [customModelName, getModels, providerQuery, visibleProviders]);
+  }, [customModelName, getModels, providerQuery, providers]);
 
   const hasLoadingProviders = providers.some((provider) => isModelsLoading(provider.id));
+  const showGuidedSetup = !aiSettings.enabled && !hasSelectedModel;
   const polishControls = (
     <div className="flex flex-col items-start gap-2 sm:items-end">
       <Field
@@ -654,34 +779,103 @@ export function EnhancementsSection() {
           aria-label="Polish"
           checked={aiSettings.enabled}
           onCheckedChange={handleToggleEnabled}
-          disabled={!hasAnyValidConfig || !hasSelectedModel}
+          disabled={!hasSelectedModel}
         />
       </Field>
-      {activeModelName ? (
-        <p className="max-w-80 text-left text-xs text-muted-foreground sm:text-right">
-          {aiSettings.enabled ? "Using" : "Ready"}{" "}
+      {hasSelectedModel && activeModelName ? (
+        <div className="flex max-w-80 flex-wrap items-center gap-x-1.5 gap-y-1 text-left text-xs text-muted-foreground sm:justify-end sm:text-right">
+          <span>Using</span>
+          {" "}
           <span className="text-foreground">{activeProviderName}</span>
           {" · "}
           <span className="text-foreground">{activeModelName}</span>
-          {!aiSettings.enabled && " · Polish off"}
+          {aiSettings.enabled && (
+            <>
+              {" · "}
+              <span className="rounded-full bg-sage-bg px-2 py-0.5 text-[11px] text-sage">
+                Active
+              </span>
+            </>
+          )}
           {" · "}
           <Button
             type="button"
             variant="link"
             size="sm"
             className="h-auto p-0 text-xs"
+            aria-label="Change Polish provider or model"
             onClick={() => setAdvancedOpen(true)}
           >
             Change
           </Button>
-        </p>
+        </div>
       ) : (
         <p className="max-w-80 text-left text-xs text-muted-foreground sm:text-right">
-          Add an API key and choose a model in Advanced to turn on Polish.
+          Not set up yet
         </p>
       )}
     </div>
   );
+
+  const polishSetupContent = showGuidedSetup ? (
+    <FieldSet className="rounded-xl border border-border/60 bg-card p-4">
+      <div className="space-y-1">
+        <FieldLegend>Connect an AI to turn on Polish</FieldLegend>
+        <FieldDescription>
+          Polish uses a cloud AI you bring a key for. Pick one — setup takes about two minutes.
+        </FieldDescription>
+      </div>
+
+      <div className="mt-4 flex flex-wrap gap-2">
+        {guidedProviders.map((provider) => {
+          const label = isGuidedProviderId(provider.id)
+            ? GUIDED_PROVIDER_LABELS[provider.id]
+            : provider.name;
+          const isProviderLoading = isLoading && guidedSetupProvider === provider.id;
+
+          return (
+            <Button
+              key={provider.id}
+              type="button"
+              variant="outline"
+              className="justify-start gap-2"
+              disabled={isLoading}
+              onClick={() => {
+                void handleGuidedProviderConnect(provider.id);
+              }}
+            >
+              {isProviderLoading ? (
+                <Loader2 className="h-4 w-4 animate-spin" />
+              ) : (
+                <Key className={`h-4 w-4 ${provider.color}`} />
+              )}
+              <span className={provider.color}>{label}</span>
+            </Button>
+          );
+        })}
+      </div>
+
+      <div className="mt-4 flex flex-wrap items-center justify-between gap-3 text-sm">
+        <Dialog>
+          <DialogTrigger asChild>
+            <Button type="button" variant="link" size="sm" className="h-auto p-0">
+              Which AI should I pick? →
+            </Button>
+          </DialogTrigger>
+          <DialogContent className="sm:max-w-md">
+            <DialogHeader>
+              <DialogTitle>Which AI should I pick?</DialogTitle>
+              <DialogDescription>
+                Anthropic Claude, OpenAI GPT, and Google Gemini all work well for Polish. Pick the
+                one you already have an account with. You can change it anytime in Advanced.
+              </DialogDescription>
+            </DialogHeader>
+          </DialogContent>
+        </Dialog>
+        <p className="text-xs text-muted-foreground">Your key stays on this device.</p>
+      </div>
+    </FieldSet>
+  ) : null;
 
   const advancedProviderContent = (
     <FieldSet className="rounded-xl border border-border/60 bg-background p-4">
@@ -717,17 +911,6 @@ export function EnhancementsSection() {
               className="pl-9"
             />
           </div>
-          {hasHiddenProviders && (
-            <Field orientation="horizontal" className="w-auto items-center gap-2">
-              <FieldTitle className="text-sm">Hidden providers</FieldTitle>
-              <Switch
-                id="advanced-ai-providers"
-                aria-label="Show hidden providers"
-                checked={showAdvancedProviders}
-                onCheckedChange={setShowAdvancedProviders}
-              />
-            </Field>
-          )}
         </div>
 
         {filteredProviders.length === 0 && (
@@ -1013,7 +1196,7 @@ export function EnhancementsSection() {
                   </DialogDescription>
                   </DialogHeader>
                   <div className="space-y-3 text-sm leading-6 text-muted-foreground">
-                    <p><strong className="text-foreground">Setup</strong> works in order: set up one provider, save its API key, select a model, then turn on Polish.</p>
+                    <p><strong className="text-foreground">Setup</strong> starts with Anthropic, OpenAI, or Google. Save a key and Polish chooses a recommended fast model for you.</p>
                     <p><strong className="text-foreground">Polish</strong> fixes grammar and punctuation while keeping your meaning.</p>
                     <p><strong className="text-foreground">Static Rules</strong> are exact corrections, words and names, and text shortcuts that work with or without Polish.</p>
                     <p><strong className="text-foreground">App Rules</strong> live in Advanced for app-specific reshaping.</p>
@@ -1036,6 +1219,7 @@ export function EnhancementsSection() {
             writingSettings={writingSettings}
             aiFormattingEnabled={aiSettings.enabled}
             polishControls={polishControls}
+            polishSetupContent={polishSetupContent}
             advancedProviderContent={advancedProviderContent}
             advancedOpen={advancedOpen}
             onAdvancedOpenChange={setAdvancedOpen}
@@ -1048,7 +1232,10 @@ export function EnhancementsSection() {
 
       <ApiKeyModal
         isOpen={showApiKeyModal}
-        onClose={() => setShowApiKeyModal(false)}
+        onClose={() => {
+          setShowApiKeyModal(false);
+          setGuidedSetupProvider(null);
+        }}
         onSubmit={handleApiKeySubmit}
         providerName={selectedProvider}
         isLoading={isLoading}

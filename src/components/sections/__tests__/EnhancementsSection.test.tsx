@@ -59,7 +59,6 @@ const providerModels = vi.hoisted(
     ],
     anthropic: [{ id: 'claude-sonnet-4', name: 'Claude Sonnet 4', recommended: true }],
     groq: [{ id: 'llama-3.3-70b-versatile', name: 'Llama 3.3 70B Versatile', recommended: true }],
-    deepseek: [{ id: 'deepseek-chat', name: 'DeepSeek Chat', recommended: true }],
   }),
 )
 
@@ -99,7 +98,6 @@ const providerListResponse = [
   { id: 'anthropic', name: 'Anthropic', status: 'production', supportsReasoning: true },
   { id: 'custom', name: 'Custom (OpenAI-compatible)', status: 'production', supportsBaseUrl: true },
   { id: 'groq', name: 'Groq', status: 'experimental', supportsReasoning: false },
-  { id: 'deepseek', name: 'DeepSeek', status: 'hidden', supportsReasoning: false },
 ]
 
 let rejectWritingSettingsUpdate = false
@@ -126,6 +124,13 @@ function renderWithProviders() {
 
 async function openAdvanced(user: ReturnType<typeof userEvent.setup>) {
   await user.click(await screen.findByRole('button', { name: /toggle advanced/i }))
+}
+
+function getAdvancedProvidersPanel() {
+  const providersHeading = screen.getByText('Providers & Models')
+  const providersPanel = providersHeading.closest('fieldset')
+  expect(providersPanel).toBeTruthy()
+  return providersPanel as HTMLElement
 }
 
 describe('EnhancementsSection', () => {
@@ -189,22 +194,21 @@ describe('EnhancementsSection', () => {
     })
   })
 
-  it('renders production providers, experimental badges, and gates hidden providers behind Advanced', async () => {
+  it('renders available providers and experimental badges in Advanced', async () => {
     const user = userEvent.setup()
     renderWithProviders()
     await openAdvanced(user)
+    const providersPanel = getAdvancedProvidersPanel()
 
-    expect(await screen.findByText('OpenAI')).toBeInTheDocument()
-    expect(screen.getByText('Google Gemini')).toBeInTheDocument()
-    expect(screen.getByText('Anthropic')).toBeInTheDocument()
-    expect(screen.getByText('Custom (OpenAI-compatible)')).toBeInTheDocument()
-    expect(screen.getByText('Groq')).toBeInTheDocument()
-    expect(screen.getByText('Experimental')).toBeInTheDocument()
-    expect(screen.queryByText('DeepSeek')).not.toBeInTheDocument()
-
-    await user.click(screen.getByRole('switch', { name: /show hidden providers/i }))
-
-    expect(await screen.findByText('DeepSeek')).toBeInTheDocument()
+    expect(within(providersPanel).getByRole('heading', { name: 'OpenAI' })).toBeInTheDocument()
+    expect(within(providersPanel).getByRole('heading', { name: 'Google Gemini' })).toBeInTheDocument()
+    expect(within(providersPanel).getByRole('heading', { name: 'Anthropic' })).toBeInTheDocument()
+    expect(
+      within(providersPanel).getByRole('heading', { name: 'Custom (OpenAI-compatible)' }),
+    ).toBeInTheDocument()
+    expect(within(providersPanel).getByRole('heading', { name: 'Groq' })).toBeInTheDocument()
+    expect(within(providersPanel).getByText('Experimental')).toBeInTheDocument()
+    expect(within(providersPanel).getByLabelText('Search providers and models')).toBeInTheDocument()
   })
 
   it('filters providers and grouped models by search text', async () => {
@@ -216,12 +220,15 @@ describe('EnhancementsSection', () => {
     await openAdvanced(user)
 
     await user.type(await screen.findByLabelText('Search providers and models'), 'llama')
+    const providersPanel = getAdvancedProvidersPanel()
 
     await waitFor(() => {
-      expect(screen.queryByText('OpenAI')).not.toBeInTheDocument()
-      expect(screen.getByText('Groq')).toBeInTheDocument()
-      expect(screen.getByRole('button', { name: /llama 3\.3 70b versatile/i })).toBeInTheDocument()
-      expect(screen.getByText('Recommended')).toBeInTheDocument()
+      expect(within(providersPanel).queryByRole('heading', { name: 'OpenAI' })).not.toBeInTheDocument()
+      expect(within(providersPanel).getByRole('heading', { name: 'Groq' })).toBeInTheDocument()
+      expect(
+        within(providersPanel).getByRole('button', { name: /llama 3\.3 70b versatile/i }),
+      ).toBeInTheDocument()
+      expect(within(providersPanel).getByText('Recommended')).toBeInTheDocument()
     })
   })
 
@@ -262,8 +269,11 @@ describe('EnhancementsSection', () => {
 
     await waitFor(() => {
       expect(screen.getByText('Providers & Models')).toBeInTheDocument()
-      expect(screen.getByText('OpenAI')).toBeInTheDocument()
-      expect(screen.getByText('Google Gemini')).toBeInTheDocument()
+      const providersPanel = getAdvancedProvidersPanel()
+      expect(within(providersPanel).getByRole('heading', { name: 'OpenAI' })).toBeInTheDocument()
+      expect(
+        within(providersPanel).getByRole('heading', { name: 'Google Gemini' }),
+      ).toBeInTheDocument()
       expect(invoke).toHaveBeenCalledWith('list_ai_providers')
     })
   })
@@ -278,7 +288,7 @@ describe('EnhancementsSection', () => {
     expect(screen.queryByRole('button', { name: 'Writing' })).not.toBeInTheDocument()
   })
 
-  it('explains how to enable Polish when setup is incomplete', async () => {
+  it('shows the guided setup card when Polish is unconfigured', async () => {
     renderWithProviders()
 
     await waitFor(() => {
@@ -286,28 +296,90 @@ describe('EnhancementsSection', () => {
         screen.getByText('Clean up grammar and punctuation while keeping your meaning.'),
       ).toBeInTheDocument()
       expect(
-        screen.getByText('Add an API key and choose a model in Advanced to turn on Polish.'),
+        screen.getByText('Connect an AI to turn on Polish'),
       ).toBeInTheDocument()
+      expect(
+        screen.getByText(
+          'Polish uses a cloud AI you bring a key for. Pick one — setup takes about two minutes.',
+        ),
+      ).toBeInTheDocument()
+      expect(screen.getByRole('button', { name: 'Anthropic' })).toBeInTheDocument()
+      expect(screen.getByRole('button', { name: 'OpenAI' })).toBeInTheDocument()
+      expect(screen.getByRole('button', { name: 'Google' })).toBeInTheDocument()
+      expect(screen.getByText('Your key stays on this device.')).toBeInTheDocument()
       expect(screen.getByRole('switch', { name: /polish/i })).toBeDisabled()
     })
   })
 
-  it('shows the selected model when Polish is off', async () => {
+  it('opens the existing API key modal from a guided provider button', async () => {
+    const user = userEvent.setup()
+    renderWithProviders()
+
+    await user.click(await screen.findByRole('button', { name: 'Anthropic' }))
+
+    await waitFor(() => {
+      expect(screen.getByRole('dialog')).toBeInTheDocument()
+      expect(screen.getByText('Add Anthropic API Key')).toBeInTheDocument()
+      expect(screen.getByLabelText('API Key')).toBeInTheDocument()
+    })
+  })
+
+  it('auto-selects the recommended model and turns Polish on after guided key validation', async () => {
+    const user = userEvent.setup()
+    renderWithProviders()
+
+    await user.click(await screen.findByRole('button', { name: 'OpenAI' }))
+    await user.type(await screen.findByLabelText('API Key'), 'openai-key')
+    await user.click(screen.getByRole('button', { name: 'Save API Key' }))
+
+    await waitFor(() => {
+      expect(saveApiKey).toHaveBeenCalledWith('openai', 'openai-key')
+      expect(invoke).toHaveBeenCalledWith('update_ai_settings', {
+        enabled: true,
+        provider: 'openai',
+        model: 'gpt-5-mini',
+      })
+      expect(invoke).toHaveBeenCalledWith('update_enhancement_options', {
+        options: { preset: 'CleanDictation' },
+      })
+      expect(toast.success).toHaveBeenCalledWith('Polish on')
+    })
+  })
+
+  it('shows the connected status line when Polish is configured but off', async () => {
     aiSettingsResponse = { ...enabledAISettings, enabled: false }
     ;(hasApiKey as ReturnType<typeof vi.fn>).mockImplementation(async (providerId: string) =>
       providerId === 'openai',
     )
 
+    const user = userEvent.setup()
     renderWithProviders()
 
     await waitFor(() => {
       expect(
         screen.getAllByText((_, element) =>
-          element?.textContent === 'Ready OpenAI · GPT-5 Mini · Polish off · Change',
+          element?.textContent === 'Using OpenAI · GPT-5 Mini · Change',
         ).length,
       ).toBeGreaterThan(0)
-      expect(screen.queryByText('Add an API key and choose a model in Advanced to turn on Polish.')).not.toBeInTheDocument()
+      expect(screen.queryByText('Connect an AI to turn on Polish')).not.toBeInTheDocument()
     })
+
+    await user.click(screen.getByRole('button', { name: /change polish provider or model/i }))
+
+    await waitFor(() => {
+      expect(screen.getByText('Providers & Models')).toBeInTheDocument()
+    })
+  })
+
+  it('keeps the simple Polish surface free of paywall or locked cues', async () => {
+    const { container } = renderWithProviders()
+
+    await waitFor(() => {
+      expect(screen.getByText('Connect an AI to turn on Polish')).toBeInTheDocument()
+      expect(screen.getByText('Not set up yet')).toBeInTheDocument()
+    })
+    expect(container.querySelector('.lucide-lock')).toBeNull()
+    expect(screen.queryByText(/premium|paywall|locked|requires Polish/i)).not.toBeInTheDocument()
   })
 
   it('hides specific language selection when Personal Dictation is loaded', async () => {
@@ -1202,7 +1274,7 @@ describe('EnhancementsSection', () => {
 
     await waitFor(() => {
       const dialog = screen.getByRole('dialog')
-      expect(within(dialog).getByText(/set up one provider, save its API key/i)).toBeInTheDocument()
+      expect(within(dialog).getByText(/Save a key and Polish chooses/i)).toBeInTheDocument()
       expect(within(dialog).getAllByText(/Static Rules/i).length).toBeGreaterThan(0)
       expect(toast.error).not.toHaveBeenCalled()
     })

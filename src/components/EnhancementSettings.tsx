@@ -59,6 +59,7 @@ interface EnhancementSettingsProps {
   writingSettings: WritingSettings;
   aiFormattingEnabled: boolean;
   polishControls: ReactNode;
+  polishSetupContent?: ReactNode;
   advancedProviderContent: ReactNode;
   advancedOpen: boolean;
   onAdvancedOpenChange: (open: boolean) => void;
@@ -711,6 +712,7 @@ export function EnhancementSettings({
   writingSettings,
   aiFormattingEnabled,
   polishControls,
+  polishSetupContent,
   advancedProviderContent,
   advancedOpen,
   onAdvancedOpenChange,
@@ -735,6 +737,8 @@ export function EnhancementSettings({
           </div>
           {polishControls}
         </div>
+
+        {polishSetupContent}
 
         <FieldSet className="rounded-xl border border-border/60 bg-card p-4">
           <FieldLegend className="mb-1">Final Text Language</FieldLegend>
