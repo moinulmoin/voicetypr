@@ -245,7 +245,9 @@ export function createRecordingPill(
   let errorTimeout: TimeoutHandle | undefined;
   let timerInterval: ReturnType<typeof setInterval> | undefined;
   let audioUnlisten: UnlistenFn | undefined;
+  let audioListenPending = false;
   let streamUnlisten: UnlistenFn | undefined;
+  let streamListenPending = false;
   let activeStreamSessionId: number | null = null;
   let lastStreamRevision = -1;
   let streamPreviewVisible = false;
@@ -288,18 +290,22 @@ export function createRecordingPill(
   };
 
   const startAudioListener = () => {
-    if (audioUnlisten) return;
+    if (audioUnlisten || audioListenPending) return;
 
+    audioListenPending = true;
     void tauriListen<number>("audio-level", (event) => {
       if (isDestroyed || visibleState() !== "listening") return;
       audioLevel = event.payload;
       render();
     }).then((unlisten) => {
-      if (isDestroyed || visibleState() !== "listening") {
+      audioListenPending = false;
+      if (audioUnlisten || isDestroyed || visibleState() !== "listening") {
         unlisten();
       } else {
         audioUnlisten = unlisten;
       }
+    }).catch(() => {
+      audioListenPending = false;
     });
   };
 
@@ -415,16 +421,20 @@ export function createRecordingPill(
       render();
       return;
     }
-    if (streamUnlisten) return;
+    if (streamUnlisten || streamListenPending) return;
 
+    streamListenPending = true;
     void tauriListen<TranscriptionStreamEvent>(TRANSCRIPTION_STREAM_EVENT, (event) => {
       handleStreamEvent(event.payload);
     }).then((unlisten) => {
-      if (isDestroyed || !streamingPreviewEnabled) {
+      streamListenPending = false;
+      if (streamUnlisten || isDestroyed || !streamingPreviewEnabled) {
         unlisten();
       } else {
         streamUnlisten = unlisten;
       }
+    }).catch(() => {
+      streamListenPending = false;
     });
   };
 
@@ -499,6 +509,26 @@ export function createRecordingPill(
     render();
   };
 
+  const applyRecordingState = (payload: RecordingStatePayload) => {
+    resetActiveState();
+    setPillState(stateFromBackend(payload.state));
+
+    if (payload.state === "error") {
+      flashError(payload.error || "Recording failed");
+    }
+  };
+
+  const readInitialRecordingState = async () => {
+    try {
+      const currentState =
+        await tauriInvoke<RecordingStatePayload>("get_current_recording_state");
+      if (isDestroyed || !currentState || typeof currentState.state !== "string") return;
+      applyRecordingState(currentState);
+    } catch {
+      // The pill can still recover from subsequent recording-state events.
+    }
+  };
+
   const subscribe = <T,>(event: string, handler: (event: TauriEvent<T>) => void) => {
     void tauriListen<T>(event, handler).then((unlisten) => {
       if (isDestroyed) {
@@ -526,12 +556,7 @@ export function createRecordingPill(
 
   subscribe<RecordingStatePayload>("recording-state-changed", (event) => {
     if (isDestroyed) return;
-    resetActiveState();
-    setPillState(stateFromBackend(event.payload.state));
-
-    if (event.payload.state === "error") {
-      flashError(event.payload.error || "Recording failed");
-    }
+    applyRecordingState(event.payload);
   });
 
   subscribe("recording-started", () => {
@@ -575,7 +600,10 @@ export function createRecordingPill(
   });
 
   render();
-  void Promise.resolve().then(readSettings);
+  void Promise.resolve().then(() => {
+    void readSettings();
+    void readInitialRecordingState();
+  });
 
   return {
     destroy: () => {

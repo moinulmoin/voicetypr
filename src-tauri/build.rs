@@ -67,6 +67,7 @@ fn main() {
         // Tell Cargo to re-run if Swift sources change
         println!("cargo:rerun-if-changed=../sidecar/parakeet-swift/Sources");
         println!("cargo:rerun-if-changed=../sidecar/parakeet-swift/Package.swift");
+        println!("cargo:rerun-if-changed=../sidecar/parakeet-swift/Package.resolved");
         println!("cargo:rerun-if-changed=../sidecar/parakeet-swift/build.sh");
 
         // Verify ffmpeg/ffprobe sidecars exist for macOS (aarch64)

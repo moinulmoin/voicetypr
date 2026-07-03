@@ -8,7 +8,7 @@ use std::time::{Duration, Instant};
 
 use super::level_meter::AudioLevelMeter;
 use super::silence_detector::{SilenceDetector, SilenceDetectorEvent};
-use super::stream_tap::{self, StreamTapRt, StreamTapSinkFactory};
+use super::stream_tap::{self, StreamTapRt, StreamTapSinkFactory, StreamTapWorkerSummary};
 
 // Type-safe recording size limits
 pub struct RecordingSize;
@@ -60,11 +60,13 @@ const RECYCLE_CHANNEL_CAPACITY: usize = WRITER_QUEUE_CAPACITY + CHUNK_POOL_SLACK
 /// [`STOP_JOIN_TIMEOUT`] comfortably covers it plus the drain + platform
 /// stream-drop budgets.
 const WRITER_JOIN_TIMEOUT: Duration = Duration::from_secs(3);
+const STREAM_TAP_JOIN_TIMEOUT: Duration = Duration::from_millis(100);
 
 /// Outer budget [`AudioRecorder::stop_recording`] gives the whole recording
 /// thread to tear down during stop. It must cover every internal sub-budget —
 /// drain window (~200ms) + platform stream drop (≤3s on Windows) + writer
-/// finalize ([`WRITER_JOIN_TIMEOUT`]) — plus a finalize margin. It is
+/// finalize ([`WRITER_JOIN_TIMEOUT`]) + stream-tap observation
+/// ([`STREAM_TAP_JOIN_TIMEOUT`]) — plus a finalize margin. It is
 /// intentionally larger than their sum so the outer join never preempts the
 /// worker while it is still finalizing the WAV; the old independent 5s poll
 /// raced the (then-unbounded) writer join and timed out mid-finalize, leaving
@@ -732,7 +734,7 @@ impl AudioRecorder {
             let writer_result = join_writer_bounded(writer_handle, WRITER_JOIN_TIMEOUT);
 
             if let Some(worker) = stream_tap_worker {
-                let _ = worker.join();
+                let _ = join_stream_tap_bounded(worker, STREAM_TAP_JOIN_TIMEOUT);
             }
             writer_result?;
 
@@ -921,6 +923,30 @@ fn join_writer_bounded(
     Err("Writer thread failed to finalize within timeout".to_string())
 }
 
+fn join_stream_tap_bounded(
+    handle: thread::JoinHandle<StreamTapWorkerSummary>,
+    deadline: Duration,
+) -> Option<StreamTapWorkerSummary> {
+    let start = Instant::now();
+    while start.elapsed() < deadline {
+        if handle.is_finished() {
+            return match handle.join() {
+                Ok(summary) => Some(summary),
+                Err(_) => {
+                    log::warn!("Stream tap worker panicked after WAV finalization");
+                    None
+                }
+            };
+        }
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    log::warn!(
+        "Stream tap worker did not finish within {}ms; detaching so preview finalization cannot block the WAV stop path",
+        deadline.as_millis()
+    );
+    None
+}
+
 /// Classifies an error returned by [`AudioRecorder::stop_recording`]. Returns true when the
 /// recording worker did NOT finish, or the WAV writer could not finalize the file, so the
 /// capture must not be transcribed. A worker that finishes with an error (e.g. a CPAL device
@@ -1012,6 +1038,27 @@ mod tests {
         assert!(!stop_error_is_integrity_failure(
             "WAV finalize failed: failed to seek"
         ));
+    }
+
+    #[test]
+    fn stream_tap_join_timeout_detaches_slow_worker() {
+        let handle = thread::spawn(|| {
+            thread::sleep(Duration::from_millis(80));
+            StreamTapWorkerSummary {
+                generation: 1,
+                frames: 0,
+                samples: 0,
+                dropped: 0,
+                cancelled: false,
+                stale: false,
+            }
+        });
+
+        let started = Instant::now();
+        let summary = join_stream_tap_bounded(handle, Duration::from_millis(10));
+
+        assert!(summary.is_none());
+        assert!(started.elapsed() < Duration::from_millis(60));
     }
 
     #[test]

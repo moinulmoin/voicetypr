@@ -10,6 +10,7 @@ let controller: RecordingPillController | undefined;
 let pillIndicatorMode: PillIndicatorMode;
 let listeners: Map<string, Set<Handler>>;
 let invokeMock: ReturnType<typeof vi.fn>;
+let currentRecordingState: { state: string; error: string | null };
 
 function createTestPill() {
   controller = createRecordingPill(root, {
@@ -46,9 +47,14 @@ describe("RecordingPill", () => {
     vi.useRealTimers();
     listeners = new Map();
     pillIndicatorMode = "when_recording";
+    currentRecordingState = { state: "idle", error: null };
     invokeMock = vi.fn((command: string) => {
       if (command === "get_settings") {
         return Promise.resolve({ pill_indicator_mode: pillIndicatorMode });
+      }
+
+      if (command === "get_current_recording_state") {
+        return Promise.resolve(currentRecordingState);
       }
 
       if (command === "cancel_recording") {
@@ -121,6 +127,16 @@ describe("RecordingPill", () => {
     expect(getByText(root, "0:03")).toBeVisible();
   });
 
+  it("hydrates the current recording state on startup", async () => {
+    currentRecordingState = { state: "recording", error: null };
+    createTestPill();
+
+    await waitFor(() => {
+      expect(invokeMock).toHaveBeenCalledWith("get_current_recording_state");
+      expect(getByTestId(root, "pill-bars")).toHaveAttribute("data-state", "listening");
+    });
+  });
+
   it("listens to audio-level only while listening", () => {
     createTestPill();
 
@@ -132,6 +148,53 @@ describe("RecordingPill", () => {
 
     const firstBar = getByTestId(root, "pill-bars").querySelector("span");
     expect(firstBar).toHaveStyle({ transform: "scaleY(0.466)" });
+  });
+
+  it("does not double-register audio-level while the first listen is pending", async () => {
+    currentRecordingState = { state: "recording", error: null };
+    const audioResolvers: Array<(unlisten: () => void) => void> = [];
+    const listenMock = vi.fn((event: string, handler: Handler) => {
+      if (event === "audio-level") {
+        return new Promise<() => void>((resolve) => {
+          audioResolvers.push((unlisten) => {
+            if (!listeners.has(event)) {
+              listeners.set(event, new Set());
+            }
+            listeners.get(event)?.add(handler);
+            resolve(unlisten);
+          });
+        });
+      }
+
+      if (!listeners.has(event)) {
+        listeners.set(event, new Set());
+      }
+      listeners.get(event)?.add(handler);
+
+      return Promise.resolve(() => {
+        listeners.get(event)?.delete(handler);
+      });
+    });
+
+    controller = createRecordingPill(root, {
+      invoke: invokeMock as never,
+      listen: listenMock as never,
+    });
+
+    emitMockEvent("recording-started");
+    emitMockEvent("transcription-started");
+    emitMockEvent("recording-started");
+
+    expect(listenMock.mock.calls.filter(([event]) => event === "audio-level")).toHaveLength(1);
+    expect(audioResolvers).toHaveLength(1);
+
+    const unlisten = vi.fn();
+    audioResolvers[0]?.(unlisten);
+
+    await waitFor(() => {
+      expect(listeners.get("audio-level")?.size).toBe(1);
+    });
+    expect(unlisten).not.toHaveBeenCalled();
   });
 
   it("invokes cancel_recording once until state changes", async () => {
