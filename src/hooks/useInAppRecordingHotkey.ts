@@ -200,6 +200,7 @@ export function useInAppRecordingHotkey(): void {
     let activeHoldCode: string | null = null;
     let pendingHoldStart: number | null = null;
     let holdStartDispatched = false;
+    let holdStartPromise: Promise<void> | null = null;
 
     // Toggle recording, mirroring the native state machine (handle_toggle_mode):
     // act only on settled states, ignore transitional ones, and debounce.
@@ -223,7 +224,12 @@ export function useInAppRecordingHotkey(): void {
       const state = currentRecording.state;
       if (state === "idle" || state === "error") {
         log.debug("In-app bare-modifier hold in editable field — starting recording");
-        void currentRecording.startRecording();
+        // Keep the start promise so a stop that races this in-flight start can
+        // chain after it — a stop_recording that reaches the backend before the
+        // start publishes `Starting` is silently dropped, and the start also
+        // clears pending_stop_after_start before Starting (stale-flag hygiene),
+        // so backend-side queueing cannot cover this window.
+        holdStartPromise = currentRecording.startRecording();
         return true;
       }
       return false;
@@ -262,6 +268,15 @@ export function useInAppRecordingHotkey(): void {
     const stopHold = (): void => {
       const { recording: currentRecording } = latest.current;
       const state = currentRecording.state;
+      const startInFlight = holdStartPromise;
+      holdStartPromise = null;
+      if (startInFlight) {
+        log.debug("In-app bare-modifier hold — stop chained after in-flight start");
+        void startInFlight
+          .catch(() => {})
+          .then(() => latest.current.recording.stopRecording());
+        return;
+      }
       if (state === "recording" || state === "starting" || activeHoldCode) {
         log.debug("In-app bare-modifier hold in editable field — stopping recording");
         void currentRecording.stopRecording();

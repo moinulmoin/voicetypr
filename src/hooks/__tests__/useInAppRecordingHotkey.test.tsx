@@ -423,6 +423,32 @@ describe("useInAppRecordingHotkey", () => {
     expect(mockRecording.stopRecording).not.toHaveBeenCalled();
   });
 
+  it("chains the hold stop after an in-flight start so stop-before-Starting is never dropped", async () => {
+    mockSettings.hotkey = "";
+    mockInvoke.mockResolvedValue({
+      bindings: [holdControlBinding],
+    });
+    let resolveStart: (() => void) | undefined;
+    mockRecording.startRecording.mockImplementationOnce(
+      () => new Promise<void>((resolve) => { resolveStart = resolve; }),
+    );
+    await renderWithBareModifier();
+
+    fireModifierDown(editable);
+    await flushHoldStart();
+    expect(mockRecording.startRecording).toHaveBeenCalledTimes(1);
+
+    // Key released while the start invoke is still in flight (backend has not
+    // yet published `Starting`): the stop must wait for the start, not drop.
+    fireModifierUp(editable);
+    expect(mockRecording.stopRecording).not.toHaveBeenCalled();
+
+    resolveStart?.();
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(mockRecording.stopRecording).toHaveBeenCalledTimes(1);
+  });
+
   it("stops a hold that already started when AltGr's second key arrives after the hold-start timer", async () => {
     mockSettings.hotkey = "";
     mockInvoke.mockResolvedValue({
