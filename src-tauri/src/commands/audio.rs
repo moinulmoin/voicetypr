@@ -1714,7 +1714,7 @@ mod tests {
             raw_text: "raw transcript".to_string(),
             final_text: "final transcript".to_string(),
             output_language: "en".to_string(),
-            mode: crate::writing::WritingMode::CleanDictation,
+            mode: crate::ai::prompts::EnhancementPreset::CleanDictation,
             ai_applied: true,
             applied_operations: vec![crate::writing::AppliedWritingOperation {
                 kind: crate::writing::WritingOperationKind::AiCleanup,
@@ -1756,7 +1756,7 @@ mod tests {
             raw_text: "raw transcript".to_string(),
             final_text: "deterministic transcript".to_string(),
             output_language: "en".to_string(),
-            mode: crate::writing::WritingMode::CleanDictation,
+            mode: crate::ai::prompts::EnhancementPreset::CleanDictation,
             ai_applied: false,
             applied_operations: vec![],
             warnings: vec![],
@@ -1786,7 +1786,7 @@ mod tests {
             raw_text: "same text".to_string(),
             final_text: "same text".to_string(),
             output_language: "en".to_string(),
-            mode: crate::writing::WritingMode::CleanDictation,
+            mode: crate::ai::prompts::EnhancementPreset::CleanDictation,
             ai_applied: true,
             applied_operations: vec![],
             warnings: vec![],
@@ -1823,7 +1823,7 @@ mod tests {
             raw_text: "raw transcript".to_string(),
             final_text: "deterministic transcript".to_string(),
             output_language: "en".to_string(),
-            mode: crate::writing::WritingMode::CleanDictation,
+            mode: crate::ai::prompts::EnhancementPreset::CleanDictation,
             ai_applied: false,
             applied_operations: vec![crate::writing::AppliedWritingOperation {
                 kind: crate::writing::WritingOperationKind::Replacement,
@@ -2260,7 +2260,7 @@ mod tests {
             raw_text: "hello world".into(),
             final_text: "hello world".into(),
             output_language: "en".into(),
-            mode: crate::writing::WritingMode::PersonalDictation,
+            mode: crate::ai::prompts::EnhancementPreset::PersonalDictation,
             ai_applied: true,
             applied_operations: vec![],
             warnings: vec![],
@@ -2335,7 +2335,7 @@ mod tests {
         assert!(!obj["diarized"].as_bool().unwrap());
 
         // Writing fields present
-        assert_eq!(obj["mode"].as_str().unwrap(), "personal_dictation");
+        assert_eq!(obj["mode"].as_str().unwrap(), "PersonalDictation");
         assert_eq!(obj["output_language"].as_str().unwrap(), "en");
         assert!(obj["ai_applied"].as_bool().unwrap());
         assert!(obj.contains_key("applied_operations"));
@@ -5347,17 +5347,10 @@ pub async fn stop_recording(
                 }
 
                 let ai_enabled = config.ai_enabled;
-                let should_emit_enhancing = if ai_enabled {
-                    crate::commands::ai::get_enhancement_options_for_ai_enabled(
-                        app_for_task.clone(),
-                        ai_enabled,
-                    )
-                    .await
-                    .map(|options| options.preset.requires_ai_formatting())
-                    .unwrap_or(false)
-                } else {
-                    false
-                };
+                let should_emit_enhancing =
+                    crate::writing::effective_pipeline_config(&app_for_task, ai_enabled)
+                        .map(|config| config.preset.requires_ai_formatting() && config.ai_effective)
+                        .unwrap_or(false);
 
                 if should_emit_enhancing {
                     let _ = app_for_task.emit("enhancing-started", ());

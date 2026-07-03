@@ -16,7 +16,7 @@ use crate::whisper::languages::validate_language;
 use super::{
     apply_final_restoration_guard, apply_library_rules, apply_voice_command_stage,
     compile_context_for_target, load_writing_settings, sanitize_transcript, AppFormattingRule,
-    AppliedWritingOperation, ContextHint, ProviderContextTarget, WritingError, WritingMode,
+    AppliedWritingOperation, ContextHint, ProviderContextTarget, WritingError,
     WritingOperationKind, WritingProfile, WritingResult, WritingSettings, WritingStageTimings,
     WritingWarning,
 };
@@ -32,10 +32,32 @@ fn app_rules_need_active_app(settings: &WritingSettings) -> bool {
     enabled_app_rules(settings).next().is_some()
 }
 
-fn resolve_app_formatting_preset(
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PipelineAiState {
+    pub stored_ai_enabled: bool,
+    pub has_model_and_key: bool,
+}
+
+impl PipelineAiState {
+    #[cfg(test)]
+    fn from_validated_ai_enabled(ai_enabled: bool) -> Self {
+        Self {
+            stored_ai_enabled: ai_enabled,
+            has_model_and_key: true,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EffectiveConfig {
+    pub preset: EnhancementPreset,
+    pub final_text_language: String,
+    pub ai_effective: bool,
+}
+
+fn matching_app_formatting_preset(
     settings: &WritingSettings,
     active_app: Option<&ContextHint>,
-    ai_enabled: bool,
 ) -> Option<EnhancementPreset> {
     let app_name = active_app?.app_name.as_deref()?.trim();
     if app_name.is_empty() {
@@ -48,63 +70,46 @@ fn resolve_app_formatting_preset(
         normalized_app_name.contains(&rule_app_name)
     })?;
 
-    if matched_rule.preset.requires_ai_formatting() && !ai_enabled {
-        return None;
-    }
-
     Some(matched_rule.preset)
 }
 
-fn resolve_effective_writing_preset(
+pub fn resolve_pipeline_config(
     settings: &WritingSettings,
-    ai_enabled: bool,
     global_preset: EnhancementPreset,
+    final_text_language: impl Into<String>,
     active_app: Option<&ContextHint>,
-) -> EnhancementPreset {
-    if !ai_enabled {
-        return EnhancementPreset::PersonalDictation;
+    ai_state: PipelineAiState,
+) -> EffectiveConfig {
+    let ai_effective = ai_state.stored_ai_enabled && ai_state.has_model_and_key;
+    let app_preset = matching_app_formatting_preset(settings, active_app)
+        .filter(|preset| ai_effective || !preset.requires_ai_formatting());
+    let mut preset = app_preset.unwrap_or(global_preset);
+
+    if !ai_effective && preset.requires_ai_formatting() {
+        preset = EnhancementPreset::PersonalDictation;
     }
 
-    resolve_app_formatting_preset(settings, active_app, ai_enabled).unwrap_or(global_preset)
+    let final_text_language = if preset == EnhancementPreset::PersonalDictation {
+        FINAL_TEXT_LANGUAGE_SAME_AS_TRANSCRIPT.to_string()
+    } else {
+        final_text_language.into()
+    };
+
+    EffectiveConfig {
+        preset,
+        final_text_language,
+        ai_effective,
+    }
 }
 
-/// Resolves whether the effective writing mode is Personal Dictation for the current
-/// foreground app, using the same preset resolution as `process_transcription`.
-pub fn effective_personal_dictation_mode(
+pub fn effective_pipeline_config(
     app: &AppHandle,
     ai_enabled: bool,
-) -> Result<bool, String> {
-    if !ai_enabled {
-        return Ok(true);
-    }
-
+) -> Result<EffectiveConfig, String> {
     let settings = load_writing_settings(app)?;
     let should_capture_active_app = app_rules_need_active_app(&settings);
     let active_app = capture_active_app_context(should_capture_active_app);
 
-    let store = app.store("settings").map_err(|e| e.to_string())?;
-    let global_preset = crate::ai::prompts::enhancement_options_for_ai_enabled(
-        store.get("enhancement_options").as_ref(),
-        ai_enabled,
-    )
-    .map(|options| options.preset)
-    .unwrap_or(EnhancementPreset::PersonalDictation);
-
-    Ok(
-        resolve_effective_writing_preset(&settings, ai_enabled, global_preset, active_app.as_ref())
-            == EnhancementPreset::PersonalDictation,
-    )
-}
-
-async fn load_writing_profile(
-    app: &AppHandle,
-    ai_enabled: bool,
-    settings: &WritingSettings,
-    active_app: Option<&ContextHint>,
-) -> Result<WritingProfile, String> {
-    let options =
-        crate::commands::ai::get_enhancement_options_for_ai_enabled(app.clone(), ai_enabled)
-            .await?;
     let store = app.store("settings").map_err(|e| e.to_string())?;
     let legacy_translate_to_english = store
         .get("translate_to_english")
@@ -120,19 +125,87 @@ async fn load_writing_profile(
     let stored_final_text_language = store
         .get("final_text_language")
         .and_then(|v| v.as_str().map(|s| s.to_string()));
-
-    let selected_preset =
-        resolve_app_formatting_preset(settings, active_app, ai_enabled).unwrap_or(options.preset);
-    let mode = selected_preset.into();
-    let mut final_text_language =
+    let final_text_language =
         normalize_final_text_language(stored_final_text_language.as_deref(), &transcription_task);
-    if mode == WritingMode::PersonalDictation {
-        final_text_language = FINAL_TEXT_LANGUAGE_SAME_AS_TRANSCRIPT.to_string();
-    }
+    let global_preset = store
+        .get("enhancement_options")
+        .map(|value| {
+            crate::ai::prompts::parse_enhancement_options_from_value(&value, ai_enabled)
+                .map(|options| options.preset)
+        })
+        .transpose()?
+        .unwrap_or_else(|| {
+            crate::ai::EnhancementOptions::default_for_ai_enabled(ai_enabled).preset
+        });
+
+    Ok(resolve_pipeline_config(
+        &settings,
+        global_preset,
+        final_text_language,
+        active_app.as_ref(),
+        PipelineAiState {
+            stored_ai_enabled: ai_enabled,
+            has_model_and_key: crate::commands::ai::has_ai_model_and_key(app)?,
+        },
+    ))
+}
+
+/// Resolves whether the effective writing mode is Personal Dictation for the current
+/// foreground app, using the same preset resolution as `process_transcription`.
+pub fn effective_personal_dictation_mode(
+    app: &AppHandle,
+    ai_enabled: bool,
+) -> Result<bool, String> {
+    Ok(effective_pipeline_config(app, ai_enabled)?.preset == EnhancementPreset::PersonalDictation)
+}
+
+async fn load_writing_profile(
+    app: &AppHandle,
+    ai_enabled: bool,
+    settings: &WritingSettings,
+    active_app: Option<&ContextHint>,
+) -> Result<WritingProfile, String> {
+    let store = app.store("settings").map_err(|e| e.to_string())?;
+    let global_preset = store
+        .get("enhancement_options")
+        .map(|value| {
+            crate::ai::prompts::parse_enhancement_options_from_value(&value, ai_enabled)
+                .map(|options| options.preset)
+        })
+        .transpose()?
+        .unwrap_or_else(|| {
+            crate::ai::EnhancementOptions::default_for_ai_enabled(ai_enabled).preset
+        });
+    let legacy_translate_to_english = store
+        .get("translate_to_english")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+    let stored_transcription_task = store
+        .get("transcription_task")
+        .and_then(|v| v.as_str().map(|s| s.to_string()));
+    let transcription_task = normalize_transcription_task(
+        stored_transcription_task.as_deref(),
+        legacy_translate_to_english,
+    );
+    let stored_final_text_language = store
+        .get("final_text_language")
+        .and_then(|v| v.as_str().map(|s| s.to_string()));
+    let normalized_final_text_language =
+        normalize_final_text_language(stored_final_text_language.as_deref(), &transcription_task);
+    let config = resolve_pipeline_config(
+        settings,
+        global_preset,
+        normalized_final_text_language,
+        active_app,
+        PipelineAiState {
+            stored_ai_enabled: ai_enabled,
+            has_model_and_key: crate::commands::ai::has_ai_model_and_key(app)?,
+        },
+    );
 
     Ok(WritingProfile {
-        mode,
-        final_text_language,
+        mode: config.preset,
+        final_text_language: config.final_text_language,
     })
 }
 
@@ -237,7 +310,7 @@ async fn run_smart_formatting(
     request: SmartFormattingRequest<'_>,
 ) -> Result<(String, u64), AiProviderError> {
     let options = crate::ai::EnhancementOptions {
-        preset: request.profile.mode.into(),
+        preset: request.profile.mode,
     };
     let ai_context =
         smart_formatting_ai_context(request.settings, request.transcript_language.as_deref());
@@ -384,13 +457,28 @@ pub async fn process_transcription(
         None => profile.final_text_language != FINAL_TEXT_LANGUAGE_SAME_AS_TRANSCRIPT,
     };
 
-    let can_run_ai_formatting = ai_enabled && profile.mode != WritingMode::PersonalDictation;
+    let pipeline_config = resolve_pipeline_config(
+        &settings,
+        profile.mode,
+        profile.final_text_language.clone(),
+        active_app.as_ref(),
+        PipelineAiState {
+            stored_ai_enabled: ai_enabled,
+            has_model_and_key: crate::commands::ai::has_ai_model_and_key(&app)
+                .map_err(WritingError::Config)?,
+        },
+    );
+    let can_run_ai_formatting =
+        pipeline_config.ai_effective && profile.mode != EnhancementPreset::PersonalDictation;
 
     if needs_output_language_transform && !can_run_ai_formatting && !library_result.literal_locked {
         return Err(WritingError::OutputLanguageRequiresAi);
     }
 
-    if profile.mode.requires_ai_formatting() && !ai_enabled && !library_result.literal_locked {
+    if profile.mode.requires_ai_formatting()
+        && !pipeline_config.ai_effective
+        && !library_result.literal_locked
+    {
         return Err(WritingError::Config(
             "This writing mode requires AI formatting. Enable AI formatting in settings or switch to Personal Dictation.".into(),
         ));
@@ -580,18 +668,22 @@ mod tests {
             app_name: Some("Slack Desktop".to_string()),
         };
         let global_preset = EnhancementPreset::PersonalDictation;
-        let effective_preset = resolve_app_formatting_preset(&settings, Some(&active_app), true)
-            .unwrap_or(global_preset);
+        let effective = resolve_pipeline_config(
+            &settings,
+            global_preset,
+            FINAL_TEXT_LANGUAGE_SAME_AS_TRANSCRIPT,
+            Some(&active_app),
+            PipelineAiState::from_validated_ai_enabled(true),
+        );
 
-        assert_eq!(effective_preset, EnhancementPreset::Message);
-        assert_eq!(WritingMode::from(effective_preset), WritingMode::Message);
-        assert!(effective_preset.requires_ai_formatting());
+        assert_eq!(effective.preset, EnhancementPreset::Message);
+        assert!(effective.preset.requires_ai_formatting());
     }
 
     #[test]
     fn test_resolve_output_language_prefers_transcript_language() {
         let profile = WritingProfile {
-            mode: WritingMode::CleanDictation,
+            mode: EnhancementPreset::CleanDictation,
             final_text_language: FINAL_TEXT_LANGUAGE_SAME_AS_TRANSCRIPT.to_string(),
         };
         let transcription = make_result(
@@ -650,7 +742,7 @@ mod tests {
     #[test]
     fn test_resolve_output_language_falls_back_to_task_language() {
         let profile = WritingProfile {
-            mode: WritingMode::CleanDictation,
+            mode: EnhancementPreset::CleanDictation,
             final_text_language: FINAL_TEXT_LANGUAGE_SAME_AS_TRANSCRIPT.to_string(),
         };
         let transcription = make_result(
@@ -685,12 +777,26 @@ mod tests {
         };
 
         assert_eq!(
-            resolve_app_formatting_preset(&settings, Some(&active_app), true),
-            Some(EnhancementPreset::Message)
+            resolve_pipeline_config(
+                &settings,
+                EnhancementPreset::PersonalDictation,
+                FINAL_TEXT_LANGUAGE_SAME_AS_TRANSCRIPT,
+                Some(&active_app),
+                PipelineAiState::from_validated_ai_enabled(true),
+            )
+            .preset,
+            EnhancementPreset::Message
         );
         assert_eq!(
-            resolve_app_formatting_preset(&settings, Some(&active_app), false),
-            None
+            resolve_pipeline_config(
+                &settings,
+                EnhancementPreset::Message,
+                FINAL_TEXT_LANGUAGE_SAME_AS_TRANSCRIPT,
+                Some(&active_app),
+                PipelineAiState::from_validated_ai_enabled(false),
+            )
+            .preset,
+            EnhancementPreset::PersonalDictation
         );
     }
 
@@ -709,8 +815,15 @@ mod tests {
         };
 
         assert_eq!(
-            resolve_app_formatting_preset(&settings, Some(&active_app), true),
-            Some(EnhancementPreset::Code)
+            resolve_pipeline_config(
+                &settings,
+                EnhancementPreset::PersonalDictation,
+                FINAL_TEXT_LANGUAGE_SAME_AS_TRANSCRIPT,
+                Some(&active_app),
+                PipelineAiState::from_validated_ai_enabled(true),
+            )
+            .preset,
+            EnhancementPreset::Code
         );
     }
 
@@ -736,13 +849,20 @@ mod tests {
         };
 
         assert_eq!(
-            resolve_app_formatting_preset(&settings, Some(&active_app), true),
-            None
+            resolve_pipeline_config(
+                &settings,
+                EnhancementPreset::CleanDictation,
+                FINAL_TEXT_LANGUAGE_SAME_AS_TRANSCRIPT,
+                Some(&active_app),
+                PipelineAiState::from_validated_ai_enabled(true),
+            )
+            .preset,
+            EnhancementPreset::CleanDictation
         );
     }
 
     #[test]
-    fn test_resolve_effective_writing_preset_ai_disabled_is_personal_dictation() {
+    fn test_resolve_pipeline_config_ai_disabled_is_personal_dictation() {
         let settings = WritingSettings {
             app_formatting_rules: vec![AppFormattingRule {
                 app_name: "slack".to_string(),
@@ -756,18 +876,20 @@ mod tests {
         };
 
         assert_eq!(
-            resolve_effective_writing_preset(
+            resolve_pipeline_config(
                 &settings,
-                false,
                 EnhancementPreset::Message,
+                "fr",
                 Some(&active_app),
-            ),
+                PipelineAiState::from_validated_ai_enabled(false),
+            )
+            .preset,
             EnhancementPreset::PersonalDictation
         );
     }
 
     #[test]
-    fn test_resolve_effective_writing_preset_app_rule_personal_dictation() {
+    fn test_resolve_pipeline_config_app_rule_personal_dictation() {
         let settings = WritingSettings {
             app_formatting_rules: vec![AppFormattingRule {
                 app_name: "notes".to_string(),
@@ -781,18 +903,20 @@ mod tests {
         };
 
         assert_eq!(
-            resolve_effective_writing_preset(
+            resolve_pipeline_config(
                 &settings,
-                true,
                 EnhancementPreset::Message,
+                "fr",
                 Some(&active_app),
-            ),
+                PipelineAiState::from_validated_ai_enabled(true),
+            )
+            .preset,
             EnhancementPreset::PersonalDictation
         );
     }
 
     #[test]
-    fn test_resolve_effective_writing_preset_app_rule_message_overrides_global_personal() {
+    fn test_resolve_pipeline_config_app_rule_message_overrides_global_personal() {
         let settings = WritingSettings {
             app_formatting_rules: vec![AppFormattingRule {
                 app_name: "slack".to_string(),
@@ -806,27 +930,31 @@ mod tests {
         };
 
         assert_eq!(
-            resolve_effective_writing_preset(
+            resolve_pipeline_config(
                 &settings,
-                true,
                 EnhancementPreset::PersonalDictation,
+                "fr",
                 Some(&active_app),
-            ),
+                PipelineAiState::from_validated_ai_enabled(true),
+            )
+            .preset,
             EnhancementPreset::Message
         );
         assert_ne!(
-            resolve_effective_writing_preset(
+            resolve_pipeline_config(
                 &settings,
-                true,
                 EnhancementPreset::PersonalDictation,
+                "fr",
                 Some(&active_app),
-            ),
+                PipelineAiState::from_validated_ai_enabled(true),
+            )
+            .preset,
             EnhancementPreset::PersonalDictation
         );
     }
 
     #[test]
-    fn test_resolve_effective_writing_preset_falls_back_to_global_without_active_app() {
+    fn test_resolve_pipeline_config_falls_back_to_global_without_active_app() {
         let settings = WritingSettings {
             app_formatting_rules: vec![AppFormattingRule {
                 app_name: "slack".to_string(),
@@ -837,12 +965,14 @@ mod tests {
         };
 
         assert_eq!(
-            resolve_effective_writing_preset(
+            resolve_pipeline_config(
                 &settings,
-                true,
                 EnhancementPreset::PersonalDictation,
+                "fr",
                 None,
-            ),
+                PipelineAiState::from_validated_ai_enabled(true),
+            )
+            .preset,
             EnhancementPreset::PersonalDictation
         );
     }

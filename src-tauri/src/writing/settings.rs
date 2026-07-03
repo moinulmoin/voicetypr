@@ -17,37 +17,6 @@ fn default_preserve_literal() -> bool {
     true
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum WritingMode {
-    PersonalDictation,
-    CleanDictation,
-    Writing,
-    Notes,
-    Message,
-    #[serde(alias = "coding")]
-    Code,
-}
-
-impl WritingMode {
-    pub fn requires_ai_formatting(self) -> bool {
-        !matches!(self, Self::PersonalDictation)
-    }
-}
-
-impl From<EnhancementPreset> for WritingMode {
-    fn from(value: EnhancementPreset) -> Self {
-        match value {
-            EnhancementPreset::PersonalDictation => Self::PersonalDictation,
-            EnhancementPreset::CleanDictation => Self::CleanDictation,
-            EnhancementPreset::Writing => Self::Writing,
-            EnhancementPreset::Notes => Self::Notes,
-            EnhancementPreset::Message => Self::Message,
-            EnhancementPreset::Code => Self::Code,
-        }
-    }
-}
-
 #[derive(Debug, Clone)]
 pub enum WritingError {
     TranslationFailed {
@@ -84,19 +53,6 @@ impl std::fmt::Display for WritingError {
 }
 
 impl std::error::Error for WritingError {}
-
-impl From<WritingMode> for EnhancementPreset {
-    fn from(value: WritingMode) -> Self {
-        match value {
-            WritingMode::PersonalDictation => Self::PersonalDictation,
-            WritingMode::CleanDictation => Self::CleanDictation,
-            WritingMode::Writing => Self::Writing,
-            WritingMode::Notes => Self::Notes,
-            WritingMode::Message => Self::Message,
-            WritingMode::Code => Self::Code,
-        }
-    }
-}
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub struct TextReplacementRule {
@@ -198,7 +154,7 @@ fn default_voice_commands() -> Vec<VoiceCommandRule> {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct WritingProfile {
-    pub mode: WritingMode,
+    pub mode: EnhancementPreset,
     pub final_text_language: String,
 }
 
@@ -246,7 +202,7 @@ pub struct WritingResult {
     pub raw_text: String,
     pub final_text: String,
     pub output_language: String,
-    pub mode: WritingMode,
+    pub mode: EnhancementPreset,
     pub ai_applied: bool,
     #[serde(default)]
     pub applied_operations: Vec<AppliedWritingOperation>,
@@ -387,55 +343,7 @@ pub fn save_writing_settings(app: &AppHandle, settings: &WritingSettings) -> Res
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ai::prompts::EnhancementPreset;
     use crate::writing::library_rules::apply_voice_commands;
-
-    #[test]
-    fn test_writing_mode_maps_from_presets() {
-        assert_eq!(
-            WritingMode::from(EnhancementPreset::PersonalDictation),
-            WritingMode::PersonalDictation
-        );
-        assert_eq!(
-            WritingMode::from(EnhancementPreset::CleanDictation),
-            WritingMode::CleanDictation
-        );
-        assert_eq!(
-            WritingMode::from(EnhancementPreset::Writing),
-            WritingMode::Writing
-        );
-        assert_eq!(
-            WritingMode::from(EnhancementPreset::Notes),
-            WritingMode::Notes
-        );
-        assert_eq!(
-            WritingMode::from(EnhancementPreset::Message),
-            WritingMode::Message
-        );
-        assert_eq!(
-            WritingMode::from(EnhancementPreset::Code),
-            WritingMode::Code
-        );
-    }
-
-    #[test]
-    fn test_writing_mode_maps_to_enhancement_preset() {
-        assert_eq!(
-            EnhancementPreset::from(WritingMode::Message),
-            EnhancementPreset::Message
-        );
-        assert_eq!(
-            EnhancementPreset::from(WritingMode::PersonalDictation),
-            EnhancementPreset::PersonalDictation
-        );
-    }
-
-    #[test]
-    fn test_writing_mode_requires_ai_formatting() {
-        assert!(!WritingMode::PersonalDictation.requires_ai_formatting());
-        assert!(WritingMode::CleanDictation.requires_ai_formatting());
-        assert!(WritingMode::Code.requires_ai_formatting());
-    }
 
     #[test]
     fn test_sanitize_writing_settings_trims_and_drops_empty_entries() {

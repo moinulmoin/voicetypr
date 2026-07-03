@@ -4,13 +4,16 @@ mod settings;
 mod vocabulary;
 
 #[allow(unused_imports)]
-pub use pipeline::{effective_personal_dictation_mode, process_transcription};
+pub use pipeline::{
+    effective_personal_dictation_mode, effective_pipeline_config, process_transcription,
+    resolve_pipeline_config, PipelineAiState,
+};
 #[allow(unused_imports)]
 pub use settings::{
     load_writing_settings, sanitize_writing_settings, save_writing_settings, AppFormattingRule,
     AppliedWritingOperation, ContextHint, CustomWord, Snippet, TextReplacementRule,
-    VoiceCommandRule, WritingError, WritingMode, WritingOperationKind, WritingProfile,
-    WritingResult, WritingSettings, WritingStageTimings, WritingWarning,
+    VoiceCommandRule, WritingError, WritingOperationKind, WritingProfile, WritingResult,
+    WritingSettings, WritingStageTimings, WritingWarning,
 };
 #[allow(unused_imports)]
 pub use vocabulary::{

@@ -112,6 +112,27 @@ fn check_has_api_key<R: tauri::Runtime>(
     }
 }
 
+pub(crate) fn has_ai_model_and_key(app: &tauri::AppHandle) -> Result<bool, String> {
+    let store = app.store("settings").map_err(|e| e.to_string())?;
+    let provider = store
+        .get("ai_provider")
+        .and_then(|v| v.as_str().map(|s| s.to_string()))
+        .unwrap_or_default();
+    let model = store
+        .get("ai_model")
+        .and_then(|v| v.as_str().map(|s| s.to_string()))
+        .unwrap_or_default();
+
+    if provider.is_empty() || model.is_empty() {
+        return Ok(false);
+    }
+
+    let cache = API_KEY_CACHE
+        .lock()
+        .map_err(|_| "Failed to access cache".to_string())?;
+    Ok(check_has_api_key(&provider, &store, &cache))
+}
+
 /// Validate a custom OpenAI-compatible base URL.
 ///
 /// This is a minimal link-local DENYLIST, not an allowlist: localhost,
@@ -768,10 +789,27 @@ pub async fn get_enhancement_options_for_ai_enabled(
     ai_enabled: bool,
 ) -> Result<EnhancementOptions, String> {
     let store = app.store("settings").map_err(|e| e.to_string())?;
-    crate::ai::prompts::enhancement_options_for_ai_enabled(
+    let options = crate::ai::prompts::enhancement_options_for_ai_enabled(
         store.get("enhancement_options").as_ref(),
         ai_enabled,
-    )
+    )?;
+    drop(store);
+
+    let settings = load_writing_settings(&app)?;
+    let effective = crate::writing::resolve_pipeline_config(
+        &settings,
+        options.preset,
+        FINAL_TEXT_LANGUAGE_SAME_AS_TRANSCRIPT,
+        None,
+        crate::writing::PipelineAiState {
+            stored_ai_enabled: ai_enabled,
+            has_model_and_key: has_ai_model_and_key(&app)?,
+        },
+    );
+
+    Ok(EnhancementOptions {
+        preset: effective.preset,
+    })
 }
 
 #[tauri::command]
@@ -1233,12 +1271,12 @@ mod tests {
     }
 
     #[test]
-    fn test_enhancement_options_for_ai_enabled_normalizes_disabled_ai() {
+    fn test_enhancement_options_for_ai_enabled_preserves_stored_preset() {
         use crate::ai::prompts::{enhancement_options_for_ai_enabled, EnhancementPreset};
 
         let value = serde_json::json!({ "preset": "Writing" });
         let options = enhancement_options_for_ai_enabled(Some(&value), false).unwrap();
-        assert_eq!(options.preset, EnhancementPreset::PersonalDictation);
+        assert_eq!(options.preset, EnhancementPreset::Writing);
 
         let enabled = enhancement_options_for_ai_enabled(Some(&value), true).unwrap();
         assert_eq!(enabled.preset, EnhancementPreset::Writing);
