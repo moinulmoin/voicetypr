@@ -24,7 +24,7 @@ use std::time::Duration;
 use tauri::{AppHandle, Manager};
 use tempfile::NamedTempFile;
 
-const LOCAL_ENGINE_TIMEOUT_GRACE: Duration = Duration::from_secs(2);
+pub(crate) const LOCAL_ENGINE_TIMEOUT_GRACE: Duration = Duration::from_secs(2);
 
 use crate::commands::audio::{
     compile_parakeet_custom_vocabulary_for_transcription,
@@ -151,7 +151,7 @@ fn deferred_executor_route_error(
 /// so the caller never receives mislabeled output. An engine that genuinely
 /// supports the task passes through unchanged (none of the cloud engines do
 /// today).
-fn ensure_cloud_task_supported(
+pub(crate) fn ensure_cloud_task_supported(
     provider: crate::cloud_stt::CloudProvider,
     translate: bool,
     source: TranscriptionSource,
@@ -470,7 +470,7 @@ fn wav_duration_ms(path: &Path) -> Option<u64> {
 /// The Parakeet sidecar's `duration` field is often `0.0` (a known FluidAudio
 /// bug). When `sidecar_secs` is `Some(s)` with `s > 0.0` we trust it; otherwise
 /// we fall back to reading the WAV header of `input_path` directly.
-fn effective_parakeet_audio_duration_ms(
+pub(crate) fn effective_parakeet_audio_duration_ms(
     sidecar_secs: Option<f32>,
     input_path: &std::path::Path,
 ) -> Option<u64> {
@@ -484,7 +484,7 @@ fn effective_parakeet_audio_duration_ms(
 }
 
 /// The watchdog/timeout budget for an attempt, or `None` to run unbounded.
-fn watchdog_budget_for(attempt_path: &Path, policy: &TimeoutPolicy) -> Option<Duration> {
+pub(crate) fn watchdog_budget_for(attempt_path: &Path, policy: &TimeoutPolicy) -> Option<Duration> {
     match policy {
         TimeoutPolicy::None => None,
         TimeoutPolicy::Explicit(deadline) => Some(*deadline),

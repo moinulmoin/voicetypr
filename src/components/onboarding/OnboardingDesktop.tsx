@@ -234,6 +234,8 @@ export const OnboardingDesktop = function OnboardingDesktop({
   const [hotkey, setHotkey] = useState(
     settings?.hotkey || "Alt+Space",
   );
+  const hotkeyUserEditedRef = useRef(false);
+  const hotkeySyncedFromSettingsRef = useRef(settings != null);
   const [isEditingHotkey, setIsEditingHotkey] = useState(false);
   const [capturedBareModifier, setCapturedBareModifier] = useState<BareModifierSpec | null>(null);
   const [isRequestingPermission, setIsRequestingPermission] = useState<
@@ -264,6 +266,27 @@ export const OnboardingDesktop = function OnboardingDesktop({
   useEffect(() => {
     sourceConfirmedRef.current = sourceConfirmed;
   }, [sourceConfirmed]);
+
+  useEffect(() => {
+    if (!settings || hotkeySyncedFromSettingsRef.current) return;
+    hotkeySyncedFromSettingsRef.current = true;
+    if (!hotkeyUserEditedRef.current) {
+      setHotkey(settings.hotkey || "Alt+Space");
+      setCapturedBareModifier(null);
+    }
+  }, [settings]);
+
+  const handleHotkeyChange = useCallback((value: string) => {
+    hotkeyUserEditedRef.current = true;
+    setHotkey(value);
+    setCapturedBareModifier(null);
+  }, []);
+
+  const handleBareModifier = useCallback((spec: BareModifierSpec) => {
+    hotkeyUserEditedRef.current = true;
+    setCapturedBareModifier(spec);
+    setHotkey("");
+  }, []);
 
   const resetSkipConfirm = useCallback(() => {
     if (skipConfirmTimeoutRef.current) {
@@ -1346,9 +1369,9 @@ export const OnboardingDesktop = function OnboardingDesktop({
 
                 <HotkeyInput
                   value={hotkey}
-                  onChange={(v) => { setHotkey(v); setCapturedBareModifier(null); }}
+                  onChange={handleHotkeyChange}
                   onEditingChange={setIsEditingHotkey}
-                  onBareModifier={(spec) => { setCapturedBareModifier(spec); setHotkey(""); }}
+                  onBareModifier={handleBareModifier}
                   allowBareModifier
                   validationRules={ONBOARDING_HOTKEY_VALIDATION}
                   placeholder={capturedBareModifier
