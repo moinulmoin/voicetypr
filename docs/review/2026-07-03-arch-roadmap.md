@@ -177,3 +177,33 @@ Rationale threaded so each wave de-risks the next. Effort in parens.
 18. **#9** (M, optional) — patch-write `save_settings` if the settings work leaves it worthwhile. Not a bug.
 
 **Why this order:** correctness point-fixes ship value immediately and independently (Wave 0). #18+#21 shrink and stabilize the engine surface before any unification (Wave 1). #14 is the single slice that lets Soniox land without a 4th transport (Wave 2). The executor-unification block (Wave 3) collapses the remaining parallel dispatches so future engines are wired once. Settings/lifecycle hardening (Wave 4) de-risks every engine that touches config or lifecycle state. The frontend/delivery/error-surface consolidation (Wave 5) is valuable but blocks nothing on the Soniox path, so it trails.
+
+---
+
+## 7. CORRECTION (2026-07-04, after grounding Wave 2 against current code)
+
+**The roadmap's premise that "#14 transport extraction unblocks Soniox" is partly wrong.**
+Grounding the transport layer revealed #14 is really TWO separable pieces with very
+different risk/value:
+
+- **#14a — capability-based routing (LOW risk, the ACTUAL Soniox enabler):** replace the
+  string compares `current_engine == "parakeet"` (commands/audio.rs:174 and :4203 — note
+  drift from the roadmap's :169/:4351) with `EngineStreamCapabilities::for_engine(...)`
+  lookups, so a new streaming engine registers by its capability row. Subtlety: the
+  capability table has `PARAKEET = FINAL_ONLY` (dormant since EOU is broken upstream) while
+  the string compare still routes Parakeet to the preview path — so this change must
+  reconcile the two, and is cleanest done AS PART OF plan 043 (Soniox), where the SONIOX
+  capability flips to supports_streaming=true and is tested end-to-end.
+- **#14b — extract `transport/line_json.rs` (HIGH risk, NOT a Soniox blocker):** Soniox is a
+  WebSocket engine (tokio-tungstenite) — it shares NOTHING at the transport level with the
+  line-JSON *sidecar* transport. Extracting line_json.rs helps a FUTURE second sidecar-based
+  engine, not Soniox. And it's the program's riskiest slice: the 3 read loops serve 3
+  distinct jobs (batch cancel-poll+Progress, stream handshake, stream session partial-
+  forward), all tangled with the slice-045 stop-gate semantics and the streaming teardown
+  (#12/#13), verifiable fully only with real-device streaming smoke.
+
+**Revised Wave 2:** DEFER #14b (line_json extraction) as a later maintainability slice
+(clearly not a feature blocker). Fold #14a (capability routing) into plan 043 Soniox.
+Proceed to either plan 043 (the cloud-streaming feature) or the lower-risk Wave 3/4
+refactors, whichever the owner prefers. Anything touching the live-streaming transport
+carries a device-smoke verification ceiling the sandbox can't clear.
