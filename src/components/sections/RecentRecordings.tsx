@@ -845,9 +845,9 @@ export function RecentRecordings({ history, hotkey = "Cmd+Shift+Space", onHistor
                                   });
                                 }}
                                 className="text-[11px] font-medium text-sage hover:underline"
-                                title={showOriginal ? "Show AI-formatted text" : "Show original text before AI formatting"}
+                                title={showOriginal ? "Show polished text" : "Show original text before Polish"}
                               >
-                                {showOriginal ? "Show formatted" : "Show original"}
+                                {showOriginal ? "Show polished" : "Show original"}
                               </button>
                             )}
                           </div>

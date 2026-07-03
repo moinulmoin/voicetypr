@@ -25,7 +25,6 @@ import { Switch } from "@/components/ui/switch";
 import type { AISettings, EnhancementOptions, EnhancementPreset } from "@/types/ai";
 import {
   fromBackendOptions,
-  presetRequiresAiFormatting,
   toBackendOptions,
 } from "@/types/ai";
 import type { WritingSettings } from "@/types/writing";
@@ -74,9 +73,31 @@ const formatModelCost = (model: AIProviderModel) => {
 const modelMatchesQuery = (model: AIProviderModel, query: string) =>
   model.id.toLowerCase().includes(query) || model.name.toLowerCase().includes(query);
 
-type EnhancementsView = "ai" | "rules" | "all";
+const POLISH_RESHAPE_MIGRATION_NOTICE_KEY = "polish_reshape_migration_notified";
+const RESHAPING_PRESETS = new Set<EnhancementPreset>([
+  "Writing",
+  "Notes",
+  "Message",
+  "Code",
+]);
 
-export function EnhancementsSection({ view = "all" }: { view?: EnhancementsView } = {}) {
+const hasShownReshapeMigrationNotice = () => {
+  try {
+    return window.localStorage.getItem(POLISH_RESHAPE_MIGRATION_NOTICE_KEY) === "true";
+  } catch {
+    return false;
+  }
+};
+
+const markReshapeMigrationNoticeShown = () => {
+  try {
+    window.localStorage.setItem(POLISH_RESHAPE_MIGRATION_NOTICE_KEY, "true");
+  } catch {
+    // localStorage can be unavailable in restricted environments; the migration still persists.
+  }
+};
+
+export function EnhancementsSection() {
   const readiness = useReadinessState();
   const { settings, updateSettings } = useSettings();
   const { fetchModels, getModels, isLoading: isModelsLoading, getError, clearModels } =
@@ -95,6 +116,7 @@ export function EnhancementsSection({ view = "all" }: { view?: EnhancementsView 
 
   const [providerSearch, setProviderSearch] = useState("");
   const [showAdvancedProviders, setShowAdvancedProviders] = useState(false);
+  const [advancedOpen, setAdvancedOpen] = useState(false);
 
   const [showApiKeyModal, setShowApiKeyModal] = useState(false);
   const [showOpenAIConfig, setShowOpenAIConfig] = useState(false);
@@ -126,12 +148,22 @@ export function EnhancementsSection({ view = "all" }: { view?: EnhancementsView 
     try {
       const options = await invoke<EnhancementOptions>("get_enhancement_options");
       let nextOptions = fromBackendOptions(options, aiEnabled);
-      if (!aiEnabled && presetRequiresAiFormatting(nextOptions.preset)) {
+      if (!aiEnabled && nextOptions.preset !== "PersonalDictation") {
         nextOptions = { preset: "PersonalDictation" };
+      }
+      if (aiEnabled && RESHAPING_PRESETS.has(nextOptions.preset)) {
+        nextOptions = { preset: "CleanDictation" };
+        await invoke("update_enhancement_options", {
+          options: toBackendOptions(nextOptions),
+        });
+        if (!hasShownReshapeMigrationNotice()) {
+          toast.info("Reshaping now lives in Advanced -> App Rules.");
+          markReshapeMigrationNoticeShown();
+        }
       }
       setEnhancementOptions(nextOptions);
     } catch (error) {
-      log.error("Failed to load enhancement options:", error);
+      log.error("Failed to load Polish options:", error);
     }
   };
 
@@ -238,7 +270,7 @@ export function EnhancementsSection({ view = "all" }: { view?: EnhancementsView 
         const writingSettingsLoaded = await loadWritingSettings();
         setSettingsLoaded(writingSettingsLoaded);
       })().catch((error) => {
-        log.error("Failed to load formatting settings:", error);
+        log.error("Failed to load Polish settings:", error);
       });
     }
   }, [settingsLoaded, loadAISettings]);
@@ -337,8 +369,8 @@ export function EnhancementsSection({ view = "all" }: { view?: EnhancementsView 
     );
 
     const unlistenFormattingError = listen<string>("formatting-error", async (event) => {
-      const msg = event.payload || "Formatting failed";
-      toast.error(typeof msg === "string" ? msg : "Formatting failed");
+      const msg = event.payload || "Polish failed";
+      toast.error(typeof msg === "string" ? msg : "Polish failed");
     });
 
     const unlistenAiEnabledChanged = listen<boolean>("ai-enabled-changed", (event) => {
@@ -371,23 +403,9 @@ export function EnhancementsSection({ view = "all" }: { view?: EnhancementsView 
       if (enhancementSaveGeneration.current === generationAtEnqueue) {
         setEnhancementOptions(rollbackOptions);
       }
-      const message = getErrorMessage(error, "Failed to save enhancement options");
+      const message = getErrorMessage(error, "Failed to save Polish settings");
       toast.error(message);
     }
-  };
-
-  const handlePresetChange = async (preset: typeof enhancementOptions.preset) => {
-    if (presetRequiresAiFormatting(preset) && !aiSettings.enabled) {
-      return;
-    }
-    if (
-      preset === "PersonalDictation" &&
-      settings?.final_text_language &&
-      settings.final_text_language !== "same_as_transcript"
-    ) {
-      await handleFinalTextLanguageChange("same_as_transcript");
-    }
-    await persistEnhancementOptions({ preset });
   };
 
   const enqueueWritingSettingsSave = (
@@ -438,7 +456,7 @@ export function EnhancementsSection({ view = "all" }: { view?: EnhancementsView 
     const hasActiveProviderKey = Boolean(providerApiKeys[aiSettings.provider]);
 
     if (enabled && (!hasActiveProviderKey || !aiSettings.model)) {
-      toast.error("Please select a provider, add an API key, and select a model first");
+      toast.error("Please select a provider, add an API key, and select a model before turning on Polish");
       return;
     }
 
@@ -451,12 +469,7 @@ export function EnhancementsSection({ view = "all" }: { view?: EnhancementsView 
 
       setAISettings((prev) => ({ ...prev, enabled }));
 
-      let nextPreset = enhancementOptions.preset;
-      if (!enabled && presetRequiresAiFormatting(enhancementOptions.preset)) {
-        nextPreset = "PersonalDictation";
-      } else if (enabled && enhancementOptions.preset === "PersonalDictation") {
-        nextPreset = "CleanDictation";
-      }
+      const nextPreset: EnhancementPreset = enabled ? "CleanDictation" : "PersonalDictation";
 
       if (
         nextPreset === "PersonalDictation" &&
@@ -471,13 +484,9 @@ export function EnhancementsSection({ view = "all" }: { view?: EnhancementsView 
         await persistEnhancementOptions({ preset: nextPreset });
       }
 
-      if (!enabled && presetChanged) {
-        toast.success("AI formatting disabled. Switched to Personal Dictation.");
-      } else {
-        toast.success(enabled ? "AI formatting enabled" : "AI formatting disabled");
-      }
+      toast.success(enabled ? "Polish on" : "Polish off");
     } catch (error) {
-      const message = getErrorMessage(error, "Failed to update AI settings");
+      const message = getErrorMessage(error, "Failed to update Polish");
       toast.error(message);
     }
   };
@@ -571,6 +580,9 @@ export function EnhancementsSection({ view = "all" }: { view?: EnhancementsView 
         },
       }));
       setAiModelNeedsReselection(false);
+      if (shouldEnable) {
+        await loadEnhancementOptions(true);
+      }
 
       toast.success("Model selected");
     } catch (error) {
@@ -600,6 +612,9 @@ export function EnhancementsSection({ view = "all" }: { view?: EnhancementsView 
     ? customModelName
     : getModels(aiSettings.provider).find((model) => model.id === aiSettings.model)?.name ||
       humanizeModelId(aiSettings.model);
+  const activeProviderName =
+    providers.find((provider) => provider.id === aiSettings.provider)?.name ||
+    aiSettings.provider;
 
   const visibleProviders = useMemo(
     () => providers.filter((provider) => showAdvancedProviders || provider.status !== "hidden"),
@@ -627,6 +642,355 @@ export function EnhancementsSection({ view = "all" }: { view?: EnhancementsView 
   }, [customModelName, getModels, providerQuery, visibleProviders]);
 
   const hasLoadingProviders = providers.some((provider) => isModelsLoading(provider.id));
+  const polishControls = (
+    <div className="flex flex-col items-start gap-2 sm:items-end">
+      <Field
+        orientation="horizontal"
+        className="w-auto items-center gap-3 rounded-lg border border-border/60 bg-card px-3 py-1.5"
+      >
+        <FieldTitle className="text-sm">Polish</FieldTitle>
+        <Switch
+          id="polish-enabled"
+          aria-label="Polish"
+          checked={aiSettings.enabled}
+          onCheckedChange={handleToggleEnabled}
+          disabled={!hasAnyValidConfig || !hasSelectedModel}
+        />
+      </Field>
+      {activeModelName ? (
+        <p className="max-w-80 text-left text-xs text-muted-foreground sm:text-right">
+          {aiSettings.enabled ? "Using" : "Ready"}{" "}
+          <span className="text-foreground">{activeProviderName}</span>
+          {" · "}
+          <span className="text-foreground">{activeModelName}</span>
+          {!aiSettings.enabled && " · Polish off"}
+          {" · "}
+          <Button
+            type="button"
+            variant="link"
+            size="sm"
+            className="h-auto p-0 text-xs"
+            onClick={() => setAdvancedOpen(true)}
+          >
+            Change
+          </Button>
+        </p>
+      ) : (
+        <p className="max-w-80 text-left text-xs text-muted-foreground sm:text-right">
+          Add an API key and choose a model in Advanced to turn on Polish.
+        </p>
+      )}
+    </div>
+  );
+
+  const advancedProviderContent = (
+    <FieldSet className="rounded-xl border border-border/60 bg-background p-4">
+      <div className="mb-3 flex items-center justify-between gap-3">
+        <FieldLegend className="mb-0 text-sm">Providers & Models</FieldLegend>
+        <div className="flex items-center gap-3 text-xs text-muted-foreground">
+          {hasLoadingProviders && (
+            <span className="inline-flex items-center gap-1.5">
+              <Spinner className="h-3.5 w-3.5" />
+              Refreshing models
+            </span>
+          )}
+        </div>
+      </div>
+
+      {showAiModelReselectionNotice && (
+        <div className="mb-3 rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-700 dark:text-amber-300">
+          Your previously selected AI model is no longer available. Please choose a model to
+          continue using Polish.
+        </div>
+      )}
+
+      <FieldGroup className="gap-3">
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+          <div className="relative flex-1">
+            <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+            <Input
+              id="ai-provider-model-search"
+              aria-label="Search providers and models"
+              value={providerSearch}
+              onChange={(event) => setProviderSearch(event.target.value)}
+              placeholder="Search providers or models"
+              className="pl-9"
+            />
+          </div>
+          {hasHiddenProviders && (
+            <Field orientation="horizontal" className="w-auto items-center gap-2">
+              <FieldTitle className="text-sm">Hidden providers</FieldTitle>
+              <Switch
+                id="advanced-ai-providers"
+                aria-label="Show hidden providers"
+                checked={showAdvancedProviders}
+                onCheckedChange={setShowAdvancedProviders}
+              />
+            </Field>
+          )}
+        </div>
+
+        {filteredProviders.length === 0 && (
+          <div className="rounded-lg border border-dashed border-border/70 px-4 py-6 text-center text-sm text-muted-foreground">
+            No providers or models match your search.
+          </div>
+        )}
+
+        {filteredProviders.map((provider) => {
+          const hasKey = providerApiKeys[provider.id] || false;
+          const isCustomActive = Boolean(
+            provider.isCustom &&
+              aiSettings.provider === "custom" &&
+              providerApiKeys.custom &&
+              aiSettings.enabled,
+          );
+          const isActive = provider.isCustom
+            ? isCustomActive
+            : Boolean(aiSettings.provider === provider.id && aiSettings.enabled);
+          const selectedModel = provider.isCustom
+            ? aiSettings.modelsByProvider.custom || customModelName || null
+            : aiSettings.modelsByProvider[provider.id] ||
+              (aiSettings.provider === provider.id ? aiSettings.model : null);
+          const models = getModels(provider.id);
+          const providerMatches = provider.name.toLowerCase().includes(providerQuery);
+          const displayModels =
+            providerQuery && !providerMatches
+              ? models.filter((model) => modelMatchesQuery(model, providerQuery))
+              : models;
+          const recommendedModels = displayModels.filter((model) => model.recommended);
+          const allModels = displayModels.filter((model) => !model.recommended);
+          const selectedModelData = models.find((model) => model.id === selectedModel);
+          const showModelPicker = !provider.isCustom && (hasKey || Boolean(providerQuery));
+          const modelGroups = ([
+            ["Recommended", recommendedModels],
+            ["All", allModels],
+          ] satisfies Array<[string, AIProviderModel[]]>).filter(
+            ([, groupModels]) => groupModels.length > 0,
+          );
+
+          return (
+            <div
+              key={provider.id}
+              className={`rounded-xl border border-border/60 bg-background p-4 transition-all ${
+                isActive ? "border-sage/50 bg-sage-bg/40" : ""
+              }`}
+            >
+              <div className="flex items-start justify-between gap-4">
+                <div className="min-w-0 flex-1">
+                  <div className="mb-1 flex flex-wrap items-center gap-2">
+                    <h3 className={`font-semibold ${provider.color}`}>{provider.name}</h3>
+                    {provider.status === "experimental" && (
+                      <Badge
+                        variant="outline"
+                        className="border-amber-500/40 text-amber-700 dark:text-amber-300"
+                      >
+                        Experimental
+                      </Badge>
+                    )}
+                    {provider.status === "hidden" && (
+                      <Badge variant="outline">Advanced</Badge>
+                    )}
+                    {providerSupportsReasoning(provider) && (
+                      <Badge variant="secondary">Reasoning</Badge>
+                    )}
+                    {isActive && (
+                      <span className="rounded-full bg-sage-bg px-2 py-0.5 text-xs text-sage">
+                        Active
+                      </span>
+                    )}
+                  </div>
+
+                  {provider.isCustom && hasKey && customModelName && (
+                    <p className="text-sm text-muted-foreground">
+                      Model: <span className="text-foreground">{customModelName}</span>
+                    </p>
+                  )}
+                  {!hasKey && (
+                    <p className="text-sm text-muted-foreground">
+                      {provider.isCustom ? "Configure endpoint to enable" : "Add API key to enable"}
+                    </p>
+                  )}
+                  {showModelPicker && selectedModel && (
+                    <p className="text-sm text-muted-foreground">
+                      Selected model:{" "}
+                      <span className="text-foreground">
+                        {selectedModelData?.name || humanizeModelId(selectedModel)}
+                      </span>
+                    </p>
+                  )}
+                </div>
+
+                <div className="flex items-center gap-2">
+                  {hasKey ? (
+                    <>
+                      {provider.isCustom && (
+                        <Button
+                          onClick={() => handleSetupApiKey(provider.id)}
+                          variant="ghost"
+                          size="sm"
+                        >
+                          <Settings2 className="h-3.5 w-3.5" />
+                        </Button>
+                      )}
+                      {!provider.isCustom && (
+                        <Button
+                          onClick={() => fetchModels(provider.id)}
+                          variant="ghost"
+                          size="sm"
+                          className="text-muted-foreground"
+                          disabled={isModelsLoading(provider.id)}
+                          title={`Refresh ${provider.name} models`}
+                        >
+                          <RefreshCw
+                            className={`h-3.5 w-3.5 ${
+                              isModelsLoading(provider.id) ? "animate-spin" : ""
+                            }`}
+                          />
+                        </Button>
+                      )}
+                      <Button
+                        onClick={async () => {
+                          const message = provider.isCustom
+                            ? `Remove configuration for ${provider.name}?`
+                            : `Remove API key for ${provider.name}?`;
+                          const confirmed = await ask(message, {
+                            title: provider.isCustom ? "Remove Configuration" : "Remove API Key",
+                            kind: "warning",
+                          });
+                          if (confirmed) {
+                            handleRemoveApiKey(provider.id);
+                          }
+                        }}
+                        variant="ghost"
+                        size="sm"
+                        className="text-muted-foreground hover:text-destructive"
+                      >
+                        <Trash2 className="h-3.5 w-3.5" />
+                      </Button>
+                    </>
+                  ) : (
+                    <>
+                      {!provider.isCustom && provider.apiKeyUrl && (
+                        <Button
+                          onClick={() => window.open(provider.apiKeyUrl, "_blank")}
+                          variant="ghost"
+                          size="sm"
+                          className="text-muted-foreground"
+                          title={`Get ${provider.name} API Key`}
+                        >
+                          <ExternalLink className="h-3.5 w-3.5" />
+                        </Button>
+                      )}
+                      <Button
+                        onClick={() => handleSetupApiKey(provider.id)}
+                        variant="outline"
+                        size="sm"
+                      >
+                        {provider.isCustom ? (
+                          <>
+                            <Settings2 className="mr-1.5 h-3.5 w-3.5" />
+                            Configure
+                          </>
+                        ) : (
+                          <>
+                            <Key className="mr-1.5 h-3.5 w-3.5" />
+                            Add Key
+                          </>
+                        )}
+                      </Button>
+                    </>
+                  )}
+                </div>
+              </div>
+
+              {showModelPicker && (
+                <div className="mt-3 space-y-3 border-t border-border/50 pt-3">
+                  {isModelsLoading(provider.id) && models.length === 0 && (
+                    <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                      <Loader2 className="h-4 w-4 animate-spin" />
+                      Loading models...
+                    </div>
+                  )}
+                  {getError(provider.id) && (
+                    <div className="flex items-center justify-between gap-3 rounded-md border border-destructive/30 px-3 py-2 text-sm text-destructive">
+                      <span>{getError(provider.id)}</span>
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => fetchModels(provider.id)}
+                        disabled={isModelsLoading(provider.id)}
+                      >
+                        Retry
+                      </Button>
+                    </div>
+                  )}
+                  {!isModelsLoading(provider.id) &&
+                    !getError(provider.id) &&
+                    modelGroups.length === 0 && (
+                      <p className="text-sm text-muted-foreground">No models available</p>
+                    )}
+                  {modelGroups.map(([label, groupModels]) => (
+                    <div key={`${provider.id}-${label}`} className="space-y-1.5">
+                      <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                        {label}
+                      </p>
+                      <div className="grid gap-1.5 md:grid-cols-2">
+                        {groupModels.map((model) => {
+                          const cost = formatModelCost(model);
+                          return (
+                            <Button
+                              key={model.id}
+                              type="button"
+                              variant={selectedModel === model.id ? "secondary" : "ghost"}
+                              className="h-auto justify-start px-3 py-2 text-left"
+                              onClick={() => handleSelectModel(provider.id, model.id)}
+                              disabled={!hasKey}
+                              title={
+                                hasKey
+                                  ? undefined
+                                  : `Add a ${provider.name} API key to select this model`
+                              }
+                            >
+                              <span className="flex min-w-0 flex-1 items-start gap-2">
+                                {model.recommended && (
+                                  <Star className="mt-0.5 h-3.5 w-3.5 shrink-0 fill-amber-500 text-amber-500" />
+                                )}
+                                <span className="min-w-0">
+                                  <span className="block truncate font-medium">{model.name}</span>
+                                  <span className="block truncate text-xs text-muted-foreground">
+                                    {model.id}
+                                  </span>
+                                </span>
+                              </span>
+                              <span className="ml-2 flex shrink-0 items-center gap-1">
+                                {model.reasoning && (
+                                  <Badge variant="secondary" className="h-4 px-1.5 text-[10px]">
+                                    Reasoning
+                                  </Badge>
+                                )}
+                                {cost && (
+                                  <Badge variant="outline" className="h-4 px-1.5 text-[10px]">
+                                    {cost}
+                                  </Badge>
+                                )}
+                                {selectedModel === model.id && (
+                                  <Check className="h-3.5 w-3.5 text-sage" />
+                                )}
+                              </span>
+                            </Button>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          );
+        })}
+      </FieldGroup>
+    </FieldSet>
+  );
 
   return (
     <div className="h-full min-h-0 flex flex-col">
@@ -634,376 +998,51 @@ export function EnhancementsSection({ view = "all" }: { view?: EnhancementsView 
         <div className="flex items-center justify-between gap-4">
           <div className="min-w-0">
             <div className="flex items-center gap-2">
-              <h1 className="text-2xl font-semibold tracking-tight">{view === "rules" ? "Default Formatting" : view === "ai" ? "AI Formatting" : "Formatting"}</h1>
+              <h1 className="text-2xl font-semibold tracking-tight">Polish</h1>
               <Dialog>
                 <DialogTrigger asChild>
-                  <Button type="button" variant="secondary" size="icon" aria-label="Formatting guide" className="rounded-full">
+                  <Button type="button" variant="secondary" size="icon" aria-label="Polish guide" className="rounded-full">
                     <HelpCircle className="h-4.5 w-4.5" />
                   </Button>
                 </DialogTrigger>
                 <DialogContent className="sm:max-w-lg">
                   <DialogHeader>
-                    <DialogTitle>Formatting guide</DialogTitle>
+                    <DialogTitle>Polish guide</DialogTitle>
                   <DialogDescription>
-                    Modes shape the final text. Your text rules (corrections, words & names, voice
-                    commands, shortcuts) always run first.
+                    Polish cleans up final text. Static Rules always run first.
                   </DialogDescription>
                   </DialogHeader>
                   <div className="space-y-3 text-sm leading-6 text-muted-foreground">
-                    <p><strong className="text-foreground">Setup</strong> works in order: set up one provider, save its API key, select a model, then turn on AI formatting when you want language conversion or heavier cleanup.</p>
-                    <p><strong className="text-foreground">Personal Dictation</strong> is no AI. Just transcription with local cleanup and your text rules.</p>
-                    <p><strong className="text-foreground">Clean Dictation</strong> uses AI to fix grammar and punctuation. Keeps your meaning.</p>
-                    <p><strong className="text-foreground">Writing</strong> uses AI to polish it into clear prose.</p>
-                    <p><strong className="text-foreground">Notes</strong> uses AI to turn it into short, structured notes.</p>
-                    <p><strong className="text-foreground">Message</strong> uses AI to format a short message.</p>
-                    <p><strong className="text-foreground">Code</strong> uses AI to format commits and code notes.</p>
+                    <p><strong className="text-foreground">Setup</strong> works in order: set up one provider, save its API key, select a model, then turn on Polish.</p>
+                    <p><strong className="text-foreground">Polish</strong> fixes grammar and punctuation while keeping your meaning.</p>
+                    <p><strong className="text-foreground">Static Rules</strong> are exact corrections, words and names, and text shortcuts that work with or without Polish.</p>
+                    <p><strong className="text-foreground">App Rules</strong> live in Advanced for app-specific reshaping.</p>
                   </div>
                 </DialogContent>
               </Dialog>
             </div>
             <p className="mt-0.5 text-sm leading-relaxed text-muted-foreground">
-              {view === "rules"
-                ? "Always-on text rules. Work with or without AI — even better with AI Formatting on."
-                : "AI polish, formatting modes, and your provider/model."}
+              Clean up your dictation automatically, plus always-on text rules.
             </p>
           </div>
-          {view !== "rules" && (
-          <div className="flex flex-col items-end gap-1">
-            <Field orientation="horizontal" className="w-auto items-center gap-3 rounded-lg border border-border/60 bg-card px-3 py-1.5">
-              <FieldTitle className="text-sm">AI formatting</FieldTitle>
-              <Switch
-                id="ai-formatting"
-                aria-label="AI formatting"
-                checked={aiSettings.enabled}
-                onCheckedChange={handleToggleEnabled}
-                disabled={!hasAnyValidConfig || !hasSelectedModel}
-              />
-            </Field>
-            {!aiSettings.enabled && (!hasAnyValidConfig || !hasSelectedModel) && (
-              <p className="max-w-56 text-right text-xs text-muted-foreground">
-                Add an API key and choose a model below to turn on AI formatting.
-              </p>
-            )}
-          </div>
-          )}
         </div>
       </div>
 
       <ScrollArea className="flex-1 min-h-0">
-        <div className="space-y-5 p-6">
-          {view !== "rules" && (
-          <>
-          <header>
-            <h2 className="text-base font-semibold">AI polish (optional)</h2>
-            <p className="mt-1 text-sm text-muted-foreground">
-              Rewrites your words for meaning and format. Needs a provider. Off by default.
-            </p>
-          </header>
-          <FieldSet className="rounded-xl border border-border/60 bg-card p-4">
-            <div className="mb-3 flex items-center justify-between gap-3">
-              <FieldLegend className="mb-0 text-sm">AI Providers</FieldLegend>
-              <div className="flex items-center gap-3 text-xs text-muted-foreground">
-                {hasLoadingProviders && (
-                  <span className="inline-flex items-center gap-1.5">
-                    <Spinner className="h-3.5 w-3.5" />
-                    Refreshing models
-                  </span>
-                )}
-                {activeModelName && (
-                  <span>
-                    {aiSettings.enabled ? "Active model" : "Selected model"}:{" "}
-                    <span className="text-foreground">{activeModelName}</span>
-                    {!aiSettings.enabled && " (AI formatting off)"}
-                  </span>
-                )}
-              </div>
-            </div>
-
-            {showAiModelReselectionNotice && (
-              <div className="mb-3 rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-700 dark:text-amber-300">
-                Your previously selected AI model is no longer available. Please choose a model to
-                continue using AI polish.
-              </div>
-            )}
-
-            <FieldGroup className="gap-3">
-              <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-                <div className="relative flex-1">
-                  <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
-                  <Input
-                    id="ai-provider-model-search"
-                    aria-label="Search providers and models"
-                    value={providerSearch}
-                    onChange={(event) => setProviderSearch(event.target.value)}
-                    placeholder="Search providers or models"
-                    className="pl-9"
-                  />
-                </div>
-                {hasHiddenProviders && (
-                  <Field orientation="horizontal" className="w-auto items-center gap-2">
-                    <FieldTitle className="text-sm">Advanced</FieldTitle>
-                    <Switch
-                      id="advanced-ai-providers"
-                      aria-label="Show advanced AI providers"
-                      checked={showAdvancedProviders}
-                      onCheckedChange={setShowAdvancedProviders}
-                    />
-                  </Field>
-                )}
-              </div>
-
-              {filteredProviders.length === 0 && (
-                <div className="rounded-lg border border-dashed border-border/70 px-4 py-6 text-center text-sm text-muted-foreground">
-                  No providers or models match your search.
-                </div>
-              )}
-
-              {filteredProviders.map((provider) => {
-                const hasKey = providerApiKeys[provider.id] || false;
-                const isCustomActive = Boolean(
-                  provider.isCustom &&
-                    aiSettings.provider === "custom" &&
-                    providerApiKeys.custom &&
-                    aiSettings.enabled,
-                );
-                const isActive = provider.isCustom
-                  ? isCustomActive
-                  : Boolean(aiSettings.provider === provider.id && aiSettings.enabled);
-                const selectedModel = provider.isCustom
-                  ? aiSettings.modelsByProvider.custom || customModelName || null
-                  : aiSettings.modelsByProvider[provider.id] ||
-                    (aiSettings.provider === provider.id ? aiSettings.model : null);
-                const models = getModels(provider.id);
-                const providerMatches = provider.name.toLowerCase().includes(providerQuery);
-                const displayModels =
-                  providerQuery && !providerMatches
-                    ? models.filter((model) => modelMatchesQuery(model, providerQuery))
-                    : models;
-                const recommendedModels = displayModels.filter((model) => model.recommended);
-                const allModels = displayModels.filter((model) => !model.recommended);
-                const selectedModelData = models.find((model) => model.id === selectedModel);
-                const showModelPicker = !provider.isCustom && (hasKey || Boolean(providerQuery));
-                const modelGroups = ([
-                  ["Recommended", recommendedModels],
-                  ["All", allModels],
-                ] satisfies Array<[string, AIProviderModel[]]>).filter(
-                  ([, groupModels]) => groupModels.length > 0,
-                );
-
-                return (
-                  <div
-                    key={provider.id}
-                    className={`rounded-xl border border-border/60 bg-background p-4 transition-all ${
-                      isActive ? "border-sage/50 bg-sage-bg/40" : ""
-                    }`}
-                  >
-                    <div className="flex items-start justify-between gap-4">
-                      <div className="min-w-0 flex-1">
-                        <div className="mb-1 flex flex-wrap items-center gap-2">
-                          <h3 className={`font-semibold ${provider.color}`}>{provider.name}</h3>
-                          {provider.status === "experimental" && (
-                            <Badge variant="outline" className="border-amber-500/40 text-amber-700 dark:text-amber-300">
-                              Experimental
-                            </Badge>
-                          )}
-                          {provider.status === "hidden" && (
-                            <Badge variant="outline">Advanced</Badge>
-                          )}
-                          {providerSupportsReasoning(provider) && (
-                            <Badge variant="secondary">Reasoning</Badge>
-                          )}
-                          {isActive && (
-                            <span className="rounded-full bg-sage-bg px-2 py-0.5 text-xs text-sage">
-                              Active
-                            </span>
-                          )}
-                        </div>
-
-                        {provider.isCustom && hasKey && customModelName && (
-                          <p className="text-sm text-muted-foreground">
-                            Model: <span className="text-foreground">{customModelName}</span>
-                          </p>
-                        )}
-                        {!hasKey && (
-                          <p className="text-sm text-muted-foreground">
-                            {provider.isCustom ? "Configure endpoint to enable" : "Add API key to enable"}
-                          </p>
-                        )}
-                        {showModelPicker && selectedModel && (
-                          <p className="text-sm text-muted-foreground">
-                            Selected model:{" "}
-                            <span className="text-foreground">
-                              {selectedModelData?.name || humanizeModelId(selectedModel)}
-                            </span>
-                          </p>
-                        )}
-                      </div>
-
-                      <div className="flex items-center gap-2">
-                        {hasKey ? (
-                          <>
-                            {provider.isCustom && (
-                              <Button onClick={() => handleSetupApiKey(provider.id)} variant="ghost" size="sm">
-                                <Settings2 className="h-3.5 w-3.5" />
-                              </Button>
-                            )}
-                            {!provider.isCustom && (
-                              <Button
-                                onClick={() => fetchModels(provider.id)}
-                                variant="ghost"
-                                size="sm"
-                                className="text-muted-foreground"
-                                disabled={isModelsLoading(provider.id)}
-                                title={`Refresh ${provider.name} models`}
-                              >
-                                <RefreshCw className={`h-3.5 w-3.5 ${isModelsLoading(provider.id) ? "animate-spin" : ""}`} />
-                              </Button>
-                            )}
-                            <Button
-                              onClick={async () => {
-                                const message = provider.isCustom
-                                  ? `Remove configuration for ${provider.name}?`
-                                  : `Remove API key for ${provider.name}?`;
-                                const confirmed = await ask(message, {
-                                  title: provider.isCustom ? "Remove Configuration" : "Remove API Key",
-                                  kind: "warning",
-                                });
-                                if (confirmed) {
-                                  handleRemoveApiKey(provider.id);
-                                }
-                              }}
-                              variant="ghost"
-                              size="sm"
-                              className="text-muted-foreground hover:text-destructive"
-                            >
-                              <Trash2 className="h-3.5 w-3.5" />
-                            </Button>
-                          </>
-                        ) : (
-                          <>
-                            {!provider.isCustom && provider.apiKeyUrl && (
-                              <Button
-                                onClick={() => window.open(provider.apiKeyUrl, "_blank")}
-                                variant="ghost"
-                                size="sm"
-                                className="text-muted-foreground"
-                                title={`Get ${provider.name} API Key`}
-                              >
-                                <ExternalLink className="h-3.5 w-3.5" />
-                              </Button>
-                            )}
-                            <Button onClick={() => handleSetupApiKey(provider.id)} variant="outline" size="sm">
-                              {provider.isCustom ? (
-                                <>
-                                  <Settings2 className="mr-1.5 h-3.5 w-3.5" />
-                                  Configure
-                                </>
-                              ) : (
-                                <>
-                                  <Key className="mr-1.5 h-3.5 w-3.5" />
-                                  Add Key
-                                </>
-                              )}
-                            </Button>
-                          </>
-                        )}
-                      </div>
-                    </div>
-
-                    {showModelPicker && (
-                      <div className="mt-3 space-y-3 border-t border-border/50 pt-3">
-                        {isModelsLoading(provider.id) && models.length === 0 && (
-                          <div className="flex items-center gap-2 text-sm text-muted-foreground">
-                            <Loader2 className="h-4 w-4 animate-spin" />
-                            Loading models...
-                          </div>
-                        )}
-                        {getError(provider.id) && (
-                          <div className="flex items-center justify-between gap-3 rounded-md border border-destructive/30 px-3 py-2 text-sm text-destructive">
-                            <span>{getError(provider.id)}</span>
-                            <Button
-                              variant="ghost"
-                              size="sm"
-                              onClick={() => fetchModels(provider.id)}
-                              disabled={isModelsLoading(provider.id)}
-                            >
-                              Retry
-                            </Button>
-                          </div>
-                        )}
-                        {!isModelsLoading(provider.id) && !getError(provider.id) && modelGroups.length === 0 && (
-                          <p className="text-sm text-muted-foreground">No models available</p>
-                        )}
-                        {modelGroups.map(([label, groupModels]) => (
-                          <div key={`${provider.id}-${label}`} className="space-y-1.5">
-                            <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
-                              {label}
-                            </p>
-                            <div className="grid gap-1.5 md:grid-cols-2">
-                              {groupModels.map((model) => {
-                                const cost = formatModelCost(model);
-                                return (
-                                  <Button
-                                    key={model.id}
-                                    type="button"
-                                    variant={selectedModel === model.id ? "secondary" : "ghost"}
-                                    className="h-auto justify-start px-3 py-2 text-left"
-                                    onClick={() => handleSelectModel(provider.id, model.id)}
-                                    disabled={!hasKey}
-                                    title={hasKey ? undefined : `Add a ${provider.name} API key to select this model`}
-                                  >
-                                    <span className="flex min-w-0 flex-1 items-start gap-2">
-                                      {model.recommended && (
-                                        <Star className="mt-0.5 h-3.5 w-3.5 shrink-0 fill-amber-500 text-amber-500" />
-                                      )}
-                                      <span className="min-w-0">
-                                        <span className="block truncate font-medium">{model.name}</span>
-                                        <span className="block truncate text-xs text-muted-foreground">{model.id}</span>
-                                      </span>
-                                    </span>
-                                    <span className="ml-2 flex shrink-0 items-center gap-1">
-                                      {model.reasoning && (
-                                        <Badge variant="secondary" className="h-4 px-1.5 text-[10px]">
-                                          Reasoning
-                                        </Badge>
-                                      )}
-                                      {cost && (
-                                        <Badge variant="outline" className="h-4 px-1.5 text-[10px]">
-                                          {cost}
-                                        </Badge>
-                                      )}
-                                      {selectedModel === model.id && (
-                                        <Check className="h-3.5 w-3.5 text-sage" />
-                                      )}
-                                    </span>
-                                  </Button>
-                                );
-                              })}
-                            </div>
-                          </div>
-                        ))}
-                      </div>
-                    )}
-                  </div>
-                );
-              })}
-            </FieldGroup>
-          </FieldSet>
-          </>
-          )}
-
+        <div className="p-6">
           <EnhancementSettings
-            view={view}
             preset={enhancementOptions.preset}
             finalTextLanguage={effectiveFinalTextLanguage}
             writingSettings={writingSettings}
             aiFormattingEnabled={aiSettings.enabled}
-            onPresetChange={handlePresetChange}
+            polishControls={polishControls}
+            advancedProviderContent={advancedProviderContent}
+            advancedOpen={advancedOpen}
+            onAdvancedOpenChange={setAdvancedOpen}
             onFinalTextLanguageChange={handleFinalTextLanguageChange}
             onWritingSettingsChange={handleWritingSettingsChange}
             writingSettingsDisabled={!settingsLoaded}
           />
-
         </div>
       </ScrollArea>
 

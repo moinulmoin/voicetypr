@@ -10,7 +10,6 @@ import { SettingsTab } from "./SettingsTab";
 import { ShortcutsTab } from "./ShortcutsTab";
 import { NetworkSharingTab } from "./NetworkSharingTab";
 import { AgentCliTab } from "./AgentCliTab";
-import { TextRulesTab } from "./TextRulesTab";
 import { AudioUploadSection } from "../sections/AudioUploadSection";
 import type { ScreenId } from "@/components/navigation";
 
@@ -51,9 +50,6 @@ export function TabContainer({ activeSection }: TabContainerProps) {
 
       case "formatting":
         return <EnhancementsTab />;
-
-      case "text-rules":
-        return <TextRulesTab />;
 
       case "license":
         return <AccountTab />;
