@@ -308,6 +308,15 @@ export function useInAppRecordingHotkey(): void {
             return;
           }
           if (bareModifier.kind === "modifier_hold") {
+            if (activeHoldCode !== null || holdStartPromise !== null) {
+              // A hold is already live (duplicate keydown without repeat —
+              // lost keyup, focus churn). Rebind to the latest physical key so
+              // its keyup owns the stop, but preserve the dispatched state and
+              // in-flight start: re-arming here would clobber
+              // holdStartDispatched and orphan the recording.
+              activeHoldCode = event.code;
+              return;
+            }
             activeHoldCode = event.code;
             holdStartDispatched = false;
             armHoldStart(event.code);
@@ -356,7 +365,7 @@ export function useInAppRecordingHotkey(): void {
           holdStartDispatched = false;
           return;
         }
-        if (holdStartDispatched) {
+        if (holdStartDispatched || holdStartPromise !== null) {
           stopHold();
         }
         activeHoldCode = null;

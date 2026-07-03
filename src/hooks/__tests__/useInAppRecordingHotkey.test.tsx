@@ -451,6 +451,31 @@ describe("useInAppRecordingHotkey", () => {
     expect(mockRecording.stopRecording).toHaveBeenCalledTimes(1);
   });
 
+  it("keyup still stops the hold after a duplicate non-repeat keydown of the same modifier", async () => {
+    mockSettings.hotkey = "";
+    mockInvoke.mockResolvedValue({
+      bindings: [holdControlBinding],
+    });
+    mockRecording.startRecording.mockResolvedValueOnce(true);
+    await renderWithBareModifier();
+
+    fireModifierDown(editable);
+    await flushHoldStart();
+    expect(mockRecording.startRecording).toHaveBeenCalledTimes(1);
+    mockRecording.state = "recording";
+
+    // Duplicate keydown WITHOUT repeat (lost keyup / focus churn) must not
+    // clobber the dispatched hold state or re-arm the start.
+    fireModifierDown(editable);
+    await flushHoldStart();
+    expect(mockRecording.startRecording).toHaveBeenCalledTimes(1);
+
+    fireModifierUp(editable);
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(mockRecording.stopRecording).toHaveBeenCalledTimes(1);
+  });
+
   it("does not issue the deferred stop when the start was a redundant no-op on a recording it does not own", async () => {
     mockSettings.hotkey = "";
     mockInvoke.mockResolvedValue({
