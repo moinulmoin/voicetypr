@@ -4729,6 +4729,20 @@ pub async fn stop_recording(
             log::warn!("stop_recording called but not currently recording");
             // Don't error - just return empty result; only reset if this stop owns the flow.
             drop(recorder); // Drop the lock before updating state
+            if entry_state == RecordingState::Starting {
+                // A start is still in flight (e.g. the in-app bare-modifier
+                // hold released before audio init finished). Queue the stop so
+                // start_recording honors it immediately after the Recording
+                // transition — same contract as the PTT key-up-during-Starting
+                // path in recording/hotkeys.rs. Without this the stop is
+                // silently dropped and the start wins, leaving an orphaned
+                // recording with no keyup owner.
+                log::info!("stop_recording during Starting: queueing pending stop after start");
+                app_state
+                    .pending_stop_after_start
+                    .store(true, std::sync::atomic::Ordering::SeqCst);
+                return Ok(String::new());
+            }
             if stop_should_reset_to_idle(entry_state) {
                 update_recording_state(&app, RecordingState::Idle, None);
             } else if entry_state == RecordingState::Stopping
