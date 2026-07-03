@@ -58,6 +58,7 @@ describe('RecordingPill', () => {
     mockRecording.state = 'recording';
     render(<RecordingPill />);
     expect(screen.getByTestId('audio-bars')).toHaveAttribute('data-state', 'listening');
+    expect(screen.getByText('Listening')).toBeInTheDocument();
   });
 
   it('shows the pill when idle and mode is always', () => {
@@ -65,6 +66,7 @@ describe('RecordingPill', () => {
     mockRecording.state = 'idle';
     render(<RecordingPill />);
     expect(screen.getByTestId('audio-bars')).toHaveAttribute('data-state', 'idle');
+    expect(screen.queryByRole('status')).not.toBeInTheDocument();
   });
 
   it('maps transcribing and stopping backend states to transcribing bars', () => {
@@ -72,10 +74,12 @@ describe('RecordingPill', () => {
     mockRecording.state = 'transcribing';
     const { rerender } = render(<RecordingPill />);
     expect(screen.getByTestId('audio-bars')).toHaveAttribute('data-state', 'transcribing');
+    expect(screen.getByText('Transcribing...')).toBeInTheDocument();
 
     mockRecording.state = 'stopping';
     rerender(<RecordingPill />);
     expect(screen.getByTestId('audio-bars')).toHaveAttribute('data-state', 'transcribing');
+    expect(screen.getByText('Transcribing...')).toBeInTheDocument();
   });
 
   it('gives formatting feedback precedence over recording and transcribing states', () => {
@@ -87,15 +91,18 @@ describe('RecordingPill', () => {
       emitMockEvent('enhancing-started', undefined);
     });
     expect(screen.getByTestId('audio-bars')).toHaveAttribute('data-state', 'formatting');
+    expect(screen.getByRole('status')).toHaveTextContent('Polishing...');
 
     mockRecording.state = 'transcribing';
     rerender(<RecordingPill />);
     expect(screen.getByTestId('audio-bars')).toHaveAttribute('data-state', 'formatting');
+    expect(screen.getByRole('status')).toHaveTextContent('Polishing...');
 
     act(() => {
       emitMockEvent('enhancing-completed', undefined);
     });
     expect(screen.getByTestId('audio-bars')).toHaveAttribute('data-state', 'transcribing');
+    expect(screen.getByRole('status')).toHaveTextContent('Transcribing...');
   });
 
   it('passes through audio levels while listening', () => {

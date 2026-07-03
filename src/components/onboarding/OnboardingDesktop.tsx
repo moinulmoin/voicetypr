@@ -14,29 +14,24 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
-import { Input } from "@/components/ui/input";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Spinner } from "@/components/ui/spinner";
 import { Switch } from "@/components/ui/switch";
-import { Textarea } from "@/components/ui/textarea";
 import { useSettings } from "@/contexts/SettingsContext";
 import { useAccessibilityPermission } from "@/hooks/useAccessibilityPermission";
 import { useMicrophonePermission } from "@/hooks/useMicrophonePermission";
 import type { useModelManagement } from "@/hooks/useModelManagement";
-import { useRecording } from "@/hooks/useRecording";
 import { formatHotkey } from "@/lib/hotkey-utils";
 import { isMacOS, isWindows } from "@/lib/platform";
 import { getModelDisplayName } from "@/lib/model-display";
 import { cn } from "@/lib/utils";
 import { ValidationPresets } from "@/lib/keyboard-normalizer";
 import { invoke } from "@tauri-apps/api/core";
-import { listen } from "@tauri-apps/api/event";
 import { open } from "@tauri-apps/plugin-shell";
 import {
   CheckCircle2,
   ChevronLeft,
   ChevronRight,
-  CircleAlert,
   CircleCheck,
   HardDrive,
   Info,
@@ -61,8 +56,6 @@ import { createLogger } from "@/lib/logger";
 const log = createLogger("onboarding");
 
 const UPGRADE_URL = "https://voicetypr.com/#pricing"; // [Upgrade to Pro] opens this externally
-const CONTACT_WEBHOOK_URL =
-  "https://discord.com/api/webhooks/1519563693501710376/kR6Cylv3kkZpLeMESRyn_t7lCWiGvichiCTn9LyYRUs2sXvZvYbVN5_5sXGm7A--2v_E"; // Discord webhook for onboarding contact; empty string = skip the POST
 
 interface OnboardingDesktopProps {
   onCompletionStart?: () => void;
@@ -77,7 +70,6 @@ type Step =
   | "permissions"
   | "readiness"
   | "hotkey"
-  | "first_transcription"
   | "success"
   | "upgrade";
 
@@ -87,13 +79,6 @@ type PermissionStatus = "checking" | "granted" | "denied" | "error";
 interface PermissionState {
   status: PermissionStatus;
   error?: string;
-}
-
-interface TranscriptionAddedPayload {
-  text?: string;
-  model?: string;
-  timestamp?: string;
-  status?: "completed" | "in_progress" | "failed";
 }
 
 interface DiscoveredRemoteServer {
@@ -133,50 +118,12 @@ const isRemoteServerOnline = (server?: SavedConnection | null) =>
 
 const sourceLabel = (sourceType: SourceType, confirmed: boolean) =>
   confirmed ? (sourceType === "local" ? "This device" : "Remote Voicetypr") : "Choose source";
-const getSampleSelectionKey = (
-  sourceType: SourceType,
-  selectedModelName: string | null,
-  activeRemoteServer: SavedConnection | null,
-) =>
-  sourceType === "local"
-    ? `local:${selectedModelName ?? ""}`
-    : `remote:${activeRemoteServer?.id ?? ""}:${activeRemoteServer?.model ?? ""}`;
-
-const FAILED_ONBOARDING_SAMPLE_PLACEHOLDER =
-  "Transcription failed - re-transcribe after resolving the issue";
 
 const ONBOARDING_HOTKEY_VALIDATION = ValidationPresets.custom({
   minKeys: 1,
   requireModifier: false,
   requireModifierForMultiKey: true,
 });
-
-const SAMPLE_SENTENCE = "The quick brown fox jumps over the lazy dog.";
-
-const isSuccessfulOnboardingSampleEvent = (
-  payload: TranscriptionAddedPayload,
-  sourceType: SourceType,
-  selectedModelName: string | null,
-  activeRemoteServer: SavedConnection | null,
-): boolean => {
-  const text = payload.text?.trim();
-  if (!text || text === FAILED_ONBOARDING_SAMPLE_PLACEHOLDER) {
-    return false;
-  }
-  if (payload.status === "failed" || payload.status === "in_progress") {
-    return false;
-  }
-  const eventModel = payload.model?.trim();
-  if (!eventModel) {
-    return false;
-  }
-  if (sourceType === "local") {
-    return Boolean(selectedModelName && eventModel === selectedModelName);
-  }
-  return Boolean(
-    activeRemoteServer && eventModel === activeRemoteServer.model,
-  );
-};
 
 /** Format a bare modifier spec as a short human-readable label, e.g. "Right ⌥". */
 function formatBareModifierLabel({ modifier, side }: BareModifierSpec): string {
@@ -197,7 +144,6 @@ export const OnboardingDesktop = function OnboardingDesktop({
   modelManagement,
 }: OnboardingDesktopProps) {
   const { settings, updateSettings } = useSettings();
-  const recording = useRecording();
   const {
     hasPermission: hasMicPermission,
     checkPermission: checkMicPermission,
@@ -225,8 +171,6 @@ export const OnboardingDesktop = function OnboardingDesktop({
   const [currentStep, setCurrentStep] = useState<Step>("welcome");
   // Anonymous error tracking is opt-out: checkbox defaults to checked on the success screen.
   const [telemetryOptIn, setTelemetryOptIn] = useState(true);
-  const [contactName, setContactName] = useState("");
-  const [contactEmail, setContactEmail] = useState("");
   const [sourceType, setSourceType] = useState<SourceType>("local");
   const [sourceConfirmed, setSourceConfirmed] = useState(false);
   const sourceConfirmedRef = useRef(false);
@@ -249,11 +193,6 @@ export const OnboardingDesktop = function OnboardingDesktop({
   const [showAddRemoteModal, setShowAddRemoteModal] = useState(false);
   const [discoveredRemoteServers, setDiscoveredRemoteServers] = useState<DiscoveredRemoteServer[]>([]);
   const [selectedDiscoveredServer, setSelectedDiscoveredServer] = useState<DiscoveredRemoteServer | null>(null);
-  const [sampleTranscript, setSampleTranscript] = useState<{
-    text: string;
-    selectionKey: string;
-  } | null>(null);
-  const [sampleError, setSampleError] = useState<string | null>(null);
   const [isSavingCompletion, setIsSavingCompletion] = useState(false);
   const [holdToTalk, setHoldToTalk] = useState(false);
 
@@ -289,7 +228,6 @@ export const OnboardingDesktop = function OnboardingDesktop({
             "permissions",
             "readiness",
             "hotkey",
-            "first_transcription",
             "success",
             "upgrade",
           ] satisfies Step[]
@@ -298,7 +236,6 @@ export const OnboardingDesktop = function OnboardingDesktop({
             "source",
             "readiness",
             "hotkey",
-            "first_transcription",
             "success",
             "upgrade",
           ] satisfies Step[],
@@ -329,21 +266,6 @@ export const OnboardingDesktop = function OnboardingDesktop({
   const hasDownloadedLocalModel = modelOrder.some((name) => isModelReady(name));
   const remoteReady = isRemoteServerOnline(activeRemoteServer);
   const sourceReady = sourceType === "local" ? localReady : remoteReady;
-  const sampleErrorDescription =
-    sourceType === "remote" && sampleError && !remoteReady
-      ? "The selected remote Voicetypr is offline. Make sure sharing is enabled on that device, keep both devices on the same network, then go back and choose an online server."
-      : sampleError;
-  const sampleSelectionKey = getSampleSelectionKey(
-    sourceType,
-    selectedModelName,
-    activeRemoteServer,
-  );
-  const previousSampleSelectionKey = useRef(sampleSelectionKey);
-  const hasCurrentSampleTranscript =
-    sampleTranscript?.selectionKey === sampleSelectionKey;
-  const currentSampleTranscript = hasCurrentSampleTranscript
-    ? sampleTranscript.text
-    : null;
 
   const loadRemoteServers = useCallback(async () => {
     setIsLoadingRemoteServers(true);
@@ -419,64 +341,6 @@ export const OnboardingDesktop = function OnboardingDesktop({
     if (currentStep !== "source" && currentStep !== "readiness") return;
     void loadRemoteServers();
   }, [currentStep, loadRemoteServers]);
-
-
-  useEffect(() => {
-    const setup = async () => {
-      const unlisten = await listen<TranscriptionAddedPayload>(
-        "transcription-added",
-        (event) => {
-          if (currentStep !== "first_transcription") {
-            return;
-          }
-          const payload = event.payload ?? {};
-          if (
-            !isSuccessfulOnboardingSampleEvent(
-              payload,
-              sourceType,
-              selectedModelName,
-              activeRemoteServer,
-            )
-          ) {
-            return;
-          }
-          const text = payload.text!.trim();
-          setSampleTranscript({ text, selectionKey: sampleSelectionKey });
-          setSampleError(null);
-        },
-      );
-      return unlisten;
-    };
-
-    let cleanup: (() => void) | undefined;
-    void setup().then((unlisten) => {
-      cleanup = unlisten;
-    });
-
-    return () => cleanup?.();
-  }, [
-    activeRemoteServer,
-    currentStep,
-    sampleSelectionKey,
-    selectedModelName,
-    sourceType,
-  ]);
-
-  useEffect(() => {
-    if (recording.state === "error") {
-      setSampleError(recording.error || "Recording failed. Try again.");
-    }
-  }, [recording.error, recording.state]);
-
-  useEffect(() => {
-    if (previousSampleSelectionKey.current === sampleSelectionKey) {
-      return;
-    }
-
-    previousSampleSelectionKey.current = sampleSelectionKey;
-    setSampleTranscript(null);
-    setSampleError(null);
-  }, [sampleSelectionKey]);
 
   const checkPermissions = async () => {
     await Promise.all([checkMicPermission(), checkAccessPermission()]);
@@ -717,28 +581,6 @@ export const OnboardingDesktop = function OnboardingDesktop({
     }
   };
 
-  // Success screen "Continue": optionally POST contact details (silent-fail), then advance to upgrade.
-  const submitContactAndContinue = async () => {
-    const name = contactName.trim();
-    const email = contactEmail.trim();
-    if (CONTACT_WEBHOOK_URL && (name || email)) {
-      try {
-        await fetch(CONTACT_WEBHOOK_URL, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            username: "Onboarding · New Users",
-            content: `**New user onboarded**\nName: ${name || "—"}\nEmail: ${email || "—"}`,
-          }),
-        });
-      } catch (contactError) {
-        // Silent-fail: contact capture must never block onboarding.
-        log.error("Failed to submit onboarding contact:", contactError);
-      }
-    }
-    setCurrentStep("upgrade");
-  };
-
   const handleNext = async () => {
     try {
       if (currentStep === "welcome") {
@@ -767,12 +609,8 @@ export const OnboardingDesktop = function OnboardingDesktop({
 
       if (currentStep === "hotkey") {
         await saveHotkeySettings();
-        setCurrentStep("first_transcription");
-        return;
-      }
-
-      if (currentStep === "first_transcription" && hasCurrentSampleTranscript) {
         setCurrentStep("success");
+        return;
       }
     } catch (error) {
       log.error("Failed to advance onboarding:", error);
@@ -785,17 +623,6 @@ export const OnboardingDesktop = function OnboardingDesktop({
     if (previousIndex >= 0) {
       setCurrentStep(steps[previousIndex]);
     }
-  };
-
-  const startSampleRecording = async () => {
-    setSampleError(null);
-    setSampleTranscript(null);
-    await recording.startRecording();
-  };
-
-  const stopSampleRecording = async () => {
-    setSampleError(null);
-    await recording.stopRecording();
   };
 
   const canProceed = () => {
@@ -812,8 +639,6 @@ export const OnboardingDesktop = function OnboardingDesktop({
         return sourceReady;
       case "hotkey":
         return !isEditingHotkey;
-      case "first_transcription":
-        return hasCurrentSampleTranscript;
       default:
         return true;
     }
@@ -840,7 +665,7 @@ export const OnboardingDesktop = function OnboardingDesktop({
                   Welcome to Voicetypr
                 </h1>
                 <p className="max-w-2xl text-base leading-7 text-muted-foreground">
-                  Choose where transcription runs, set your hotkey, then try one real voice typing test before setup finishes.
+                  Choose where transcription runs, set your hotkey, then start voice typing anywhere.
                 </p>
                 <p className="text-sm text-muted-foreground">
                   By continuing, you agree to our Terms and Privacy Policy.
@@ -860,17 +685,17 @@ export const OnboardingDesktop = function OnboardingDesktop({
                   <span className="flex size-8 items-center justify-center rounded-lg bg-sage-bg text-sage">
                     <Sparkles className="size-4" />
                   </span>
-                  Setup completes when this works
+                  Setup takes three quick steps
                 </CardTitle>
                 <CardDescription>
-                  No fake green check. Voicetypr is ready only after the first recording succeeds.
+                  Prepare a transcription source, choose a shortcut, and you are ready to use Voicetypr.
                 </CardDescription>
               </CardHeader>
               <CardContent className="flex flex-col gap-2.5">
                 {[
                   ["1", "Pick local or remote transcription"],
                   ["2", "Prepare the selected source"],
-                  ["3", "Record one sample and see the transcript"],
+                  ["3", "Save your recording hotkey"],
                 ].map(([number, text]) => (
                   <div key={number} className="flex items-center gap-3 rounded-xl border border-border/60 bg-muted/40 px-3 py-2.5">
                     <span className="flex size-7 items-center justify-center rounded-full bg-sage-bg text-sm font-semibold text-sage">
@@ -973,7 +798,7 @@ export const OnboardingDesktop = function OnboardingDesktop({
                   type: "microphone" as const,
                   icon: Mic,
                   title: "Microphone",
-                  desc: "Record your voice for the first transcription.",
+                  desc: "Record your voice for transcription.",
                   ...permissions.microphone,
                 },
                 {
@@ -1117,7 +942,7 @@ export const OnboardingDesktop = function OnboardingDesktop({
                   <div>
                     <p className="text-sm font-medium">Saved remote servers</p>
                     <p className="text-sm text-muted-foreground">
-                      Online servers can be selected for the first transcription.
+                      Online servers can be selected for transcription.
                     </p>
                   </div>
                   <div className="flex gap-2">
@@ -1328,89 +1153,6 @@ export const OnboardingDesktop = function OnboardingDesktop({
           </OnboardingPanel>
         )}
 
-        {currentStep === "first_transcription" && (
-          <OnboardingPanel
-            title="Do your first transcription"
-            description="Say one short sentence. Onboarding only finishes after Voicetypr returns real text."
-            footer={
-              <StepFooter
-                onBack={handleBack}
-                onNext={handleNext}
-                nextDisabled={!canProceed()}
-                nextLabel="Review result"
-                onSkip={() => setCurrentStep("success")}
-                skipLabel="Skip for now"
-              />
-            }
-          >
-            <Card className="mx-auto w-full max-w-2xl rounded-2xl border border-border bg-card shadow-sm">
-              <CardHeader>
-                <CardAction>
-                  <Badge variant="outline">{sourceLabel(sourceType, true)}</Badge>
-                </CardAction>
-                <CardTitle className="flex items-center gap-2.5 text-xl">
-                  <span className="flex size-8 items-center justify-center rounded-lg bg-sage-bg text-sage">
-                    <Mic className="size-4" />
-                  </span>
-                  Sample recording
-                </CardTitle>
-                <CardDescription>
-                  Start a short sample, then stop to transcribe it.
-                </CardDescription>
-              </CardHeader>
-              <CardContent className="flex flex-col gap-4">
-                <div className="flex flex-wrap gap-3">
-                  <Button
-                    onClick={() => void startSampleRecording()}
-                    disabled={recording.isActive}
-                  >
-                    {recording.state === "starting" ? <Spinner /> : null}
-                    Start sample
-                  </Button>
-                  <Button
-                    variant="outline"
-                    onClick={() => void stopSampleRecording()}
-                    disabled={!recording.isActive || recording.state === "transcribing"}
-                  >
-                    {recording.state === "stopping" || recording.state === "transcribing" ? <Spinner /> : null}
-                    Stop and transcribe
-                  </Button>
-                </div>
-
-                <div className="rounded-xl border border-border bg-muted/40 p-4 text-sm">
-                  <p className="mb-1 font-medium text-muted-foreground">Read this aloud:</p>
-                  <p className="text-foreground">{SAMPLE_SENTENCE}</p>
-                </div>
-
-                {recording.state === "transcribing" ? (
-                  <Alert>
-                    <Spinner />
-                    <AlertTitle>Transcribing</AlertTitle>
-                    <AlertDescription>
-                      Waiting for {sourceLabel(sourceType, true).toLowerCase()} to return your text.
-                    </AlertDescription>
-                  </Alert>
-                ) : null}
-
-                {sampleError ? (
-                  <Alert variant="destructive">
-                    <CircleAlert className="size-4" />
-                    <AlertTitle>Sample failed</AlertTitle>
-                    <AlertDescription>{sampleErrorDescription}</AlertDescription>
-                  </Alert>
-                ) : null}
-
-                <Textarea
-                  key={currentSampleTranscript ?? "empty"}
-                  defaultValue={currentSampleTranscript ?? ""}
-                  placeholder="Your transcription will appear here as you speak."
-                  className="min-h-[96px] resize-y text-base leading-7"
-                />
-              </CardContent>
-            </Card>
-          </OnboardingPanel>
-        )}
-
         {currentStep === "success" && (
           <section className="mx-auto flex w-full max-w-xl flex-col items-center gap-6 text-center">
             <div className="flex size-16 items-center justify-center rounded-3xl bg-sage text-sage-foreground shadow-sm">
@@ -1418,52 +1160,23 @@ export const OnboardingDesktop = function OnboardingDesktop({
             </div>
             <div className="flex flex-col gap-3">
               <h1 className="text-4xl font-semibold tracking-[-0.04em]">
-                That&rsquo;s your first transcription 🎉
+                You're all set
               </h1>
               <p className="text-muted-foreground">
-                You&rsquo;re all set — Voicetypr is ready to use.{" "}
+                Voicetypr is ready to use.{" "}
                 {capturedBareModifier
                   ? holdToTalk
-                    ? <>Hold {formatBareModifierLabel(capturedBareModifier)} anywhere to start recording — release to stop.</>
+                    ? <>Hold {formatBareModifierLabel(capturedBareModifier)} anywhere to start recording; release to stop.</>
                     : <>Tap {formatBareModifierLabel(capturedBareModifier)} anywhere to start or stop recording.</>
                   : holdToTalk
-                    ? <>Hold {formatHotkey(hotkey)} anywhere to start recording — release to stop.</>
+                    ? <>Hold {formatHotkey(hotkey)} anywhere to start recording; release to stop.</>
                     : <>Press {formatHotkey(hotkey)} anywhere to start recording.</>}
               </p>
             </div>
 
-            <div className="flex w-full flex-col gap-3 rounded-2xl border border-border bg-card p-4 text-left shadow-sm">
-              <div className="grid gap-3 sm:grid-cols-2">
-                <div className="flex flex-col gap-1.5">
-                  <label htmlFor="onboarding-contact-name" className="text-sm font-medium">
-                    Name
-                  </label>
-                  <Input
-                    id="onboarding-contact-name"
-                    value={contactName}
-                    onChange={(event) => setContactName(event.target.value)}
-                    placeholder="Your name"
-                    autoComplete="name"
-                  />
-                </div>
-                <div className="flex flex-col gap-1.5">
-                  <label htmlFor="onboarding-contact-email" className="text-sm font-medium">
-                    Email
-                  </label>
-                  <Input
-                    id="onboarding-contact-email"
-                    type="email"
-                    value={contactEmail}
-                    onChange={(event) => setContactEmail(event.target.value)}
-                    placeholder="you@example.com"
-                    autoComplete="email"
-                  />
-                </div>
-              </div>
-              <p className="text-xs text-muted-foreground">
-                Optional — so we can reach you if something breaks. We&rsquo;ll never share it.
-              </p>
-            </div>
+            <p className="w-full rounded-2xl border border-border bg-card p-4 text-left text-sm text-muted-foreground shadow-sm">
+              Tip: turn on Polish in Settings to clean up your dictation automatically.
+            </p>
 
             <label className="flex w-full items-start gap-3 rounded-2xl border border-border bg-card p-4 text-left text-sm shadow-sm">
               <input
@@ -1474,12 +1187,12 @@ export const OnboardingDesktop = function OnboardingDesktop({
               />
               <span className="text-muted-foreground">
                 Send anonymous error reports to help make Voicetypr better. Never
-                your audio, transcripts, or personal data — just crash details.
-                Change this anytime in Settings → Advanced.
+                your audio, transcripts, or personal data - just crash details.
+                Change this anytime in Settings &gt; Advanced.
               </span>
             </label>
 
-            <Button size="lg" onClick={() => void submitContactAndContinue()}>
+            <Button size="lg" onClick={() => setCurrentStep("upgrade")}>
               Continue
               <ChevronRight />
             </Button>
@@ -1493,10 +1206,10 @@ export const OnboardingDesktop = function OnboardingDesktop({
             </div>
             <div className="flex flex-col gap-3">
               <h1 className="text-4xl font-semibold tracking-[-0.04em]">
-                Make Voicetypr yours
+                You can upgrade to Pro anytime
               </h1>
               <p className="text-muted-foreground">
-                Unlock Pro to keep it forever.
+                Continue now, or connect an existing license.
               </p>
             </div>
 
@@ -1525,7 +1238,7 @@ export const OnboardingDesktop = function OnboardingDesktop({
                 onClick={() => void completeOnboarding()}
                 disabled={isSavingCompletion}
               >
-                Maybe later
+                Continue
               </Button>
             </div>
           </section>
