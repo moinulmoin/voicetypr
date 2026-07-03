@@ -6,7 +6,8 @@ use crate::ai::genai_runtime::AiKeyResolver;
 use crate::ai::providers::{launch_providers, PROVIDER_CUSTOM};
 use crate::ai::EnhancementOptions;
 use crate::commands::settings::{
-    FINAL_TEXT_LANGUAGE_SAME_AS_TRANSCRIPT, TRANSCRIPTION_TASK_TRANSCRIBE,
+    persist_settings_and_invalidate, FINAL_TEXT_LANGUAGE_SAME_AS_TRANSCRIPT,
+    TRANSCRIPTION_TASK_TRANSCRIBE,
 };
 use crate::secure_store;
 use crate::writing::{load_writing_settings, save_writing_settings, WritingSettings};
@@ -711,38 +712,39 @@ pub async fn update_ai_settings(
         }
     }
 
-    let store = app.store("settings").map_err(|e| e.to_string())?;
-    let mut models_by_provider = load_models_by_provider(&store, &provider, &model);
-    remember_provider_model(&mut models_by_provider, &provider, &model);
+    persist_settings_and_invalidate(
+        &app,
+        |store| {
+            let mut models_by_provider = load_models_by_provider(store, &provider, &model);
+            remember_provider_model(&mut models_by_provider, &provider, &model);
 
-    store.set("ai_enabled", json!(enabled));
-    store.set("ai_provider", json!(provider));
-    store.set("ai_model", json!(model));
-    store.set("ai_models_by_provider", json!(models_by_provider));
-    if !model.is_empty() {
-        store.set("ai_model_needs_reselection", json!(false));
-    }
-    if !enabled {
-        store.set(
-            "enhancement_options",
-            serde_json::to_value(EnhancementOptions {
-                preset: crate::ai::prompts::EnhancementPreset::PersonalDictation,
-            })
-            .map_err(|e| format!("Failed to serialize enhancement options: {}", e))?,
-        );
-        store.set(
-            "final_text_language",
-            json!(FINAL_TEXT_LANGUAGE_SAME_AS_TRANSCRIPT),
-        );
-        store.set("transcription_task", json!(TRANSCRIPTION_TASK_TRANSCRIBE));
-    }
+            store.set("ai_enabled", json!(enabled));
+            store.set("ai_provider", json!(provider));
+            store.set("ai_model", json!(model));
+            store.set("ai_models_by_provider", json!(models_by_provider));
+            if !model.is_empty() {
+                store.set("ai_model_needs_reselection", json!(false));
+            }
+            if !enabled {
+                store.set(
+                    "enhancement_options",
+                    serde_json::to_value(EnhancementOptions {
+                        preset: crate::ai::prompts::EnhancementPreset::PersonalDictation,
+                    })
+                    .map_err(|e| format!("Failed to serialize enhancement options: {}", e))?,
+                );
+                store.set(
+                    "final_text_language",
+                    json!(FINAL_TEXT_LANGUAGE_SAME_AS_TRANSCRIPT),
+                );
+                store.set("transcription_task", json!(TRANSCRIPTION_TASK_TRANSCRIBE));
+            }
 
-    store
-        .save()
-        .map_err(|e| format!("Failed to save AI settings: {}", e))?;
-
-    // Invalidate recording config cache when AI settings change
-    crate::commands::audio::invalidate_recording_config_cache(&app).await;
+            Ok(())
+        },
+        |e| format!("Failed to save AI settings: {}", e),
+    )
+    .await?;
 
     log::info!(
         "AI settings updated: enabled={}, provider={}, model={}",
@@ -756,28 +758,28 @@ pub async fn update_ai_settings(
 
 #[tauri::command]
 pub async fn disable_ai_enhancement(app: tauri::AppHandle) -> Result<(), String> {
-    let store = app.store("settings").map_err(|e| e.to_string())?;
+    persist_settings_and_invalidate(
+        &app,
+        |store| {
+            store.set("ai_enabled", json!(false));
+            store.set(
+                "enhancement_options",
+                serde_json::to_value(EnhancementOptions {
+                    preset: crate::ai::prompts::EnhancementPreset::PersonalDictation,
+                })
+                .map_err(|e| format!("Failed to serialize enhancement options: {}", e))?,
+            );
+            store.set(
+                "final_text_language",
+                json!(FINAL_TEXT_LANGUAGE_SAME_AS_TRANSCRIPT),
+            );
+            store.set("transcription_task", json!(TRANSCRIPTION_TASK_TRANSCRIBE));
 
-    store.set("ai_enabled", json!(false));
-    store.set(
-        "enhancement_options",
-        serde_json::to_value(EnhancementOptions {
-            preset: crate::ai::prompts::EnhancementPreset::PersonalDictation,
-        })
-        .map_err(|e| format!("Failed to serialize enhancement options: {}", e))?,
-    );
-    store.set(
-        "final_text_language",
-        json!(FINAL_TEXT_LANGUAGE_SAME_AS_TRANSCRIPT),
-    );
-    store.set("transcription_task", json!(TRANSCRIPTION_TASK_TRANSCRIBE));
-
-    store
-        .save()
-        .map_err(|e| format!("Failed to save AI settings: {}", e))?;
-
-    // Invalidate recording config cache when AI settings change
-    crate::commands::audio::invalidate_recording_config_cache(&app).await;
+            Ok(())
+        },
+        |e| format!("Failed to save AI settings: {}", e),
+    )
+    .await?;
 
     log::info!("AI enhancement disabled");
 
@@ -829,19 +831,20 @@ pub async fn update_enhancement_options(
     options: EnhancementOptions,
     app: tauri::AppHandle,
 ) -> Result<(), String> {
-    let store = app.store("settings").map_err(|e| e.to_string())?;
+    persist_settings_and_invalidate(
+        &app,
+        |store| {
+            store.set(
+                "enhancement_options",
+                serde_json::to_value(&options)
+                    .map_err(|e| format!("Failed to serialize options: {}", e))?,
+            );
 
-    store.set(
-        "enhancement_options",
-        serde_json::to_value(&options)
-            .map_err(|e| format!("Failed to serialize options: {}", e))?,
-    );
-
-    store
-        .save()
-        .map_err(|e| format!("Failed to save enhancement options: {}", e))?;
-
-    crate::commands::audio::invalidate_recording_config_cache(&app).await;
+            Ok(())
+        },
+        |e| format!("Failed to save enhancement options: {}", e),
+    )
+    .await?;
 
     log::info!("Enhancement options updated: preset={:?}", options.preset);
 
@@ -859,6 +862,7 @@ pub async fn update_writing_settings(
     app: tauri::AppHandle,
 ) -> Result<(), String> {
     save_writing_settings(&app, &settings)?;
+    // Writing settings are persisted by writing::settings; keep one invalidation immediately after that save.
     crate::commands::audio::invalidate_recording_config_cache(&app).await;
     Ok(())
 }

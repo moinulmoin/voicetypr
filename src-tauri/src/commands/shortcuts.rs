@@ -248,6 +248,7 @@ pub async fn set_formatting_preset(
     store.save().map_err(|e| e.to_string())?;
     drop(store);
 
+    // Preserve this shortcut path's direct reset plus settings-changed emit as its single invalidation.
     let app_state = app.state::<AppState>();
     *app_state.recording_config_cache.write().await = None;
     let _ = app.emit("settings-changed", ());
@@ -288,20 +289,28 @@ pub async fn toggle_ai_formatting(app: AppHandle) -> Result<(), String> {
 
     match next_ai_enabled(current, can_enable) {
         Some(true) => {
-            let store = app.store("settings").map_err(|e| e.to_string())?;
-            store.set("ai_enabled", serde_json::Value::Bool(true));
-            store.save().map_err(|e| e.to_string())?;
-            drop(store);
-            crate::commands::audio::invalidate_recording_config_cache(&app).await;
+            crate::commands::settings::persist_settings_and_invalidate(
+                &app,
+                |store| {
+                    store.set("ai_enabled", serde_json::Value::Bool(true));
+                    Ok(())
+                },
+                std::convert::identity,
+            )
+            .await?;
             crate::commands::audio::pill_toast(&app, "AI formatting on", 2500);
             let _ = crate::emit_to_window(&app, "main", "ai-enabled-changed", true);
         }
         Some(false) => {
-            let store = app.store("settings").map_err(|e| e.to_string())?;
-            store.set("ai_enabled", serde_json::Value::Bool(false));
-            store.save().map_err(|e| e.to_string())?;
-            drop(store);
-            crate::commands::audio::invalidate_recording_config_cache(&app).await;
+            crate::commands::settings::persist_settings_and_invalidate(
+                &app,
+                |store| {
+                    store.set("ai_enabled", serde_json::Value::Bool(false));
+                    Ok(())
+                },
+                std::convert::identity,
+            )
+            .await?;
             crate::commands::audio::pill_toast(&app, "AI formatting off", 2500);
             let _ = crate::emit_to_window(&app, "main", "ai-enabled-changed", false);
         }

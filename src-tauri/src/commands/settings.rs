@@ -31,6 +31,24 @@ pub const TRANSCRIPTION_TASK_TRANSCRIBE: &str = "transcribe";
 pub const TRANSCRIPTION_TASK_TRANSLATE_TO_ENGLISH: &str = "translate_to_english";
 pub const FINAL_TEXT_LANGUAGE_SAME_AS_TRANSCRIPT: &str = "same_as_transcript";
 
+pub(crate) async fn persist_settings_and_invalidate<F, M>(
+    app: &AppHandle,
+    mutate: F,
+    map_save_error: M,
+) -> Result<(), String>
+where
+    F: FnOnce(&tauri_plugin_store::Store<tauri::Wry>) -> Result<(), String>,
+    M: FnOnce(String) -> String,
+{
+    let store = app.store("settings").map_err(|e| e.to_string())?;
+    mutate(&store)?;
+    store.save().map_err(|e| map_save_error(e.to_string()))?;
+    drop(store);
+
+    crate::commands::audio::invalidate_recording_config_cache(app).await;
+    Ok(())
+}
+
 #[derive(Serialize, Deserialize, Clone)]
 pub struct Settings {
     pub hotkey: String,
@@ -739,7 +757,7 @@ pub async fn save_settings(app: AppHandle, settings: Settings) -> Result<(), Str
         );
     }
 
-    // Invalidate recording config cache when settings change
+    // This command reloads on save failure and rebuilds bindings after save; keep one explicit invalidation.
     crate::commands::audio::invalidate_recording_config_cache(&app).await;
 
     // Preload new model and update tray menu if model changed
