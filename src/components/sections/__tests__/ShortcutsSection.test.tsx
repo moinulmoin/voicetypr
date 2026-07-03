@@ -65,58 +65,10 @@ const actionDefinitions: ShortcutActionDefinition[] = [
     allows_single_key: true,
   },
   {
-    action: "cycle_formatting_mode",
-    label: "Cycle Formatting Mode",
-    description: "Move to the next formatting mode.",
-    section: "Formatting",
-    recommended_trigger: "pressed",
-    allows_single_key: true,
-  },
-  {
-    action: "set_personal_dictation",
-    label: "Personal Dictation",
-    description: "Switch to personal dictation.",
-    section: "Formatting",
-    recommended_trigger: "pressed",
-    allows_single_key: true,
-  },
-  {
-    action: "set_clean_dictation",
-    label: "Clean Dictation",
-    description: "Switch to clean dictation.",
-    section: "Formatting",
-    recommended_trigger: "pressed",
-    allows_single_key: true,
-  },
-  {
-    action: "set_writing",
-    label: "Writing",
-    description: "Switch to writing mode.",
-    section: "Formatting",
-    recommended_trigger: "pressed",
-    allows_single_key: true,
-  },
-  {
-    action: "set_notes",
-    label: "Notes",
-    description: "Switch to notes mode.",
-    section: "Formatting",
-    recommended_trigger: "pressed",
-    allows_single_key: true,
-  },
-  {
-    action: "set_message",
-    label: "Message",
-    description: "Switch to message mode.",
-    section: "Formatting",
-    recommended_trigger: "pressed",
-    allows_single_key: true,
-  },
-  {
-    action: "set_code",
-    label: "Code",
-    description: "Switch to code mode.",
-    section: "Formatting",
+    action: "toggle_ai_formatting",
+    label: "Toggle Polish",
+    description: "Turn Polish on or off.",
+    section: "Polish",
     recommended_trigger: "pressed",
     allows_single_key: true,
   },
@@ -171,7 +123,7 @@ describe("ShortcutsSection", () => {
     await waitFor(() => {
       expect(screen.getByRole("heading", { name: "Recording" })).toBeInTheDocument();
       expect(screen.getByRole("heading", { name: "History" })).toBeInTheDocument();
-      expect(screen.getByRole("heading", { name: "Formatting" })).toBeInTheDocument();
+      expect(screen.getByRole("heading", { name: "Polish" })).toBeInTheDocument();
       expect(screen.getByRole("heading", { name: "App" })).toBeInTheDocument();
     });
 
@@ -181,6 +133,7 @@ describe("ShortcutsSection", () => {
     expect(screen.queryByText("Hold to Record")).not.toBeInTheDocument();
     expect(screen.getByText("Cancel Recording")).toBeInTheDocument();
     expect(screen.getByText("Copy Last Transcription")).toBeInTheDocument();
+    expect(screen.getByText("Toggle Polish")).toBeInTheDocument();
     expect(screen.getByText("Open Dashboard")).toBeInTheDocument();
     expect(screen.getAllByRole("button", { name: "Set shortcut" })).toHaveLength(
       actionDefinitions.filter(

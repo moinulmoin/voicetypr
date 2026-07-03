@@ -1,11 +1,10 @@
-use crate::ai::prompts::EnhancementPreset;
 use crate::commands::key_normalizer::is_typing_safe_single_key;
 use crate::commands::shortcuts::{
-    action_preset, hold_shortcut_transition, is_single_key_shortcut, next_ai_enabled,
-    normalized_custom_shortcut_conflict, pressed_shortcut_should_run, validate_shortcut_settings,
-    CustomHoldTransition, ExistingShortcutStrings, ModifierKind, ModifierSpec, ShortcutAction,
-    ShortcutBinding, ShortcutSettings, ShortcutTrigger, SideKind, TriggerKind,
-    MAX_SINGLE_KEY_BINDINGS,
+    decode_shortcut_settings_value, hold_shortcut_transition, is_single_key_shortcut,
+    next_ai_enabled, normalized_custom_shortcut_conflict, pressed_shortcut_should_run,
+    validate_shortcut_settings, CustomHoldTransition, ExistingShortcutStrings, ModifierKind,
+    ModifierSpec, ShortcutAction, ShortcutBinding, ShortcutSettings, ShortcutTrigger, SideKind,
+    TriggerKind, MAX_SINGLE_KEY_BINDINGS,
 };
 use keytrigger::KeyPhase;
 use std::collections::HashSet;
@@ -26,6 +25,54 @@ fn binding(action: ShortcutAction, shortcut: &str) -> ShortcutBinding {
 #[test]
 fn shortcut_settings_default_empty() {
     assert!(ShortcutSettings::default().bindings.is_empty());
+}
+
+#[test]
+fn stored_retired_mode_shortcut_is_dropped_without_losing_valid_bindings() {
+    let stored = serde_json::json!({
+        "bindings": [
+            {
+                "id": "retired-writing",
+                "action": "set_writing",
+                "shortcut": "F5",
+                "trigger": "pressed",
+                "enabled": true,
+                "allow_risky_combo": true
+            },
+            {
+                "id": "recording-toggle",
+                "action": "toggle_recording",
+                "shortcut": "F1",
+                "trigger": "pressed",
+                "enabled": true,
+                "allow_risky_combo": true
+            },
+            {
+                "id": "copy-last",
+                "action": "copy_last_transcription",
+                "shortcut": "CommandOrControl+Shift+C",
+                "trigger": "pressed",
+                "enabled": true,
+                "allow_risky_combo": false
+            }
+        ]
+    });
+
+    let loaded = decode_shortcut_settings_value(stored)
+        .expect("retired shortcut action should not fail the whole settings load");
+
+    assert!(loaded.dropped_unknown_actions);
+    assert_eq!(loaded.settings.bindings.len(), 2);
+    assert_eq!(loaded.settings.bindings[0].id, "recording-toggle");
+    assert_eq!(
+        loaded.settings.bindings[0].action,
+        ShortcutAction::ToggleRecording
+    );
+    assert_eq!(loaded.settings.bindings[1].id, "copy-last");
+    assert_eq!(
+        loaded.settings.bindings[1].action,
+        ShortcutAction::CopyLastTranscription
+    );
 }
 
 #[test]
@@ -280,35 +327,6 @@ fn disabled_invalid_binding_does_not_fail_validation() {
 }
 
 #[test]
-fn mode_actions_map_to_expected_presets() {
-    assert_eq!(
-        action_preset(ShortcutAction::SetPersonalDictation),
-        Some(EnhancementPreset::PersonalDictation)
-    );
-    assert_eq!(
-        action_preset(ShortcutAction::SetCleanDictation),
-        Some(EnhancementPreset::CleanDictation)
-    );
-    assert_eq!(
-        action_preset(ShortcutAction::SetWriting),
-        Some(EnhancementPreset::Writing)
-    );
-    assert_eq!(
-        action_preset(ShortcutAction::SetNotes),
-        Some(EnhancementPreset::Notes)
-    );
-    assert_eq!(
-        action_preset(ShortcutAction::SetMessage),
-        Some(EnhancementPreset::Message)
-    );
-    assert_eq!(
-        action_preset(ShortcutAction::SetCode),
-        Some(EnhancementPreset::Code)
-    );
-    assert_eq!(action_preset(ShortcutAction::OpenDashboard), None);
-}
-
-#[test]
 fn next_ai_enabled_toggles_correctly() {
     // Disabling always works regardless of can_enable
     assert_eq!(next_ai_enabled(true, true), Some(false));
@@ -398,7 +416,7 @@ fn single_key_cap_allows_5_rejects_6() {
         safe_sk(ShortcutAction::CancelRecording, "F2"),
         safe_sk(ShortcutAction::CopyLastTranscription, "F3"),
         safe_sk(ShortcutAction::PasteLastTranscription, "F4"),
-        safe_sk(ShortcutAction::CycleFormattingMode, "F5"),
+        safe_sk(ShortcutAction::ToggleAiFormatting, "F5"),
     ];
     assert_eq!(five_bindings.len(), MAX_SINGLE_KEY_BINDINGS);
     assert!(
@@ -414,7 +432,7 @@ fn single_key_cap_allows_5_rejects_6() {
     );
 
     let mut six_bindings = five_bindings;
-    six_bindings.push(safe_sk(ShortcutAction::ToggleAiFormatting, "F6"));
+    six_bindings.push(safe_sk(ShortcutAction::OpenDashboard, "F6"));
     let err = validate_shortcut_settings(
         ShortcutSettings {
             bindings: six_bindings,
