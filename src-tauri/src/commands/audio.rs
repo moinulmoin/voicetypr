@@ -7,8 +7,9 @@ use crate::audio::silence_detector::SilenceDetectorEvent;
 use crate::audio::stream_tap::{StreamTapSink, StreamTapSinkFactory};
 use crate::commands::settings::{
     get_settings, normalize_final_text_language, normalize_speech_language_for_model,
-    normalize_transcription_task, recording_retention_days_from_store, resolve_pill_indicator_mode,
-    task_uses_translate_to_english, Settings, TRANSCRIPTION_TASK_TRANSCRIBE,
+    normalize_transcription_task, read_whisper_speed_mode, recording_retention_days_from_store,
+    resolve_pill_indicator_mode, task_uses_translate_to_english, Settings,
+    TRANSCRIPTION_TASK_TRANSCRIBE,
 };
 use crate::license::LicenseState;
 use crate::media::MediaPauseController;
@@ -210,8 +211,7 @@ fn build_parakeet_stream_sink_factory(
                         sample_rate,
                         channels,
                         engine: stream_engine,
-                        chunk_ms: matches!(stream_engine, ParakeetStreamEngine::Eou)
-                            .then_some(320),
+                        chunk_ms: matches!(stream_engine, ParakeetStreamEngine::Eou).then_some(320),
                         config: matches!(stream_engine, ParakeetStreamEngine::SlidingWindow)
                             .then_some(ParakeetStreamConfig::streaming()),
                     },
@@ -1591,7 +1591,7 @@ pub(crate) async fn warm_whisper_gpu_sidecar_on_model_preload(
 }
 
 // TODO(arch-review): collapse into a request struct when the whisper dispatch
-// seam is restructured (audio_ctx param from plan 032 pushed this to 8 args).
+// seam is restructured (audio_ctx/speed-mode params pushed this over 8 args).
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn transcribe_whisper_with_acceleration<F>(
     app: &AppHandle,
@@ -1601,11 +1601,14 @@ pub(crate) async fn transcribe_whisper_with_acceleration<F>(
     translate: bool,
     initial_prompt: Option<&str>,
     audio_ctx: Option<i32>,
+    speed_mode_override: Option<bool>,
     should_cancel: F,
 ) -> Result<WhisperTranscriptionOutput, String>
 where
     F: Fn() -> bool + Clone + Send + 'static,
 {
+    let speed_mode = speed_mode_override.unwrap_or_else(|| read_whisper_speed_mode(app));
+
     #[cfg(target_os = "windows")]
     let mode = transcription_acceleration_mode(app).await;
 
@@ -1665,7 +1668,7 @@ where
     let transcriber = {
         let cache_state = app.state::<AsyncMutex<TranscriberCache>>();
         let mut cache = cache_state.lock().await;
-        cache.get_or_create(model_path)?
+        cache.get_or_create(model_path, speed_mode)?
     };
 
     let audio_path = audio_path.to_path_buf();
@@ -6597,7 +6600,17 @@ pub async fn transcribe_audio_file(
     model_name: String,
     model_engine: Option<String>,
 ) -> Result<UploadTranscription, String> {
-    transcribe_audio_file_impl(app, file_path, model_name, model_engine, true, None, None).await
+    transcribe_audio_file_impl(
+        app,
+        file_path,
+        model_name,
+        model_engine,
+        true,
+        None,
+        None,
+        None,
+    )
+    .await
 }
 
 pub async fn transcribe_audio_file_for_cli(
@@ -6607,6 +6620,7 @@ pub async fn transcribe_audio_file_for_cli(
     model_engine: Option<String>,
     language_override: Option<String>,
     audio_ctx: Option<i32>,
+    speed_mode_override: Option<bool>,
 ) -> Result<UploadTranscription, String> {
     transcribe_audio_file_impl(
         app,
@@ -6616,10 +6630,15 @@ pub async fn transcribe_audio_file_for_cli(
         false,
         language_override,
         audio_ctx,
+        speed_mode_override,
     )
     .await
 }
 
+// TODO(arch #16, Wave 3): this parallel upload dispatch gets rewritten to take a
+// TranscriptionRequest and route through the executor — bundling args is throwaway
+// until then. See docs/review/2026-07-03-arch-roadmap.md.
+#[allow(clippy::too_many_arguments)]
 async fn transcribe_audio_file_impl(
     app: AppHandle,
     file_path: String,
@@ -6628,6 +6647,7 @@ async fn transcribe_audio_file_impl(
     validate_requirements: bool,
     language_override: Option<String>,
     audio_ctx: Option<i32>,
+    speed_mode_override: Option<bool>,
 ) -> Result<UploadTranscription, String> {
     log::info!(
         "[UPLOAD] transcribe_audio_file START | file_path={:?}, model_name={}, engine_hint={:?}",
@@ -6744,6 +6764,7 @@ async fn transcribe_audio_file_impl(
                 translate_to_english,
                 initial_prompt.as_deref(),
                 audio_ctx,
+                speed_mode_override,
                 || false,
             )
             .await?;
@@ -7097,6 +7118,7 @@ pub async fn transcribe_audio(
                 Some(language.as_str()),
                 translate_to_english,
                 initial_prompt.as_deref(),
+                None,
                 None,
                 || false,
             )

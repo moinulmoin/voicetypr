@@ -101,6 +101,9 @@ struct TranscribeArgs {
     /// Override Whisper audio context for this transcription run. Only applies when present.
     #[arg(long)]
     audio_ctx: Option<i32>,
+    /// Enable Whisper speed mode for this transcription run without changing app settings.
+    #[arg(long)]
+    speed_mode: bool,
     /// Transcribe via a remote Voicetypr server given as host:port (e.g. 192.168.1.10:47842) instead of locally.
     #[arg(long)]
     server: Option<String>,
@@ -440,6 +443,7 @@ async fn run_transcribe(
             engine.clone(),
             args.language.clone(),
             args.audio_ctx,
+            Some(args.speed_mode),
         )
         .await?;
         json!({ "text": t.text, "words": t.words, "metadata": t.metadata, "model": model, "engine": engine })
@@ -508,6 +512,7 @@ async fn run_record(app: &tauri::AppHandle, args: RecordArgs) -> Result<(), Box<
             output_path.to_string_lossy().to_string(),
             model.clone(),
             engine.clone(),
+            None,
             None,
             None,
         )

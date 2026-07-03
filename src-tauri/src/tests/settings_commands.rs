@@ -28,6 +28,7 @@ mod tests {
         assert!(settings.auto_paste_transcription); // Default to true
         assert!(!settings.save_recordings);
         assert_eq!(settings.recording_retention_days, Some(30));
+        assert!(!settings.whisper_speed_mode);
         assert_eq!(settings.transcription_mode, "regular");
     }
 
@@ -63,6 +64,7 @@ mod tests {
             save_recordings: true,
             recording_retention_days: Some(7),
             transcription_acceleration: "auto".to_string(),
+            whisper_speed_mode: false,
             transcription_mode: "regular".to_string(),
         };
 
@@ -146,6 +148,7 @@ mod tests {
             save_recordings: true,
             recording_retention_days: None,
             transcription_acceleration: "auto".to_string(),
+            whisper_speed_mode: false,
             transcription_mode: "regular".to_string(),
         };
 
@@ -843,6 +846,7 @@ mod tests {
             save_recordings: true,
             recording_retention_days: None,
             transcription_acceleration: "gpu".to_string(),
+            whisper_speed_mode: true,
             transcription_mode: "regular".to_string(),
         };
 

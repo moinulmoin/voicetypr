@@ -195,6 +195,7 @@ async fn route_once(
                 translate,
                 request.initial_prompt.as_deref(),
                 None,
+                None,
                 move || token.is_cancelled(),
             )
             .await

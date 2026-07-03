@@ -75,6 +75,9 @@ pub struct Settings {
     // Transcription hardware acceleration: "auto" | "gpu" | "cpu"
     #[serde(default = "default_transcription_acceleration")]
     pub transcription_acceleration: String,
+    // Whisper context-load speed optimization. Only applied on Apple-Silicon Metal.
+    #[serde(default)]
+    pub whisper_speed_mode: bool,
     // Product-facing streaming preview mode: "regular" | "live_preview"
     #[serde(default = "default_transcription_mode")]
     pub transcription_mode: String,
@@ -112,6 +115,7 @@ impl Default for Settings {
             save_recordings: false,              // Default to not saving recordings
             recording_retention_days: Some(30),  // Default cleanup period when saving is enabled
             transcription_acceleration: "auto".to_string(),
+            whisper_speed_mode: false,
             transcription_mode: TRANSCRIPTION_MODE_REGULAR.to_string(),
         }
     }
@@ -123,6 +127,14 @@ fn default_transcription_acceleration() -> String {
 
 fn default_transcription_mode() -> String {
     TRANSCRIPTION_MODE_REGULAR.to_string()
+}
+
+pub(crate) fn read_whisper_speed_mode(app: &AppHandle) -> bool {
+    app.store("settings")
+        .ok()
+        .and_then(|store| store.get("whisper_speed_mode"))
+        .and_then(|value| value.as_bool())
+        .unwrap_or(false)
 }
 
 pub fn normalize_transcription_mode(value: Option<&str>) -> String {
@@ -493,6 +505,10 @@ pub async fn get_settings(app: AppHandle) -> Result<Settings, String> {
                 .and_then(|v| v.as_str().map(|s| s.to_string()))
                 .as_deref(),
         ),
+        whisper_speed_mode: store
+            .get("whisper_speed_mode")
+            .and_then(|v| v.as_bool())
+            .unwrap_or_else(|| Settings::default().whisper_speed_mode),
         transcription_mode: normalize_transcription_mode(
             store
                 .get("transcription_mode")
@@ -715,6 +731,7 @@ pub async fn save_settings(app: AppHandle, settings: Settings) -> Result<(), Str
         "transcription_acceleration",
         json!(&normalized_transcription_acceleration),
     );
+    store.set("whisper_speed_mode", json!(settings.whisper_speed_mode));
     store.set("transcription_mode", json!(&normalized_transcription_mode));
 
     // Network sharing settings

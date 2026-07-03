@@ -380,9 +380,14 @@ impl RealTranscriptionContext {
                 .cache
                 .lock()
                 .map_err(|e| format!("Failed to acquire cache lock: {}", e))?;
+            let speed_mode = self
+                .app_handle
+                .as_ref()
+                .map(crate::commands::settings::read_whisper_speed_mode)
+                .unwrap_or(false);
 
             cache
-                .get_or_create(model_path)
+                .get_or_create(model_path, speed_mode)
                 .map_err(|e| format!("Failed to load Whisper model: {}", e))?
         };
 

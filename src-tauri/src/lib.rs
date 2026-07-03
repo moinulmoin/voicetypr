@@ -1143,7 +1143,8 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
                                 let preload_result = {
                                     let cache_state = app_handle.state::<AsyncMutex<TranscriberCache>>();
                                     let mut cache = cache_state.lock().await;
-                                    cache.get_or_create(&model_path).map(|_| ())
+                                    let speed_mode = crate::commands::settings::read_whisper_speed_mode(&app_handle);
+                                    cache.get_or_create(&model_path, speed_mode).map(|_| ())
                                 };
 
                                 match preload_result {
