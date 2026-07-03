@@ -2,9 +2,10 @@
 mod behavior_tests {
     use crate::ai::prompts::{
         build_enhancement_prompt, build_enhancement_prompt_for_transcript_language,
-        get_language_name, migrate_preset_str,
-        parse_enhancement_options_from_value, EnhancementOptions, EnhancementPreset,
+        get_language_name, migrate_preset_str, parse_enhancement_options_from_value,
+        EnhancementOptions, EnhancementPreset,
     };
+    use serde::Deserialize;
 
     const ALL_PRESETS: &[EnhancementPreset] = &[
         EnhancementPreset::PersonalDictation,
@@ -19,11 +20,78 @@ mod behavior_tests {
         EnhancementOptions { preset }
     }
 
+    #[derive(Debug, Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct PresetParityFixture {
+        migrations: Vec<MigrationCase>,
+        requires_ai_formatting: Vec<RequiresAiCase>,
+        defaults: Vec<DefaultCase>,
+    }
+
+    #[derive(Debug, Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct MigrationCase {
+        raw: String,
+        ai_enabled: bool,
+        expected: String,
+    }
+
+    #[derive(Debug, Deserialize)]
+    struct RequiresAiCase {
+        preset: String,
+        expected: bool,
+    }
+
+    #[derive(Debug, Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct DefaultCase {
+        ai_enabled: bool,
+        expected: String,
+    }
+
+    fn preset_from_fixture(value: &str, ai_enabled: bool) -> EnhancementPreset {
+        migrate_preset_str(value, ai_enabled)
+    }
+
     // All 6 presets build without panic.
     #[test]
     fn all_presets_build_without_panic() {
         for &preset in ALL_PRESETS {
             let _ = build_enhancement_prompt(None, &options(preset), None);
+        }
+    }
+
+    #[test]
+    fn shared_preset_parity_fixture_matches_rust_contract() {
+        let fixture: PresetParityFixture =
+            serde_json::from_str(include_str!("../../../tests/fixtures/preset-parity.json"))
+                .expect("preset parity fixture should be valid JSON");
+
+        for test_case in fixture.migrations {
+            assert_eq!(
+                migrate_preset_str(&test_case.raw, test_case.ai_enabled),
+                preset_from_fixture(&test_case.expected, test_case.ai_enabled),
+                "migration case {:?}",
+                test_case
+            );
+        }
+
+        for test_case in fixture.requires_ai_formatting {
+            assert_eq!(
+                preset_from_fixture(&test_case.preset, false).requires_ai_formatting(),
+                test_case.expected,
+                "requires-ai case {:?}",
+                test_case
+            );
+        }
+
+        for test_case in fixture.defaults {
+            assert_eq!(
+                EnhancementOptions::default_for_ai_enabled(test_case.ai_enabled).preset,
+                preset_from_fixture(&test_case.expected, test_case.ai_enabled),
+                "default case {:?}",
+                test_case
+            );
         }
     }
 
