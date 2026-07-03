@@ -55,6 +55,12 @@ pub struct EffectiveConfig {
     pub ai_effective: bool,
 }
 
+struct PipelineConfigInputs {
+    global_preset: EnhancementPreset,
+    final_text_language: String,
+    ai_state: PipelineAiState,
+}
+
 fn matching_app_formatting_preset(
     settings: &WritingSettings,
     active_app: Option<&ContextHint>,
@@ -102,15 +108,21 @@ pub fn resolve_pipeline_config(
     }
 }
 
-pub fn effective_pipeline_config(
+fn read_pipeline_config_inputs(
     app: &AppHandle,
     ai_enabled: bool,
-) -> Result<EffectiveConfig, String> {
-    let settings = load_writing_settings(app)?;
-    let should_capture_active_app = app_rules_need_active_app(&settings);
-    let active_app = capture_active_app_context(should_capture_active_app);
-
+) -> Result<PipelineConfigInputs, String> {
     let store = app.store("settings").map_err(|e| e.to_string())?;
+    let global_preset = store
+        .get("enhancement_options")
+        .map(|value| {
+            crate::ai::prompts::parse_enhancement_options_from_value(&value, ai_enabled)
+                .map(|options| options.preset)
+        })
+        .transpose()?
+        .unwrap_or_else(|| {
+            crate::ai::EnhancementOptions::default_for_ai_enabled(ai_enabled).preset
+        });
     let legacy_translate_to_english = store
         .get("translate_to_english")
         .and_then(|v| v.as_bool())
@@ -127,26 +139,33 @@ pub fn effective_pipeline_config(
         .and_then(|v| v.as_str().map(|s| s.to_string()));
     let final_text_language =
         normalize_final_text_language(stored_final_text_language.as_deref(), &transcription_task);
-    let global_preset = store
-        .get("enhancement_options")
-        .map(|value| {
-            crate::ai::prompts::parse_enhancement_options_from_value(&value, ai_enabled)
-                .map(|options| options.preset)
-        })
-        .transpose()?
-        .unwrap_or_else(|| {
-            crate::ai::EnhancementOptions::default_for_ai_enabled(ai_enabled).preset
-        });
+    let ai_state = PipelineAiState {
+        stored_ai_enabled: ai_enabled,
+        has_model_and_key: crate::commands::ai::has_ai_model_and_key(app)?,
+    };
+
+    Ok(PipelineConfigInputs {
+        global_preset,
+        final_text_language,
+        ai_state,
+    })
+}
+
+pub fn effective_pipeline_config(
+    app: &AppHandle,
+    ai_enabled: bool,
+) -> Result<EffectiveConfig, String> {
+    let settings = load_writing_settings(app)?;
+    let should_capture_active_app = app_rules_need_active_app(&settings);
+    let active_app = capture_active_app_context(should_capture_active_app);
+    let inputs = read_pipeline_config_inputs(app, ai_enabled)?;
 
     Ok(resolve_pipeline_config(
         &settings,
-        global_preset,
-        final_text_language,
+        inputs.global_preset,
+        inputs.final_text_language,
         active_app.as_ref(),
-        PipelineAiState {
-            stored_ai_enabled: ai_enabled,
-            has_model_and_key: crate::commands::ai::has_ai_model_and_key(app)?,
-        },
+        inputs.ai_state,
     ))
 }
 
@@ -164,49 +183,16 @@ async fn load_writing_profile(
     ai_enabled: bool,
     settings: &WritingSettings,
     active_app: Option<&ContextHint>,
-) -> Result<WritingProfile, String> {
-    let store = app.store("settings").map_err(|e| e.to_string())?;
-    let global_preset = store
-        .get("enhancement_options")
-        .map(|value| {
-            crate::ai::prompts::parse_enhancement_options_from_value(&value, ai_enabled)
-                .map(|options| options.preset)
-        })
-        .transpose()?
-        .unwrap_or_else(|| {
-            crate::ai::EnhancementOptions::default_for_ai_enabled(ai_enabled).preset
-        });
-    let legacy_translate_to_english = store
-        .get("translate_to_english")
-        .and_then(|v| v.as_bool())
-        .unwrap_or(false);
-    let stored_transcription_task = store
-        .get("transcription_task")
-        .and_then(|v| v.as_str().map(|s| s.to_string()));
-    let transcription_task = normalize_transcription_task(
-        stored_transcription_task.as_deref(),
-        legacy_translate_to_english,
-    );
-    let stored_final_text_language = store
-        .get("final_text_language")
-        .and_then(|v| v.as_str().map(|s| s.to_string()));
-    let normalized_final_text_language =
-        normalize_final_text_language(stored_final_text_language.as_deref(), &transcription_task);
-    let config = resolve_pipeline_config(
-        settings,
-        global_preset,
-        normalized_final_text_language,
-        active_app,
-        PipelineAiState {
-            stored_ai_enabled: ai_enabled,
-            has_model_and_key: crate::commands::ai::has_ai_model_and_key(app)?,
-        },
-    );
+) -> Result<EffectiveConfig, String> {
+    let inputs = read_pipeline_config_inputs(app, ai_enabled)?;
 
-    Ok(WritingProfile {
-        mode: config.preset,
-        final_text_language: config.final_text_language,
-    })
+    Ok(resolve_pipeline_config(
+        settings,
+        inputs.global_preset,
+        inputs.final_text_language,
+        active_app,
+        inputs.ai_state,
+    ))
 }
 
 pub(crate) fn normalize_language_scope(value: Option<&str>) -> Option<String> {
@@ -216,10 +202,7 @@ pub(crate) fn normalize_language_scope(value: Option<&str>) -> Option<String> {
     })
 }
 
-fn resolve_output_language(
-    profile: &WritingProfile,
-    transcription: &TranscriptionResult,
-) -> String {
+fn resolve_output_language(profile: &WritingProfile, transcription: &TranscriptionResult) -> String {
     if profile.final_text_language == FINAL_TEXT_LANGUAGE_SAME_AS_TRANSCRIPT {
         transcription
             .transcript_language
@@ -299,7 +282,7 @@ struct SmartFormattingRequest<'a> {
     text: &'a str,
     transcript_language: Option<String>,
     output_language: &'a mut String,
-    profile: &'a WritingProfile,
+    config: &'a EffectiveConfig,
     settings: &'a WritingSettings,
     needs_output_language_transform: bool,
     applied_operations: &'a mut Vec<AppliedWritingOperation>,
@@ -310,7 +293,7 @@ async fn run_smart_formatting(
     request: SmartFormattingRequest<'_>,
 ) -> Result<(String, u64), AiProviderError> {
     let options = crate::ai::EnhancementOptions {
-        preset: request.profile.mode,
+        preset: request.config.preset,
     };
     let ai_context =
         smart_formatting_ai_context(request.settings, request.transcript_language.as_deref());
@@ -340,10 +323,10 @@ async fn run_smart_formatting(
                     detail: if request.needs_output_language_transform {
                         format!(
                             "Translated/rewrote transcript to {} using {:?}",
-                            request.output_language, request.profile.mode
+                            request.output_language, request.config.preset
                         )
                     } else {
-                        format!("Applied {:?} cleanup", request.profile.mode)
+                        format!("Applied {:?} cleanup", request.config.preset)
                     },
                 });
             } else if request.needs_output_language_transform {
@@ -404,7 +387,7 @@ pub async fn process_transcription(
     let settings = load_writing_settings(&app).map_err(WritingError::Config)?;
     let should_capture_active_app = app_rules_need_active_app(&settings);
     let active_app = capture_active_app_context(should_capture_active_app);
-    let profile = load_writing_profile(&app, ai_enabled, &settings, active_app.as_ref())
+    let pipeline_config = load_writing_profile(&app, ai_enabled, &settings, active_app.as_ref())
         .await
         .map_err(WritingError::Config)?;
     let transcript_language = transcription.transcript_language.clone().or_else(|| {
@@ -412,7 +395,11 @@ pub async fn process_transcription(
             .task
             .fallback_transcript_language(transcription.spoken_language.as_deref())
     });
-    let mut output_language = resolve_output_language(&profile, &transcription);
+    let output_profile = WritingProfile {
+        mode: pipeline_config.preset,
+        final_text_language: pipeline_config.final_text_language.clone(),
+    };
+    let mut output_language = resolve_output_language(&output_profile, &transcription);
     let mut applied_operations = Vec::new();
     let mut warnings = Vec::new();
     let deterministic_start = Instant::now();
@@ -454,28 +441,17 @@ pub async fn process_transcription(
     // is left untouched (pass-through) rather than forcing a spurious error.
     let needs_output_language_transform = match transcript_language.as_deref() {
         Some(language) => language != output_language,
-        None => profile.final_text_language != FINAL_TEXT_LANGUAGE_SAME_AS_TRANSCRIPT,
+        None => pipeline_config.final_text_language != FINAL_TEXT_LANGUAGE_SAME_AS_TRANSCRIPT,
     };
 
-    let pipeline_config = resolve_pipeline_config(
-        &settings,
-        profile.mode,
-        profile.final_text_language.clone(),
-        active_app.as_ref(),
-        PipelineAiState {
-            stored_ai_enabled: ai_enabled,
-            has_model_and_key: crate::commands::ai::has_ai_model_and_key(&app)
-                .map_err(WritingError::Config)?,
-        },
-    );
-    let can_run_ai_formatting =
-        pipeline_config.ai_effective && profile.mode != EnhancementPreset::PersonalDictation;
+    let can_run_ai_formatting = pipeline_config.ai_effective
+        && pipeline_config.preset != EnhancementPreset::PersonalDictation;
 
     if needs_output_language_transform && !can_run_ai_formatting && !library_result.literal_locked {
         return Err(WritingError::OutputLanguageRequiresAi);
     }
 
-    if profile.mode.requires_ai_formatting()
+    if pipeline_config.preset.requires_ai_formatting()
         && !pipeline_config.ai_effective
         && !library_result.literal_locked
     {
@@ -506,7 +482,7 @@ pub async fn process_transcription(
                 text: &library_result.text,
                 transcript_language: transcript_language.clone(),
                 output_language: &mut output_language,
-                profile: &profile,
+                config: &pipeline_config,
                 settings: &settings,
                 needs_output_language_transform,
                 applied_operations: &mut applied_operations,
@@ -546,7 +522,7 @@ pub async fn process_transcription(
         ai_applied: should_run_ai && ai_error.is_none() && final_text != library_result.text,
         final_text,
         output_language,
-        mode: profile.mode,
+        mode: pipeline_config.preset,
         applied_operations,
         warnings,
         context_hint: active_app,
