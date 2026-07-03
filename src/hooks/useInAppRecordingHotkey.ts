@@ -248,6 +248,13 @@ export function useInAppRecordingHotkey(): void {
 
     const cancelHoldBeforeStart = (): void => {
       clearPendingHoldStart();
+      // The hold-start timer can fire between AltGr's synthesized Control
+      // keydown and the AltGraph keydown that reveals it was never a bare
+      // hold — if the start already dispatched, stop it or the recording
+      // sticks with no keyup owner.
+      if (holdStartDispatched) {
+        stopHold();
+      }
       activeHoldCode = null;
       holdStartDispatched = false;
     };

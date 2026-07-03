@@ -423,6 +423,35 @@ describe("useInAppRecordingHotkey", () => {
     expect(mockRecording.stopRecording).not.toHaveBeenCalled();
   });
 
+  it("stops a hold that already started when AltGr's second key arrives after the hold-start timer", async () => {
+    mockSettings.hotkey = "";
+    mockInvoke.mockResolvedValue({
+      bindings: [holdControlBinding],
+    });
+    await renderWithBareModifier();
+
+    fireModifierDown(editable);
+    // Race: the 0ms hold-start timer fires BETWEEN the synthesized Control
+    // keydown and the AltGraph keydown — the hold has already started.
+    await flushHoldStart();
+    expect(mockRecording.startRecording).toHaveBeenCalledTimes(1);
+    mockRecording.state = "recording";
+    editable.dispatchEvent(
+      markAltGraph(
+        new KeyboardEvent("keydown", {
+          bubbles: true,
+          cancelable: true,
+          code: "AltRight",
+          key: "AltGraph",
+          ctrlKey: true,
+          altKey: true,
+        }),
+      ),
+    );
+
+    expect(mockRecording.stopRecording).toHaveBeenCalledTimes(1);
+  });
+
   it("stops an active modifier_hold even when keyup still reports AltGraph", async () => {
     mockSettings.hotkey = "";
     mockInvoke.mockResolvedValue({
