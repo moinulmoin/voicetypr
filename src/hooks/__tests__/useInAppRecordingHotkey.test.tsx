@@ -443,10 +443,36 @@ describe("useInAppRecordingHotkey", () => {
     fireModifierUp(editable);
     expect(mockRecording.stopRecording).not.toHaveBeenCalled();
 
+    mockRecording.state = "recording";
     resolveStart?.();
     await Promise.resolve();
     await Promise.resolve();
     expect(mockRecording.stopRecording).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not issue the deferred stop when the in-flight start failed, preserving the error state", async () => {
+    mockSettings.hotkey = "";
+    mockInvoke.mockResolvedValue({
+      bindings: [holdControlBinding],
+    });
+    let resolveStart: (() => void) | undefined;
+    mockRecording.startRecording.mockImplementationOnce(
+      () => new Promise<void>((resolve) => { resolveStart = resolve; }),
+    );
+    await renderWithBareModifier();
+
+    fireModifierDown(editable);
+    await flushHoldStart();
+    fireModifierUp(editable);
+
+    // Start settles as a failure: useRecording swallows the rejection and
+    // flips state to 'error'. The deferred stop must NOT fire — it would
+    // reset the backend to Idle and wipe the error message.
+    mockRecording.state = "error";
+    resolveStart?.();
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(mockRecording.stopRecording).not.toHaveBeenCalled();
   });
 
   it("stops a hold that already started when AltGr's second key arrives after the hold-start timer", async () => {

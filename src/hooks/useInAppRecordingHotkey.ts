@@ -272,9 +272,15 @@ export function useInAppRecordingHotkey(): void {
       holdStartPromise = null;
       if (startInFlight) {
         log.debug("In-app bare-modifier hold — stop chained after in-flight start");
-        void startInFlight
-          .catch(() => {})
-          .then(() => latest.current.recording.stopRecording());
+        void startInFlight.catch(() => {}).then(() => {
+          // startRecording swallows failures (state flips to 'error'), so only
+          // stop when the start actually took — an unconditional stop would
+          // reset state to Idle and wipe the failed-start error message.
+          const settledState = latest.current.recording.state;
+          if (settledState === "recording" || settledState === "starting") {
+            void latest.current.recording.stopRecording();
+          }
+        });
         return;
       }
       if (state === "recording" || state === "starting" || activeHoldCode) {
