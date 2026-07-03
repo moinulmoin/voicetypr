@@ -1,4 +1,5 @@
 pub mod capabilities;
+pub(crate) mod engines;
 pub mod error;
 pub mod executor;
 pub mod request;

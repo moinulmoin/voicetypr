@@ -158,20 +158,6 @@ impl CloudProvider {
         }
     }
 
-    /// Transcribe `audio_path` using the stored API key for this provider.
-    pub async fn transcribe(
-        self,
-        app: &AppHandle,
-        audio_path: &Path,
-        language: Option<&str>,
-    ) -> Result<String, String> {
-        let key = crate::secure_store::secure_get(app, self.key_name())?
-            .ok_or_else(|| format!("{} API key not set", self.display_name()))?;
-        self.transcribe_typed(app, &key, audio_path, language)
-            .await
-            .map_err(|e| e.message(self.display_name()))
-    }
-
     pub(crate) async fn transcribe_typed(
         self,
         app: &AppHandle,

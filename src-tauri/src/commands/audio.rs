@@ -7,9 +7,8 @@ use crate::audio::silence_detector::SilenceDetectorEvent;
 use crate::audio::stream_tap::{StreamTapSink, StreamTapSinkFactory};
 use crate::commands::settings::{
     get_settings, normalize_final_text_language, normalize_speech_language_for_model,
-    normalize_transcription_task, read_whisper_speed_mode, recording_retention_days_from_store,
-    resolve_pill_indicator_mode, task_uses_translate_to_english, Settings,
-    TRANSCRIPTION_TASK_TRANSCRIBE,
+    normalize_transcription_task, recording_retention_days_from_store, resolve_pill_indicator_mode,
+    task_uses_translate_to_english, Settings, TRANSCRIPTION_TASK_TRANSCRIBE,
 };
 use crate::license::LicenseState;
 use crate::media::MediaPauseController;
@@ -40,15 +39,12 @@ use crate::transcription::stream::{
     StreamSessionGate, TranscriptionStreamEvent, TRANSCRIPTION_STREAM_EVENT,
 };
 use crate::transcription::{
-    TranscriptionJob, TranscriptionResult, TranscriptionSegment, TranscriptionSource,
-    TranscriptionWord,
+    TranscriptionJob, TranscriptionResult, TranscriptionSource, TranscriptionWord,
 };
 use crate::utils::logger::*;
 #[cfg(debug_assertions)]
 use crate::utils::system_monitor;
-use crate::whisper::cache::TranscriberCache;
 use crate::whisper::manager::WhisperManager;
-use crate::whisper::transcriber::WhisperTranscriptionOutput;
 use crate::{
     emit_to_all, emit_to_window, update_recording_state, AppState, RecordingMode, RecordingState,
 };
@@ -63,6 +59,8 @@ use std::time::{Duration, Instant};
 use tauri::async_runtime::{Mutex as AsyncMutex, RwLock as AsyncRwLock};
 use tauri_plugin_store::StoreExt;
 use uuid::Uuid;
+
+pub(crate) use crate::transcription::engines::*;
 
 pub(crate) const PTT_START_ABORTED_AFTER_RELEASE: &str =
     "PTT key released before recording could start";
@@ -1122,10 +1120,6 @@ fn build_transcription_job(
     )
 }
 
-fn seconds_to_duration_ms(duration_seconds: Option<f32>) -> Option<u64> {
-    duration_seconds.map(|seconds| (seconds.max(0.0) * 1000.0) as u64)
-}
-
 fn upload_timeout_error(source: TranscriptionSource) -> TranscriptionError {
     TranscriptionError::new(
         TranscriptionErrorCode::Timeout,
@@ -1224,19 +1218,6 @@ where
     })
 }
 
-pub(crate) fn transcription_watchdog_budget(audio_duration_ms: Option<u64>) -> std::time::Duration {
-    const MIN_SECONDS: u64 = 180;
-    const MAX_SECONDS: u64 = 30 * 60;
-
-    let budget_seconds = audio_duration_ms
-        .map(|duration_ms| duration_ms.saturating_add(999) / 1000)
-        .map(|duration_seconds| duration_seconds.saturating_mul(4).saturating_add(60))
-        .unwrap_or(MIN_SECONDS)
-        .clamp(MIN_SECONDS, MAX_SECONDS);
-
-    std::time::Duration::from_secs(budget_seconds)
-}
-
 /// Build a [`TranscriptionRequest`] for the desktop record→insert hot path from an
 /// already-resolved [`ActiveEngineSelection`]. The desktop owns recording history
 /// and cleanup, so it passes `CleanupPolicy::CallerOwns`; the executor enforces the
@@ -1312,20 +1293,6 @@ fn is_non_speech_transcript(raw: &str) -> bool {
             | "(music)"
             | "(noise)"
     )
-}
-
-pub(crate) fn parakeet_segments_to_transcription_segments(
-    segments: Vec<ParakeetSegment>,
-) -> Vec<TranscriptionSegment> {
-    segments
-        .into_iter()
-        .map(|segment| TranscriptionSegment {
-            text: segment.text,
-            start_ms: seconds_to_duration_ms(segment.start),
-            end_ms: seconds_to_duration_ms(segment.end),
-            speaker_id: None,
-        })
-        .collect()
 }
 
 fn build_parakeet_upload_transcription_result(
@@ -1583,26 +1550,6 @@ fn notify_ai_polish_failure(app: &AppHandle, error: &AiProviderError) {
     }
 }
 
-async fn save_ai_polish_fallback_history(
-    app: AppHandle,
-    transcription: &TranscriptionResult,
-    writing_result: &crate::writing::WritingResult,
-) -> Result<(), String> {
-    save_transcription_with_recording(
-        app.clone(),
-        writing_result.final_text.clone(),
-        transcription.model.clone(),
-        None,
-        Some(build_writing_history_metadata(
-            transcription,
-            Some(writing_result),
-        )),
-    )
-    .await?;
-    let _ = emit_to_window(&app, "main", "history-updated", ());
-    Ok(())
-}
-
 #[derive(Debug)]
 struct DesktopWritingSuccessPlan {
     final_text: String,
@@ -1662,44 +1609,8 @@ pub fn compile_remote_request_context(
     )
 }
 
-pub(crate) fn compile_parakeet_custom_vocabulary_for_transcription(
-    app: &AppHandle,
-    language: Option<&str>,
-) -> Vec<crate::parakeet::messages::ParakeetVocabularyTerm> {
-    let Ok(settings) = crate::writing::load_writing_settings(app) else {
-        return Vec::new();
-    };
-
-    if settings.custom_words.is_empty() {
-        return Vec::new();
-    }
-
-    crate::writing::compile_parakeet_custom_vocabulary(&settings, language)
-}
-
 fn compile_whisper_initial_prompt(app: &AppHandle, language: Option<&str>) -> Option<String> {
     compile_remote_request_context(app, language)
-}
-
-#[cfg(target_os = "windows")]
-const DEFAULT_TRANSCRIPTION_ACCELERATION: &str = "auto";
-#[cfg(target_os = "windows")]
-fn normalize_transcription_acceleration(value: Option<&str>) -> String {
-    match value {
-        Some("cpu") => "cpu".to_string(),
-        Some("gpu") => "gpu".to_string(),
-        _ => DEFAULT_TRANSCRIPTION_ACCELERATION.to_string(),
-    }
-}
-#[cfg(target_os = "windows")]
-async fn transcription_acceleration_mode(app: &AppHandle) -> String {
-    if let Ok(store) = app.store("settings") {
-        let value = store
-            .get("transcription_acceleration")
-            .and_then(|v| v.as_str().map(str::to_owned));
-        return normalize_transcription_acceleration(value.as_deref());
-    }
-    DEFAULT_TRANSCRIPTION_ACCELERATION.to_string()
 }
 
 /// Best-effort warm of the Windows Vulkan sidecar when a Whisper model is preloaded.
@@ -1723,117 +1634,6 @@ pub(crate) async fn warm_whisper_gpu_sidecar_on_model_preload(
         let _ = (app, model_path);
         false
     }
-}
-
-// TODO(arch-review): collapse into a request struct when the whisper dispatch
-// seam is restructured (audio_ctx/speed-mode params pushed this over 8 args).
-#[allow(clippy::too_many_arguments)]
-pub(crate) async fn transcribe_whisper_with_acceleration<F>(
-    app: &AppHandle,
-    model_path: &Path,
-    audio_path: &Path,
-    language: Option<&str>,
-    translate: bool,
-    initial_prompt: Option<&str>,
-    audio_ctx: Option<i32>,
-    speed_mode_override: Option<bool>,
-    should_cancel: F,
-) -> Result<WhisperTranscriptionOutput, String>
-where
-    F: Fn() -> bool + Clone + Send + 'static,
-{
-    let speed_mode = speed_mode_override.unwrap_or_else(|| read_whisper_speed_mode(app));
-
-    #[cfg(target_os = "windows")]
-    let mode = transcription_acceleration_mode(app).await;
-
-    #[cfg(target_os = "windows")]
-    let mut preserve_gpu_status = false;
-
-    #[cfg(target_os = "windows")]
-    if mode != "cpu" && audio_ctx.is_none() {
-        if should_cancel() {
-            return Err("Transcription cancelled".to_string());
-        }
-
-        let gpu_client = app.state::<crate::whisper::gpu_sidecar::GpuSidecarClient>();
-        let status = gpu_client.status().await;
-        let should_try_gpu = mode == "gpu" || status.gpu_available != Some(false);
-
-        if should_try_gpu {
-            let gpu_result = gpu_client
-                .transcribe(
-                    app,
-                    crate::whisper::gpu_sidecar::GpuTranscribeRequest {
-                        model_path,
-                        audio_path,
-                        language,
-                        translate,
-                        initial_prompt,
-                        mode: &mode,
-                    },
-                )
-                .await;
-
-            match gpu_result {
-                Ok(output) => return Ok(output),
-                Err(error)
-                    if error == "Transcription cancelled"
-                        || error == crate::whisper::gpu_sidecar::SIDECAR_ABORT_ERROR =>
-                {
-                    // User cancel / watchdog abort: not a GPU fault. Surface the
-                    // canonical cancellation — no CPU re-run, no GPU-status change.
-                    gpu_client.abort_active_process().await;
-                    return Err("Transcription cancelled".to_string());
-                }
-                Err(error) => {
-                    preserve_gpu_status = true;
-                    log::warn!("GPU sidecar failed, falling back to CPU: {error}");
-                    if mode == "gpu" {
-                        pill_toast(app, "GPU unavailable, using CPU", 4000);
-                    }
-                }
-            }
-        } else {
-            preserve_gpu_status = true;
-            log::info!("Skipping Vulkan sidecar in auto mode after previous GPU failure");
-        }
-    }
-
-    let transcriber = {
-        let cache_state = app.state::<AsyncMutex<TranscriberCache>>();
-        let mut cache = cache_state.lock().await;
-        cache.get_or_create(model_path, speed_mode)?
-    };
-
-    let audio_path = audio_path.to_path_buf();
-    let language = language.map(str::to_owned);
-    let initial_prompt = initial_prompt.map(str::to_owned);
-    let should_cancel_for_decode = should_cancel.clone();
-    let result = tokio::task::spawn_blocking(move || {
-        transcriber.transcribe_with_metadata_with_prompt(
-            &audio_path,
-            language.as_deref(),
-            translate,
-            initial_prompt.as_deref(),
-            audio_ctx,
-            should_cancel_for_decode,
-        )
-    })
-    .await
-    .map_err(|error| format!("Whisper transcription worker failed: {error}"))?;
-
-    #[cfg(target_os = "windows")]
-    {
-        if result.is_ok() && !preserve_gpu_status {
-            let gpu_client = app.state::<crate::whisper::gpu_sidecar::GpuSidecarClient>();
-            gpu_client
-                .set_cpu_status(&mode, "Last transcription used CPU mode.")
-                .await;
-        }
-    }
-
-    result
 }
 
 fn build_remote_upload_transcription_request(
@@ -1875,12 +1675,12 @@ mod tests {
         is_ai_auth_error, is_non_speech_transcript, persist_if_current,
         plan_desktop_writing_success, recording_license_state, remote_server_error_pill_message,
         run_upload_cloud_with_timeout, run_upload_local_engine_with_timeout,
-        set_in_flight_transcription_audio, should_hide_pill_when_idle, should_use_active_remote,
-        silence_event_runs_in_state, silence_timeout_disposition, stop_should_reset_to_idle,
+        set_in_flight_transcription_audio, should_hide_pill_when_idle, silence_event_runs_in_state,
+        silence_timeout_disposition, stop_should_reset_to_idle,
         sync_retranscription_failure_metadata, take_in_flight_transcription_audio,
-        toast_clear_is_current, transcription_watchdog_budget, LocalFailureKind,
-        NormalizedTempFile, PillToastEventPayload, RecordingLicenseState, SilenceDetectorEvent,
-        SilenceTimeoutDisposition, StopInFlightGuard, TranscriptionFailure, TranscriptionStatus,
+        toast_clear_is_current, LocalFailureKind, NormalizedTempFile, PillToastEventPayload,
+        RecordingLicenseState, SilenceDetectorEvent, SilenceTimeoutDisposition, StopInFlightGuard,
+        TranscriptionFailure, TranscriptionStatus,
     };
     use crate::cloud_stt::CloudProvider;
     use crate::commands::license::CachedLicense;
@@ -2001,42 +1801,6 @@ mod tests {
         let (without_context, _) =
             build_remote_upload_transcription_request(audio_path, vec![1, 2, 3], None, None);
         assert!(without_context.context.is_none());
-    }
-
-    #[test]
-    fn transcription_watchdog_budget_defaults_to_minimum_for_unknown_duration() {
-        assert_eq!(
-            transcription_watchdog_budget(None),
-            std::time::Duration::from_secs(180)
-        );
-    }
-
-    #[test]
-    fn transcription_watchdog_budget_floors_to_minimum_for_short_audio() {
-        assert_eq!(
-            transcription_watchdog_budget(Some(10_000)),
-            std::time::Duration::from_secs(180)
-        );
-    }
-
-    #[test]
-    fn transcription_watchdog_budget_scales_duration_and_adds_sixty_seconds() {
-        assert_eq!(
-            transcription_watchdog_budget(Some(60_000)),
-            std::time::Duration::from_secs(300)
-        );
-    }
-
-    #[test]
-    fn transcription_watchdog_budget_ceilings_partial_seconds_and_clamps_maximum() {
-        assert_eq!(
-            transcription_watchdog_budget(Some(60_001)),
-            std::time::Duration::from_secs(304)
-        );
-        assert_eq!(
-            transcription_watchdog_budget(Some(600_000)),
-            std::time::Duration::from_secs(1800)
-        );
     }
 
     #[test]
@@ -2597,18 +2361,6 @@ mod tests {
         }
 
         assert!(!path.exists());
-    }
-
-    #[test]
-    fn explicit_engine_hint_bypasses_active_remote() {
-        assert!(!should_use_active_remote(Some("whisper")));
-        assert!(!should_use_active_remote(Some("parakeet")));
-        assert!(!should_use_active_remote(Some("soniox")));
-    }
-
-    #[test]
-    fn missing_engine_hint_allows_active_remote() {
-        assert!(should_use_active_remote(None));
     }
 
     #[test]
@@ -3663,48 +3415,6 @@ pub async fn open_recordings_folder(app: AppHandle) -> Result<(), String> {
     Ok(())
 }
 
-#[derive(Clone)]
-pub(crate) enum ActiveEngineSelection {
-    Whisper {
-        model_name: String,
-        model_path: PathBuf,
-    },
-    Parakeet {
-        model_name: String,
-    },
-    Cloud {
-        provider: crate::cloud_stt::CloudProvider,
-        model_name: String,
-    },
-    Remote {
-        server_id: String,
-        server_name: String,
-        host: String,
-        port: u16,
-        password: Option<String>,
-    },
-}
-
-impl ActiveEngineSelection {
-    pub(crate) fn engine_name(&self) -> &'static str {
-        match self {
-            ActiveEngineSelection::Whisper { .. } => "whisper",
-            ActiveEngineSelection::Parakeet { .. } => "parakeet",
-            ActiveEngineSelection::Cloud { provider, .. } => provider.id(),
-            ActiveEngineSelection::Remote { .. } => "remote",
-        }
-    }
-
-    pub(crate) fn model_name(&self) -> &str {
-        match self {
-            ActiveEngineSelection::Whisper { model_name, .. } => model_name,
-            ActiveEngineSelection::Parakeet { model_name } => model_name,
-            ActiveEngineSelection::Cloud { model_name, .. } => model_name,
-            ActiveEngineSelection::Remote { server_name, .. } => server_name,
-        }
-    }
-}
-
 async fn abort_due_to_missing_model(
     app: &AppHandle,
     audio_path: &Path,
@@ -3745,140 +3455,6 @@ async fn abort_due_to_missing_model(
     update_recording_state(app, RecordingState::Idle, None);
 
     Err(log_message.to_string())
-}
-
-fn should_use_active_remote(engine_hint: Option<&str>) -> bool {
-    engine_hint.is_none()
-}
-
-pub(crate) async fn resolve_engine_for_model(
-    app: &AppHandle,
-    model_name: &str,
-    engine_hint: Option<&str>,
-) -> Result<ActiveEngineSelection, String> {
-    let remote_settings = app.state::<AsyncMutex<RemoteSettings>>();
-    let active_remote = {
-        let settings = remote_settings.lock().await;
-        settings.get_active_connection().cloned()
-    };
-
-    if should_use_active_remote(engine_hint) {
-        if let Some(remote_conn) = active_remote {
-            if matches!(
-                remote_conn.status,
-                crate::remote::settings::ConnectionStatus::Online
-            ) {
-                return Ok(ActiveEngineSelection::Remote {
-                    server_id: remote_conn.id.clone(),
-                    server_name: remote_conn.display_name(),
-                    host: remote_conn.host,
-                    port: remote_conn.port,
-                    password: remote_conn.password,
-                });
-            }
-
-            return Err(
-                "Selected remote unavailable. Reconnect or choose another source.".to_string(),
-            );
-        }
-    }
-
-    let whisper_state = app.state::<AsyncRwLock<WhisperManager>>();
-    let parakeet_manager = app.state::<ParakeetManager>();
-
-    match engine_hint.map(|e| e.to_lowercase()) {
-        Some(ref engine) if crate::cloud_stt::CloudProvider::from_id(engine).is_some() => {
-            let provider = crate::cloud_stt::CloudProvider::from_id(engine).unwrap();
-            if crate::secure_store::secure_has(app, provider.key_name()).unwrap_or(false) {
-                Ok(ActiveEngineSelection::Cloud {
-                    provider,
-                    model_name: model_name.to_string(),
-                })
-            } else {
-                Err(format!(
-                    "{} key not configured. Please configure it in Models.",
-                    provider.display_name()
-                ))
-            }
-        }
-        Some(ref engine) if engine == "parakeet" => {
-            let status = parakeet_manager
-                .list_models()
-                .into_iter()
-                .find(|m| m.name == model_name);
-
-            match status {
-                Some(info) if info.downloaded => Ok(ActiveEngineSelection::Parakeet {
-                    model_name: model_name.to_string(),
-                }),
-                Some(_) => Err(format!(
-                    "Parakeet model '{}' is not downloaded. Please download it first.",
-                    model_name
-                )),
-                None => Err(format!(
-                    "Parakeet model '{}' not found in registry.",
-                    model_name
-                )),
-            }
-        }
-        Some(ref engine) if engine == "whisper" || engine == "whisper.cpp" => {
-            let path = whisper_state
-                .read()
-                .await
-                .get_model_path(model_name)
-                .ok_or_else(|| format!("Whisper model '{}' not found", model_name))?;
-
-            Ok(ActiveEngineSelection::Whisper {
-                model_name: model_name.to_string(),
-                model_path: path,
-            })
-        }
-        Some(engine) => Err(format!("Unknown model engine '{}'.", engine)),
-        None => {
-            if let Some(provider) = crate::cloud_stt::CloudProvider::from_id(model_name) {
-                if crate::secure_store::secure_has(app, provider.key_name()).unwrap_or(false) {
-                    return Ok(ActiveEngineSelection::Cloud {
-                        provider,
-                        model_name: model_name.to_string(),
-                    });
-                } else {
-                    return Err(format!(
-                        "{} key not configured. Please configure it in Models.",
-                        provider.display_name()
-                    ));
-                }
-            }
-            if let Some(path) = whisper_state.read().await.get_model_path(model_name) {
-                return Ok(ActiveEngineSelection::Whisper {
-                    model_name: model_name.to_string(),
-                    model_path: path,
-                });
-            }
-
-            let status = parakeet_manager
-                .list_models()
-                .into_iter()
-                .find(|m| m.name == model_name);
-
-            if let Some(info) = status {
-                if info.downloaded {
-                    return Ok(ActiveEngineSelection::Parakeet {
-                        model_name: model_name.to_string(),
-                    });
-                } else {
-                    return Err(format!(
-                        "Model '{}' is a Parakeet model but not downloaded. Please download it first.",
-                        model_name
-                    ));
-                }
-            }
-
-            Err(format!(
-                "Model '{}' not found in Whisper or Parakeet registries",
-                model_name
-            ))
-        }
-    }
 }
 
 /// Helper function to invalidate recording config cache when settings change
@@ -7338,263 +6914,6 @@ pub async fn diarize_audio_file(
             other
         )),
     }
-}
-
-#[tauri::command]
-pub async fn transcribe_audio(
-    app: AppHandle,
-    audio_data: Vec<u8>,
-    model_name: String,
-    model_engine: Option<String>,
-) -> Result<String, String> {
-    log::info!(
-        "[UPLOAD] transcribe_audio (bytes) START | bytes={}, model_name={}, engine_hint={:?}",
-        audio_data.len(),
-        model_name,
-        model_engine
-    );
-    // Validate requirements (includes license check)
-    validate_recording_requirements(&app).await?;
-
-    // Save audio data to app data directory
-    let recordings_dir = app
-        .path()
-        .app_data_dir()
-        .map_err(|e| e.to_string())?
-        .join("recordings");
-
-    // Ensure directory exists
-    std::fs::create_dir_all(&recordings_dir)
-        .map_err(|e| format!("Failed to create recordings directory: {}", e))?;
-
-    let temp_path = recordings_dir.join("temp_audio.wav");
-
-    std::fs::write(&temp_path, audio_data).map_err(|e| e.to_string())?;
-
-    let engine_selection =
-        resolve_engine_for_model(&app, &model_name, model_engine.as_deref()).await?;
-
-    // Get language and translation settings
-    let store = app.store("settings").map_err(|e| e.to_string())?;
-    let legacy_speech_language = store
-        .get("language")
-        .and_then(|v| v.as_str().map(|s| s.to_string()))
-        .unwrap_or_else(|| "en".to_string());
-    let legacy_translate_to_english = store
-        .get("translate_to_english")
-        .and_then(|v| v.as_bool())
-        .unwrap_or(false);
-    let language = store
-        .get("speech_language")
-        .and_then(|v| v.as_str().map(|s| s.to_string()))
-        .unwrap_or(legacy_speech_language);
-    let ai_enabled = store
-        .get("ai_enabled")
-        .and_then(|v| v.as_bool())
-        .unwrap_or(false);
-    let stored_transcription_task = store
-        .get("transcription_task")
-        .and_then(|v| v.as_str().map(|s| s.to_string()));
-    let transcription_task = resolve_transcription_task_for_audio(
-        &app,
-        ai_enabled,
-        legacy_translate_to_english,
-        stored_transcription_task.as_deref(),
-    )?;
-    let translate_to_english = task_uses_translate_to_english(&transcription_task);
-
-    let language = normalize_speech_language_for_model(
-        engine_selection.engine_name(),
-        engine_selection.model_name(),
-        &language,
-    );
-
-    log::info!(
-        "[LANGUAGE] transcribe_audio using language: {}, transcription_task={}, translate: {}",
-        language,
-        transcription_task,
-        translate_to_english
-    );
-
-    let transcription_job = build_transcription_job(
-        TranscriptionSource::AudioBytes,
-        engine_selection.engine_name().to_string(),
-        engine_selection.model_name().to_string(),
-        Some(language.clone()),
-        translate_to_english,
-    );
-
-    let transcription_result = match engine_selection {
-        ActiveEngineSelection::Whisper { model_path, .. } => {
-            let initial_prompt = compile_whisper_initial_prompt(&app, Some(language.as_str()));
-            let output = transcribe_whisper_with_acceleration(
-                &app,
-                &model_path,
-                &temp_path,
-                Some(language.as_str()),
-                translate_to_english,
-                initial_prompt.as_deref(),
-                None,
-                None,
-                || false,
-            )
-            .await?;
-            TranscriptionResult::new(&transcription_job, output.raw_text)
-                .with_transcript_language(output.transcript_language)
-                .with_segments(output.segments)
-                .with_audio_duration_ms(Some(output.audio_duration_ms))
-                .with_processing_duration_ms(Some(output.processing_duration_ms))
-        }
-        ActiveEngineSelection::Parakeet { model_name } => {
-            let parakeet_manager = app.state::<ParakeetManager>();
-
-            parakeet_manager
-                .load_model(&app, &model_name)
-                .await
-                .map_err(|e| format!("Failed to load Parakeet model: {}", e))?;
-
-            let custom_vocabulary =
-                compile_parakeet_custom_vocabulary_for_transcription(&app, Some(&language));
-
-            match parakeet_manager
-                .transcribe_with_custom_vocabulary(
-                    &app,
-                    &model_name,
-                    temp_path.clone(),
-                    ParakeetTranscriptionOptions {
-                        language: Some(language.clone()),
-                        translate: translate_to_english,
-                        custom_vocabulary,
-                        cancel_flag: None,
-                    },
-                )
-                .await
-            {
-                Ok(ParakeetResponse::Transcription {
-                    text,
-                    segments,
-                    language,
-                    duration,
-                }) => TranscriptionResult::new(&transcription_job, text)
-                    .with_transcript_language(language)
-                    .with_segments(parakeet_segments_to_transcription_segments(segments))
-                    .with_audio_duration_ms(seconds_to_duration_ms(duration)),
-                Ok(other) => return Err(format!("Unexpected Parakeet response: {:?}", other)),
-                Err(err) => return Err(format!("Parakeet transcription failed: {}", err)),
-            }
-        }
-        ActiveEngineSelection::Cloud { provider, .. } => {
-            let text = provider
-                .transcribe(&app, &temp_path, Some(&language))
-                .await?;
-            let cloud_job = build_transcription_job(
-                TranscriptionSource::AudioBytes,
-                transcription_job.engine.clone(),
-                transcription_job.model.clone(),
-                transcription_job.spoken_language.clone(),
-                false,
-            );
-            TranscriptionResult::new(&cloud_job, text)
-        }
-        ActiveEngineSelection::Remote {
-            server_id,
-            server_name,
-            host,
-            port,
-            password,
-            ..
-        } => {
-            // Normalize to Whisper contract (16k mono s16 WAV) for remote transcription
-            log::debug!("[CLIPBOARD] Normalizing to Whisper WAV for remote transcription...");
-            let normalized_file = NormalizedTempFile::new({
-                let ts = chrono::Local::now().format("%Y%m%d_%H%M%S");
-                let out_path = recordings_dir.join(format!("normalized_clipboard_{}.wav", ts));
-                crate::ffmpeg::normalize_streaming(&app, &temp_path, &out_path)
-                    .await
-                    .map_err(|e| format!("Audio normalization (ffmpeg) failed: {}", e))?;
-                out_path
-            });
-            log::info!("[CLIPBOARD] Normalized WAV at {:?}", normalized_file.path());
-
-            log::info!(
-                "🌐 [Remote Clipboard] Starting transcription to '{}' ({}:{})",
-                server_name,
-                host,
-                port
-            );
-
-            // Read the normalized audio file
-            let audio_data = std::fs::read(normalized_file.path())
-                .map_err(|e| format!("Failed to read audio file: {}", e))?;
-
-            let audio_size_kb = audio_data.len() as f64 / 1024.0;
-            log::info!(
-                "🌐 [Remote Clipboard] Sending {:.1} KB audio to '{}'",
-                audio_size_kb,
-                server_name
-            );
-
-            // Create HTTP client connection
-            let server_conn = RemoteServerConnection::new(host.clone(), port, password.clone());
-
-            let request_context = crate::commands::remote::resolve_remote_request_context(
-                &app,
-                &server_id,
-                transcription_job.spoken_language.as_deref(),
-            )
-            .await;
-
-            let (request, timeout_ms) = build_remote_upload_transcription_request(
-                normalized_file.path(),
-                audio_data,
-                Some(&transcription_job),
-                request_context,
-            );
-
-            let response = client::transcribe_audio(&server_conn, request, timeout_ms)
-                .await
-                .map_err(|e| {
-                    log::warn!(
-                        "🌐 [Remote Clipboard] Remote transcription FAILED to '{}': {}",
-                        server_name,
-                        e
-                    );
-                    e.to_string()
-                })?;
-
-            log::info!(
-                "🌐 [Remote Clipboard] Transcription COMPLETED from '{}': {} chars received",
-                server_name,
-                response.text.len()
-            );
-
-            build_remote_transcription_result(&transcription_job, response)
-        }
-    };
-
-    // Clean up
-    if let Err(e) = std::fs::remove_file(&temp_path) {
-        log::warn!("Failed to remove test audio file: {}", e);
-    }
-
-    let ai_enabled = load_ai_enabled(&app)?;
-    let writing_result = crate::writing::process_transcription(
-        app.clone(),
-        transcription_result.clone(),
-        ai_enabled,
-    )
-    .await
-    .map_err(|e| e.user_message())?;
-    if let Some(error) = writing_result.ai_error.as_ref() {
-        log::warn!(
-            "AI polish failed with {}; returning and saving deterministic test transcription text",
-            ai_failure_category(error)
-        );
-        notify_ai_polish_failure(&app, error);
-        save_ai_polish_fallback_history(app.clone(), &transcription_result, &writing_result)
-            .await?;
-    }
-    Ok(writing_result.final_text)
 }
 
 #[tauri::command]

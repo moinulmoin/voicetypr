@@ -1355,7 +1355,6 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             download_parakeet_vocabulary_model,
             preload_model,
             verify_model,
-            transcribe_audio,
             transcribe_audio_file,
             diarize_audio_file,
             get_settings,
