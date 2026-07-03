@@ -101,9 +101,10 @@ struct TranscribeArgs {
     /// Override Whisper audio context for this transcription run. Only applies when present.
     #[arg(long)]
     audio_ctx: Option<i32>,
-    /// Enable Whisper speed mode for this transcription run without changing app settings.
+    /// Override whisper speed mode (Metal flash-attention) for this run.
+    /// Absent => fall back to the app setting; `--speed-mode true|false` forces it.
     #[arg(long)]
-    speed_mode: bool,
+    speed_mode: Option<bool>,
     /// Transcribe via a remote Voicetypr server given as host:port (e.g. 192.168.1.10:47842) instead of locally.
     #[arg(long)]
     server: Option<String>,
@@ -443,7 +444,7 @@ async fn run_transcribe(
             engine.clone(),
             args.language.clone(),
             args.audio_ctx,
-            Some(args.speed_mode),
+            args.speed_mode,
         )
         .await?;
         json!({ "text": t.text, "words": t.words, "metadata": t.metadata, "model": model, "engine": engine })
