@@ -451,6 +451,30 @@ describe("useInAppRecordingHotkey", () => {
     expect(mockRecording.stopRecording).toHaveBeenCalledTimes(1);
   });
 
+  it("does not issue the deferred stop when the start was a redundant no-op on a recording it does not own", async () => {
+    mockSettings.hotkey = "";
+    mockInvoke.mockResolvedValue({
+      bindings: [holdControlBinding],
+    });
+    let resolveStart: ((started: boolean) => void) | undefined;
+    mockRecording.startRecording.mockImplementationOnce(
+      () => new Promise<boolean>((resolve) => { resolveStart = resolve; }),
+    );
+    await renderWithBareModifier();
+
+    fireModifierDown(editable);
+    await flushHoldStart();
+    fireModifierUp(editable);
+
+    // Backend reports false: a recording was already starting/active (e.g. the
+    // native hotkey path won the race), so this hold owns nothing — stopping
+    // would kill someone else's dictation mid-sentence.
+    resolveStart?.(false);
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(mockRecording.stopRecording).not.toHaveBeenCalled();
+  });
+
   it("does not issue the deferred stop when the in-flight start failed, preserving the error state", async () => {
     mockSettings.hotkey = "";
     mockInvoke.mockResolvedValue({

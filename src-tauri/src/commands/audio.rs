@@ -3964,10 +3964,14 @@ pub(crate) fn ptt_key_released(app_state: &AppState) -> bool {
 }
 
 #[tauri::command]
+/// Returns `true` when THIS call started the recording, `false` when it was a
+/// redundant no-op on an already starting/active recording (idempotent
+/// fast-path). Callers that pair a later stop with their own start (the in-app
+/// bare-modifier hold) must key on this — a bare Ok never proved ownership.
 pub async fn start_recording(
     app: AppHandle,
     state: State<'_, RecorderState>,
-) -> Result<(), String> {
+) -> Result<bool, String> {
     let recording_start = Instant::now();
 
     log_start("RECORDING_START");
@@ -4053,7 +4057,7 @@ pub async fn start_recording(
                 "start_recording: already {:?}; treating redundant start as no-op",
                 live_state
             );
-            return Ok(());
+            return Ok(false);
         }
     }
 
@@ -4679,7 +4683,7 @@ pub async fn start_recording(
 
     crate::trigger::engine_host::rebuild_engine_bindings(&app);
 
-    Ok(())
+    Ok(true)
 }
 
 #[tauri::command]

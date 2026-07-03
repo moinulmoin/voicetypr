@@ -111,8 +111,12 @@ export function useRecording(): UseRecordingReturn {
   const startRecording = useCallback(async (): Promise<boolean> => {
     try {
       log.debug('[Recording Hook] Invoking start_recording...');
-      await invoke('start_recording');
-      return true;
+      // Backend reports ownership: true = this call started the recording,
+      // false = redundant no-op on an already-active recording. A hold that
+      // pairs its stop with this start must never stop a recording it did
+      // not create.
+      const started = await invoke<boolean>('start_recording');
+      return started === true;
     } catch (err) {
       log.error('[Recording Hook] Failed to start recording:', err);
       setState('error');
