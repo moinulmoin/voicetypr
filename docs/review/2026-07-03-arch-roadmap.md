@@ -207,3 +207,29 @@ different risk/value:
 Proceed to either plan 043 (the cloud-streaming feature) or the lower-risk Wave 3/4
 refactors, whichever the owner prefers. Anything touching the live-streaming transport
 carries a device-smoke verification ceiling the sandbox can't clear.
+
+---
+
+## 8. NEW discovered issue (2026-07-04, found via the #16-full CLI A/B)
+
+**#28 · ggml-metal teardown assert crashes the process on exit (pre-existing, NOT from any slice).**
+The whisper CLI (and likely the app on quit) aborts on process exit with
+`ggml_metal_device_free → GGML_ASSERT([rsets->data count] == 0) failed` (SIGABRT/134),
+AFTER the transcription completes and correct output is produced. Confirmed pre-existing:
+the integration-HEAD baseline binary crashes identically to the #16-full binary (3/3 runs
+each). Backtrace cites the known ggml-metal issue (github.com/ggml-org/llama.cpp/pull/17869).
+
+- **Impact:** (a) the perf-harness captures CLI `--json` via stdout redirection, and the
+  exit-abort flakily truncates the buffered stdout flush → the sporadic empty/SKIPPED
+  harness rows seen throughout the campaign. (b) The app process likely hits the same
+  assert on quit (non-fatal to the user but a dirty exit / crash-reporter noise).
+- **Likely fix:** ensure the whisper `WhisperContext` (and its Metal device) is explicitly
+  dropped before process exit rather than during C++ static destructor `__cxa_finalize`
+  (the assert fires because the Metal device is freed while resource sets are still live at
+  atexit). For the CLI: drop the TranscriberCache/context before returning from the
+  transcribe subcommand. For the app: drop on the shutdown/exit hook. OR bump
+  whisper-rs-sys past the ggml fix once released.
+- **Priority:** Medium — no user-facing data loss (transcription completes first), but it
+  dirties CLI/harness reliability and app-quit. A contained fix (explicit context drop
+  before exit). Verify by: CLI transcribe returns exit 0 and file-redirected `--json` is
+  never truncated across 10 runs.
