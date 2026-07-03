@@ -89,6 +89,14 @@ button {
   justify-content: center;
 }
 
+.pill-surface[hidden],
+.pill-dots[hidden],
+.pill-bars[hidden],
+.pill-status[hidden],
+.pill-preview[hidden] {
+  display: none;
+}
+
 .pill-dots {
   gap: 5px;
 }
@@ -156,10 +164,6 @@ button {
   white-space: nowrap;
   direction: rtl;
   mask-image: linear-gradient(to right, transparent, black 18px);
-}
-
-.pill-preview[hidden] {
-  display: none;
 }
 
 .pill-committed,

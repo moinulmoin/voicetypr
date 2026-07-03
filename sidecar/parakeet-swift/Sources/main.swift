@@ -730,7 +730,7 @@ struct ParakeetSidecar {
 
     static func isHeavyCommandBlockedDuringStream(_ commandType: String?) -> Bool {
         switch commandType {
-        case "load_model", "download_model", "unload_model", "delete_model", "transcribe", "download_ctc_models", "download_eou_model", "warmup_eou", "diarize", "start_stream":
+        case "load_model", "download_model", "unload_model", "delete_model", "transcribe", "download_ctc_models", "download_eou_model", "warmup", "warmup_eou", "diarize", "start_stream":
             return true
         default:
             return false
@@ -991,7 +991,9 @@ struct ParakeetSidecar {
             case "eou":
                 let chunkMs = command["chunk_ms"] as? Int ?? 320
                 let manager = try await loadCachedEouManager(chunkMs: chunkMs)
-                await manager.reset()
+                try await withLibraryStdoutRedirected {
+                    await manager.reset()
+                }
                 let session = ActiveStreamSession(
                     engine: .eou(manager),
                     sampleRate: sampleRate,
@@ -1001,13 +1003,12 @@ struct ParakeetSidecar {
                 await manager.setPartialCallback { transcript in
                     Task { @MainActor in
                         guard let active = activeStreamSession else { return }
-                        active.latestPartial = transcript
-                        let tentative: String
-                        if transcript.hasPrefix(active.committedPrefix) {
-                            tentative = String(transcript.dropFirst(active.committedPrefix.count))
-                        } else {
-                            tentative = transcript
+                        guard transcript.hasPrefix(active.committedPrefix) else {
+                            log("⚠️ Dropping non-monotonic EOU tentative stream text")
+                            return
                         }
+                        active.latestPartial = transcript
+                        let tentative = String(transcript.dropFirst(active.committedPrefix.count))
                         sendResponse(
                             StreamPartialResponse(text: tentative, isConfirmed: false, confidence: 0.0),
                             encoder: encoder
@@ -1017,6 +1018,10 @@ struct ParakeetSidecar {
                 await manager.setEouCallback { transcript in
                     Task { @MainActor in
                         guard let active = activeStreamSession else { return }
+                        guard transcript.hasPrefix(active.committedPrefix) else {
+                            log("⚠️ Dropping non-monotonic EOU committed stream text")
+                            return
+                        }
                         active.committedPrefix = transcript
                         active.latestPartial = transcript
                         sendResponse(
@@ -1030,8 +1035,10 @@ struct ParakeetSidecar {
 
             case "sliding_window":
                 let manager = SlidingWindowAsrManager(config: streamingConfig(from: command))
-                try await manager.loadModels(models)
-                try await manager.startStreaming(source: .microphone)
+                try await withLibraryStdoutRedirected {
+                    try await manager.loadModels(models)
+                    try await manager.startStreaming(source: .microphone)
+                }
                 let session = ActiveStreamSession(
                     engine: .slidingWindow(manager),
                     sampleRate: sampleRate,
@@ -1082,13 +1089,21 @@ struct ParakeetSidecar {
 
         switch session.engine {
         case .slidingWindow(let manager):
-            await manager.streamAudio(buffer)
+            do {
+                try await withLibraryStdoutRedirected {
+                    await manager.streamAudio(buffer)
+                }
+            } catch {
+                sendError("stream_chunk_failed", message: "Failed to process stream chunk: \(error.localizedDescription)", encoder: encoder)
+            }
         case .eou(let manager):
             do {
-                try await manager.appendAudio(buffer)
-                try await manager.processBufferedAudio()
-                let toks = await manager.getRawTokenStrings()
-                log("DBG-EOU frames=\(buffer.frameLength) tokens=\(toks.count) sample='\(toks.suffix(5).joined(separator: "|"))'")
+                try await withLibraryStdoutRedirected {
+                    try await manager.appendAudio(buffer)
+                    try await manager.processBufferedAudio()
+                    let toks = await manager.getRawTokenStrings()
+                    log("DBG-EOU frames=\(buffer.frameLength) tokens=\(toks.count) sample='\(toks.suffix(5).joined(separator: "|"))'")
+                }
             } catch {
                 sendError("stream_chunk_failed", message: "Failed to process stream chunk: \(error.localizedDescription)", encoder: encoder)
             }
@@ -1107,9 +1122,13 @@ struct ParakeetSidecar {
             let finalText: String
             switch session.engine {
             case .slidingWindow(let manager):
-                finalText = try await manager.finish()
+                finalText = try await withLibraryStdoutRedirected {
+                    try await manager.finish()
+                }
             case .eou(let manager):
-                finalText = try await manager.finish()
+                finalText = try await withLibraryStdoutRedirected {
+                    try await manager.finish()
+                }
             }
             session.forwarder?.cancel()
             sendResponse(StreamFinalResponse(text: finalText), encoder: encoder)
@@ -1127,11 +1146,17 @@ struct ParakeetSidecar {
             return
         }
         activeStreamSession = nil
-        switch session.engine {
-        case .slidingWindow(let manager):
-            await manager.cancel()
-        case .eou(let manager):
-            await manager.reset()
+        do {
+            try await withLibraryStdoutRedirected {
+                switch session.engine {
+                case .slidingWindow(let manager):
+                    await manager.cancel()
+                case .eou(let manager):
+                    await manager.reset()
+                }
+            }
+        } catch {
+            log("⚠️ Stream cancel cleanup failed: \(error.localizedDescription)")
         }
         session.forwarder?.cancel()
         if emitResponse {

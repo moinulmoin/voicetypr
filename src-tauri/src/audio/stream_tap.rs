@@ -34,6 +34,18 @@ pub trait StreamTapSink: Send {
 pub type StreamTapSinkFactory =
     Arc<dyn Fn(u32, u16) -> Option<Box<dyn StreamTapSink>> + Send + Sync>;
 
+fn cancel_sink(sink: &mut Option<Box<dyn StreamTapSink>>) {
+    if let Some(sink) = sink.as_mut() {
+        sink.cancel();
+    }
+}
+
+fn finalize_sink(sink: &mut Option<Box<dyn StreamTapSink>>) {
+    if let Some(sink) = sink.as_mut() {
+        let _ = sink.finalize();
+    }
+}
+
 impl StreamTapRt {
     #[allow(dead_code)] // Future streaming diagnostics slice will read this accessor.
     pub fn dropped(&self) -> u64 {
@@ -244,10 +256,26 @@ where
     loop {
         let msg = match rx.recv_timeout(Duration::from_millis(100)) {
             Ok(msg) => msg,
-            Err(RecvTimeoutError::Disconnected) => break,
+            Err(RecvTimeoutError::Disconnected) => {
+                stale_seen |= crate::commands::audio::recording_generation_is_stale(generation);
+                cancelled_seen |= (cancelled)();
+                if stale_seen || cancelled_seen || !finalize_flag.load(Ordering::SeqCst) {
+                    cancel_sink(&mut sink);
+                } else {
+                    finalize_sink(&mut sink);
+                }
+                break;
+            }
             Err(RecvTimeoutError::Timeout) => {
                 stale_seen |= crate::commands::audio::recording_generation_is_stale(generation);
-                if finalize_flag.load(Ordering::SeqCst) || stale_seen || (cancelled)() {
+                let now_cancelled = (cancelled)();
+                cancelled_seen |= now_cancelled;
+                if stale_seen || now_cancelled {
+                    cancel_sink(&mut sink);
+                    break;
+                }
+                if finalize_flag.load(Ordering::SeqCst) {
+                    finalize_sink(&mut sink);
                     break;
                 }
                 continue;
@@ -262,12 +290,13 @@ where
                     chunk.clear();
                     let _ = pool_tx.send(chunk);
                 }
-                StreamTapMsg::Finalize => break,
+                StreamTapMsg::Finalize => {
+                    cancel_sink(&mut sink);
+                    break;
+                }
                 StreamTapMsg::Cancel => {
                     cancelled_seen = true;
-                    if let Some(sink) = sink.as_mut() {
-                        sink.cancel();
-                    }
+                    cancel_sink(&mut sink);
                     break;
                 }
             }
@@ -297,16 +326,12 @@ where
                 let _ = pool_tx.send(chunk);
             }
             StreamTapMsg::Finalize => {
-                if let Some(sink) = sink.as_mut() {
-                    let _ = sink.finalize();
-                }
+                finalize_sink(&mut sink);
                 break;
             }
             StreamTapMsg::Cancel => {
                 cancelled_seen = true;
-                if let Some(sink) = sink.as_mut() {
-                    sink.cancel();
-                }
+                cancel_sink(&mut sink);
                 break;
             }
         }
@@ -344,9 +369,41 @@ where
 mod tests {
     use super::*;
     use crate::commands::audio::begin_recording_generation;
+    use std::sync::atomic::AtomicUsize;
 
     fn not_cancelled() -> Arc<dyn Fn() -> bool + Send + Sync> {
         Arc::new(|| false)
+    }
+
+    struct CountingSink {
+        finalized: Arc<AtomicUsize>,
+        cancelled: Arc<AtomicUsize>,
+    }
+
+    impl StreamTapSink for CountingSink {
+        fn send_frame(&mut self, _samples: &[i16]) {}
+
+        fn finalize(&mut self) -> Option<String> {
+            self.finalized.fetch_add(1, Ordering::SeqCst);
+            Some(String::new())
+        }
+
+        fn cancel(&mut self) {
+            self.cancelled.fetch_add(1, Ordering::SeqCst);
+        }
+    }
+
+    fn counting_sink() -> (Box<dyn StreamTapSink>, Arc<AtomicUsize>, Arc<AtomicUsize>) {
+        let finalized = Arc::new(AtomicUsize::new(0));
+        let cancelled = Arc::new(AtomicUsize::new(0));
+        (
+            Box::new(CountingSink {
+                finalized: finalized.clone(),
+                cancelled: cancelled.clone(),
+            }),
+            finalized,
+            cancelled,
+        )
     }
 
     fn test_context(
@@ -499,5 +556,91 @@ mod tests {
         assert!(summary.stale);
         assert_eq!(summary.frames, 0);
         assert_eq!(summary.samples, 0);
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn cancelled_finalize_cancels_sink_instead_of_abandoning_session() {
+        let generation = begin_recording_generation();
+        let (tx, rx) = mpsc::sync_channel(STREAM_QUEUE_CAPACITY);
+        let (pool_tx, _pool_rx) = mpsc::sync_channel(STREAM_RECYCLE_CAPACITY);
+        let dropped = Arc::new(AtomicU64::new(0));
+        let finalize_flag = Arc::new(AtomicBool::new(true));
+        let (sink, finalized, cancelled) = counting_sink();
+
+        tx.try_send(StreamTapMsg::Finalize).unwrap();
+        drop(tx);
+
+        let context = NoopWorkerContext {
+            rx,
+            pool_tx,
+            dropped,
+            finalize_flag,
+            generation,
+            cancelled: Arc::new(|| true),
+            sink: Some(sink),
+            log_summary: false,
+        };
+        let summary = run_noop_worker_observed(context, |_| {});
+
+        assert!(summary.cancelled);
+        assert_eq!(cancelled.load(Ordering::SeqCst), 1);
+        assert_eq!(finalized.load(Ordering::SeqCst), 0);
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn disconnected_without_finalize_cancels_sink() {
+        let generation = begin_recording_generation();
+        let (tx, rx) = mpsc::sync_channel(STREAM_QUEUE_CAPACITY);
+        let (pool_tx, _pool_rx) = mpsc::sync_channel(STREAM_RECYCLE_CAPACITY);
+        let dropped = Arc::new(AtomicU64::new(0));
+        let finalize_flag = Arc::new(AtomicBool::new(false));
+        let (sink, finalized, cancelled) = counting_sink();
+        drop(tx);
+
+        let context = NoopWorkerContext {
+            rx,
+            pool_tx,
+            dropped,
+            finalize_flag,
+            generation,
+            cancelled: not_cancelled(),
+            sink: Some(sink),
+            log_summary: false,
+        };
+        let summary = run_noop_worker_observed(context, |_| {});
+
+        assert!(!summary.cancelled);
+        assert_eq!(cancelled.load(Ordering::SeqCst), 1);
+        assert_eq!(finalized.load(Ordering::SeqCst), 0);
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn disconnected_after_finalize_flag_finalizes_sink() {
+        let generation = begin_recording_generation();
+        let (tx, rx) = mpsc::sync_channel(STREAM_QUEUE_CAPACITY);
+        let (pool_tx, _pool_rx) = mpsc::sync_channel(STREAM_RECYCLE_CAPACITY);
+        let dropped = Arc::new(AtomicU64::new(0));
+        let finalize_flag = Arc::new(AtomicBool::new(true));
+        let (sink, finalized, cancelled) = counting_sink();
+        drop(tx);
+
+        let context = NoopWorkerContext {
+            rx,
+            pool_tx,
+            dropped,
+            finalize_flag,
+            generation,
+            cancelled: not_cancelled(),
+            sink: Some(sink),
+            log_summary: false,
+        };
+        let summary = run_noop_worker_observed(context, |_| {});
+
+        assert!(!summary.cancelled);
+        assert_eq!(finalized.load(Ordering::SeqCst), 1);
+        assert_eq!(cancelled.load(Ordering::SeqCst), 0);
     }
 }

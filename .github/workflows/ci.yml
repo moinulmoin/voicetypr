@@ -243,7 +243,8 @@ jobs:
 
       - name: Rust tests
         shell: pwsh
-        run: ./src-tauri/run-tests.ps1
+        working-directory: src-tauri
+        run: ./run-tests.ps1
 
       - name: Build Tauri (release, CPU-safe main app)
         run: cd src-tauri && cargo build --release

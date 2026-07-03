@@ -122,6 +122,52 @@ describe("RecordingPill streaming preview", () => {
     expect(preview()).not.toBeVisible();
   });
 
+  it("does not double-subscribe to stream events while listen is pending", async () => {
+    let resolveStreamListen: ((unlisten: () => void) => void) | undefined;
+    const listenMock = vi.fn((event: string, handler: Handler) => {
+      if (event === TRANSCRIPTION_STREAM_EVENT) {
+        return new Promise<() => void>((resolve) => {
+          resolveStreamListen = (unlisten) => {
+            if (!listeners.has(event)) {
+              listeners.set(event, new Set());
+            }
+            listeners.get(event)?.add(handler);
+            resolve(unlisten);
+          };
+        });
+      }
+
+      if (!listeners.has(event)) {
+        listeners.set(event, new Set());
+      }
+      listeners.get(event)?.add(handler);
+
+      return Promise.resolve(() => {
+        listeners.get(event)?.delete(handler);
+      });
+    });
+
+    controller = createRecordingPill(root, {
+      invoke: invokeMock as never,
+      listen: listenMock as never,
+    });
+
+    await waitForSettings();
+    emitMockEvent("settings-changed");
+    emitMockEvent("settings-changed");
+
+    expect(
+      listenMock.mock.calls.filter(([event]) => event === TRANSCRIPTION_STREAM_EVENT),
+    ).toHaveLength(1);
+    expect(resolveStreamListen).toBeDefined();
+
+    const unlisten = vi.fn();
+    resolveStreamListen?.(unlisten);
+
+    await waitForStreamListener();
+    expect(unlisten).not.toHaveBeenCalled();
+  });
+
   it("keeps the committed span mounted and appends committed text across partials", async () => {
     createTestPill();
     await waitForSettings();

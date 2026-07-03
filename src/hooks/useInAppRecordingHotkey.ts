@@ -63,6 +63,14 @@ function hasOtherModifierHeld(event: KeyboardEvent, spec: ModifierSpec): boolean
   );
 }
 
+function hasAltGraph(event: KeyboardEvent): boolean {
+  return event.getModifierState?.("AltGraph") === true;
+}
+
+function isAltGraphSecondKey(event: KeyboardEvent): boolean {
+  return hasAltGraph(event) || event.code === "AltRight" || event.key === "AltGraph";
+}
+
 type BareModifierFallback = {
   modifier: ModifierSpec;
   kind: "isolated_tap" | "modifier_hold";
@@ -190,6 +198,8 @@ export function useInAppRecordingHotkey(): void {
     // intervening key, or on focus/visibility loss.
     let pendingTap: { code: string; stateAtDown: string } | null = null;
     let activeHoldCode: string | null = null;
+    let pendingHoldStart: number | null = null;
+    let holdStartDispatched = false;
 
     // Toggle recording, mirroring the native state machine (handle_toggle_mode):
     // act only on settled states, ignore transitional ones, and debounce.
@@ -208,13 +218,38 @@ export function useInAppRecordingHotkey(): void {
       }
     };
 
-    const startHold = (): void => {
+    const startHold = (): boolean => {
       const { recording: currentRecording } = latest.current;
       const state = currentRecording.state;
       if (state === "idle" || state === "error") {
         log.debug("In-app bare-modifier hold in editable field — starting recording");
         void currentRecording.startRecording();
+        return true;
       }
+      return false;
+    };
+
+    const clearPendingHoldStart = (): void => {
+      if (pendingHoldStart !== null) {
+        window.clearTimeout(pendingHoldStart);
+        pendingHoldStart = null;
+      }
+    };
+
+    const armHoldStart = (code: string): void => {
+      clearPendingHoldStart();
+      pendingHoldStart = window.setTimeout(() => {
+        pendingHoldStart = null;
+        if (activeHoldCode === code) {
+          holdStartDispatched = startHold();
+        }
+      }, 0);
+    };
+
+    const cancelHoldBeforeStart = (): void => {
+      clearPendingHoldStart();
+      activeHoldCode = null;
+      holdStartDispatched = false;
     };
 
     const stopHold = (): void => {
@@ -236,13 +271,15 @@ export function useInAppRecordingHotkey(): void {
       if (bareModifier) {
         if (eventMatchesBareModifier(event, bareModifier.modifier)) {
           if (event.repeat) return; // held modifier auto-repeats; keep the pending tap/hold
-          if (hasOtherModifierHeld(event, bareModifier.modifier)) {
+          if (hasOtherModifierHeld(event, bareModifier.modifier) || hasAltGraph(event)) {
             pendingTap = null;
+            cancelHoldBeforeStart();
             return;
           }
           if (bareModifier.kind === "modifier_hold") {
             activeHoldCode = event.code;
-            startHold();
+            holdStartDispatched = false;
+            armHoldStart(event.code);
             return;
           }
           pendingTap = { code: event.code, stateAtDown: latest.current.recording.state };
@@ -252,6 +289,9 @@ export function useInAppRecordingHotkey(): void {
           // Any non-matching key while the modifier is held → it's a chord/combo,
           // not a clean tap (covers Ctrl+C/V and AltGr's synthesized second key).
           pendingTap = null;
+          if (activeHoldCode && isAltGraphSecondKey(event)) {
+            cancelHoldBeforeStart();
+          }
           return;
         }
       }
@@ -263,7 +303,7 @@ export function useInAppRecordingHotkey(): void {
         // and Shift/Alt-only combos to the field's normal typing.
         if (!event.ctrlKey && !event.metaKey) return;
         // AltGr is reported as Ctrl+Alt on Windows and produces typed chars.
-        if (event.getModifierState?.("AltGraph")) return;
+        if (hasAltGraph(event)) return;
         if (!eventMatchesShortcut(event, currentHotkey)) return;
         event.preventDefault();
         performToggle("hotkey");
@@ -274,16 +314,28 @@ export function useInAppRecordingHotkey(): void {
 
     const onKeyUp = (event: KeyboardEvent) => {
       if (activeHoldCode && event.code === activeHoldCode) {
-        if (event.isComposing || event.getModifierState?.("AltGraph")) return;
-        if (!isEditableTarget(event.target)) return;
-        stopHold();
+        clearPendingHoldStart();
+        if (event.isComposing) {
+          activeHoldCode = null;
+          holdStartDispatched = false;
+          return;
+        }
+        if (!isEditableTarget(event.target)) {
+          activeHoldCode = null;
+          holdStartDispatched = false;
+          return;
+        }
+        if (holdStartDispatched) {
+          stopHold();
+        }
         activeHoldCode = null;
+        holdStartDispatched = false;
         return;
       }
       const pending = pendingTap;
       if (!pending || event.code !== pending.code) return;
       pendingTap = null;
-      if (event.isComposing || event.getModifierState?.("AltGraph")) return;
+      if (event.isComposing || hasAltGraph(event)) return;
       if (!isEditableTarget(event.target)) return;
       // Bail if the recording state moved since keydown (e.g. the native hook
       // did fire) — avoids a start→stop stutter.
@@ -292,9 +344,13 @@ export function useInAppRecordingHotkey(): void {
     };
 
     const clearPending = () => {
+      clearPendingHoldStart();
       if (activeHoldCode) {
-        stopHold();
+        if (holdStartDispatched) {
+          stopHold();
+        }
         activeHoldCode = null;
+        holdStartDispatched = false;
       }
       pendingTap = null;
     };
@@ -306,6 +362,7 @@ export function useInAppRecordingHotkey(): void {
     document.addEventListener("visibilitychange", clearPending);
 
     return () => {
+      clearPending();
       window.removeEventListener("keydown", onKeyDown, true);
       window.removeEventListener("keyup", onKeyUp, true);
       window.removeEventListener("blur", clearPending, true);

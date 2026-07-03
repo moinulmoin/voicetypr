@@ -122,6 +122,19 @@ async function renderWithBareModifier(): Promise<void> {
   });
 }
 
+async function flushHoldStart(): Promise<void> {
+  await act(async () => {
+    await new Promise((resolve) => window.setTimeout(resolve, 0));
+  });
+}
+
+function markAltGraph(event: KeyboardEvent): KeyboardEvent {
+  Object.defineProperty(event, "getModifierState", {
+    value: (key: string) => key === "AltGraph",
+  });
+  return event;
+}
+
 describe("useInAppRecordingHotkey", () => {
   let editable: HTMLTextAreaElement;
   let nonEditable: HTMLDivElement;
@@ -346,6 +359,7 @@ describe("useInAppRecordingHotkey", () => {
     await renderWithBareModifier();
 
     fireModifierDown(editable);
+    await flushHoldStart();
 
     expect(mockRecording.startRecording).toHaveBeenCalledTimes(1);
     expect(mockRecording.stopRecording).not.toHaveBeenCalled();
@@ -366,8 +380,74 @@ describe("useInAppRecordingHotkey", () => {
     fireModifierDown(editable);
     fireModifierDown(editable, { repeat: true });
     fireModifierDown(editable, { repeat: true });
+    await flushHoldStart();
 
     expect(mockRecording.startRecording).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not start a modifier_hold recording for AltGr's synthesized Control then RightAlt sequence", async () => {
+    mockSettings.hotkey = "";
+    mockInvoke.mockResolvedValue({
+      bindings: [holdControlBinding],
+    });
+    await renderWithBareModifier();
+
+    fireModifierDown(editable);
+    editable.dispatchEvent(
+      markAltGraph(
+        new KeyboardEvent("keydown", {
+          bubbles: true,
+          cancelable: true,
+          code: "AltRight",
+          key: "AltGraph",
+          ctrlKey: true,
+          altKey: true,
+        }),
+      ),
+    );
+    await flushHoldStart();
+    editable.dispatchEvent(
+      markAltGraph(
+        new KeyboardEvent("keyup", {
+          bubbles: true,
+          cancelable: true,
+          code: "ControlLeft",
+          key: "Control",
+          ctrlKey: true,
+          altKey: true,
+        }),
+      ),
+    );
+
+    expect(mockRecording.startRecording).not.toHaveBeenCalled();
+    expect(mockRecording.stopRecording).not.toHaveBeenCalled();
+  });
+
+  it("stops an active modifier_hold even when keyup still reports AltGraph", async () => {
+    mockSettings.hotkey = "";
+    mockInvoke.mockResolvedValue({
+      bindings: [holdControlBinding],
+    });
+    await renderWithBareModifier();
+
+    fireModifierDown(editable);
+    await flushHoldStart();
+    mockRecording.state = "recording";
+    editable.dispatchEvent(
+      markAltGraph(
+        new KeyboardEvent("keyup", {
+          bubbles: true,
+          cancelable: true,
+          code: "ControlLeft",
+          key: "Control",
+          ctrlKey: true,
+          altKey: true,
+        }),
+      ),
+    );
+
+    expect(mockRecording.startRecording).toHaveBeenCalledTimes(1);
+    expect(mockRecording.stopRecording).toHaveBeenCalledTimes(1);
   });
 
   it("bails if recording state changed between keydown and keyup", async () => {
