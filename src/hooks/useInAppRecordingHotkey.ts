@@ -200,7 +200,7 @@ export function useInAppRecordingHotkey(): void {
     let activeHoldCode: string | null = null;
     let pendingHoldStart: number | null = null;
     let holdStartDispatched = false;
-    let holdStartPromise: Promise<void> | null = null;
+    let holdStartPromise: Promise<boolean> | null = null;
 
     // Toggle recording, mirroring the native state machine (handle_toggle_mode):
     // act only on settled states, ignore transitional ones, and debounce.
@@ -272,15 +272,18 @@ export function useInAppRecordingHotkey(): void {
       holdStartPromise = null;
       if (startInFlight) {
         log.debug("In-app bare-modifier hold — stop chained after in-flight start");
-        void startInFlight.catch(() => {}).then(() => {
-          // startRecording swallows failures (state flips to 'error'), so only
-          // stop when the start actually took — an unconditional stop would
-          // reset state to Idle and wipe the failed-start error message.
-          const settledState = latest.current.recording.state;
-          if (settledState === "recording" || settledState === "starting") {
-            void latest.current.recording.stopRecording();
-          }
-        });
+        void startInFlight.then(
+          (started) => {
+            // startRecording reports its own outcome — React state can be
+            // stale at settle time (events/re-renders lag the invoke), so it
+            // must not gate this. Stop only a start that actually took; a
+            // failed start keeps its error state instead of being reset.
+            if (started) {
+              void latest.current.recording.stopRecording();
+            }
+          },
+          () => {},
+        );
         return;
       }
       if (state === "recording" || state === "starting" || activeHoldCode) {

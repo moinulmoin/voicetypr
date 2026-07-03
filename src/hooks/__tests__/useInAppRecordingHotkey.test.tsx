@@ -428,9 +428,9 @@ describe("useInAppRecordingHotkey", () => {
     mockInvoke.mockResolvedValue({
       bindings: [holdControlBinding],
     });
-    let resolveStart: (() => void) | undefined;
+    let resolveStart: ((started: boolean) => void) | undefined;
     mockRecording.startRecording.mockImplementationOnce(
-      () => new Promise<void>((resolve) => { resolveStart = resolve; }),
+      () => new Promise<boolean>((resolve) => { resolveStart = resolve; }),
     );
     await renderWithBareModifier();
 
@@ -440,11 +440,12 @@ describe("useInAppRecordingHotkey", () => {
 
     // Key released while the start invoke is still in flight (backend has not
     // yet published `Starting`): the stop must wait for the start, not drop.
+    // NOTE: React state deliberately stays 'idle' here — the settle-time gate
+    // must rely on the reported outcome, not possibly-stale observed state.
     fireModifierUp(editable);
     expect(mockRecording.stopRecording).not.toHaveBeenCalled();
 
-    mockRecording.state = "recording";
-    resolveStart?.();
+    resolveStart?.(true);
     await Promise.resolve();
     await Promise.resolve();
     expect(mockRecording.stopRecording).toHaveBeenCalledTimes(1);
@@ -455,9 +456,9 @@ describe("useInAppRecordingHotkey", () => {
     mockInvoke.mockResolvedValue({
       bindings: [holdControlBinding],
     });
-    let resolveStart: (() => void) | undefined;
+    let resolveStart: ((started: boolean) => void) | undefined;
     mockRecording.startRecording.mockImplementationOnce(
-      () => new Promise<void>((resolve) => { resolveStart = resolve; }),
+      () => new Promise<boolean>((resolve) => { resolveStart = resolve; }),
     );
     await renderWithBareModifier();
 
@@ -465,11 +466,10 @@ describe("useInAppRecordingHotkey", () => {
     await flushHoldStart();
     fireModifierUp(editable);
 
-    // Start settles as a failure: useRecording swallows the rejection and
-    // flips state to 'error'. The deferred stop must NOT fire — it would
-    // reset the backend to Idle and wipe the error message.
-    mockRecording.state = "error";
-    resolveStart?.();
+    // Start settles as a failure (startRecording swallows the rejection and
+    // reports false). The deferred stop must NOT fire — it would reset the
+    // backend to Idle and wipe the error message.
+    resolveStart?.(false);
     await Promise.resolve();
     await Promise.resolve();
     expect(mockRecording.stopRecording).not.toHaveBeenCalled();
