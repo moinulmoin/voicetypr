@@ -177,8 +177,10 @@ impl TranscriberCache {
         }
     }
 
-    /// Manually clear the cache (e.g. to free RAM or after a model upgrade).
-    #[cfg(test)]
+    /// Clear the cache, dropping every cached `Arc<Transcriber>` (and, when that was the
+    /// last reference, freeing its Whisper/Metal GPU buffers). Called on process exit to
+    /// empty the ggml-metal residency set before teardown so the device destructor does
+    /// not assert (#28); also usable to free RAM or after a model upgrade.
     pub fn clear(&mut self) {
         self.map.clear();
         self.lru_order.clear();
