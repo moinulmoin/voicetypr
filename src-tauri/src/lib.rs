@@ -1509,18 +1509,25 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             Box::new(e)
         })?
         .run(|app_handle, event| match event {
-            // #28: unload cached Whisper models (and their Metal GPU buffers) before the
-            // process tears down. On Apple Silicon the ggml-metal device destructor
-            // asserts at exit if a model's residency set is still live, aborting the
-            // process (SIGABRT) on quit — after transcription already succeeded. Emptying
-            // the cache here drops the residency set first, so exit is clean. (Harmless on
-            // non-Apple platforms: it just frees the models a moment early.)
+            // #28: unload every in-process Whisper model (and its Metal GPU buffers) before
+            // the process tears down. On Apple Silicon the ggml-metal device destructor
+            // asserts at exit if a model's residency set is still live, aborting the process
+            // (SIGABRT) on quit — after transcription already succeeded. Two owners must be
+            // emptied: the local dictation cache (managed `TranscriberCache`), and the
+            // strong-host remote server's OWN cache (inside `RealTranscriptionContext`) —
+            // stopping the server joins its tasks and drops that context. Both harmless on
+            // non-Apple platforms: they just release resources a moment early.
             tauri::RunEvent::Exit => {
-                if let Some(cache) = app_handle.try_state::<AsyncMutex<TranscriberCache>>() {
-                    tauri::async_runtime::block_on(async move {
+                tauri::async_runtime::block_on(async move {
+                    if let Some(cache) = app_handle.try_state::<AsyncMutex<TranscriberCache>>() {
                         cache.lock().await.clear();
-                    });
-                }
+                    }
+                    if let Some(remote) = app_handle
+                        .try_state::<AsyncMutex<crate::remote::lifecycle::RemoteServerManager>>()
+                    {
+                        remote.lock().await.stop().await;
+                    }
+                });
             }
             #[cfg(target_os = "macos")]
             tauri::RunEvent::Reopen { has_visible_windows, .. } => {
