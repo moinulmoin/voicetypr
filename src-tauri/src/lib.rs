@@ -1508,13 +1508,27 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             eprintln!("Voicetypr failed to start: {}", e);
             Box::new(e)
         })?
-        .run(|app_handle, event| {
+        .run(|app_handle, event| match event {
+            // #28: unload cached Whisper models (and their Metal GPU buffers) before the
+            // process tears down. On Apple Silicon the ggml-metal device destructor
+            // asserts at exit if a model's residency set is still live, aborting the
+            // process (SIGABRT) on quit — after transcription already succeeded. Emptying
+            // the cache here drops the residency set first, so exit is clean. (Harmless on
+            // non-Apple platforms: it just frees the models a moment early.)
+            tauri::RunEvent::Exit => {
+                if let Some(cache) = app_handle.try_state::<AsyncMutex<TranscriberCache>>() {
+                    tauri::async_runtime::block_on(async move {
+                        cache.lock().await.clear();
+                    });
+                }
+            }
             #[cfg(target_os = "macos")]
-            if let tauri::RunEvent::Reopen { has_visible_windows, .. } = event {
+            tauri::RunEvent::Reopen { has_visible_windows, .. } => {
                 if !has_visible_windows {
                     show_main_window(app_handle);
                 }
             }
+            _ => {}
         });
 
     // Log successful application startup

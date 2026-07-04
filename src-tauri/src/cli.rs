@@ -220,15 +220,26 @@ pub fn maybe_run_from_env_with_context(
         warm_ai_key_cache(&app_handle).await?;
         let _ = check_license_status(app_handle.clone()).await;
 
-        match command {
-            CliCommand::Status(args) => run_status(&app_handle, args).await?,
-            CliCommand::Models(args) => run_models(&app_handle, args).await?,
-            CliCommand::Transcribe(args) => run_transcribe(&app_handle, args).await?,
-            CliCommand::Record(args) => run_record(&app_handle, args).await?,
-            CliCommand::StreamBench(args) => run_stream_bench(&app_handle, args).await?,
+        let outcome: Result<(), Box<dyn Error>> = async {
+            match command {
+                CliCommand::Status(args) => run_status(&app_handle, args).await?,
+                CliCommand::Models(args) => run_models(&app_handle, args).await?,
+                CliCommand::Transcribe(args) => run_transcribe(&app_handle, args).await?,
+                CliCommand::Record(args) => run_record(&app_handle, args).await?,
+                CliCommand::StreamBench(args) => run_stream_bench(&app_handle, args).await?,
+            }
+            Ok(())
+        }
+        .await;
+
+        // #28: unload cached Whisper models (and their Metal buffers) before this process
+        // exits — on success OR failure — so the ggml-metal device destructor does not
+        // assert on a live residency set and SIGABRT after the output was already produced.
+        if let Some(cache) = app_handle.try_state::<AsyncMutex<TranscriberCache>>() {
+            cache.lock().await.clear();
         }
 
-        Ok::<(), Box<dyn Error>>(())
+        outcome
     });
 
     // Format failures for the human or the agent: --json gets a parseable {"error": ...}
