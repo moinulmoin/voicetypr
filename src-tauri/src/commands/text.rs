@@ -701,7 +701,7 @@ fn paste_windows() -> Result<(), String> {
                         KEYBD_EVENT_FLAGS(0)
                     },
                     time: 0,
-                    dwExtraInfo: 0,
+                    dwExtraInfo: keytrigger::INJECTED_SIGNATURE,
                 },
             },
         }
