@@ -285,7 +285,6 @@ impl WindowManager {
         // Apply Windows-specific window flags to prevent focus stealing
         #[cfg(target_os = "windows")]
         {
-            use std::ffi::c_void;
             use windows::Win32::Foundation::HWND;
             use windows::Win32::UI::WindowsAndMessaging::*;
 
