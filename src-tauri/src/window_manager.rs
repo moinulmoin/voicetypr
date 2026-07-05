@@ -18,8 +18,8 @@ fn calculate_pill_position(
     screen_height: f64,
     edge_offset: f64,
 ) -> (f64, f64) {
-    let pill_width = 80.0;
-    let pill_height = 40.0;
+    let pill_width = 260.0;
+    let pill_height = 64.0;
 
     // Horizontal position: left, center, or right
     let x = if position.ends_with("-left") {
@@ -253,7 +253,8 @@ impl WindowManager {
         .transparent(true)
         .shadow(false) // Disabled to fix Windows transparency issue
         .skip_taskbar(true)
-        .inner_size(80.0, 40.0)
+        .inner_size(260.0, 64.0)
+        .accept_first_mouse(true)
         .position(position_x, position_y)
         .visible(true) // Start visible
         .focused(false); // Don't steal focus
@@ -284,14 +285,13 @@ impl WindowManager {
         // Apply Windows-specific window flags to prevent focus stealing
         #[cfg(target_os = "windows")]
         {
-            use std::ffi::c_void;
             use windows::Win32::Foundation::HWND;
             use windows::Win32::UI::WindowsAndMessaging::*;
 
             if let Ok(hwnd) = pill_window.hwnd() {
                 unsafe {
                     // windows crate 0.62+: HWND wraps *mut c_void instead of isize
-                    let hwnd = HWND(hwnd.0 as *mut c_void);
+                    let hwnd = HWND(hwnd.0);
 
                     // Validate HWND before using it
                     if IsWindow(Some(hwnd)).as_bool() {
@@ -750,9 +750,9 @@ impl WindowManager {
 mod tests {
     use super::calculate_pill_position;
 
-    // Screen: 1920x1080, pill: 80x40, edge_offset: 10
-    // x_left = 10, x_center = 920, x_right = 1830
-    // y_top = 10, y_bottom = 1030
+    // Screen: 1920x1080, pill: 260x64, edge_offset: 10
+    // x_left = 10, x_center = 830, x_right = 1650
+    // y_top = 10, y_bottom = 1006
 
     #[test]
     fn calculate_pill_position_top_left() {
@@ -764,14 +764,14 @@ mod tests {
     #[test]
     fn calculate_pill_position_top_center() {
         let (x, y) = calculate_pill_position("top-center", 1920.0, 1080.0, 10.0);
-        assert_eq!(x, 920.0);
+        assert_eq!(x, 830.0);
         assert_eq!(y, 10.0);
     }
 
     #[test]
     fn calculate_pill_position_top_right() {
         let (x, y) = calculate_pill_position("top-right", 1920.0, 1080.0, 10.0);
-        assert_eq!(x, 1830.0);
+        assert_eq!(x, 1650.0);
         assert_eq!(y, 10.0);
     }
 
@@ -779,28 +779,28 @@ mod tests {
     fn calculate_pill_position_bottom_left() {
         let (x, y) = calculate_pill_position("bottom-left", 1920.0, 1080.0, 10.0);
         assert_eq!(x, 10.0);
-        assert_eq!(y, 1030.0);
+        assert_eq!(y, 1006.0);
     }
 
     #[test]
     fn calculate_pill_position_bottom_center() {
         let (x, y) = calculate_pill_position("bottom-center", 1920.0, 1080.0, 10.0);
-        assert_eq!(x, 920.0);
-        assert_eq!(y, 1030.0);
+        assert_eq!(x, 830.0);
+        assert_eq!(y, 1006.0);
     }
 
     #[test]
     fn calculate_pill_position_bottom_right() {
         let (x, y) = calculate_pill_position("bottom-right", 1920.0, 1080.0, 10.0);
-        assert_eq!(x, 1830.0);
-        assert_eq!(y, 1030.0);
+        assert_eq!(x, 1650.0);
+        assert_eq!(y, 1006.0);
     }
 
     #[test]
     fn calculate_pill_position_defaults_to_bottom_center() {
         let (x, y) = calculate_pill_position("unknown", 1920.0, 1080.0, 10.0);
-        assert_eq!(x, 920.0);
-        assert_eq!(y, 1030.0);
+        assert_eq!(x, 830.0);
+        assert_eq!(y, 1006.0);
     }
 
     #[test]
@@ -808,6 +808,6 @@ mod tests {
         // Test with 50px offset
         let (x, y) = calculate_pill_position("bottom-left", 1920.0, 1080.0, 50.0);
         assert_eq!(x, 50.0);
-        assert_eq!(y, 990.0); // 1080 - 40 - 50
+        assert_eq!(y, 966.0); // 1080 - 64 - 50
     }
 }

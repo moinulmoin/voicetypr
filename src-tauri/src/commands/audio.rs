@@ -1,9 +1,10 @@
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering as AtomicOrdering};
-use tauri::{AppHandle, Emitter, Manager, State};
+use tauri::{AppHandle, Emitter, Manager, Runtime, State};
 
 use crate::ai::error::{user_facing_message, AiProviderError};
 use crate::audio::recorder::AudioRecorder;
 use crate::audio::silence_detector::SilenceDetectorEvent;
+use crate::audio::stream_tap::{StreamTapSink, StreamTapSinkFactory};
 use crate::commands::settings::{
     get_settings, normalize_final_text_language, normalize_speech_language_for_model,
     normalize_transcription_task, recording_retention_days_from_store, resolve_pill_indicator_mode,
@@ -11,8 +12,8 @@ use crate::commands::settings::{
 };
 use crate::license::LicenseState;
 use crate::media::MediaPauseController;
-use crate::parakeet::manager::ParakeetTranscriptionOptions;
-use crate::parakeet::messages::{ParakeetResponse, ParakeetSegment};
+use crate::parakeet::messages::{ParakeetResponse, ParakeetStreamConfig, ParakeetStreamEngine};
+use crate::parakeet::sidecar::ParakeetStreamHandle;
 use crate::parakeet::ParakeetManager;
 use crate::provider_capabilities::ProviderEngine;
 use crate::remote::client::{
@@ -20,22 +21,24 @@ use crate::remote::client::{
     TranscriptionRequest as RemoteTranscriptionRequest, TranscriptionSource as RemoteTimeoutSource,
 };
 use crate::remote::settings::RemoteSettings;
-use crate::transcription::error::TranscriptionErrorCode;
-use crate::transcription::executor::transcribe_with_app;
+use crate::transcription::error::{TranscriptionError, TranscriptionErrorCode};
+use crate::transcription::executor::{
+    ensure_cloud_task_supported, transcribe_with_app, watchdog_budget_for,
+};
 use crate::transcription::request::{
     AudioFormatHint, CancellationToken, CleanupPolicy, EngineSelection, RequestContext,
     TimeoutPolicy, TranscriptionAudio, TranscriptionRequest,
 };
+use crate::transcription::stream::{
+    StreamSessionGate, TranscriptionStreamEvent, TRANSCRIPTION_STREAM_EVENT,
+};
 use crate::transcription::{
-    TranscriptionJob, TranscriptionResult, TranscriptionSegment, TranscriptionSource,
-    TranscriptionWord,
+    TranscriptionJob, TranscriptionResult, TranscriptionSource, TranscriptionWord,
 };
 use crate::utils::logger::*;
 #[cfg(debug_assertions)]
 use crate::utils::system_monitor;
-use crate::whisper::cache::TranscriberCache;
 use crate::whisper::manager::WhisperManager;
-use crate::whisper::transcriber::WhisperTranscriptionOutput;
 use crate::{
     emit_to_all, emit_to_window, update_recording_state, AppState, RecordingMode, RecordingState,
 };
@@ -49,6 +52,8 @@ use std::time::Instant;
 use tauri::async_runtime::{Mutex as AsyncMutex, RwLock as AsyncRwLock};
 use tauri_plugin_store::StoreExt;
 use uuid::Uuid;
+
+pub(crate) use crate::transcription::engines::*;
 
 pub(crate) const PTT_START_ABORTED_AFTER_RELEASE: &str =
     "PTT key released before recording could start";
@@ -68,6 +73,223 @@ static MEDIA_CONTROLLER: Lazy<MediaPauseController> = Lazy::new(MediaPauseContro
 /// cancellation flag for its own attempt. SeqCst keeps the bump (start),
 /// capture (stop/spawn) and check (deliver) linearizable.
 static RECORDING_GENERATION: AtomicU64 = AtomicU64::new(0);
+
+struct ParakeetPreviewStreamSink {
+    app: AppHandle,
+    handle: ParakeetStreamHandle,
+    session_id: u64,
+    revision: Arc<AtomicU64>,
+    gate: Arc<Mutex<StreamSessionGate>>,
+    started: Instant,
+}
+
+impl ParakeetPreviewStreamSink {
+    fn next_revision(&self) -> u64 {
+        self.revision.fetch_add(1, AtomicOrdering::SeqCst) + 1
+    }
+
+    fn emit(&self, event: TranscriptionStreamEvent) {
+        emit_parakeet_stream_event(&self.app, &self.gate, event);
+    }
+}
+
+impl StreamTapSink for ParakeetPreviewStreamSink {
+    fn send_frame(&mut self, samples: &[i16]) {
+        if let Err(error) = self.handle.send_chunk(samples) {
+            log::warn!("Failed to enqueue Parakeet stream audio chunk: {}", error);
+        }
+    }
+
+    fn finalize(&mut self) -> Option<String> {
+        match tauri::async_runtime::block_on(self.handle.finalize()) {
+            Ok(text) => {
+                log_performance(
+                    "PARAKEET_STREAM_FINAL",
+                    self.started.elapsed().as_millis() as u64,
+                    Some("source=preview"),
+                );
+                self.emit(TranscriptionStreamEvent::Final {
+                    session_id: self.session_id,
+                    revision: self.next_revision(),
+                    text: text.clone(),
+                });
+                Some(text)
+            }
+            Err(error) => {
+                self.emit(TranscriptionStreamEvent::Error {
+                    session_id: self.session_id,
+                    revision: self.next_revision(),
+                    error: error.to_string(),
+                });
+                log::warn!("Parakeet stream finalization failed: {}", error);
+                None
+            }
+        }
+    }
+
+    fn cancel(&mut self) {
+        self.handle.cancel();
+        self.emit(TranscriptionStreamEvent::Cancelled {
+            session_id: self.session_id,
+            revision: self.next_revision(),
+        });
+    }
+}
+
+fn emit_parakeet_stream_event(
+    app: &AppHandle,
+    gate: &Arc<Mutex<StreamSessionGate>>,
+    event: TranscriptionStreamEvent,
+) {
+    let admitted = gate
+        .lock()
+        .map(|mut gate| gate.admit(&event))
+        .unwrap_or(crate::transcription::stream::Admit::StaleSession);
+    if !matches!(admitted, crate::transcription::stream::Admit::Accept) {
+        log::debug!("Dropping stale Parakeet stream event: {:?}", admitted);
+        return;
+    }
+    if let Err(error) = emit_to_window(app, "pill", TRANSCRIPTION_STREAM_EVENT, event) {
+        log::warn!("Failed to emit Parakeet stream event: {}", error);
+    }
+}
+
+fn build_parakeet_stream_sink_factory(
+    app: &AppHandle,
+    config: &RecordingConfig,
+    streaming_tap_enabled: bool,
+    streaming_engine_enabled: bool,
+    live_preview_mode: bool,
+    recording_generation: u64,
+) -> Option<StreamTapSinkFactory> {
+    if !streaming_tap_enabled
+        || !streaming_engine_enabled
+        || config.current_engine != "parakeet"
+        || config.current_model.is_empty()
+    {
+        return None;
+    }
+
+    let app = app.clone();
+    let model_name = config.current_model.clone();
+    Some(Arc::new(move |sample_rate, channels| {
+        let app_for_stream = app.clone();
+        let model_name_for_stream = model_name.clone();
+        let gate = Arc::new(Mutex::new(StreamSessionGate::new(recording_generation)));
+        let revision = Arc::new(AtomicU64::new(0));
+        let committed = Arc::new(Mutex::new(String::new()));
+        let first_partial_logged = Arc::new(AtomicBool::new(false));
+        let first_confirmed_logged = Arc::new(AtomicBool::new(false));
+        let started = Instant::now();
+
+        let callback_app = app_for_stream.clone();
+        let callback_gate = gate.clone();
+        let callback_revision = revision.clone();
+        let callback_committed = committed.clone();
+        let callback_first_partial_logged = first_partial_logged.clone();
+        let callback_first_confirmed_logged = first_confirmed_logged.clone();
+
+        let stream_engine = if live_preview_mode {
+            ParakeetStreamEngine::Eou
+        } else {
+            ParakeetStreamEngine::SlidingWindow
+        };
+        let opened = tauri::async_runtime::block_on(async move {
+            let parakeet_manager = app_for_stream.state::<ParakeetManager>();
+            parakeet_manager
+                .load_model(&app_for_stream, &model_name_for_stream)
+                .await
+                .map_err(|error| error.to_string())?;
+            parakeet_manager
+                .open_stream(
+                    crate::parakeet::manager::ParakeetStreamRequest {
+                        app: app_for_stream.clone(),
+                        model_name: &model_name_for_stream,
+                        sample_rate,
+                        channels,
+                        engine: stream_engine,
+                        chunk_ms: matches!(stream_engine, ParakeetStreamEngine::Eou).then_some(320),
+                        config: matches!(stream_engine, ParakeetStreamEngine::SlidingWindow)
+                            .then_some(ParakeetStreamConfig::streaming()),
+                    },
+                    move |partial| {
+                        if !callback_first_partial_logged.swap(true, AtomicOrdering::SeqCst) {
+                            log_performance(
+                                "PARAKEET_STREAM_FIRST_PARTIAL",
+                                started.elapsed().as_millis() as u64,
+                                Some("source=preview"),
+                            );
+                        }
+
+                        let mut committed_guard = match callback_committed.lock() {
+                            Ok(guard) => guard,
+                            Err(_) => {
+                                log::warn!("Parakeet stream committed guard poisoned");
+                                return;
+                            }
+                        };
+
+                        let (committed_text, tentative_text) = if partial.is_confirmed {
+                            if !callback_first_confirmed_logged.swap(true, AtomicOrdering::SeqCst) {
+                                log_performance(
+                                    "PARAKEET_STREAM_FIRST_CONFIRMED",
+                                    started.elapsed().as_millis() as u64,
+                                    Some("source=preview"),
+                                );
+                            }
+                            if !StreamSessionGate::assert_committed_monotonic(
+                                &committed_guard,
+                                &partial.text,
+                            ) {
+                                log::warn!("Rejected non-monotonic Parakeet committed stream text");
+                                return;
+                            }
+                            *committed_guard = partial.text.clone();
+                            (committed_guard.clone(), String::new())
+                        } else {
+                            (committed_guard.clone(), partial.text)
+                        };
+                        drop(committed_guard);
+
+                        let event = TranscriptionStreamEvent::Partial {
+                            session_id: recording_generation,
+                            revision: callback_revision.fetch_add(1, AtomicOrdering::SeqCst) + 1,
+                            committed: committed_text,
+                            tentative: tentative_text,
+                        };
+                        emit_parakeet_stream_event(&callback_app, &callback_gate, event);
+                    },
+                )
+                .await
+        });
+
+        match opened {
+            Ok(handle) => {
+                emit_parakeet_stream_event(
+                    &app,
+                    &gate,
+                    TranscriptionStreamEvent::Started {
+                        session_id: recording_generation,
+                        engine: "parakeet".to_string(),
+                        revision: 0,
+                    },
+                );
+                Some(Box::new(ParakeetPreviewStreamSink {
+                    app: app.clone(),
+                    handle,
+                    session_id: recording_generation,
+                    revision,
+                    gate,
+                    started,
+                }) as Box<dyn StreamTapSink>)
+            }
+            Err(error) => {
+                log::warn!("Failed to open Parakeet preview stream: {}", error);
+                None
+            }
+        }
+    }))
+}
 
 /// Open a new recording generation. Called at the top of `start_recording`
 /// before `Starting` is published, so every stop/cancel and spawned
@@ -291,8 +513,8 @@ fn toast_clear_is_current(counter: &AtomicU64, toast_id: u64) -> bool {
         .is_ok()
 }
 
-fn emit_pill_toast(
-    app: &AppHandle,
+fn emit_pill_toast<R: Runtime>(
+    app: &AppHandle<R>,
     message: &str,
     duration_ms: u64,
     variant: Option<PillToastVariant>,
@@ -363,12 +585,12 @@ fn emit_pill_toast(
 /// Show a toast message on the pill's toast window (above the pill).
 /// Existing call sites intentionally emit no variant, preserving frontend
 /// severity inference.
-pub fn pill_toast(app: &AppHandle, message: &str, duration_ms: u64) -> u64 {
+pub fn pill_toast<R: Runtime>(app: &AppHandle<R>, message: &str, duration_ms: u64) -> u64 {
     emit_pill_toast(app, message, duration_ms, None, false, None)
 }
 
-pub fn pill_toast_with_variant(
-    app: &AppHandle,
+pub fn pill_toast_with_variant<R: Runtime>(
+    app: &AppHandle<R>,
     message: &str,
     duration_ms: u64,
     variant: PillToastVariant,
@@ -376,13 +598,17 @@ pub fn pill_toast_with_variant(
     emit_pill_toast(app, message, duration_ms, Some(variant), false, None)
 }
 
-pub fn pill_toast_persistent(app: &AppHandle, message: &str, variant: PillToastVariant) -> u64 {
+pub fn pill_toast_persistent<R: Runtime>(
+    app: &AppHandle<R>,
+    message: &str,
+    variant: PillToastVariant,
+) -> u64 {
     emit_pill_toast(app, message, 0, Some(variant), true, None)
 }
 
 /// Show a toast with a remediation suggestion rendered below the message.
-pub fn pill_toast_with_suggestion(
-    app: &AppHandle,
+pub fn pill_toast_with_suggestion<R: Runtime>(
+    app: &AppHandle<R>,
     message: &str,
     suggestion: &str,
     duration_ms: u64,
@@ -391,7 +617,7 @@ pub fn pill_toast_with_suggestion(
     emit_pill_toast(app, message, duration_ms, variant, false, Some(suggestion))
 }
 
-pub fn clear_pill_toast(app: &AppHandle, toast_id: u64) {
+pub fn clear_pill_toast<R: Runtime>(app: &AppHandle<R>, toast_id: u64) {
     if !toast_clear_is_current(&TOAST_ID_COUNTER, toast_id) {
         return;
     }
@@ -414,6 +640,17 @@ pub fn clear_pill_toast(app: &AppHandle, toast_id: u64) {
 
 fn should_hide_pill_when_idle(mode: &str) -> bool {
     mode != "always"
+}
+
+fn emit_recording_too_short_feedback<R: Runtime>(
+    app: &AppHandle<R>,
+    min_duration_label: &str,
+) -> u64 {
+    pill_toast(
+        app,
+        &format!("Recording shorter than {} seconds", min_duration_label),
+        1000,
+    )
 }
 
 /// Check if pill should be hidden based on pill_indicator_mode setting.
@@ -876,21 +1113,11 @@ fn build_transcription_job(
     )
 }
 
-fn seconds_to_duration_ms(duration_seconds: Option<f32>) -> Option<u64> {
-    duration_seconds.map(|seconds| (seconds.max(0.0) * 1000.0) as u64)
-}
-
-pub(crate) fn transcription_watchdog_budget(audio_duration_ms: Option<u64>) -> std::time::Duration {
-    const MIN_SECONDS: u64 = 180;
-    const MAX_SECONDS: u64 = 30 * 60;
-
-    let budget_seconds = audio_duration_ms
-        .map(|duration_ms| duration_ms.saturating_add(999) / 1000)
-        .map(|duration_seconds| duration_seconds.saturating_mul(4).saturating_add(60))
-        .unwrap_or(MIN_SECONDS)
-        .clamp(MIN_SECONDS, MAX_SECONDS);
-
-    std::time::Duration::from_secs(budget_seconds)
+fn upload_error_to_string(error: TranscriptionError) -> String {
+    if error.code == TranscriptionErrorCode::Timeout {
+        return error.user_message;
+    }
+    error.detail.unwrap_or(error.user_message)
 }
 
 /// Build a [`TranscriptionRequest`] for the desktop record→insert hot path from an
@@ -935,6 +1162,8 @@ fn build_desktop_transcription_request(
         timeout: TimeoutPolicy::Interactive,
         cancellation,
         initial_prompt,
+        audio_ctx: None,
+        speed_mode_override: None,
     })
 }
 
@@ -968,20 +1197,6 @@ fn is_non_speech_transcript(raw: &str) -> bool {
             | "(music)"
             | "(noise)"
     )
-}
-
-pub(crate) fn parakeet_segments_to_transcription_segments(
-    segments: Vec<ParakeetSegment>,
-) -> Vec<TranscriptionSegment> {
-    segments
-        .into_iter()
-        .map(|segment| TranscriptionSegment {
-            text: segment.text,
-            start_ms: seconds_to_duration_ms(segment.start),
-            end_ms: seconds_to_duration_ms(segment.end),
-            speaker_id: None,
-        })
-        .collect()
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
@@ -1103,6 +1318,9 @@ fn build_writing_history_metadata(
     if let Some(v) = transcription.timings.processing_duration_ms {
         map.insert("processing_duration_ms".into(), v.into());
     }
+    if let Some(v) = transcription.timings.spans_ms.as_ref() {
+        map.insert("timings_ms".into(), v.clone());
+    }
     map.insert("diarized".into(), transcription.words.is_some().into());
     if let Some(wr) = writing {
         map.insert(
@@ -1220,26 +1438,6 @@ fn notify_ai_polish_failure(app: &AppHandle, error: &AiProviderError) {
     }
 }
 
-async fn save_ai_polish_fallback_history(
-    app: AppHandle,
-    transcription: &TranscriptionResult,
-    writing_result: &crate::writing::WritingResult,
-) -> Result<(), String> {
-    save_transcription_with_recording(
-        app.clone(),
-        writing_result.final_text.clone(),
-        transcription.model.clone(),
-        None,
-        Some(build_writing_history_metadata(
-            transcription,
-            Some(writing_result),
-        )),
-    )
-    .await?;
-    let _ = emit_to_window(&app, "main", "history-updated", ());
-    Ok(())
-}
-
 #[derive(Debug)]
 struct DesktopWritingSuccessPlan {
     final_text: String,
@@ -1299,44 +1497,8 @@ pub fn compile_remote_request_context(
     )
 }
 
-pub(crate) fn compile_parakeet_custom_vocabulary_for_transcription(
-    app: &AppHandle,
-    language: Option<&str>,
-) -> Vec<crate::parakeet::messages::ParakeetVocabularyTerm> {
-    let Ok(settings) = crate::writing::load_writing_settings(app) else {
-        return Vec::new();
-    };
-
-    if settings.custom_words.is_empty() {
-        return Vec::new();
-    }
-
-    crate::writing::compile_parakeet_custom_vocabulary(&settings, language)
-}
-
 fn compile_whisper_initial_prompt(app: &AppHandle, language: Option<&str>) -> Option<String> {
     compile_remote_request_context(app, language)
-}
-
-#[cfg(target_os = "windows")]
-const DEFAULT_TRANSCRIPTION_ACCELERATION: &str = "auto";
-#[cfg(target_os = "windows")]
-fn normalize_transcription_acceleration(value: Option<&str>) -> String {
-    match value {
-        Some("cpu") => "cpu".to_string(),
-        Some("gpu") => "gpu".to_string(),
-        _ => DEFAULT_TRANSCRIPTION_ACCELERATION.to_string(),
-    }
-}
-#[cfg(target_os = "windows")]
-async fn transcription_acceleration_mode(app: &AppHandle) -> String {
-    if let Ok(store) = app.store("settings") {
-        let value = store
-            .get("transcription_acceleration")
-            .and_then(|v| v.as_str().map(str::to_owned));
-        return normalize_transcription_acceleration(value.as_deref());
-    }
-    DEFAULT_TRANSCRIPTION_ACCELERATION.to_string()
 }
 
 /// Best-effort warm of the Windows Vulkan sidecar when a Whisper model is preloaded.
@@ -1360,109 +1522,6 @@ pub(crate) async fn warm_whisper_gpu_sidecar_on_model_preload(
         let _ = (app, model_path);
         false
     }
-}
-
-pub(crate) async fn transcribe_whisper_with_acceleration<F>(
-    app: &AppHandle,
-    model_path: &Path,
-    audio_path: &Path,
-    language: Option<&str>,
-    translate: bool,
-    initial_prompt: Option<&str>,
-    should_cancel: F,
-) -> Result<WhisperTranscriptionOutput, String>
-where
-    F: Fn() -> bool + Clone + Send + 'static,
-{
-    #[cfg(target_os = "windows")]
-    let mode = transcription_acceleration_mode(app).await;
-
-    #[cfg(target_os = "windows")]
-    let mut preserve_gpu_status = false;
-
-    #[cfg(target_os = "windows")]
-    if mode != "cpu" {
-        if should_cancel() {
-            return Err("Transcription cancelled".to_string());
-        }
-
-        let gpu_client = app.state::<crate::whisper::gpu_sidecar::GpuSidecarClient>();
-        let status = gpu_client.status().await;
-        let should_try_gpu = mode == "gpu" || status.gpu_available != Some(false);
-
-        if should_try_gpu {
-            let gpu_result = gpu_client
-                .transcribe(
-                    app,
-                    crate::whisper::gpu_sidecar::GpuTranscribeRequest {
-                        model_path,
-                        audio_path,
-                        language,
-                        translate,
-                        initial_prompt,
-                        mode: &mode,
-                    },
-                )
-                .await;
-
-            match gpu_result {
-                Ok(output) => return Ok(output),
-                Err(error)
-                    if error == "Transcription cancelled"
-                        || error == crate::whisper::gpu_sidecar::SIDECAR_ABORT_ERROR =>
-                {
-                    // User cancel / watchdog abort: not a GPU fault. Surface the
-                    // canonical cancellation — no CPU re-run, no GPU-status change.
-                    gpu_client.abort_active_process().await;
-                    return Err("Transcription cancelled".to_string());
-                }
-                Err(error) => {
-                    preserve_gpu_status = true;
-                    log::warn!("GPU sidecar failed, falling back to CPU: {error}");
-                    if mode == "gpu" {
-                        pill_toast(app, "GPU unavailable, using CPU", 4000);
-                    }
-                }
-            }
-        } else {
-            preserve_gpu_status = true;
-            log::info!("Skipping Vulkan sidecar in auto mode after previous GPU failure");
-        }
-    }
-
-    let transcriber = {
-        let cache_state = app.state::<AsyncMutex<TranscriberCache>>();
-        let mut cache = cache_state.lock().await;
-        cache.get_or_create(model_path)?
-    };
-
-    let audio_path = audio_path.to_path_buf();
-    let language = language.map(str::to_owned);
-    let initial_prompt = initial_prompt.map(str::to_owned);
-    let should_cancel_for_decode = should_cancel.clone();
-    let result = tokio::task::spawn_blocking(move || {
-        transcriber.transcribe_with_metadata_with_prompt(
-            &audio_path,
-            language.as_deref(),
-            translate,
-            initial_prompt.as_deref(),
-            should_cancel_for_decode,
-        )
-    })
-    .await
-    .map_err(|error| format!("Whisper transcription worker failed: {error}"))?;
-
-    #[cfg(target_os = "windows")]
-    {
-        if result.is_ok() && !preserve_gpu_status {
-            let gpu_client = app.state::<crate::whisper::gpu_sidecar::GpuSidecarClient>();
-            gpu_client
-                .set_cpu_status(&mode, "Last transcription used CPU mode.")
-                .await;
-        }
-    }
-
-    result
 }
 
 fn build_remote_upload_transcription_request(
@@ -1499,26 +1558,30 @@ mod tests {
         build_failed_transcription_row, build_remote_server_error_payload,
         build_remote_transcription_result, build_remote_upload_transcription_request,
         build_transcription_job, build_translation_failed_history_metadata,
-        build_writing_history_metadata, classify_local_failure, finalize_in_flight_audio,
-        is_ai_auth_error, is_non_speech_transcript, persist_if_current,
+        build_writing_history_metadata, classify_local_failure, emit_recording_too_short_feedback,
+        finalize_in_flight_audio, is_ai_auth_error, is_non_speech_transcript, persist_if_current,
         plan_desktop_writing_success, recording_license_state, remote_server_error_pill_message,
-        set_in_flight_transcription_audio, should_hide_pill_when_idle, should_use_active_remote,
-        silence_event_runs_in_state, silence_timeout_disposition, stop_should_reset_to_idle,
+        set_in_flight_transcription_audio, should_hide_pill_when_idle, silence_event_runs_in_state,
+        silence_timeout_disposition, stop_should_reset_to_idle,
         sync_retranscription_failure_metadata, take_in_flight_transcription_audio,
-        toast_clear_is_current, transcription_watchdog_budget, LocalFailureKind,
-        NormalizedTempFile, PillToastEventPayload, RecordingLicenseState, SilenceDetectorEvent,
-        SilenceTimeoutDisposition, StopInFlightGuard, TranscriptionFailure, TranscriptionStatus,
+        toast_clear_is_current, LocalFailureKind, NormalizedTempFile, PillToastEventPayload,
+        RecordingLicenseState, SilenceDetectorEvent, SilenceTimeoutDisposition, StopInFlightGuard,
+        TranscriptionFailure, TranscriptionStatus,
     };
+    use crate::cloud_stt::CloudProvider;
     use crate::commands::license::CachedLicense;
     use crate::license::{LicenseState, LicenseStatus};
     use crate::remote::client::{
         calculate_timeout_ms, RemoteClientError, RemoteEndpoint, TranscriptionSource,
     };
+    use crate::transcription::error::TranscriptionErrorCode;
+    use crate::transcription::executor::ensure_cloud_task_supported;
     use crate::{AppState, RecordingState};
     use reqwest::StatusCode;
     use std::fs;
     use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-    use std::sync::Arc;
+    use std::sync::{Arc, Mutex};
+    use tauri::{Listener, Manager};
 
     fn cached_license(status: LicenseState) -> CachedLicense {
         CachedLicense::new(LicenseStatus {
@@ -1605,39 +1668,40 @@ mod tests {
     }
 
     #[test]
-    fn transcription_watchdog_budget_defaults_to_minimum_for_unknown_duration() {
+    fn recording_too_short_feedback_emits_toast_without_pill_window() {
+        let app = tauri::test::mock_app();
+        let received = Arc::new(Mutex::new(Vec::<serde_json::Value>::new()));
+        let received_for_listener = received.clone();
+        app.listen("toast", move |event| {
+            let payload = serde_json::from_str(event.payload()).expect("toast payload json");
+            received_for_listener.lock().unwrap().push(payload);
+        });
+
+        assert!(app.get_webview_window("pill").is_none());
+        emit_recording_too_short_feedback(app.handle(), "0.5");
+
+        let events = received.lock().unwrap();
+        assert_eq!(events.len(), 1);
         assert_eq!(
-            transcription_watchdog_budget(None),
-            std::time::Duration::from_secs(180)
+            events[0]["message"].as_str(),
+            Some("Recording shorter than 0.5 seconds")
         );
+        assert_eq!(events[0]["duration_ms"].as_u64(), Some(1000));
     }
 
     #[test]
-    fn transcription_watchdog_budget_floors_to_minimum_for_short_audio() {
-        assert_eq!(
-            transcription_watchdog_budget(Some(10_000)),
-            std::time::Duration::from_secs(180)
-        );
-    }
+    fn upload_cloud_translate_guard_rejects_unsupported_providers() {
+        for provider in CloudProvider::ALL {
+            let error = ensure_cloud_task_supported(
+                *provider,
+                true,
+                crate::transcription::TranscriptionSource::AudioFile,
+            )
+            .expect_err("translate-to-English must be rejected");
 
-    #[test]
-    fn transcription_watchdog_budget_scales_duration_and_adds_sixty_seconds() {
-        assert_eq!(
-            transcription_watchdog_budget(Some(60_000)),
-            std::time::Duration::from_secs(300)
-        );
-    }
-
-    #[test]
-    fn transcription_watchdog_budget_ceilings_partial_seconds_and_clamps_maximum() {
-        assert_eq!(
-            transcription_watchdog_budget(Some(60_001)),
-            std::time::Duration::from_secs(304)
-        );
-        assert_eq!(
-            transcription_watchdog_budget(Some(600_000)),
-            std::time::Duration::from_secs(1800)
-        );
+            assert_eq!(error.code, TranscriptionErrorCode::EngineUnavailable);
+            assert!(error.user_message.contains("translate to English"));
+        }
     }
 
     #[test]
@@ -2091,18 +2155,6 @@ mod tests {
     }
 
     #[test]
-    fn explicit_engine_hint_bypasses_active_remote() {
-        assert!(!should_use_active_remote(Some("whisper")));
-        assert!(!should_use_active_remote(Some("parakeet")));
-        assert!(!should_use_active_remote(Some("soniox")));
-    }
-
-    #[test]
-    fn missing_engine_hint_allows_active_remote() {
-        assert!(should_use_active_remote(None));
-    }
-
-    #[test]
     fn retryable_preserved_remote_failure_emits_history_capable_payload_and_copy() {
         let failure = TranscriptionFailure::Remote(RemoteClientError::Timeout {
             endpoint: RemoteEndpoint::Transcribe,
@@ -2225,6 +2277,7 @@ mod tests {
             timings: TranscriptionTimings {
                 audio_duration_ms: Some(5000),
                 processing_duration_ms: Some(1200),
+                spans_ms: None,
             },
         }
     }
@@ -2498,8 +2551,6 @@ mod tests {
         );
     }
 
-    static POST_TRANSCRIPTION_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
-
     fn unique_side_effect_path(label: &str) -> std::path::PathBuf {
         static COUNTER: AtomicU64 = AtomicU64::new(0);
         let n = COUNTER.fetch_add(1, Ordering::SeqCst);
@@ -2508,7 +2559,9 @@ mod tests {
 
     #[test]
     fn persist_if_current_skips_stale_generation_and_cancel() {
-        let _guard = POST_TRANSCRIPTION_TEST_LOCK.lock().unwrap();
+        let _lifecycle_guard = crate::tests::RECORDING_LIFECYCLE_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         let app_state = AppState::new();
         let generation = begin_recording_generation();
         let mut commits = 0;
@@ -2542,7 +2595,9 @@ mod tests {
     #[tokio::test(flavor = "current_thread")]
     #[allow(clippy::await_holding_lock)] // process-wide test serialization lock; current-thread runtime
     async fn stale_task_cannot_clear_newer_in_flight_tracker() {
-        let _guard = POST_TRANSCRIPTION_TEST_LOCK.lock().unwrap();
+        let _lifecycle_guard = crate::tests::RECORDING_LIFECYCLE_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         let stale_generation = begin_recording_generation();
         let stale_path = unique_side_effect_path("stale-audio");
         fs::write(&stale_path, b"stale audio").unwrap();
@@ -2578,7 +2633,9 @@ mod tests {
     #[tokio::test(flavor = "current_thread")]
     #[allow(clippy::await_holding_lock)] // process-wide test serialization lock; current-thread runtime
     async fn failed_history_after_late_cancel_is_skipped_at_commit_site() {
-        let _guard = POST_TRANSCRIPTION_TEST_LOCK.lock().unwrap();
+        let _lifecycle_guard = crate::tests::RECORDING_LIFECYCLE_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         let generation = begin_recording_generation();
         let app_state = Arc::new(AppState::new());
         let history_path = unique_side_effect_path("failed-history");
@@ -2614,7 +2671,9 @@ mod tests {
     #[tokio::test(flavor = "current_thread")]
     #[allow(clippy::await_holding_lock)] // process-wide test serialization lock; current-thread runtime
     async fn translation_failed_history_after_late_cancel_is_skipped_at_commit_site() {
-        let _guard = POST_TRANSCRIPTION_TEST_LOCK.lock().unwrap();
+        let _lifecycle_guard = crate::tests::RECORDING_LIFECYCLE_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         let generation = begin_recording_generation();
         let app_state = Arc::new(AppState::new());
         let history_path = unique_side_effect_path("translation-history");
@@ -2651,7 +2710,9 @@ mod tests {
     #[tokio::test(flavor = "current_thread")]
     #[allow(clippy::await_holding_lock)] // process-wide test serialization lock; current-thread runtime
     async fn cancel_between_gate_and_spawned_history_save_is_rechecked_inside_task() {
-        let _guard = POST_TRANSCRIPTION_TEST_LOCK.lock().unwrap();
+        let _lifecycle_guard = crate::tests::RECORDING_LIFECYCLE_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         let generation = begin_recording_generation();
         let app_state = Arc::new(AppState::new());
         let history_path = unique_side_effect_path("spawned-history");
@@ -3153,48 +3214,6 @@ pub async fn open_recordings_folder(app: AppHandle) -> Result<(), String> {
     Ok(())
 }
 
-#[derive(Clone)]
-pub(crate) enum ActiveEngineSelection {
-    Whisper {
-        model_name: String,
-        model_path: PathBuf,
-    },
-    Parakeet {
-        model_name: String,
-    },
-    Cloud {
-        provider: crate::cloud_stt::CloudProvider,
-        model_name: String,
-    },
-    Remote {
-        server_id: String,
-        server_name: String,
-        host: String,
-        port: u16,
-        password: Option<String>,
-    },
-}
-
-impl ActiveEngineSelection {
-    pub(crate) fn engine_name(&self) -> &'static str {
-        match self {
-            ActiveEngineSelection::Whisper { .. } => "whisper",
-            ActiveEngineSelection::Parakeet { .. } => "parakeet",
-            ActiveEngineSelection::Cloud { provider, .. } => provider.id(),
-            ActiveEngineSelection::Remote { .. } => "remote",
-        }
-    }
-
-    pub(crate) fn model_name(&self) -> &str {
-        match self {
-            ActiveEngineSelection::Whisper { model_name, .. } => model_name,
-            ActiveEngineSelection::Parakeet { model_name } => model_name,
-            ActiveEngineSelection::Cloud { model_name, .. } => model_name,
-            ActiveEngineSelection::Remote { server_name, .. } => server_name,
-        }
-    }
-}
-
 async fn abort_due_to_missing_model(
     app: &AppHandle,
     audio_path: &Path,
@@ -3235,140 +3254,6 @@ async fn abort_due_to_missing_model(
     update_recording_state(app, RecordingState::Idle, None);
 
     Err(log_message.to_string())
-}
-
-fn should_use_active_remote(engine_hint: Option<&str>) -> bool {
-    engine_hint.is_none()
-}
-
-pub(crate) async fn resolve_engine_for_model(
-    app: &AppHandle,
-    model_name: &str,
-    engine_hint: Option<&str>,
-) -> Result<ActiveEngineSelection, String> {
-    let remote_settings = app.state::<AsyncMutex<RemoteSettings>>();
-    let active_remote = {
-        let settings = remote_settings.lock().await;
-        settings.get_active_connection().cloned()
-    };
-
-    if should_use_active_remote(engine_hint) {
-        if let Some(remote_conn) = active_remote {
-            if matches!(
-                remote_conn.status,
-                crate::remote::settings::ConnectionStatus::Online
-            ) {
-                return Ok(ActiveEngineSelection::Remote {
-                    server_id: remote_conn.id.clone(),
-                    server_name: remote_conn.display_name(),
-                    host: remote_conn.host,
-                    port: remote_conn.port,
-                    password: remote_conn.password,
-                });
-            }
-
-            return Err(
-                "Selected remote unavailable. Reconnect or choose another source.".to_string(),
-            );
-        }
-    }
-
-    let whisper_state = app.state::<AsyncRwLock<WhisperManager>>();
-    let parakeet_manager = app.state::<ParakeetManager>();
-
-    match engine_hint.map(|e| e.to_lowercase()) {
-        Some(ref engine) if crate::cloud_stt::CloudProvider::from_id(engine).is_some() => {
-            let provider = crate::cloud_stt::CloudProvider::from_id(engine).unwrap();
-            if crate::secure_store::secure_has(app, provider.key_name()).unwrap_or(false) {
-                Ok(ActiveEngineSelection::Cloud {
-                    provider,
-                    model_name: model_name.to_string(),
-                })
-            } else {
-                Err(format!(
-                    "{} key not configured. Please configure it in Models.",
-                    provider.display_name()
-                ))
-            }
-        }
-        Some(ref engine) if engine == "parakeet" => {
-            let status = parakeet_manager
-                .list_models()
-                .into_iter()
-                .find(|m| m.name == model_name);
-
-            match status {
-                Some(info) if info.downloaded => Ok(ActiveEngineSelection::Parakeet {
-                    model_name: model_name.to_string(),
-                }),
-                Some(_) => Err(format!(
-                    "Parakeet model '{}' is not downloaded. Please download it first.",
-                    model_name
-                )),
-                None => Err(format!(
-                    "Parakeet model '{}' not found in registry.",
-                    model_name
-                )),
-            }
-        }
-        Some(ref engine) if engine == "whisper" || engine == "whisper.cpp" => {
-            let path = whisper_state
-                .read()
-                .await
-                .get_model_path(model_name)
-                .ok_or_else(|| format!("Whisper model '{}' not found", model_name))?;
-
-            Ok(ActiveEngineSelection::Whisper {
-                model_name: model_name.to_string(),
-                model_path: path,
-            })
-        }
-        Some(engine) => Err(format!("Unknown model engine '{}'.", engine)),
-        None => {
-            if let Some(provider) = crate::cloud_stt::CloudProvider::from_id(model_name) {
-                if crate::secure_store::secure_has(app, provider.key_name()).unwrap_or(false) {
-                    return Ok(ActiveEngineSelection::Cloud {
-                        provider,
-                        model_name: model_name.to_string(),
-                    });
-                } else {
-                    return Err(format!(
-                        "{} key not configured. Please configure it in Models.",
-                        provider.display_name()
-                    ));
-                }
-            }
-            if let Some(path) = whisper_state.read().await.get_model_path(model_name) {
-                return Ok(ActiveEngineSelection::Whisper {
-                    model_name: model_name.to_string(),
-                    model_path: path,
-                });
-            }
-
-            let status = parakeet_manager
-                .list_models()
-                .into_iter()
-                .find(|m| m.name == model_name);
-
-            if let Some(info) = status {
-                if info.downloaded {
-                    return Ok(ActiveEngineSelection::Parakeet {
-                        model_name: model_name.to_string(),
-                    });
-                } else {
-                    return Err(format!(
-                        "Model '{}' is a Parakeet model but not downloaded. Please download it first.",
-                        model_name
-                    ));
-                }
-            }
-
-            Err(format!(
-                "Model '{}' not found in Whisper or Parakeet registries",
-                model_name
-            ))
-        }
-    }
 }
 
 /// Helper function to invalidate recording config cache when settings change
@@ -3730,10 +3615,14 @@ pub(crate) fn ptt_key_released(app_state: &AppState) -> bool {
 }
 
 #[tauri::command]
+/// Returns `true` when THIS call started the recording, `false` when it was a
+/// redundant no-op on an already starting/active recording (idempotent
+/// fast-path). Callers that pair a later stop with their own start (the in-app
+/// bare-modifier hold) must key on this — a bare Ok never proved ownership.
 pub async fn start_recording(
     app: AppHandle,
     state: State<'_, RecorderState>,
-) -> Result<(), String> {
+) -> Result<bool, String> {
     let recording_start = Instant::now();
 
     log_start("RECORDING_START");
@@ -3819,7 +3708,7 @@ pub async fn start_recording(
                 "start_recording: already {:?}; treating redundant start as no-op",
                 live_state
             );
-            return Ok(());
+            return Ok(false);
         }
     }
 
@@ -3867,6 +3756,29 @@ pub async fn start_recording(
             // chime clips the start of capture.
         }
     }
+    let (streaming_tap_enabled, streaming_engine_enabled, live_preview_mode) = app
+        .store("settings")
+        .ok()
+        .map(|store| {
+            let live_preview_mode = store
+                .get("transcription_mode")
+                .and_then(|value| value.as_str().map(|value| value == "live_preview"))
+                .unwrap_or(false);
+            let dev_tap_enabled = store
+                .get("streaming_tap_enabled")
+                .and_then(|value| value.as_bool())
+                .unwrap_or(false);
+            let dev_engine_enabled = store
+                .get("streaming_engine_enabled")
+                .and_then(|value| value.as_bool())
+                .unwrap_or(false);
+            (
+                live_preview_mode || dev_tap_enabled,
+                live_preview_mode || dev_engine_enabled,
+                live_preview_mode,
+            )
+        })
+        .unwrap_or((false, false, false));
 
     // Pause system media if enabled (default: off)
     let mut resume_media_on_error = false;
@@ -3920,7 +3832,9 @@ pub async fn start_recording(
                 let guard = remote.lock().await;
                 guard.get_active_connection().is_some()
             };
-            if !remote_active && crate::secure_store::secure_has(&app, provider.key_name()).unwrap_or(false) {
+            if !remote_active
+                && crate::secure_store::secure_has(&app, provider.key_name()).unwrap_or(false)
+            {
                 provider.warm_up().await;
             }
         });
@@ -4084,79 +3998,50 @@ pub async fn start_recording(
         log_file_operation("RECORDING_START", audio_path_str, false, None, None);
 
         // Start recording and get side-channel receivers
-        let (audio_level_rx, silence_event_rx) =
-            match recorder.start_recording(audio_path_str, selected_microphone.clone()) {
-                Ok(_) => {
-                    log::debug!(
-                        "⏱️ [REC TIMING] recorder.start_recording returned Ok (+{}ms)",
-                        recording_start.elapsed().as_millis()
+        let recording_generation = current_recording_generation();
+        let parakeet_streaming_enabled = config.current_engine == "parakeet";
+        let streaming_tap_enabled = streaming_tap_enabled && parakeet_streaming_enabled;
+        let streaming_engine_enabled = streaming_engine_enabled && parakeet_streaming_enabled;
+        let cancellation_flag = app_state.should_cancel_recording.clone();
+        let stream_cancelled: Arc<dyn Fn() -> bool + Send + Sync> =
+            Arc::new(move || cancellation_flag.load(AtomicOrdering::SeqCst));
+        let stream_sink_factory = build_parakeet_stream_sink_factory(
+            &app,
+            &config,
+            streaming_tap_enabled,
+            streaming_engine_enabled,
+            live_preview_mode,
+            recording_generation,
+        );
+        let (audio_level_rx, silence_event_rx) = match recorder.start_recording(
+            audio_path_str,
+            selected_microphone.clone(),
+            streaming_tap_enabled,
+            recording_generation,
+            stream_cancelled,
+            stream_sink_factory,
+        ) {
+            Ok(_) => {
+                log::debug!(
+                    "⏱️ [REC TIMING] recorder.start_recording returned Ok (+{}ms)",
+                    recording_start.elapsed().as_millis()
+                );
+                // Verify recording actually started
+                let is_recording = recorder.is_recording();
+
+                // Get receivers before potentially dropping recorder
+                let level_rx = recorder.take_audio_level_receiver();
+                let silence_rx = recorder.take_silence_event_receiver();
+
+                if !is_recording {
+                    drop(recorder); // Release the lock if we're erroring out
+                    log_failed(
+                        "RECORDER_INIT",
+                        "Recording failed to start after initialization",
                     );
-                    // Verify recording actually started
-                    let is_recording = recorder.is_recording();
-
-                    // Get receivers before potentially dropping recorder
-                    let level_rx = recorder.take_audio_level_receiver();
-                    let silence_rx = recorder.take_silence_event_receiver();
-
-                    if !is_recording {
-                        drop(recorder); // Release the lock if we're erroring out
-                        log_failed(
-                            "RECORDER_INIT",
-                            "Recording failed to start after initialization",
-                        );
-                        log_with_context(
-                            log::Level::Debug,
-                            "Recorder initialization failed",
-                            &[
-                                ("audio_path", audio_path_str),
-                                (
-                                    "init_time_ms",
-                                    recorder_init_start
-                                        .elapsed()
-                                        .as_millis()
-                                        .to_string()
-                                        .as_str(),
-                                ),
-                            ],
-                        );
-
-                        update_recording_state(
-                            &app,
-                            RecordingState::Error,
-                            Some("Microphone initialization failed".to_string()),
-                        );
-
-                        // Emit user-friendly error via pill toast
-                        pill_toast_with_suggestion(
-                        &app,
-                        "Microphone access failed",
-                        "Enable Microphone access in System Settings \u{25b8} Privacy & Security",
-                        1500,
-                        None,
-                    );
-
-                        resume_media_if_needed();
-                        return Err("Failed to start recording".to_string());
-                    } else {
-                        log_performance(
-                            "RECORDER_INIT",
-                            recorder_init_start.elapsed().as_millis() as u64,
-                            Some(&format!("file={}", audio_path_str)),
-                        );
-                        log::info!("✅ Recording started successfully");
-
-                        // Monitor system resources at recording start
-                        #[cfg(debug_assertions)]
-                        system_monitor::log_resources_before_operation("RECORDING_START");
-                    }
-
-                    (level_rx, silence_rx)
-                }
-                Err(e) => {
-                    log_failed("RECORDER_START", &e);
                     log_with_context(
                         log::Level::Debug,
-                        "Recorder start failed",
+                        "Recorder initialization failed",
                         &[
                             ("audio_path", audio_path_str),
                             (
@@ -4170,29 +4055,79 @@ pub async fn start_recording(
                         ],
                     );
 
-                    update_recording_state(&app, RecordingState::Error, Some(e.to_string()));
+                    update_recording_state(
+                        &app,
+                        RecordingState::Error,
+                        Some("Microphone initialization failed".to_string()),
+                    );
 
-                    // Provide specific error messages for common issues
-                    let (user_message, suggestion) =
-                        if e.contains("permission") || e.contains("access") {
-                            (
+                    // Emit user-friendly error via pill toast
+                    pill_toast_with_suggestion(
+                        &app,
+                        "Microphone access failed",
+                        "Enable Microphone access in System Settings \u{25b8} Privacy & Security",
+                        1500,
+                        None,
+                    );
+
+                    resume_media_if_needed();
+                    return Err("Failed to start recording".to_string());
+                } else {
+                    log_performance(
+                        "RECORDER_INIT",
+                        recorder_init_start.elapsed().as_millis() as u64,
+                        Some(&format!("file={}", audio_path_str)),
+                    );
+                    log::info!("✅ Recording started successfully");
+
+                    // Monitor system resources at recording start
+                    #[cfg(debug_assertions)]
+                    system_monitor::log_resources_before_operation("RECORDING_START");
+                }
+
+                (level_rx, silence_rx)
+            }
+            Err(e) => {
+                log_failed("RECORDER_START", &e);
+                log_with_context(
+                    log::Level::Debug,
+                    "Recorder start failed",
+                    &[
+                        ("audio_path", audio_path_str),
+                        (
+                            "init_time_ms",
+                            recorder_init_start
+                                .elapsed()
+                                .as_millis()
+                                .to_string()
+                                .as_str(),
+                        ),
+                    ],
+                );
+
+                update_recording_state(&app, RecordingState::Error, Some(e.to_string()));
+
+                // Provide specific error messages for common issues
+                let (user_message, suggestion) = if e.contains("permission") || e.contains("access")
+                {
+                    (
                         "Microphone permission denied",
                         "Enable Microphone access in System Settings \u{25b8} Privacy & Security",
                     )
-                        } else if e.contains("device") || e.contains("not found") {
-                            ("No microphone found", "Connect a microphone and try again")
-                        } else if e.contains("in use") || e.contains("busy") {
-                            ("Microphone busy", "Close other apps using the microphone")
-                        } else {
-                            ("Recording failed", "Try recording again")
-                        };
+                } else if e.contains("device") || e.contains("not found") {
+                    ("No microphone found", "Connect a microphone and try again")
+                } else if e.contains("in use") || e.contains("busy") {
+                    ("Microphone busy", "Close other apps using the microphone")
+                } else {
+                    ("Recording failed", "Try recording again")
+                };
 
-                    pill_toast_with_suggestion(&app, user_message, suggestion, 1500, None);
+                pill_toast_with_suggestion(&app, user_message, suggestion, 1500, None);
 
-                    resume_media_if_needed();
-                    return Err(e);
-                }
-            };
+                resume_media_if_needed();
+                return Err(e);
+            }
+        };
 
         // Release the recorder lock after successful start
         drop(recorder);
@@ -4399,7 +4334,7 @@ pub async fn start_recording(
 
     crate::trigger::engine_host::rebuild_engine_bindings(&app);
 
-    Ok(())
+    Ok(true)
 }
 
 #[tauri::command]
@@ -4449,6 +4384,20 @@ pub async fn stop_recording(
             log::warn!("stop_recording called but not currently recording");
             // Don't error - just return empty result; only reset if this stop owns the flow.
             drop(recorder); // Drop the lock before updating state
+            if entry_state == RecordingState::Starting {
+                // A start is still in flight (e.g. the in-app bare-modifier
+                // hold released before audio init finished). Queue the stop so
+                // start_recording honors it immediately after the Recording
+                // transition — same contract as the PTT key-up-during-Starting
+                // path in recording/hotkeys.rs. Without this the stop is
+                // silently dropped and the start wins, leaving an orphaned
+                // recording with no keyup owner.
+                log::info!("stop_recording during Starting: queueing pending stop after start");
+                app_state
+                    .pending_stop_after_start
+                    .store(true, std::sync::atomic::Ordering::SeqCst);
+                return Ok(String::new());
+            }
             if stop_should_reset_to_idle(entry_state) {
                 update_recording_state(&app, RecordingState::Idle, None);
             } else if entry_state == RecordingState::Stopping
@@ -5006,13 +4955,7 @@ pub async fn stop_recording(
             })();
 
             if matches!(duration_gate, Ok((true, _))) {
-                // Emit friendly feedback and stop here
-                let _ = emit_to_window(
-                    &app,
-                    "pill",
-                    "recording-too-short",
-                    format!("Recording shorter than {} seconds", min_duration_label),
-                );
+                emit_recording_too_short_feedback(&app, &min_duration_label);
                 if let Err(e) = std::fs::remove_file(&normalized_path) {
                     log::debug!("Failed to remove short normalized audio: {}", e);
                 }
@@ -6299,7 +6242,17 @@ pub async fn transcribe_audio_file(
     model_name: String,
     model_engine: Option<String>,
 ) -> Result<UploadTranscription, String> {
-    transcribe_audio_file_impl(app, file_path, model_name, model_engine, true).await
+    transcribe_audio_file_impl(
+        app,
+        file_path,
+        model_name,
+        model_engine,
+        true,
+        None,
+        None,
+        None,
+    )
+    .await
 }
 
 pub async fn transcribe_audio_file_for_cli(
@@ -6307,16 +6260,100 @@ pub async fn transcribe_audio_file_for_cli(
     file_path: String,
     model_name: String,
     model_engine: Option<String>,
+    language_override: Option<String>,
+    audio_ctx: Option<i32>,
+    speed_mode_override: Option<bool>,
 ) -> Result<UploadTranscription, String> {
-    transcribe_audio_file_impl(app, file_path, model_name, model_engine, false).await
+    transcribe_audio_file_impl(
+        app,
+        file_path,
+        model_name,
+        model_engine,
+        false,
+        language_override,
+        audio_ctx,
+        speed_mode_override,
+    )
+    .await
 }
 
+async fn normalize_upload_audio_for_cloud(
+    app: &AppHandle,
+    recordings_dir: &Path,
+    wav_path: &Path,
+) -> Result<NormalizedTempFile, String> {
+    log::debug!("[UPLOAD] Normalizing to WAV for cloud transcription...");
+    let ts = chrono::Local::now().format("%Y%m%d_%H%M%S");
+    let out_path = recordings_dir.join(format!("normalized_{}.wav", ts));
+    crate::ffmpeg::normalize_streaming(app, wav_path, &out_path)
+        .await
+        .map_err(|e| format!("Audio normalization (ffmpeg) failed: {}", e))?;
+    Ok(NormalizedTempFile::new(out_path))
+}
+
+fn cloud_provider_supports_diarized_words(provider: crate::cloud_stt::CloudProvider) -> bool {
+    matches!(
+        provider,
+        crate::cloud_stt::CloudProvider::Deepgram | crate::cloud_stt::CloudProvider::Soniox
+    )
+}
+
+async fn maybe_return_diarized_cloud_upload(
+    app: &AppHandle,
+    provider: crate::cloud_stt::CloudProvider,
+    audio_path: &Path,
+    language: &str,
+    transcription_job: &TranscriptionJob,
+) -> Result<Option<UploadTranscription>, String> {
+    if !cloud_provider_supports_diarized_words(provider) {
+        return Ok(None);
+    }
+
+    let budget = watchdog_budget_for(audio_path, &TimeoutPolicy::Upload);
+    let transcribe = provider.transcribe_diarized(app, audio_path, Some(language));
+    let cloud_transcript = match budget {
+        Some(deadline) => tokio::time::timeout(deadline, transcribe)
+            .await
+            .map_err(|_| "Transcription timed out".to_string())?,
+        None => transcribe.await,
+    }?;
+
+    if cloud_transcript.words.is_empty() {
+        log::debug!(
+            "[UPLOAD] {} diarized probe returned plain transcript ({} chars); routing through executor",
+            provider.display_name(),
+            cloud_transcript.text.len()
+        );
+        return Ok(None);
+    }
+
+    let words = cloud_transcript.words;
+    let text = group_words_into_speaker_text(&words);
+    log::info!(
+        "[UPLOAD] Diarized cloud transcript: {} words, {} chars",
+        words.len(),
+        text.len()
+    );
+    let mut diarized_result = TranscriptionResult::new(transcription_job, text.clone());
+    diarized_result.words = Some(words.clone());
+    let metadata = Some(build_writing_history_metadata(&diarized_result, None));
+    Ok(Some(UploadTranscription {
+        text,
+        words: Some(words),
+        metadata,
+    }))
+}
+
+#[allow(clippy::too_many_arguments)]
 async fn transcribe_audio_file_impl(
     app: AppHandle,
     file_path: String,
     model_name: String,
     model_engine: Option<String>,
     validate_requirements: bool,
+    language_override: Option<String>,
+    audio_ctx: Option<i32>,
+    speed_mode_override: Option<bool>,
 ) -> Result<UploadTranscription, String> {
     log::info!(
         "[UPLOAD] transcribe_audio_file START | file_path={:?}, model_name={}, engine_hint={:?}",
@@ -6368,10 +6405,12 @@ async fn transcribe_audio_file_impl(
         .get("translate_to_english")
         .and_then(|v| v.as_bool())
         .unwrap_or(false);
-    let language = store
-        .get("speech_language")
-        .and_then(|v| v.as_str().map(|s| s.to_string()))
-        .unwrap_or(legacy_speech_language);
+    let language = language_override.unwrap_or_else(|| {
+        store
+            .get("speech_language")
+            .and_then(|v| v.as_str().map(|s| s.to_string()))
+            .unwrap_or(legacy_speech_language)
+    });
     let ai_enabled = store
         .get("ai_enabled")
         .and_then(|v| v.as_bool())
@@ -6408,208 +6447,142 @@ async fn transcribe_audio_file_impl(
         translate_to_english,
     );
 
-    // For cloud providers, skip normalization and send original wav_path
-    let transcription_result = match engine_selection {
-        ActiveEngineSelection::Whisper { model_path, .. } => {
-            // Normalize to Whisper contract
-            log::debug!("[UPLOAD] Normalizing to Whisper WAV (16k mono s16)...");
-            let normalized_file = NormalizedTempFile::new({
-                let ts = chrono::Local::now().format("%Y%m%d_%H%M%S");
-                let out_path = recordings_dir.join(format!("normalized_{}.wav", ts));
-                crate::ffmpeg::normalize_streaming(&app, &wav_path, &out_path)
-                    .await
-                    .map_err(|e| format!("Audio normalization (ffmpeg) failed: {}", e))?;
-                out_path
-            });
-            log::info!("[UPLOAD] Normalized WAV at {:?}", normalized_file.path());
-            let initial_prompt = compile_whisper_initial_prompt(&app, Some(&language));
-            let output = transcribe_whisper_with_acceleration(
-                &app,
-                &model_path,
-                normalized_file.path(),
-                Some(&language),
-                translate_to_english,
-                initial_prompt.as_deref(),
-                || false,
-            )
-            .await?;
-            TranscriptionResult::new(&transcription_job, output.raw_text)
-                .with_transcript_language(output.transcript_language)
-                .with_segments(output.segments)
-                .with_audio_duration_ms(Some(output.audio_duration_ms))
-                .with_processing_duration_ms(Some(output.processing_duration_ms))
-        }
-        ActiveEngineSelection::Parakeet { model_name } => {
-            // Normalize to Whisper/Parakeet contract first
-            log::debug!("[UPLOAD] Normalizing to Whisper WAV (16k mono s16)...");
-            let normalized_file = NormalizedTempFile::new({
-                let ts = chrono::Local::now().format("%Y%m%d_%H%M%S");
-                let out_path = recordings_dir.join(format!("normalized_{}.wav", ts));
-                crate::ffmpeg::normalize_streaming(&app, &wav_path, &out_path)
-                    .await
-                    .map_err(|e| format!("Audio normalization (ffmpeg) failed: {}", e))?;
-                out_path
-            });
-            log::info!("[UPLOAD] Normalized WAV at {:?}", normalized_file.path());
-            let parakeet_manager = app.state::<ParakeetManager>();
-
-            parakeet_manager
-                .load_model(&app, &model_name)
+    let transcription_result = if let ActiveEngineSelection::Remote {
+        server_id,
+        server_name,
+        host,
+        port,
+        password,
+        ..
+    } = &engine_selection
+    {
+        // Normalize to Whisper contract (16k mono s16 WAV) for remote transcription
+        log::debug!("[UPLOAD] Normalizing to Whisper WAV for remote transcription...");
+        let normalized_file = NormalizedTempFile::new({
+            let ts = chrono::Local::now().format("%Y%m%d_%H%M%S");
+            let out_path = recordings_dir.join(format!("normalized_{}.wav", ts));
+            crate::ffmpeg::normalize_streaming(&app, &wav_path, &out_path)
                 .await
-                .map_err(|e| format!("Failed to load Parakeet model: {}", e))?;
+                .map_err(|e| format!("Audio normalization (ffmpeg) failed: {}", e))?;
+            out_path
+        });
+        log::info!("[UPLOAD] Normalized WAV at {:?}", normalized_file.path());
 
-            let custom_vocabulary =
-                compile_parakeet_custom_vocabulary_for_transcription(&app, Some(&language));
-
-            match parakeet_manager
-                .transcribe_with_custom_vocabulary(
-                    &app,
-                    &model_name,
-                    normalized_file.path().to_path_buf(),
-                    ParakeetTranscriptionOptions {
-                        language: Some(language.clone()),
-                        translate: translate_to_english,
-                        custom_vocabulary,
-                        cancel_flag: None,
-                    },
-                )
-                .await
-            {
-                Ok(ParakeetResponse::Transcription {
-                    text,
-                    segments,
-                    language,
-                    duration,
-                }) => TranscriptionResult::new(&transcription_job, text)
-                    .with_transcript_language(language)
-                    .with_segments(parakeet_segments_to_transcription_segments(segments))
-                    .with_audio_duration_ms(seconds_to_duration_ms(duration)),
-                Ok(other) => {
-                    return Err(format!("Unexpected Parakeet response: {:?}", other));
-                }
-                Err(err) => {
-                    return Err(format!("Parakeet transcription failed: {}", err));
-                }
-            }
-        }
-        ActiveEngineSelection::Cloud { provider, .. } => {
-            log::debug!("[UPLOAD] Normalizing to WAV for cloud transcription...");
-            let normalized_file = NormalizedTempFile::new({
-                let ts = chrono::Local::now().format("%Y%m%d_%H%M%S");
-                let out_path = recordings_dir.join(format!("normalized_{}.wav", ts));
-                crate::ffmpeg::normalize_streaming(&app, &wav_path, &out_path)
-                    .await
-                    .map_err(|e| format!("Audio normalization (ffmpeg) failed: {}", e))?;
-                out_path
-            });
-            let cloud_transcript = provider
-                .transcribe_diarized(&app, normalized_file.path(), Some(&language))
-                .await?;
-
-            // If the provider returned speaker-attributed words, group them and
-            // return directly — no AI polish for diarized uploads.
-            if !cloud_transcript.words.is_empty() {
-                let words = cloud_transcript.words;
-                let text = group_words_into_speaker_text(&words);
-                log::info!(
-                    "[UPLOAD] Diarized cloud transcript: {} words, {} chars",
-                    words.len(),
-                    text.len()
-                );
-                let mut diarized_result =
-                    TranscriptionResult::new(&transcription_job, text.clone());
-                diarized_result.words = Some(words.clone());
-                let metadata = Some(build_writing_history_metadata(&diarized_result, None));
-                return Ok(UploadTranscription {
-                    text,
-                    words: Some(words),
-                    metadata,
-                });
-            }
-
-            let cloud_job = build_transcription_job(
-                TranscriptionSource::AudioFile,
-                transcription_job.engine.clone(),
-                transcription_job.model.clone(),
-                transcription_job.spoken_language.clone(),
-                false,
-            );
-            TranscriptionResult::new(&cloud_job, cloud_transcript.text)
-        }
-        ActiveEngineSelection::Remote {
-            server_id,
+        log::info!(
+            "🌐 [Remote Upload] Starting transcription to '{}' ({}:{})",
             server_name,
             host,
-            port,
-            password,
-            ..
-        } => {
-            // Normalize to Whisper contract (16k mono s16 WAV) for remote transcription
-            log::debug!("[UPLOAD] Normalizing to Whisper WAV for remote transcription...");
-            let normalized_file = NormalizedTempFile::new({
-                let ts = chrono::Local::now().format("%Y%m%d_%H%M%S");
-                let out_path = recordings_dir.join(format!("normalized_{}.wav", ts));
-                crate::ffmpeg::normalize_streaming(&app, &wav_path, &out_path)
-                    .await
-                    .map_err(|e| format!("Audio normalization (ffmpeg) failed: {}", e))?;
-                out_path
-            });
-            log::info!("[UPLOAD] Normalized WAV at {:?}", normalized_file.path());
+            port
+        );
 
-            log::info!(
-                "🌐 [Remote Upload] Starting transcription to '{}' ({}:{})",
-                server_name,
-                host,
-                port
-            );
+        let audio_data = std::fs::read(normalized_file.path())
+            .map_err(|e| format!("Failed to read audio file: {}", e))?;
 
-            // Read the normalized audio file
-            let audio_data = std::fs::read(normalized_file.path())
-                .map_err(|e| format!("Failed to read audio file: {}", e))?;
+        let audio_size_kb = audio_data.len() as f64 / 1024.0;
+        log::info!(
+            "🌐 [Remote Upload] Sending {:.1} KB audio to '{}'",
+            audio_size_kb,
+            server_name
+        );
 
-            let audio_size_kb = audio_data.len() as f64 / 1024.0;
-            log::info!(
-                "🌐 [Remote Upload] Sending {:.1} KB audio to '{}'",
-                audio_size_kb,
-                server_name
-            );
+        let server_conn = RemoteServerConnection::new(host.clone(), *port, password.clone());
 
-            // Create HTTP client connection
-            let server_conn = RemoteServerConnection::new(host.clone(), port, password.clone());
+        let request_context = crate::commands::remote::resolve_remote_request_context(
+            &app,
+            server_id,
+            transcription_job.spoken_language.as_deref(),
+        )
+        .await;
 
-            let request_context = crate::commands::remote::resolve_remote_request_context(
-                &app,
-                &server_id,
-                transcription_job.spoken_language.as_deref(),
-            )
-            .await;
+        let (request, timeout_ms) = build_remote_upload_transcription_request(
+            normalized_file.path(),
+            audio_data,
+            Some(&transcription_job),
+            request_context,
+        );
 
-            let (request, timeout_ms) = build_remote_upload_transcription_request(
-                normalized_file.path(),
-                audio_data,
-                Some(&transcription_job),
-                request_context,
-            );
+        let response = client::transcribe_audio(&server_conn, request, timeout_ms)
+            .await
+            .map_err(|e| {
+                log::warn!(
+                    "🌐 [Remote Upload] Remote transcription FAILED to '{}': {}",
+                    server_name,
+                    e
+                );
+                e.to_string()
+            })?;
 
-            let response = client::transcribe_audio(&server_conn, request, timeout_ms)
-                .await
-                .map_err(|e| {
-                    log::warn!(
-                        "🌐 [Remote Upload] Remote transcription FAILED to '{}': {}",
-                        server_name,
-                        e
-                    );
-                    e.to_string()
-                })?;
+        log::info!(
+            "🌐 [Remote Upload] Transcription COMPLETED from '{}': {} chars received",
+            server_name,
+            response.text.len()
+        );
 
-            log::info!(
-                "🌐 [Remote Upload] Transcription COMPLETED from '{}': {} chars received",
-                server_name,
-                response.text.len()
-            );
-
-            build_remote_transcription_result(&transcription_job, response)
-        }
+        build_remote_transcription_result(&transcription_job, response)
+    } else {
+        let mut _executor_audio_guard: Option<NormalizedTempFile> = None;
+        let (executor_audio_path, format_hint) = match &engine_selection {
+            ActiveEngineSelection::Cloud { provider, .. } => {
+                ensure_cloud_task_supported(
+                    *provider,
+                    translate_to_english,
+                    TranscriptionSource::AudioFile,
+                )
+                .map_err(upload_error_to_string)?;
+                let normalized_file =
+                    normalize_upload_audio_for_cloud(&app, &recordings_dir, &wav_path).await?;
+                if let Some(diarized) = maybe_return_diarized_cloud_upload(
+                    &app,
+                    *provider,
+                    normalized_file.path(),
+                    &language,
+                    &transcription_job,
+                )
+                .await?
+                {
+                    return Ok(diarized);
+                }
+                let path = normalized_file.path().to_path_buf();
+                _executor_audio_guard = Some(normalized_file);
+                (path, Some(AudioFormatHint::Wav))
+            }
+            _ => (wav_path.clone(), None),
+        };
+        let engine =
+            ProviderEngine::from_engine_str(engine_selection.engine_name()).ok_or_else(|| {
+                format!(
+                    "Unknown transcription engine: {}",
+                    engine_selection.engine_name()
+                )
+            })?;
+        let initial_prompt = if matches!(engine_selection, ActiveEngineSelection::Whisper { .. }) {
+            compile_whisper_initial_prompt(&app, Some(&language))
+        } else {
+            None
+        };
+        let request = TranscriptionRequest {
+            source: TranscriptionSource::AudioFile,
+            audio: TranscriptionAudio::Path {
+                path: executor_audio_path,
+                format_hint,
+                cleanup: CleanupPolicy::CallerOwns,
+            },
+            engine: EngineSelection::Explicit {
+                engine,
+                model: engine_selection.model_name().to_string(),
+            },
+            spoken_language: Some(language.clone()),
+            task: transcription_job.task,
+            context: RequestContext::default(),
+            timeout: TimeoutPolicy::Upload,
+            cancellation: CancellationToken::new(),
+            initial_prompt,
+            audio_ctx,
+            speed_mode_override,
+        };
+        transcribe_with_app(&app, request)
+            .await
+            .map_err(upload_error_to_string)?
     };
 
     log::info!(
@@ -6673,261 +6646,6 @@ pub async fn diarize_audio_file(
             other
         )),
     }
-}
-
-#[tauri::command]
-pub async fn transcribe_audio(
-    app: AppHandle,
-    audio_data: Vec<u8>,
-    model_name: String,
-    model_engine: Option<String>,
-) -> Result<String, String> {
-    log::info!(
-        "[UPLOAD] transcribe_audio (bytes) START | bytes={}, model_name={}, engine_hint={:?}",
-        audio_data.len(),
-        model_name,
-        model_engine
-    );
-    // Validate requirements (includes license check)
-    validate_recording_requirements(&app).await?;
-
-    // Save audio data to app data directory
-    let recordings_dir = app
-        .path()
-        .app_data_dir()
-        .map_err(|e| e.to_string())?
-        .join("recordings");
-
-    // Ensure directory exists
-    std::fs::create_dir_all(&recordings_dir)
-        .map_err(|e| format!("Failed to create recordings directory: {}", e))?;
-
-    let temp_path = recordings_dir.join("temp_audio.wav");
-
-    std::fs::write(&temp_path, audio_data).map_err(|e| e.to_string())?;
-
-    let engine_selection =
-        resolve_engine_for_model(&app, &model_name, model_engine.as_deref()).await?;
-
-    // Get language and translation settings
-    let store = app.store("settings").map_err(|e| e.to_string())?;
-    let legacy_speech_language = store
-        .get("language")
-        .and_then(|v| v.as_str().map(|s| s.to_string()))
-        .unwrap_or_else(|| "en".to_string());
-    let legacy_translate_to_english = store
-        .get("translate_to_english")
-        .and_then(|v| v.as_bool())
-        .unwrap_or(false);
-    let language = store
-        .get("speech_language")
-        .and_then(|v| v.as_str().map(|s| s.to_string()))
-        .unwrap_or(legacy_speech_language);
-    let ai_enabled = store
-        .get("ai_enabled")
-        .and_then(|v| v.as_bool())
-        .unwrap_or(false);
-    let stored_transcription_task = store
-        .get("transcription_task")
-        .and_then(|v| v.as_str().map(|s| s.to_string()));
-    let transcription_task = resolve_transcription_task_for_audio(
-        &app,
-        ai_enabled,
-        legacy_translate_to_english,
-        stored_transcription_task.as_deref(),
-    )?;
-    let translate_to_english = task_uses_translate_to_english(&transcription_task);
-
-    let language = normalize_speech_language_for_model(
-        engine_selection.engine_name(),
-        engine_selection.model_name(),
-        &language,
-    );
-
-    log::info!(
-        "[LANGUAGE] transcribe_audio using language: {}, transcription_task={}, translate: {}",
-        language,
-        transcription_task,
-        translate_to_english
-    );
-
-    let transcription_job = build_transcription_job(
-        TranscriptionSource::AudioBytes,
-        engine_selection.engine_name().to_string(),
-        engine_selection.model_name().to_string(),
-        Some(language.clone()),
-        translate_to_english,
-    );
-
-    let transcription_result = match engine_selection {
-        ActiveEngineSelection::Whisper { model_path, .. } => {
-            let initial_prompt = compile_whisper_initial_prompt(&app, Some(language.as_str()));
-            let output = transcribe_whisper_with_acceleration(
-                &app,
-                &model_path,
-                &temp_path,
-                Some(language.as_str()),
-                translate_to_english,
-                initial_prompt.as_deref(),
-                || false,
-            )
-            .await?;
-            TranscriptionResult::new(&transcription_job, output.raw_text)
-                .with_transcript_language(output.transcript_language)
-                .with_segments(output.segments)
-                .with_audio_duration_ms(Some(output.audio_duration_ms))
-                .with_processing_duration_ms(Some(output.processing_duration_ms))
-        }
-        ActiveEngineSelection::Parakeet { model_name } => {
-            let parakeet_manager = app.state::<ParakeetManager>();
-
-            parakeet_manager
-                .load_model(&app, &model_name)
-                .await
-                .map_err(|e| format!("Failed to load Parakeet model: {}", e))?;
-
-            let custom_vocabulary =
-                compile_parakeet_custom_vocabulary_for_transcription(&app, Some(&language));
-
-            match parakeet_manager
-                .transcribe_with_custom_vocabulary(
-                    &app,
-                    &model_name,
-                    temp_path.clone(),
-                    ParakeetTranscriptionOptions {
-                        language: Some(language.clone()),
-                        translate: translate_to_english,
-                        custom_vocabulary,
-                        cancel_flag: None,
-                    },
-                )
-                .await
-            {
-                Ok(ParakeetResponse::Transcription {
-                    text,
-                    segments,
-                    language,
-                    duration,
-                }) => TranscriptionResult::new(&transcription_job, text)
-                    .with_transcript_language(language)
-                    .with_segments(parakeet_segments_to_transcription_segments(segments))
-                    .with_audio_duration_ms(seconds_to_duration_ms(duration)),
-                Ok(other) => return Err(format!("Unexpected Parakeet response: {:?}", other)),
-                Err(err) => return Err(format!("Parakeet transcription failed: {}", err)),
-            }
-        }
-        ActiveEngineSelection::Cloud { provider, .. } => {
-            let text = provider
-                .transcribe(&app, &temp_path, Some(&language))
-                .await?;
-            let cloud_job = build_transcription_job(
-                TranscriptionSource::AudioBytes,
-                transcription_job.engine.clone(),
-                transcription_job.model.clone(),
-                transcription_job.spoken_language.clone(),
-                false,
-            );
-            TranscriptionResult::new(&cloud_job, text)
-        }
-        ActiveEngineSelection::Remote {
-            server_id,
-            server_name,
-            host,
-            port,
-            password,
-            ..
-        } => {
-            // Normalize to Whisper contract (16k mono s16 WAV) for remote transcription
-            log::debug!("[CLIPBOARD] Normalizing to Whisper WAV for remote transcription...");
-            let normalized_file = NormalizedTempFile::new({
-                let ts = chrono::Local::now().format("%Y%m%d_%H%M%S");
-                let out_path = recordings_dir.join(format!("normalized_clipboard_{}.wav", ts));
-                crate::ffmpeg::normalize_streaming(&app, &temp_path, &out_path)
-                    .await
-                    .map_err(|e| format!("Audio normalization (ffmpeg) failed: {}", e))?;
-                out_path
-            });
-            log::info!("[CLIPBOARD] Normalized WAV at {:?}", normalized_file.path());
-
-            log::info!(
-                "🌐 [Remote Clipboard] Starting transcription to '{}' ({}:{})",
-                server_name,
-                host,
-                port
-            );
-
-            // Read the normalized audio file
-            let audio_data = std::fs::read(normalized_file.path())
-                .map_err(|e| format!("Failed to read audio file: {}", e))?;
-
-            let audio_size_kb = audio_data.len() as f64 / 1024.0;
-            log::info!(
-                "🌐 [Remote Clipboard] Sending {:.1} KB audio to '{}'",
-                audio_size_kb,
-                server_name
-            );
-
-            // Create HTTP client connection
-            let server_conn = RemoteServerConnection::new(host.clone(), port, password.clone());
-
-            let request_context = crate::commands::remote::resolve_remote_request_context(
-                &app,
-                &server_id,
-                transcription_job.spoken_language.as_deref(),
-            )
-            .await;
-
-            let (request, timeout_ms) = build_remote_upload_transcription_request(
-                normalized_file.path(),
-                audio_data,
-                Some(&transcription_job),
-                request_context,
-            );
-
-            let response = client::transcribe_audio(&server_conn, request, timeout_ms)
-                .await
-                .map_err(|e| {
-                    log::warn!(
-                        "🌐 [Remote Clipboard] Remote transcription FAILED to '{}': {}",
-                        server_name,
-                        e
-                    );
-                    e.to_string()
-                })?;
-
-            log::info!(
-                "🌐 [Remote Clipboard] Transcription COMPLETED from '{}': {} chars received",
-                server_name,
-                response.text.len()
-            );
-
-            build_remote_transcription_result(&transcription_job, response)
-        }
-    };
-
-    // Clean up
-    if let Err(e) = std::fs::remove_file(&temp_path) {
-        log::warn!("Failed to remove test audio file: {}", e);
-    }
-
-    let ai_enabled = load_ai_enabled(&app)?;
-    let writing_result = crate::writing::process_transcription(
-        app.clone(),
-        transcription_result.clone(),
-        ai_enabled,
-    )
-    .await
-    .map_err(|e| e.user_message())?;
-    if let Some(error) = writing_result.ai_error.as_ref() {
-        log::warn!(
-            "AI polish failed with {}; returning and saving deterministic test transcription text",
-            ai_failure_category(error)
-        );
-        notify_ai_polish_failure(&app, error);
-        save_ai_polish_fallback_history(app.clone(), &transcription_result, &writing_result)
-            .await?;
-    }
-    Ok(writing_result.final_text)
 }
 
 #[tauri::command]

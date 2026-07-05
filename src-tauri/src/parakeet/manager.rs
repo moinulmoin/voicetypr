@@ -1,16 +1,25 @@
 use std::path::{Path, PathBuf};
-use std::sync::atomic::AtomicBool;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
+use std::time::Instant;
 
 use log::{trace, warn};
 use reqwest::Client;
 use serde::Serialize;
-use tauri::{AppHandle, Emitter};
+use tauri::{AppHandle, Emitter, Manager};
 
 use super::error::ParakeetError;
-use super::messages::{ParakeetCommand, ParakeetResponse, ParakeetVocabularyTerm};
-use super::models::{get_available_models, ParakeetModelDefinition, AVAILABLE_MODELS};
-use super::sidecar::ParakeetClient;
+use super::messages::{
+    ParakeetCommand, ParakeetResponse, ParakeetStreamConfig, ParakeetStreamEngine,
+    ParakeetVocabularyTerm,
+};
+use super::models::{ParakeetModelDefinition, AVAILABLE_MODELS};
+#[cfg(target_os = "macos")]
+use super::models::get_available_models;
+use super::sidecar::{
+    ParakeetClient, ParakeetStreamHandle, ParakeetStreamOpenRequest, ParakeetStreamPartial,
+};
+use crate::utils::logger::log_performance;
 
 #[derive(Debug, Clone, Serialize)]
 pub struct ParakeetModelStatus {
@@ -26,6 +35,13 @@ pub struct ParakeetModelStatus {
     pub engine: String,
 }
 
+#[derive(Debug, Clone, Serialize)]
+pub struct ParakeetEouModelStatus {
+    pub chunk_ms: u16,
+    pub downloaded: bool,
+    pub path: Option<String>,
+}
+
 #[derive(Debug, Clone)]
 pub struct ParakeetTranscriptionOptions {
     pub language: Option<String>,
@@ -33,6 +49,8 @@ pub struct ParakeetTranscriptionOptions {
     pub custom_vocabulary: Vec<ParakeetVocabularyTerm>,
     pub cancel_flag: Option<Arc<AtomicBool>>,
 }
+
+const EOU_MODEL_SIZE_BYTES: u64 = 250 * 1024 * 1024;
 
 impl ParakeetTranscriptionOptions {
     pub fn new(
@@ -58,8 +76,28 @@ pub struct ParakeetVocabularyStatus {
 pub struct ParakeetManager {
     client: ParakeetClient,
     root_dir: PathBuf,
+    last_model_load_ms: AtomicU64,
+    last_inference_ms: AtomicU64,
+    last_warmup_ms: AtomicU64,
+    real_transcription_active: AtomicBool,
     #[allow(dead_code)]
     http: Client,
+}
+
+#[derive(Debug, Clone, Copy, Default, Serialize)]
+pub struct ParakeetTimingSnapshot {
+    pub model_load_ms: u64,
+    pub inference_ms: u64,
+    pub warmup_ms: u64,
+    pub total_ms: u64,
+}
+
+struct TranscriptionActiveGuard<'a>(&'a AtomicBool);
+
+impl Drop for TranscriptionActiveGuard<'_> {
+    fn drop(&mut self) {
+        self.0.store(false, Ordering::SeqCst);
+    }
 }
 
 const PARAKEET_UNAVAILABLE_EVENT: &str = "parakeet-unavailable";
@@ -76,13 +114,62 @@ fn model_files_complete(model_dir: &Path, definition: &ParakeetModelDefinition) 
     })
 }
 
+pub struct ParakeetStreamRequest<'a> {
+    pub app: AppHandle,
+    pub model_name: &'a str,
+    pub sample_rate: u32,
+    pub channels: u16,
+    pub engine: ParakeetStreamEngine,
+    pub chunk_ms: Option<u16>,
+    pub config: Option<ParakeetStreamConfig>,
+}
+
 impl ParakeetManager {
     pub fn new(root_dir: PathBuf) -> Self {
         Self {
             client: ParakeetClient::new("parakeet-sidecar"),
             root_dir,
+            last_model_load_ms: AtomicU64::new(0),
+            last_inference_ms: AtomicU64::new(0),
+            last_warmup_ms: AtomicU64::new(0),
+            real_transcription_active: AtomicBool::new(false),
             http: Client::new(),
         }
+    }
+
+    pub fn latest_timing_snapshot(&self) -> ParakeetTimingSnapshot {
+        let model_load_ms = self.last_model_load_ms.load(Ordering::Relaxed);
+        let inference_ms = self.last_inference_ms.load(Ordering::Relaxed);
+        let warmup_ms = self.last_warmup_ms.load(Ordering::Relaxed);
+        ParakeetTimingSnapshot {
+            model_load_ms,
+            inference_ms,
+            warmup_ms,
+            total_ms: model_load_ms.saturating_add(inference_ms),
+        }
+    }
+
+    fn real_transcription_busy(&self, app: &AppHandle) -> bool {
+        if self.real_transcription_active.load(Ordering::SeqCst) {
+            return true;
+        }
+
+        app.try_state::<crate::AppState>()
+            .map(|state| {
+                matches!(
+                    state.get_current_state(),
+                    crate::RecordingState::Starting
+                        | crate::RecordingState::Recording
+                        | crate::RecordingState::Stopping
+                        | crate::RecordingState::Transcribing
+                )
+            })
+            .unwrap_or(false)
+    }
+
+    fn mark_real_transcription_active(&self) -> TranscriptionActiveGuard<'_> {
+        self.real_transcription_active.store(true, Ordering::SeqCst);
+        TranscriptionActiveGuard(&self.real_transcription_active)
     }
 
     fn model_version_for(definition: &ParakeetModelDefinition) -> &'static str {
@@ -102,6 +189,7 @@ impl ParakeetManager {
     /// - **macOS (Apple Silicon)**: Returns all Parakeet models
     /// - **macOS (Intel)**: Returns an empty list (Parakeet requires Apple Silicon)
     /// - **Windows/Linux**: Returns empty vector (compile-time exclusion)
+    #[allow(clippy::needless_return)]
     pub fn list_models(&self) -> Vec<ParakeetModelStatus> {
         // Parakeet Swift/FluidAudio integration is macOS-only
         // On non-macOS platforms, this returns empty at compile time
@@ -136,6 +224,45 @@ impl ParakeetManager {
         model_name: &str,
     ) -> Option<&'static ParakeetModelDefinition> {
         AVAILABLE_MODELS.iter().find(|m| m.id == model_name)
+    }
+
+    pub async fn open_stream(
+        &self,
+        request: ParakeetStreamRequest<'_>,
+        partial_callback: impl FnMut(ParakeetStreamPartial) + Send + 'static,
+    ) -> Result<ParakeetStreamHandle, String> {
+        let ParakeetStreamRequest {
+            app,
+            model_name,
+            sample_rate,
+            channels,
+            engine,
+            chunk_ms,
+            config,
+        } = request;
+        let Some(definition) = self.get_model_definition(model_name) else {
+            return Err(format!("Unknown Parakeet model: {model_name}"));
+        };
+        if !self.is_model_downloaded(definition) {
+            return Err(format!("Parakeet model is not downloaded: {model_name}"));
+        }
+
+        self.client
+            .open_stream(
+                ParakeetStreamOpenRequest {
+                    app,
+                    model_id: definition.id.to_string(),
+                    model_version: Some(Self::model_version_for(definition).to_string()),
+                    sample_rate,
+                    channels,
+                    engine,
+                    chunk_ms,
+                    config,
+                },
+                partial_callback,
+            )
+            .await
+            .map_err(|error| error.to_string())
     }
 
     pub fn model_dir(&self, model_name: &str) -> PathBuf {
@@ -244,6 +371,93 @@ impl ParakeetManager {
         }
     }
 
+    pub async fn eou_model_status(
+        &self,
+        app: &AppHandle,
+        chunk_ms: u16,
+    ) -> Result<ParakeetEouModelStatus, ParakeetError> {
+        match self
+            .send_command(app, &ParakeetCommand::EouModelStatus { chunk_ms })
+            .await?
+        {
+            ParakeetResponse::EouModelStatus {
+                chunk_ms,
+                downloaded,
+                path,
+            } => Ok(ParakeetEouModelStatus {
+                chunk_ms,
+                downloaded,
+                path,
+            }),
+            ParakeetResponse::Error { code, message, .. } => {
+                Err(ParakeetError::SidecarError { code, message })
+            }
+            other => Err(ParakeetError::SidecarError {
+                code: "unexpected_response".to_string(),
+                message: format!("Unexpected EOU status response: {:?}", other),
+            }),
+        }
+    }
+
+    pub async fn download_eou_model(
+        &self,
+        app: &AppHandle,
+        chunk_ms: u16,
+        mut progress_callback: impl FnMut(u64, u64, Option<String>) + Send + 'static,
+    ) -> Result<(), String> {
+        let mut last_downloaded = 0;
+        match self
+            .send_command_with_progress_and_cancel(
+                app,
+                &ParakeetCommand::DownloadEouModel { chunk_ms },
+                None,
+                |progress, phase| {
+                    let progress = progress.clamp(0.0, 1.0) as f64;
+                    let downloaded = (EOU_MODEL_SIZE_BYTES as f64 * progress).round() as u64;
+                    last_downloaded = downloaded;
+                    progress_callback(downloaded, EOU_MODEL_SIZE_BYTES, phase.map(str::to_string));
+                },
+            )
+            .await
+        {
+            Ok(ParakeetResponse::Ok { .. }) => {
+                if last_downloaded < EOU_MODEL_SIZE_BYTES {
+                    progress_callback(
+                        EOU_MODEL_SIZE_BYTES,
+                        EOU_MODEL_SIZE_BYTES,
+                        Some("complete".to_string()),
+                    );
+                }
+                Ok(())
+            }
+            Ok(ParakeetResponse::Error { code, message, .. }) => {
+                Err(format!("Failed to download EOU model: {code}: {message}"))
+            }
+            Ok(other) => Err(format!("Unexpected EOU download response: {other:?}")),
+            Err(error) => Err(format!("Failed to communicate with sidecar: {error}")),
+        }
+    }
+
+    pub async fn warmup_eou(&self, app: &AppHandle, chunk_ms: u16) -> Result<(), ParakeetError> {
+        match self
+            .send_command(app, &ParakeetCommand::WarmupEou { chunk_ms })
+            .await?
+        {
+            ParakeetResponse::Warmed { warmed: true, .. } => Ok(()),
+            ParakeetResponse::Warmed { error, .. } => Err(ParakeetError::SidecarError {
+                code: "eou_warmup_failed".to_string(),
+                message: error.unwrap_or_else(|| "EOU warmup failed".to_string()),
+            }),
+            ParakeetResponse::Error { code, message, .. } => {
+                Err(ParakeetError::SidecarError { code, message })
+            }
+            other => Err(ParakeetError::SidecarError {
+                code: "unexpected_response".to_string(),
+                message: format!("Unexpected EOU warmup response: {:?}", other),
+            }),
+        }
+    }
+
     pub async fn delete_model(&self, app: &AppHandle, model_name: &str) -> Result<(), String> {
         let Some(definition) = self.get_model_definition(model_name) else {
             return Err(format!("Unknown Parakeet model: {model_name}"));
@@ -297,6 +511,7 @@ impl ParakeetManager {
         model_name: &str,
         cancel_flag: Option<Arc<AtomicBool>>,
     ) -> Result<(), ParakeetError> {
+        let load_start = Instant::now();
         let Some(definition) = self.get_model_definition(model_name) else {
             return Err(ParakeetError::SpawnError(format!(
                 "Unknown Parakeet model: {model_name}"
@@ -318,7 +533,7 @@ impl ParakeetManager {
             eager_unload: Some(false),
         };
 
-        match self
+        let result = match self
             .send_command_with_progress_and_cancel(app, &command, cancel_flag, |_, _| {})
             .await?
         {
@@ -357,7 +572,17 @@ impl ParakeetManager {
                 code: "unexpected_response".to_string(),
                 message: format!("Unexpected response: {:?}", other),
             }),
+        };
+        if result.is_ok() {
+            let elapsed_ms = load_start.elapsed().as_millis() as u64;
+            self.last_model_load_ms.store(elapsed_ms, Ordering::Relaxed);
+            log_performance(
+                "PARAKEET_MODEL_LOAD",
+                elapsed_ms,
+                Some(&format!("model={model_name}")),
+            );
         }
+        result
     }
 
     pub fn vocabulary_status_from_response(
@@ -388,6 +613,47 @@ impl ParakeetManager {
             .await
     }
 
+    pub async fn warmup(&self, app: &AppHandle) -> Result<Option<u64>, ParakeetError> {
+        if self.real_transcription_busy(app) {
+            log::info!("Skipping Parakeet warmup because recording/transcription is active");
+            return Ok(None);
+        }
+
+        let warmup_start = Instant::now();
+        match self.send_command(app, &ParakeetCommand::Warmup {}).await? {
+            ParakeetResponse::Warmed { warmed, ms, error } => {
+                let elapsed_ms = if ms == 0 {
+                    warmup_start.elapsed().as_millis() as u64
+                } else {
+                    ms
+                };
+                log_performance(
+                    "PARAKEET_WARMUP",
+                    elapsed_ms,
+                    Some(&format!("warmed={warmed}")),
+                );
+                if warmed {
+                    self.last_warmup_ms.store(elapsed_ms, Ordering::Relaxed);
+                    Ok(Some(elapsed_ms))
+                } else {
+                    log::warn!(
+                        "Parakeet warmup did not complete: {}",
+                        error.unwrap_or_else(|| "unknown warmup error".to_string())
+                    );
+                    Ok(None)
+                }
+            }
+            ParakeetResponse::Error { code, message, .. } => {
+                log::warn!("Parakeet warmup failed: {code}: {message}");
+                Ok(None)
+            }
+            other => Err(ParakeetError::SidecarError {
+                code: "unexpected_response".to_string(),
+                message: format!("Unexpected warmup response: {:?}", other),
+            }),
+        }
+    }
+
     pub async fn transcribe(
         &self,
         app: &AppHandle,
@@ -409,10 +675,12 @@ impl ParakeetManager {
     pub async fn transcribe_with_custom_vocabulary(
         &self,
         app: &AppHandle,
-        _model_name: &str,
+        model_name: &str,
         audio_path: PathBuf,
         options: ParakeetTranscriptionOptions,
     ) -> Result<ParakeetResponse, ParakeetError> {
+        let _active_guard = self.mark_real_transcription_active();
+        let inference_start = Instant::now();
         let command = ParakeetCommand::Transcribe {
             audio_path: audio_path.to_string_lossy().to_string(),
             language: options.language,
@@ -427,8 +695,22 @@ impl ParakeetManager {
                 .then_some(options.custom_vocabulary),
         };
 
-        self.send_command_with_progress_and_cancel(app, &command, options.cancel_flag, |_, _| {})
-            .await
+        let result = self
+            .send_command_with_progress_and_cancel(app, &command, options.cancel_flag, |_, _| {})
+            .await;
+        if matches!(result, Ok(ParakeetResponse::Transcription { .. })) {
+            let elapsed_ms = inference_start.elapsed().as_millis() as u64;
+            self.last_inference_ms.store(elapsed_ms, Ordering::Relaxed);
+            log_performance(
+                "PARAKEET_INFERENCE",
+                elapsed_ms,
+                Some(&format!(
+                    "model={model_name}, audio_path={}",
+                    audio_path.display()
+                )),
+            );
+        }
+        result
     }
 
     pub async fn diarize(

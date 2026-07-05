@@ -1,11 +1,14 @@
 #![allow(dead_code)]
 
 use super::error::ParakeetError;
-use super::messages::{ParakeetCommand, ParakeetResponse};
+use super::messages::{
+    ParakeetCommand, ParakeetResponse, ParakeetStreamConfig, ParakeetStreamEngine,
+};
+use base64::{engine::general_purpose, Engine as _};
 use log::{debug, error, warn};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tauri::async_runtime::{Receiver, RwLock};
 use tauri::AppHandle;
 use tauri_plugin_shell::{
@@ -13,6 +16,81 @@ use tauri_plugin_shell::{
     ShellExt,
 };
 use tokio::sync::RwLockWriteGuard;
+
+use crate::utils::logger::log_performance;
+
+const STREAM_INACTIVITY_TIMEOUT: Duration = Duration::from_secs(30);
+const STREAM_FINALIZE_TIMEOUT: Duration = Duration::from_secs(30);
+const STREAM_OPEN_TIMEOUT: Duration = Duration::from_secs(30);
+
+#[derive(Debug, Clone)]
+pub struct ParakeetStreamPartial {
+    pub text: String,
+    pub is_confirmed: bool,
+    pub confidence: Option<f32>,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum ParakeetStreamControl {
+    Chunk(Vec<i16>),
+    Finalize,
+    Cancel,
+}
+
+pub struct ParakeetStreamHandle {
+    tx: tokio::sync::mpsc::UnboundedSender<ParakeetStreamControl>,
+    final_rx:
+        tokio::sync::Mutex<Option<tokio::sync::oneshot::Receiver<Result<String, ParakeetError>>>>,
+}
+
+pub struct ParakeetStreamOpenRequest {
+    pub app: AppHandle,
+    pub model_id: String,
+    pub model_version: Option<String>,
+    pub sample_rate: u32,
+    pub channels: u16,
+    pub engine: ParakeetStreamEngine,
+    pub chunk_ms: Option<u16>,
+    pub config: Option<ParakeetStreamConfig>,
+}
+
+impl ParakeetStreamHandle {
+    pub fn send_chunk(&self, samples: &[i16]) -> Result<(), ParakeetError> {
+        self.tx
+            .send(ParakeetStreamControl::Chunk(samples.to_vec()))
+            .map_err(|_| ParakeetError::Terminated)
+    }
+
+    pub async fn finalize(&self) -> Result<String, ParakeetError> {
+        self.tx
+            .send(ParakeetStreamControl::Finalize)
+            .map_err(|_| ParakeetError::Terminated)?;
+        let Some(rx) = self.final_rx.lock().await.take() else {
+            return Err(ParakeetError::SidecarError {
+                code: "stream_already_finalized".to_string(),
+                message: "Stream finalization was already requested".to_string(),
+            });
+        };
+        match tokio::time::timeout(STREAM_FINALIZE_TIMEOUT, rx).await {
+            Ok(Ok(result)) => result,
+            Ok(Err(_)) => Err(ParakeetError::Terminated),
+            Err(_) => Err(ParakeetError::Timeout {
+                operation: "finalize_stream".to_string(),
+                timeout_secs: STREAM_FINALIZE_TIMEOUT.as_secs(),
+            }),
+        }
+    }
+
+    pub fn cancel(&self) {
+        let _ = self.tx.send(ParakeetStreamControl::Cancel);
+    }
+}
+
+impl Drop for ParakeetStreamHandle {
+    fn drop(&mut self) {
+        let _ = self.tx.send(ParakeetStreamControl::Cancel);
+    }
+}
 
 fn extract_json_payload(raw: &str) -> Option<&str> {
     let start = raw.find('{')?;
@@ -36,6 +114,84 @@ fn parse_response_line(raw: &str) -> Result<ParakeetResponse, ParakeetError> {
             }
         }
     }
+}
+
+fn log_parakeet_stderr(line: &str) {
+    let lower = line.to_ascii_lowercase();
+    let looks_like_error = lower.contains("error")
+        || lower.contains("fail")
+        || lower.contains("rate limit")
+        || lower.contains("huggingface")
+        || line.contains('❌');
+    if looks_like_error {
+        warn!("Parakeet sidecar: {}", line);
+    } else {
+        log::info!("Parakeet sidecar: {}", line);
+    }
+}
+
+fn write_command_to_child(
+    child: &mut Option<CommandChild>,
+    command: &ParakeetCommand,
+) -> Result<(), ParakeetError> {
+    let mut payload = serde_json::to_string(command)?;
+    payload.push('\n');
+    child
+        .as_mut()
+        .ok_or(ParakeetError::Terminated)?
+        .write(payload.as_bytes())
+        .map_err(|e| ParakeetError::SpawnError(e.to_string()))
+}
+
+fn response_from_command_event(
+    event: CommandEvent,
+) -> Result<Option<ParakeetResponse>, ParakeetError> {
+    let (line_bytes, from_stdout) = match event {
+        CommandEvent::Stdout(line) => (line, true),
+        CommandEvent::Stderr(line) => (line, false),
+        CommandEvent::Terminated(payload) => {
+            error!(
+                "Parakeet sidecar terminated unexpectedly code={:?}",
+                payload.code
+            );
+            return Err(ParakeetError::Terminated);
+        }
+        CommandEvent::Error(err) => {
+            error!("Error from Parakeet sidecar pipe: {err}");
+            return Err(ParakeetError::SpawnError(err));
+        }
+        _ => return Ok(None),
+    };
+
+    let text = String::from_utf8_lossy(&line_bytes);
+    let trimmed = text.trim();
+    if trimmed.is_empty() {
+        return Ok(None);
+    }
+
+    match parse_response_line(trimmed) {
+        Ok(response) => Ok(Some(response)),
+        Err(err) => {
+            if from_stdout {
+                error!(
+                    "Failed to parse Parakeet sidecar stdout protocol line ({} bytes)",
+                    trimmed.len()
+                );
+                Err(err)
+            } else {
+                log_parakeet_stderr(trimmed);
+                Ok(None)
+            }
+        }
+    }
+}
+
+fn encode_i16_le_base64(samples: &[i16]) -> String {
+    let mut bytes = Vec::with_capacity(samples.len() * 2);
+    for sample in samples {
+        bytes.extend_from_slice(&sample.to_le_bytes());
+    }
+    general_purpose::STANDARD.encode(bytes)
 }
 
 async fn request_with_timeout<F>(
@@ -119,6 +275,7 @@ pub struct ParakeetSidecar {
 
 impl ParakeetSidecar {
     pub async fn spawn(app: &AppHandle, binary_name: &str) -> Result<Self, ParakeetError> {
+        let spawn_start = Instant::now();
         // In Tauri v2, use the shell plugin and pass just the filename.
         // The externalBin entry in tauri.conf.json must include this binary.
         let (rx, child) = app
@@ -127,6 +284,11 @@ impl ParakeetSidecar {
             .map_err(|e| ParakeetError::SpawnError(e.to_string()))?
             .spawn()
             .map_err(|e| ParakeetError::SpawnError(e.to_string()))?;
+        log_performance(
+            "PARAKEET_SPAWN",
+            spawn_start.elapsed().as_millis() as u64,
+            Some(&format!("binary={binary_name}")),
+        );
 
         log::info!(
             "Spawned Parakeet sidecar pid={} name={}",
@@ -145,6 +307,61 @@ impl ParakeetSidecar {
     ) -> Result<ParakeetResponse, ParakeetError> {
         self.request_with_progress_and_cancel(command, None::<&mut fn(f32, Option<&str>)>, None)
             .await
+    }
+
+    fn write_command(&mut self, command: &ParakeetCommand) -> Result<(), ParakeetError> {
+        let mut payload = serde_json::to_string(command)?;
+        payload.push('\n');
+        self.child
+            .as_mut()
+            .ok_or(ParakeetError::Terminated)?
+            .write(payload.as_bytes())
+            .map_err(|e| ParakeetError::SpawnError(e.to_string()))
+    }
+
+    async fn next_protocol_response(&mut self) -> Result<ParakeetResponse, ParakeetError> {
+        loop {
+            let Some(event) = self.rx.recv().await else {
+                return Err(ParakeetError::Terminated);
+            };
+
+            let (line_bytes, from_stdout) = match event {
+                CommandEvent::Stdout(line) => (line, true),
+                CommandEvent::Stderr(line) => (line, false),
+                CommandEvent::Terminated(payload) => {
+                    error!(
+                        "Parakeet sidecar terminated unexpectedly code={:?}",
+                        payload.code
+                    );
+                    return Err(ParakeetError::Terminated);
+                }
+                CommandEvent::Error(err) => {
+                    error!("Error from Parakeet sidecar pipe: {err}");
+                    return Err(ParakeetError::SpawnError(err));
+                }
+                _ => continue,
+            };
+
+            let text = String::from_utf8_lossy(&line_bytes);
+            let trimmed = text.trim();
+            if trimmed.is_empty() {
+                continue;
+            }
+
+            match parse_response_line(trimmed) {
+                Ok(response) => return Ok(response),
+                Err(err) => {
+                    if from_stdout {
+                        error!(
+                            "Failed to parse Parakeet sidecar stdout protocol line ({} bytes)",
+                            trimmed.len()
+                        );
+                        return Err(err);
+                    }
+                    log_parakeet_stderr(trimmed);
+                }
+            }
+        }
     }
 
     pub async fn request_with_progress_and_cancel<F>(
@@ -246,17 +463,7 @@ impl ParakeetSidecar {
                     // info level, so trace lines are invisible in field logs,
                     // which would hide the last thing FluidAudio prints before a
                     // stall. `info` keeps that stall context visible by default.
-                    let lower = trimmed.to_ascii_lowercase();
-                    let looks_like_error = lower.contains("error")
-                        || lower.contains("fail")
-                        || lower.contains("rate limit")
-                        || lower.contains("huggingface")
-                        || trimmed.contains('❌');
-                    if looks_like_error {
-                        warn!("Parakeet sidecar: {}", trimmed);
-                    } else {
-                        log::info!("Parakeet sidecar: {}", trimmed);
-                    }
+                    log_parakeet_stderr(trimmed);
                 }
             }
         }
@@ -275,14 +482,14 @@ impl ParakeetSidecar {
 
 pub struct ParakeetClient {
     binary_name: String,
-    inner: RwLock<Option<ParakeetSidecar>>,
+    inner: Arc<RwLock<Option<ParakeetSidecar>>>,
 }
 
 impl ParakeetClient {
     pub fn new(binary_name: impl Into<String>) -> Self {
         Self {
             binary_name: binary_name.into(),
-            inner: RwLock::new(None),
+            inner: Arc::new(RwLock::new(None)),
         }
     }
 
@@ -397,6 +604,301 @@ impl ParakeetClient {
         }
 
         response
+    }
+
+    pub async fn open_stream<F>(
+        &self,
+        request: ParakeetStreamOpenRequest,
+        mut partial_callback: F,
+    ) -> Result<ParakeetStreamHandle, ParakeetError>
+    where
+        F: FnMut(ParakeetStreamPartial) + Send + 'static,
+    {
+        let inner = self.inner.clone();
+        let binary_name = self.binary_name.clone();
+        let ParakeetStreamOpenRequest {
+            app,
+            model_id,
+            model_version,
+            sample_rate,
+            channels,
+            engine,
+            chunk_ms,
+            config,
+        } = request;
+        let (control_tx, mut control_rx) =
+            tokio::sync::mpsc::unbounded_channel::<ParakeetStreamControl>();
+        let (ready_tx, ready_rx) = tokio::sync::oneshot::channel::<Result<(), ParakeetError>>();
+        let (final_tx, final_rx) = tokio::sync::oneshot::channel::<Result<String, ParakeetError>>();
+        let open_aborted = Arc::new(AtomicBool::new(false));
+        let task_open_aborted = open_aborted.clone();
+
+        tauri::async_runtime::spawn(async move {
+            let mut ready_tx = Some(ready_tx);
+            let mut final_tx = Some(final_tx);
+            let mut guard = inner.write().await;
+            if task_open_aborted.load(Ordering::Relaxed) {
+                return;
+            }
+            if guard.is_none() {
+                match ParakeetSidecar::spawn(&app, &binary_name).await {
+                    Ok(sidecar) => {
+                        guard.replace(sidecar);
+                    }
+                    Err(error) => {
+                        if let Some(tx) = ready_tx.take() {
+                            let _ = tx.send(Err(error));
+                        }
+                        if let Some(tx) = final_tx.take() {
+                            let _ = tx.send(Err(ParakeetError::Terminated));
+                        }
+                        return;
+                    }
+                }
+            }
+
+            let Some(sidecar) = guard.as_mut() else {
+                if let Some(tx) = ready_tx.take() {
+                    let _ = tx.send(Err(ParakeetError::Terminated));
+                }
+                if let Some(tx) = final_tx.take() {
+                    let _ = tx.send(Err(ParakeetError::Terminated));
+                }
+                return;
+            };
+
+            let start_command = ParakeetCommand::StartStream {
+                model_id,
+                model_version,
+                sample_rate,
+                channels,
+                engine,
+                chunk_ms,
+                config,
+            };
+            if let Err(error) = write_command_to_child(&mut sidecar.child, &start_command) {
+                if let Some(tx) = ready_tx.take() {
+                    let _ = tx.send(Err(error));
+                }
+                if let Some(tx) = final_tx.take() {
+                    let _ = tx.send(Err(ParakeetError::Terminated));
+                }
+                return;
+            }
+
+            let open_deadline = tokio::time::sleep(STREAM_OPEN_TIMEOUT);
+            tokio::pin!(open_deadline);
+            loop {
+                tokio::select! {
+                    response = sidecar.next_protocol_response() => {
+                        match response {
+                            Ok(ParakeetResponse::StreamStarted {}) => {
+                                if let Some(tx) = ready_tx.take() {
+                                    let _ = tx.send(Ok(()));
+                                }
+                                break;
+                            }
+                            Ok(ParakeetResponse::StreamPartial {
+                                text,
+                                is_confirmed,
+                                confidence,
+                            }) => {
+                                partial_callback(ParakeetStreamPartial {
+                                    text,
+                                    is_confirmed,
+                                    confidence,
+                                });
+                            }
+                            Ok(ParakeetResponse::Error { code, message, .. }) => {
+                                if let Some(tx) = ready_tx.take() {
+                                    let _ = tx.send(Err(ParakeetError::SidecarError {
+                                        code: code.clone(),
+                                        message: message.clone(),
+                                    }));
+                                }
+                                if let Some(tx) = final_tx.take() {
+                                    let _ = tx.send(Err(ParakeetError::SidecarError { code, message }));
+                                }
+                                let _ = sidecar;
+                                Self::clear_sidecar(&mut guard);
+                                return;
+                            }
+                            Ok(_) => {}
+                            Err(error) => {
+                                if let Some(tx) = ready_tx.take() {
+                                    let _ = tx.send(Err(error));
+                                }
+                                if let Some(tx) = final_tx.take() {
+                                    let _ = tx.send(Err(ParakeetError::Terminated));
+                                }
+                                let _ = sidecar;
+                                Self::clear_sidecar(&mut guard);
+                                return;
+                            }
+                        }
+                    }
+                    _ = &mut open_deadline => {
+                        let operation = "start_stream".to_string();
+                        if let Some(tx) = ready_tx.take() {
+                            let _ = tx.send(Err(ParakeetError::Timeout {
+                                operation: operation.clone(),
+                                timeout_secs: STREAM_OPEN_TIMEOUT.as_secs(),
+                            }));
+                        }
+                        if let Some(tx) = final_tx.take() {
+                            let _ = tx.send(Err(ParakeetError::Timeout {
+                                operation,
+                                timeout_secs: STREAM_OPEN_TIMEOUT.as_secs(),
+                            }));
+                        }
+                        let _ = write_command_to_child(&mut sidecar.child, &ParakeetCommand::CancelStream {});
+                        let _ = sidecar;
+                        Self::clear_sidecar(&mut guard);
+                        return;
+                    }
+                }
+            }
+
+            let mut finalize_requested = false;
+            let mut clear_after_exit = false;
+            loop {
+                tokio::select! {
+                    control = control_rx.recv() => {
+                        let Some(control) = control else {
+                            let _ = write_command_to_child(
+                                &mut sidecar.child,
+                                &ParakeetCommand::CancelStream {},
+                            );
+                            clear_after_exit = true;
+                            break;
+                        };
+                        let command = match control {
+                            ParakeetStreamControl::Chunk(samples) => {
+                                if finalize_requested {
+                                    continue;
+                                }
+                                ParakeetCommand::AudioChunk {
+                                    pcm_b64: encode_i16_le_base64(&samples),
+                                }
+                            }
+                            ParakeetStreamControl::Finalize => {
+                                finalize_requested = true;
+                                ParakeetCommand::FinalizeStream {}
+                            }
+                            ParakeetStreamControl::Cancel => {
+                                let _ = write_command_to_child(
+                                    &mut sidecar.child,
+                                    &ParakeetCommand::CancelStream {},
+                                );
+                                if let Some(tx) = final_tx.take() {
+                                    let _ = tx.send(Err(ParakeetError::SidecarError {
+                                        code: "cancelled".to_string(),
+                                        message: "Stream cancelled".to_string(),
+                                    }));
+                                }
+                                clear_after_exit = true;
+                                break;
+                            }
+                        };
+                        if let Err(error) = write_command_to_child(&mut sidecar.child, &command) {
+                            if let Some(tx) = final_tx.take() {
+                                let _ = tx.send(Err(error));
+                            }
+                            clear_after_exit = true;
+                            break;
+                        }
+                    }
+                    event = sidecar.rx.recv() => {
+                        let Some(event) = event else {
+                            if let Some(tx) = final_tx.take() {
+                                let _ = tx.send(Err(ParakeetError::Terminated));
+                            }
+                            clear_after_exit = true;
+                            break;
+                        };
+                        match response_from_command_event(event) {
+                            Ok(Some(ParakeetResponse::StreamPartial { text, is_confirmed, confidence })) => {
+                                partial_callback(ParakeetStreamPartial { text, is_confirmed, confidence });
+                            }
+                            Ok(Some(ParakeetResponse::StreamFinal { text })) => {
+                                if let Some(tx) = final_tx.take() {
+                                    let _ = tx.send(Ok(text));
+                                }
+                                break;
+                            }
+                            Ok(Some(ParakeetResponse::StreamCancelled {})) => {
+                                if let Some(tx) = final_tx.take() {
+                                    let _ = tx.send(Err(ParakeetError::SidecarError {
+                                        code: "cancelled".to_string(),
+                                        message: "Stream cancelled".to_string(),
+                                    }));
+                                }
+                                break;
+                            }
+                            Ok(Some(ParakeetResponse::Error { code, message, .. })) => {
+                                if let Some(tx) = final_tx.take() {
+                                    let _ = tx.send(Err(ParakeetError::SidecarError { code, message }));
+                                }
+                                let _ = write_command_to_child(
+                                    &mut sidecar.child,
+                                    &ParakeetCommand::CancelStream {},
+                                );
+                                clear_after_exit = true;
+                                break;
+                            }
+                            Ok(Some(_)) | Ok(None) => {}
+                            Err(error) => {
+                                if let Some(tx) = final_tx.take() {
+                                    let _ = tx.send(Err(error));
+                                }
+                                let _ = write_command_to_child(
+                                    &mut sidecar.child,
+                                    &ParakeetCommand::CancelStream {},
+                                );
+                                clear_after_exit = true;
+                                break;
+                            }
+                        }
+                    }
+                    _ = tokio::time::sleep(STREAM_INACTIVITY_TIMEOUT) => {
+                        if let Some(tx) = final_tx.take() {
+                            let _ = tx.send(Err(ParakeetError::Timeout {
+                                operation: "stream_session".to_string(),
+                                timeout_secs: STREAM_INACTIVITY_TIMEOUT.as_secs(),
+                            }));
+                        }
+                        let _ = write_command_to_child(
+                            &mut sidecar.child,
+                            &ParakeetCommand::CancelStream {},
+                        );
+                        clear_after_exit = true;
+                        break;
+                    }
+                }
+            }
+            if clear_after_exit {
+                let _ = sidecar;
+                Self::clear_sidecar(&mut guard);
+            }
+        });
+
+        match tokio::time::timeout(STREAM_OPEN_TIMEOUT, ready_rx).await {
+            Err(_) => {
+                open_aborted.store(true, Ordering::Relaxed);
+                Err(ParakeetError::Timeout {
+                    operation: "start_stream".to_string(),
+                    timeout_secs: STREAM_OPEN_TIMEOUT.as_secs(),
+                })
+            }
+            Ok(ready) => match ready {
+                Ok(Ok(())) => Ok(ParakeetStreamHandle {
+                    tx: control_tx,
+                    final_rx: tokio::sync::Mutex::new(Some(final_rx)),
+                }),
+                Ok(Err(error)) => Err(error),
+                Err(_) => Err(ParakeetError::Terminated),
+            },
+        }
     }
 
     pub async fn shutdown(&self) {
@@ -595,6 +1097,21 @@ mod tests {
             err,
             ParakeetError::SidecarError { code, .. } if code == "cancelled"
         ));
+    }
+
+    #[tokio::test]
+    async fn dropping_stream_handle_sends_cancel_control() {
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+        let (_final_tx, final_rx) =
+            tokio::sync::oneshot::channel::<Result<String, ParakeetError>>();
+        let handle = super::ParakeetStreamHandle {
+            tx,
+            final_rx: tokio::sync::Mutex::new(Some(final_rx)),
+        };
+
+        drop(handle);
+
+        assert_eq!(rx.recv().await, Some(super::ParakeetStreamControl::Cancel));
     }
 
     #[test]

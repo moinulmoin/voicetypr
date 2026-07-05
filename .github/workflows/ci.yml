@@ -18,17 +18,18 @@ jobs:
     steps:
       - uses: actions/checkout@v5
 
-      - name: Setup Node.js
-        uses: actions/setup-node@v5
-        with:
-          node-version: '22.19.0'
-          package-manager-cache: false
-
       - name: Setup pnpm
         run: |
           corepack enable
           corepack prepare pnpm@10.13.1 --activate
           pnpm --version
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v5
+        with:
+          node-version: '22.19.0'
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
@@ -40,7 +41,10 @@ jobs:
         run: pnpm typecheck
 
       - name: Run tests
-        run: pnpm test
+        run: pnpm test:frontend
+
+  # No Ubuntu Rust clippy job: the native Tauri crate targets macOS/Windows and
+  # Linux runners are not provisioned with the required native app dependencies.
 
   # ===========================================
   # Build macOS (full build = catches all issues)
@@ -65,22 +69,44 @@ jobs:
           sudo xcode-select -s "$xcode"
           swift --version
 
-      - name: Setup Node.js
-        uses: actions/setup-node@v5
-        with:
-          node-version: '22.19.0'
-          package-manager-cache: false
-
       - name: Setup pnpm
         run: |
           corepack enable
           corepack prepare pnpm@10.13.1 --activate
           pnpm --version
 
+      - name: Setup Node.js
+        uses: actions/setup-node@v5
+        with:
+          node-version: '22.19.0'
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@1.91.1
+        with:
+          components: clippy
+
       - name: Rust cache
         uses: Swatinem/rust-cache@v2
         with:
           workspaces: src-tauri
+
+      - name: Cache Parakeet Swift build
+        uses: actions/cache@v4
+        with:
+          path: sidecar/parakeet-swift/.build
+          key: ${{ runner.os }}-${{ runner.arch }}-parakeet-swift-${{ hashFiles('sidecar/parakeet-swift/Package.swift', 'sidecar/parakeet-swift/Sources/**') }}
+          restore-keys: |
+            ${{ runner.os }}-${{ runner.arch }}-parakeet-swift-
+
+      - name: Cache FFmpeg sidecar
+        uses: actions/cache@v4
+        with:
+          path: sidecar/ffmpeg/dist
+          key: ${{ runner.os }}-${{ runner.arch }}-ffmpeg-${{ hashFiles('scripts/ensure-ffmpeg-sidecar.cjs') }}
+          restore-keys: |
+            ${{ runner.os }}-${{ runner.arch }}-ffmpeg-
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
@@ -91,11 +117,16 @@ jobs:
       - name: Build frontend
         run: pnpm build
 
-      - name: Rust tests
+      - name: Rust tests (Apple Silicon)
+        if: matrix.arch == 'aarch64'
         run: cd src-tauri && cargo test
 
+      - name: Rust tests (Intel compile-only)
+        if: matrix.arch == 'x86_64'
+        run: cd src-tauri && cargo test --no-run
+
       - name: Clippy
-        run: cd src-tauri && cargo clippy -- -D warnings
+        run: cd src-tauri && cargo clippy --workspace --all-targets -- -D warnings
 
       - name: Build Tauri (release)
         run: cd src-tauri && cargo build --release
@@ -118,26 +149,40 @@ jobs:
     steps:
       - uses: actions/checkout@v5
 
-      - name: Setup Node.js
-        uses: actions/setup-node@v5
-        with:
-          node-version: '22.19.0'
-          package-manager-cache: false
-
       - name: Setup pnpm
         run: |
           corepack enable
           corepack prepare pnpm@10.13.1 --activate
           pnpm --version
 
+      - name: Setup Node.js
+        uses: actions/setup-node@v5
+        with:
+          node-version: '22.19.0'
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+
       - name: Prepare cargo target dir
         shell: pwsh
         run: New-Item -ItemType Directory -Force -Path $env:CARGO_TARGET_DIR | Out-Null
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@1.91.1
+        with:
+          components: clippy
 
       - name: Rust cache
         uses: Swatinem/rust-cache@v2
         with:
           workspaces: src-tauri
+
+      - name: Cache FFmpeg sidecar
+        uses: actions/cache@v4
+        with:
+          path: sidecar/ffmpeg/dist
+          key: ${{ runner.os }}-${{ runner.arch }}-ffmpeg-${{ hashFiles('scripts/ensure-ffmpeg-sidecar.cjs') }}
+          restore-keys: |
+            ${{ runner.os }}-${{ runner.arch }}-ffmpeg-
 
       - name: Install Vulkan SDK
         uses: jakoch/install-vulkan-sdk-action@v1
@@ -193,8 +238,13 @@ jobs:
       - name: Build frontend
         run: pnpm build
 
-      - name: Rust tests (compile-only on Windows runner)
-        run: cd src-tauri && cargo test --no-run
+      - name: Clippy
+        run: cd src-tauri && cargo clippy --workspace --all-targets -- -D warnings
+
+      - name: Rust tests
+        shell: pwsh
+        working-directory: src-tauri
+        run: ./run-tests.ps1
 
       - name: Build Tauri (release, CPU-safe main app)
         run: cd src-tauri && cargo build --release

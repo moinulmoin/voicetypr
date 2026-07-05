@@ -30,6 +30,8 @@ pub const DEFAULT_INDICATOR_OFFSET: u32 = 10;
 pub const TRANSCRIPTION_TASK_TRANSCRIBE: &str = "transcribe";
 pub const TRANSCRIPTION_TASK_TRANSLATE_TO_ENGLISH: &str = "translate_to_english";
 pub const FINAL_TEXT_LANGUAGE_SAME_AS_TRANSCRIPT: &str = "same_as_transcript";
+pub const TRANSCRIPTION_MODE_REGULAR: &str = "regular";
+pub const TRANSCRIPTION_MODE_LIVE_PREVIEW: &str = "live_preview";
 
 #[derive(Serialize, Deserialize, Clone)]
 pub struct Settings {
@@ -73,6 +75,12 @@ pub struct Settings {
     // Transcription hardware acceleration: "auto" | "gpu" | "cpu"
     #[serde(default = "default_transcription_acceleration")]
     pub transcription_acceleration: String,
+    // Whisper context-load speed optimization. Only applied on Apple-Silicon Metal.
+    #[serde(default)]
+    pub whisper_speed_mode: bool,
+    // Product-facing streaming preview mode: "regular" | "live_preview"
+    #[serde(default = "default_transcription_mode")]
+    pub transcription_mode: String,
 }
 
 impl Default for Settings {
@@ -107,12 +115,33 @@ impl Default for Settings {
             save_recordings: false,              // Default to not saving recordings
             recording_retention_days: Some(30),  // Default cleanup period when saving is enabled
             transcription_acceleration: "auto".to_string(),
+            whisper_speed_mode: false,
+            transcription_mode: TRANSCRIPTION_MODE_REGULAR.to_string(),
         }
     }
 }
 
 fn default_transcription_acceleration() -> String {
     "auto".to_string()
+}
+
+fn default_transcription_mode() -> String {
+    TRANSCRIPTION_MODE_REGULAR.to_string()
+}
+
+pub(crate) fn read_whisper_speed_mode(app: &AppHandle) -> bool {
+    app.store("settings")
+        .ok()
+        .and_then(|store| store.get("whisper_speed_mode"))
+        .and_then(|value| value.as_bool())
+        .unwrap_or(false)
+}
+
+pub fn normalize_transcription_mode(value: Option<&str>) -> String {
+    match value {
+        Some(TRANSCRIPTION_MODE_LIVE_PREVIEW) => TRANSCRIPTION_MODE_LIVE_PREVIEW.to_string(),
+        _ => TRANSCRIPTION_MODE_REGULAR.to_string(),
+    }
 }
 
 pub fn normalize_stored_transcription_acceleration(value: Option<&str>) -> String {
@@ -476,6 +505,16 @@ pub async fn get_settings(app: AppHandle) -> Result<Settings, String> {
                 .and_then(|v| v.as_str().map(|s| s.to_string()))
                 .as_deref(),
         ),
+        whisper_speed_mode: store
+            .get("whisper_speed_mode")
+            .and_then(|v| v.as_bool())
+            .unwrap_or_else(|| Settings::default().whisper_speed_mode),
+        transcription_mode: normalize_transcription_mode(
+            store
+                .get("transcription_mode")
+                .and_then(|v| v.as_str().map(|s| s.to_string()))
+                .as_deref(),
+        ),
     };
     let normalized_speech_language = normalize_speech_language_for_model(
         &settings.current_model_engine,
@@ -568,6 +607,8 @@ pub async fn save_settings(app: AppHandle, settings: Settings) -> Result<(), Str
     );
     let normalized_transcription_acceleration =
         normalize_stored_transcription_acceleration(Some(&settings.transcription_acceleration));
+    let normalized_transcription_mode =
+        normalize_transcription_mode(Some(&settings.transcription_mode));
 
     let normalized_hotkey = normalize_shortcut_keys(&settings.hotkey);
     if !normalized_hotkey.is_empty() {
@@ -690,6 +731,8 @@ pub async fn save_settings(app: AppHandle, settings: Settings) -> Result<(), Str
         "transcription_acceleration",
         json!(&normalized_transcription_acceleration),
     );
+    store.set("whisper_speed_mode", json!(settings.whisper_speed_mode));
+    store.set("transcription_mode", json!(&normalized_transcription_mode));
 
     // Network sharing settings
     if let Some(port) = settings.sharing_port {
@@ -764,7 +807,20 @@ pub async fn save_settings(app: AppHandle, settings: Settings) -> Result<(), Str
             tokio::spawn(async move {
                 let parakeet_manager = app_clone.state::<ParakeetManager>();
                 match parakeet_manager.load_model(&app_clone, &model_name).await {
-                    Ok(_) => log::info!("Successfully preloaded new model: {}", model_name),
+                    Ok(_) => {
+                        log::info!("Successfully preloaded new model: {}", model_name);
+                        match parakeet_manager.warmup(&app_clone).await {
+                            Ok(Some(ms)) => log::info!(
+                                "Successfully warmed new Parakeet model '{}' in {}ms",
+                                model_name,
+                                ms
+                            ),
+                            Ok(None) => {
+                                log::info!("Parakeet warmup skipped for '{}'", model_name)
+                            }
+                            Err(e) => log::warn!("Failed to warm new Parakeet model: {}", e),
+                        }
+                    }
                     Err(e) => log::warn!("Failed to preload new model: {}", e),
                 }
             });

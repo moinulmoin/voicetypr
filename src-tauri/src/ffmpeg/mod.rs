@@ -8,8 +8,6 @@ use tokio::process::Command;
 
 // On Windows ensure spawned console apps (ffmpeg/ffprobe) don't flash a console window
 #[cfg(target_os = "windows")]
-use std::os::windows::process::CommandExt as _;
-#[cfg(target_os = "windows")]
 const CREATE_NO_WINDOW: u32 = 0x08000000;
 
 #[cfg(target_os = "windows")]

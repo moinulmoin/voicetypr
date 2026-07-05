@@ -96,7 +96,7 @@ jobs:
           version: 10.13.1
 
       - name: Setup Rust
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@1.91.1
         with:
           targets: aarch64-apple-darwin
 
@@ -229,7 +229,7 @@ jobs:
           version: 10.13.1
 
       - name: Setup Rust
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@1.91.1
         with:
           targets: x86_64-apple-darwin
 
@@ -349,7 +349,7 @@ jobs:
           version: 10.13.1
 
       - name: Setup Rust
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@1.91.1
         with:
           targets: x86_64-pc-windows-msvc
       - name: Rust cache

@@ -24,17 +24,17 @@ use std::time::Duration;
 use tauri::{AppHandle, Manager};
 use tempfile::NamedTempFile;
 
-const LOCAL_ENGINE_TIMEOUT_GRACE: Duration = Duration::from_secs(2);
+pub(crate) const LOCAL_ENGINE_TIMEOUT_GRACE: Duration = Duration::from_secs(2);
 
-use crate::commands::audio::{
-    compile_parakeet_custom_vocabulary_for_transcription,
-    parakeet_segments_to_transcription_segments, resolve_engine_for_model,
-    transcribe_whisper_with_acceleration, transcription_watchdog_budget, ActiveEngineSelection,
-};
 use crate::parakeet::manager::{ParakeetManager, ParakeetTranscriptionOptions};
 use crate::parakeet::messages::ParakeetResponse;
 use crate::provider_capabilities::ProviderEngine;
 use crate::secure_store::secure_get;
+use crate::transcription::engines::{
+    compile_parakeet_custom_vocabulary_for_transcription,
+    parakeet_segments_to_transcription_segments, resolve_engine_for_model,
+    transcribe_whisper_with_acceleration, transcription_watchdog_budget, ActiveEngineSelection,
+};
 use crate::transcription::error::{
     from_local_engine_string, from_stt_error, TranscriptionError, TranscriptionErrorCode,
 };
@@ -151,7 +151,7 @@ fn deferred_executor_route_error(
 /// so the caller never receives mislabeled output. An engine that genuinely
 /// supports the task passes through unchanged (none of the cloud engines do
 /// today).
-fn ensure_cloud_task_supported(
+pub(crate) fn ensure_cloud_task_supported(
     provider: crate::cloud_stt::CloudProvider,
     translate: bool,
     source: TranscriptionSource,
@@ -194,16 +194,29 @@ async fn route_once(
                 language,
                 translate,
                 request.initial_prompt.as_deref(),
+                request.audio_ctx,
+                request.speed_mode_override,
                 move || token.is_cancelled(),
             )
             .await
             .map_err(|e| from_local_engine_string(&e, source))?;
 
-            Ok(TranscriptionResult::new(job, output.raw_text)
+            let result = TranscriptionResult::new(job, output.raw_text)
                 .with_transcript_language(output.transcript_language)
                 .with_segments(output.segments)
                 .with_audio_duration_ms(Some(output.audio_duration_ms))
-                .with_processing_duration_ms(Some(output.processing_duration_ms)))
+                .with_processing_duration_ms(Some(output.processing_duration_ms));
+            let result = if matches!(source, TranscriptionSource::AudioFile) {
+                result.with_span_timings_ms(serde_json::json!({
+                    "preprocessing": output.timings.preprocessing_ms,
+                    "inference": output.timings.inference_ms,
+                    "extraction": output.timings.extraction_ms,
+                    "total": output.timings.total_ms,
+                }))
+            } else {
+                result
+            };
+            Ok(result)
         }
         ActiveEngineSelection::Parakeet { model_name } => {
             let manager = app.state::<ParakeetManager>();
@@ -248,10 +261,25 @@ async fn route_once(
                     segments,
                     language,
                     duration,
-                }) => Ok(TranscriptionResult::new(job, text)
-                    .with_transcript_language(language)
-                    .with_segments(parakeet_segments_to_transcription_segments(segments))
-                    .with_audio_duration_ms(effective_parakeet_audio_duration_ms(duration, input_path))),
+                }) => {
+                    let timings = manager.latest_timing_snapshot();
+                    let result = TranscriptionResult::new(job, text)
+                        .with_transcript_language(language)
+                        .with_segments(parakeet_segments_to_transcription_segments(segments))
+                        .with_audio_duration_ms(effective_parakeet_audio_duration_ms(
+                            duration, input_path,
+                        ));
+                    let result = if matches!(source, TranscriptionSource::AudioFile) {
+                        result.with_span_timings_ms(serde_json::json!({
+                            "model_load": timings.model_load_ms,
+                            "inference": timings.inference_ms,
+                            "total": timings.total_ms,
+                        }))
+                    } else {
+                        result
+                    };
+                    Ok(result)
+                }
                 Ok(ParakeetResponse::Error { code, message, .. }) => Err(TranscriptionError::new(
                     TranscriptionErrorCode::EngineFailed,
                     source,
@@ -468,7 +496,7 @@ fn wav_duration_ms(path: &Path) -> Option<u64> {
 /// The Parakeet sidecar's `duration` field is often `0.0` (a known FluidAudio
 /// bug). When `sidecar_secs` is `Some(s)` with `s > 0.0` we trust it; otherwise
 /// we fall back to reading the WAV header of `input_path` directly.
-fn effective_parakeet_audio_duration_ms(
+pub(crate) fn effective_parakeet_audio_duration_ms(
     sidecar_secs: Option<f32>,
     input_path: &std::path::Path,
 ) -> Option<u64> {
@@ -482,7 +510,7 @@ fn effective_parakeet_audio_duration_ms(
 }
 
 /// The watchdog/timeout budget for an attempt, or `None` to run unbounded.
-fn watchdog_budget_for(attempt_path: &Path, policy: &TimeoutPolicy) -> Option<Duration> {
+pub(crate) fn watchdog_budget_for(attempt_path: &Path, policy: &TimeoutPolicy) -> Option<Duration> {
     match policy {
         TimeoutPolicy::None => None,
         TimeoutPolicy::Explicit(deadline) => Some(*deadline),

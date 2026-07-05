@@ -6,6 +6,7 @@ pub mod recorder;
 pub mod recorder_watchdog;
 pub mod resampler;
 pub mod silence_detector;
+pub mod stream_tap;
 
 #[cfg(test)]
 mod converter_tests;

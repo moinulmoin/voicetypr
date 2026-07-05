@@ -1,6 +1,6 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { OnboardingDesktop } from "./OnboardingDesktop";
 
 const {
@@ -12,27 +12,34 @@ const {
   eventListeners,
   modelManagement,
   settingsState,
+  settingsView,
   recordingState,
-} = vi.hoisted(() => ({
-  invokeMock: vi.fn(),
-  updateSettingsMock: vi.fn(),
-  onCompleteMock: vi.fn(),
-  startRecordingMock: vi.fn(),
-  stopRecordingMock: vi.fn(),
-  eventListeners: new Map<string, Set<(event: { payload: unknown }) => void>>(),
-  settingsState: {
+} = vi.hoisted(() => {
+  const settingsState = {
     hotkey: "CommandOrControl+Shift+Space",
     current_model: "base.en",
     current_model_engine: "whisper",
     speech_language: "en",
     onboarding_completed: false,
-  },
-  recordingState: {
+  };
+
+  return {
+    invokeMock: vi.fn(),
+    updateSettingsMock: vi.fn(),
+    onCompleteMock: vi.fn(),
+    startRecordingMock: vi.fn(),
+    stopRecordingMock: vi.fn(),
+    eventListeners: new Map<string, Set<(event: { payload: unknown }) => void>>(),
+    settingsState,
+    settingsView: {
+      current: settingsState as typeof settingsState | null,
+    },
+    recordingState: {
     state: "idle",
     error: null as string | null,
     isActive: false,
-  },
-  modelManagement: {
+    },
+    modelManagement: {
     models: {
       "base.en": {
         name: "base.en",
@@ -58,12 +65,13 @@ const {
     deleteModel: vi.fn(),
     sortedModels: [],
     isLoading: false,
-  },
-}));
+    },
+  };
+});
 
 vi.mock("@/contexts/SettingsContext", () => ({
   useSettings: () => ({
-    settings: settingsState,
+    settings: settingsView.current,
     updateSettings: updateSettingsMock,
   }),
 }));
@@ -126,6 +134,73 @@ const renderOnboarding = () =>
     />,
   );
 
+const navigateToFirstTranscription = async (
+  user: ReturnType<typeof userEvent.setup>,
+) => {
+  await user.click(screen.getByRole("button", { name: /start setup/i }));
+  await user.click(screen.getByText("Use this device"));
+  await user.click(screen.getByRole("button", { name: /continue/i }));
+  await user.click(screen.getByRole("button", { name: /continue/i }));
+  await user.click(screen.getByRole("button", { name: /continue/i }));
+  await user.click(screen.getByRole("button", { name: /save hotkey/i }));
+  return screen.findByRole("button", { name: /review result/i });
+};
+
+const navigateToHotkeyWithLocalSource = async (
+  user: ReturnType<typeof userEvent.setup>,
+) => {
+  await user.click(screen.getByRole("button", { name: /start setup/i }));
+  await user.click(screen.getByText("Use this device"));
+  await user.click(screen.getByRole("button", { name: /continue/i }));
+  await user.click(screen.getByRole("button", { name: /continue/i }));
+  await user.click(screen.getByRole("button", { name: /continue/i }));
+  await screen.findByText("Recording hotkey");
+};
+
+const onlineRemoteServer = {
+  id: "remote-1",
+  host: "192.168.1.24",
+  port: 3030,
+  password: null,
+  has_password: false,
+  name: "Studio Mac",
+  created_at: 1,
+  model: "base.en",
+  status: "Online",
+  last_checked: 1,
+};
+
+const navigateToHotkeyWithRemoteSource = async (
+  user: ReturnType<typeof userEvent.setup>,
+) => {
+  invokeMock.mockImplementation((command: string) => {
+    switch (command) {
+      case "discover_remote_servers":
+        return Promise.resolve([]);
+      case "list_remote_servers":
+        return Promise.resolve([onlineRemoteServer]);
+      case "get_active_remote_server":
+        return Promise.resolve(null);
+      case "check_remote_server_status":
+        return Promise.resolve(onlineRemoteServer);
+      case "set_active_remote_server":
+      case "set_global_shortcut":
+        return Promise.resolve(true);
+      default:
+        return Promise.resolve(null);
+    }
+  });
+
+  await user.click(screen.getByRole("button", { name: /start setup/i }));
+  await user.click(screen.getByText("Use another Voicetypr"));
+  await user.click(screen.getByRole("button", { name: /continue/i }));
+  await user.click(screen.getByRole("button", { name: /continue/i }));
+  await screen.findByText("Studio Mac");
+  await user.click(screen.getByRole("button", { name: /use this server/i }));
+  await user.click(screen.getByRole("button", { name: /continue/i }));
+  await screen.findByText("Recording hotkey");
+};
+
 beforeEach(() => {
   vi.clearAllMocks();
   Object.assign(platformMock, { isMacOS: true, isWindows: false, isLinux: false });
@@ -137,6 +212,7 @@ beforeEach(() => {
     speech_language: "en",
     onboarding_completed: false,
   });
+  settingsView.current = settingsState;
   delete (settingsState as Record<string, unknown>).transcription_acceleration;
   Object.assign(recordingState, {
     state: "idle",
@@ -183,6 +259,10 @@ beforeEach(() => {
   });
 });
 
+afterEach(() => {
+  vi.useRealTimers();
+});
+
 describe("OnboardingDesktop", () => {
   it("requires a successful first transcription before completing onboarding", async () => {
     const user = userEvent.setup();
@@ -222,6 +302,97 @@ describe("OnboardingDesktop", () => {
     expect(updateSettingsMock).toHaveBeenCalledWith({ onboarding_completed: true });
     expect(onCompleteMock).toHaveBeenCalledTimes(1);
     expect(onCompleteMock).toHaveBeenCalledWith(undefined);
+  });
+
+  it("requires two skip clicks before leaving first transcription", async () => {
+    const user = userEvent.setup();
+    renderOnboarding();
+
+    await navigateToFirstTranscription(user);
+
+    await user.click(screen.getByRole("button", { name: /skip for now/i }));
+
+    expect(screen.getByRole("button", { name: /review result/i })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /skip without testing/i })).toBeInTheDocument();
+    expect(screen.getByText("You can test anytime from the main window.")).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: /skip without testing/i }));
+
+    expect(screen.getByText(/your first transcription/i)).toBeInTheDocument();
+  });
+
+  it("reverts skip confirmation after the timeout", async () => {
+    const user = userEvent.setup();
+    renderOnboarding();
+
+    await navigateToFirstTranscription(user);
+
+    vi.useFakeTimers();
+    fireEvent.click(screen.getByRole("button", { name: /skip for now/i }));
+
+    expect(screen.getByRole("button", { name: /skip without testing/i })).toBeInTheDocument();
+
+    act(() => {
+      vi.advanceTimersByTime(5_000);
+    });
+
+    expect(screen.getByRole("button", { name: /skip for now/i })).toBeInTheDocument();
+    expect(screen.queryByText("You can test anytime from the main window.")).not.toBeInTheDocument();
+  });
+
+  it("completes onboarding from the confirmed skip path", async () => {
+    const user = userEvent.setup();
+    renderOnboarding();
+
+    await navigateToFirstTranscription(user);
+
+    await user.click(screen.getByRole("button", { name: /skip for now/i }));
+    await user.click(screen.getByRole("button", { name: /skip without testing/i }));
+    await user.click(screen.getByRole("button", { name: /continue/i }));
+    await user.click(screen.getByRole("button", { name: /maybe later/i }));
+
+    expect(updateSettingsMock).toHaveBeenCalledWith({ onboarding_completed: true });
+    expect(onCompleteMock).toHaveBeenCalledTimes(1);
+    expect(onCompleteMock).toHaveBeenCalledWith(undefined);
+  });
+
+  it("hides the skip button after a successful sample transcription", async () => {
+    const user = userEvent.setup();
+    renderOnboarding();
+
+    const reviewButton = await navigateToFirstTranscription(user);
+
+    expect(screen.getByRole("button", { name: /skip for now/i })).toBeInTheDocument();
+
+    emit("transcription-added", {
+      text: "Successful onboarding sample.",
+      model: "base.en",
+      timestamp: "2026-05-18T00:00:00Z",
+    });
+
+    await waitFor(() => expect(reviewButton).toBeEnabled());
+    expect(screen.queryByRole("button", { name: /skip for now/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /skip without testing/i })).not.toBeInTheDocument();
+  });
+
+  it("focuses the sample textarea on the first transcription step and after sample buttons", async () => {
+    const user = userEvent.setup();
+    renderOnboarding();
+
+    await user.click(screen.getByRole("button", { name: /start setup/i }));
+    await user.click(screen.getByText("Use this device"));
+    await user.click(screen.getByRole("button", { name: /continue/i }));
+    await user.click(screen.getByRole("button", { name: /continue/i }));
+    await user.click(screen.getByRole("button", { name: /continue/i }));
+    await user.click(screen.getByRole("button", { name: /save hotkey/i }));
+
+    const textarea = await screen.findByPlaceholderText(
+      "Your transcription will appear here as you speak.",
+    );
+    await waitFor(() => expect(textarea).toHaveFocus());
+
+    await user.click(screen.getByRole("button", { name: /start sample/i }));
+    await waitFor(() => expect(textarea).toHaveFocus());
   });
 
   it("routes to the License tab when the user already has a license", async () => {
@@ -420,6 +591,77 @@ describe("OnboardingDesktop", () => {
     });
     expect(invokeMock).toHaveBeenCalledWith("update_shortcut_settings", {
       settings: { bindings: [userBinding] },
+    });
+  });
+
+  it("resyncs the hotkey when settings resolve after mount", async () => {
+    const user = userEvent.setup();
+    settingsView.current = null;
+    const view = renderOnboarding();
+
+    Object.assign(settingsState, {
+      hotkey: "CommandOrControl+Alt+M",
+      current_model: "base.en",
+      current_model_engine: "whisper",
+      speech_language: "en",
+    });
+    settingsView.current = settingsState;
+    view.rerender(
+      <OnboardingDesktop
+        onComplete={onCompleteMock}
+        modelManagement={modelManagement as never}
+      />,
+    );
+
+    await navigateToHotkeyWithLocalSource(user);
+    await user.click(screen.getByRole("button", { name: /save hotkey/i }));
+
+    expect(invokeMock).toHaveBeenCalledWith("set_global_shortcut", {
+      shortcut: "CommandOrControl+Alt+M",
+    });
+  });
+
+  it("does not clobber a hotkey edited before settings resolve", async () => {
+    const user = userEvent.setup();
+    settingsView.current = null;
+    const view = renderOnboarding();
+
+    await navigateToHotkeyWithRemoteSource(user);
+
+    await user.click(screen.getByTitle("Change hotkey"));
+    fireEvent.keyDown(window, {
+      key: "k",
+      code: "KeyK",
+      metaKey: true,
+    });
+    fireEvent.keyUp(window, {
+      key: "k",
+      code: "KeyK",
+      metaKey: true,
+    });
+    await user.click(screen.getByTitle("Save hotkey"));
+
+    Object.assign(settingsState, {
+      hotkey: "CommandOrControl+Shift+P",
+      current_model: "base.en",
+      current_model_engine: "whisper",
+      speech_language: "en",
+    });
+    settingsView.current = settingsState;
+    view.rerender(
+      <OnboardingDesktop
+        onComplete={onCompleteMock}
+        modelManagement={modelManagement as never}
+      />,
+    );
+
+    await user.click(screen.getByRole("button", { name: /save hotkey/i }));
+
+    expect(invokeMock).toHaveBeenCalledWith("set_global_shortcut", {
+      shortcut: "CommandOrControl+K",
+    });
+    expect(invokeMock).not.toHaveBeenCalledWith("set_global_shortcut", {
+      shortcut: "CommandOrControl+Shift+P",
     });
   });
 

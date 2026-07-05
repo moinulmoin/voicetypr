@@ -11,7 +11,7 @@ type RecordingState = 'idle' | 'starting' | 'recording' | 'stopping' | 'transcri
 interface UseRecordingReturn {
   state: RecordingState;
   error: string | null;
-  startRecording: () => Promise<void>;
+  startRecording: () => Promise<boolean>;
   stopRecording: () => Promise<void>;
   isActive: boolean;
 }
@@ -108,14 +108,20 @@ export function useRecording(): UseRecordingReturn {
   }, [state]);
 
   // Simple command invocations - let backend handle all state management
-  const startRecording = useCallback(async () => {
+  const startRecording = useCallback(async (): Promise<boolean> => {
     try {
       log.debug('[Recording Hook] Invoking start_recording...');
-      await invoke('start_recording');
+      // Backend reports ownership: true = this call started the recording,
+      // false = redundant no-op on an already-active recording. A hold that
+      // pairs its stop with this start must never stop a recording it did
+      // not create.
+      const started = await invoke<boolean>('start_recording');
+      return started === true;
     } catch (err) {
       log.error('[Recording Hook] Failed to start recording:', err);
       setState('error');
       setError(`${getCommandErrorMessage(err, 'Recording could not start')}. Try again in a moment.`);
+      return false;
     }
   }, []);
 

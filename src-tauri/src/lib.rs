@@ -65,6 +65,7 @@ fn show_main_window(app: &tauri::AppHandle) {
 }
 
 /// Hide the main window and the macOS Dock icon — back to the menubar/tray.
+#[allow(clippy::needless_return)]
 fn hide_main_window(app: &tauri::AppHandle) {
     // If the system tray failed to create (e.g. the Windows shell notification
     // area wasn't ready at startup), hiding the window would leave the app
@@ -239,7 +240,8 @@ use commands::{
     license::*,
     logs::{clear_old_logs, get_latest_log_for_bug_report, get_log_directory, open_logs_folder},
     model::{
-        cancel_download, delete_model, download_model, download_parakeet_vocabulary_model,
+        activate_live_preview, cancel_download, delete_model, download_eou_model, download_model,
+        download_parakeet_vocabulary_model, eou_model_status, get_active_stream_capabilities,
         get_model_status, get_parakeet_vocabulary_status, list_downloaded_models, preload_model,
         verify_model,
     },
@@ -380,6 +382,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     // egress chokepoint. Inert unless opted in AND a DSN was compiled in.
     let _sentry_guard = telemetry::init(telemetry_enabled, telemetry_install_id);
 
+    #[cfg_attr(not(target_os = "macos"), allow(unused_mut))]
     let mut builder = tauri::Builder::default()
         .plugin(tauri_plugin_os::init())
         .plugin(setup_logging().build())
@@ -1142,7 +1145,8 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
                                 let preload_result = {
                                     let cache_state = app_handle.state::<AsyncMutex<TranscriberCache>>();
                                     let mut cache = cache_state.lock().await;
-                                    cache.get_or_create(&model_path).map(|_| ())
+                                    let speed_mode = crate::commands::settings::read_whisper_speed_mode(&app_handle);
+                                    cache.get_or_create(&model_path, speed_mode).map(|_| ())
                                 };
 
                                 match preload_result {
@@ -1179,8 +1183,8 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
                     .flatten()
                     .unwrap_or((1440.0, 900.0));
 
-                    let pill_width = 80.0;  // Sized for 3-dot pill (active state with padding)
-                    let pill_height = 40.0;
+                    let pill_width = 260.0;
+                    let pill_height = 64.0;
                     let bottom_offset = 10.0;  // Distance from bottom of screen
 
                     let x = (screen_width - pill_width) / 2.0;
@@ -1205,7 +1209,8 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
                         .skip_taskbar(true)
                         .transparent(true)
                         .shadow(false)  // Prevent window shadow on macOS
-                        .inner_size(80.0, 40.0)  // Sized for 3-dot pill (active state with padding)
+                        .inner_size(260.0, 64.0)
+                        .accept_first_mouse(true)
                         .position(pos_x, pos_y)
                         .visible(true)  // Always visible (controlled by show_pill_indicator setting)
                         .focused(false);  // Don't steal focus
@@ -1236,7 +1241,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
                 // Create toast window for feedback messages (positioned above pill) - all platforms
                 let toast_width = 400.0;
                 let toast_height = 80.0;
-                let pill_width = 80.0;
+                let pill_width = 260.0;
                 let gap = 8.0; // Gap between pill and toast
 
                 // Center toast above pill
@@ -1262,6 +1267,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
                 #[cfg(debug_assertions)]
                 let toast_builder = toast_builder;
 
+                #[cfg_attr(not(target_os = "macos"), allow(unused_variables))]
                 let toast_window = toast_builder.build()?;
 
                 // macOS: Convert toast to NSPanel to match pill behavior
@@ -1343,12 +1349,15 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             get_audio_devices,
             get_current_audio_device,
             download_model,
+            download_eou_model,
+            eou_model_status,
+            activate_live_preview,
+            get_active_stream_capabilities,
             get_model_status,
             get_parakeet_vocabulary_status,
             download_parakeet_vocabulary_model,
             preload_model,
             verify_model,
-            transcribe_audio,
             transcribe_audio_file,
             diarize_audio_file,
             get_settings,
@@ -1502,13 +1511,34 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             eprintln!("Voicetypr failed to start: {}", e);
             Box::new(e)
         })?
-        .run(|app_handle, event| {
+        .run(|app_handle, event| match event {
+            // #28: unload every in-process Whisper model (and its Metal GPU buffers) before
+            // the process tears down. On Apple Silicon the ggml-metal device destructor
+            // asserts at exit if a model's residency set is still live, aborting the process
+            // (SIGABRT) on quit — after transcription already succeeded. Two owners must be
+            // emptied: the local dictation cache (managed `TranscriberCache`), and the
+            // strong-host remote server's OWN cache (inside `RealTranscriptionContext`) —
+            // stopping the server joins its tasks and drops that context. Both harmless on
+            // non-Apple platforms: they just release resources a moment early.
+            tauri::RunEvent::Exit => {
+                tauri::async_runtime::block_on(async move {
+                    if let Some(cache) = app_handle.try_state::<AsyncMutex<TranscriberCache>>() {
+                        cache.lock().await.clear();
+                    }
+                    if let Some(remote) = app_handle
+                        .try_state::<AsyncMutex<crate::remote::lifecycle::RemoteServerManager>>()
+                    {
+                        remote.lock().await.stop().await;
+                    }
+                });
+            }
             #[cfg(target_os = "macos")]
-            if let tauri::RunEvent::Reopen { has_visible_windows, .. } = event {
+            tauri::RunEvent::Reopen { has_visible_windows, .. } => {
                 if !has_visible_windows {
                     show_main_window(app_handle);
                 }
             }
+            _ => {}
         });
 
     // Log successful application startup
@@ -1888,6 +1918,15 @@ async fn perform_startup_checks(app: tauri::AppHandle) {
             match parakeet_manager.load_model(&app, &model_name).await {
                 Ok(_) => {
                     log::info!("✅ Parakeet model '{}' autoloaded from cache", model_name);
+                    match parakeet_manager.warmup(&app).await {
+                        Ok(Some(ms)) => {
+                            log::info!("✅ Parakeet model '{}' warmed in {}ms", model_name, ms)
+                        }
+                        Ok(None) => log::info!("Parakeet warmup skipped for '{}'", model_name),
+                        Err(err) => {
+                            log::warn!("Failed to warm Parakeet model '{}': {}", model_name, err)
+                        }
+                    }
                 }
                 Err(err) => {
                     log::warn!(

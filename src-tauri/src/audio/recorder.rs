@@ -8,6 +8,7 @@ use std::time::{Duration, Instant};
 
 use super::level_meter::AudioLevelMeter;
 use super::silence_detector::{SilenceDetector, SilenceDetectorEvent};
+use super::stream_tap::{self, StreamTapRt, StreamTapSinkFactory, StreamTapWorkerSummary};
 
 // Type-safe recording size limits
 pub struct RecordingSize;
@@ -59,11 +60,13 @@ const RECYCLE_CHANNEL_CAPACITY: usize = WRITER_QUEUE_CAPACITY + CHUNK_POOL_SLACK
 /// [`STOP_JOIN_TIMEOUT`] comfortably covers it plus the drain + platform
 /// stream-drop budgets.
 const WRITER_JOIN_TIMEOUT: Duration = Duration::from_secs(3);
+const STREAM_TAP_JOIN_TIMEOUT: Duration = Duration::from_millis(100);
 
 /// Outer budget [`AudioRecorder::stop_recording`] gives the whole recording
 /// thread to tear down during stop. It must cover every internal sub-budget —
 /// drain window (~200ms) + platform stream drop (≤3s on Windows) + writer
-/// finalize ([`WRITER_JOIN_TIMEOUT`]) — plus a finalize margin. It is
+/// finalize ([`WRITER_JOIN_TIMEOUT`]) + stream-tap observation
+/// ([`STREAM_TAP_JOIN_TIMEOUT`]) — plus a finalize margin. It is
 /// intentionally larger than their sum so the outer join never preempts the
 /// worker while it is still finalizing the WAV; the old independent 5s poll
 /// raced the (then-unbounded) writer join and timed out mid-finalize, leaving
@@ -238,6 +241,10 @@ impl AudioRecorder {
         &mut self,
         output_path: &str,
         device_name: Option<String>,
+        streaming_tap_enabled: bool,
+        recording_generation: u64,
+        stream_cancelled: Arc<dyn Fn() -> bool + Send + Sync>,
+        stream_sink_factory: Option<StreamTapSinkFactory>,
     ) -> Result<(), String> {
         log::info!(
             "AudioRecorder::start_recording called with path: {}",
@@ -268,7 +275,7 @@ impl AudioRecorder {
         let stop_tx_clone = stop_tx.clone();
 
         // Create audio level channel (f64 for EBU R128 loudness values)
-        let (audio_level_tx, audio_level_rx) = mpsc::channel::<f64>();
+        let (audio_level_tx, audio_level_rx) = mpsc::sync_channel::<f64>(8);
         let (silence_event_tx, silence_event_rx) = mpsc::sync_channel::<SilenceDetectorEvent>(8);
         // Spawn recording thread
         let thread_handle = thread::spawn(move || -> Result<String, String> {
@@ -302,6 +309,9 @@ impl AudioRecorder {
             log::info!("======================================");
 
             let config = device.default_input_config().map_err(|e| e.to_string())?;
+            let stream_sink = stream_sink_factory
+                .as_ref()
+                .and_then(|factory| factory(config.sample_rate().0, config.channels()));
 
             log::info!(
                 "Audio config: sample_rate={} Hz, channels={}, format={:?}",
@@ -353,6 +363,19 @@ impl AudioRecorder {
             let writer_bytes = bytes_written.clone();
             let writer_dropped = dropped_chunks.clone();
             let stop_tx_for_size = stop_tx_clone.clone();
+            let (stream_tap_rt, stream_tap_finalizer) = if let Some(handle) =
+                stream_tap::maybe_spawn_noop_worker(
+                    streaming_tap_enabled,
+                    recording_generation,
+                    chunk_capacity,
+                    stream_cancelled,
+                    stream_sink,
+                ) {
+                let (rt, finalizer) = handle.into_rt();
+                (Some(rt), Some(finalizer))
+            } else {
+                (None, None)
+            };
             // Disconnect-independent finalize signal. The RT callback holds a
             // `writer_tx` clone that can outlive stop on the Windows
             // stream-drop-timeout path, so neither a `Full` `Finalize` send nor
@@ -469,6 +492,7 @@ impl AudioRecorder {
                 let level_meter_clone = level_meter.clone();
                 let stop_requested_clone = stop_requested.clone();
                 let callback_drained_clone = callback_drained.clone();
+                let stream_tap_rt: Option<StreamTapRt> = stream_tap_rt;
 
                 move |f32_samples: &[f32], i16_samples: &[i16]| {
                     // A panic in this real-time path would unwind into CPAL's
@@ -498,6 +522,9 @@ impl AudioRecorder {
                                         }
                                         Err(TrySendError::Full(WriterMsg::Finalize)) => {}
                                         Err(TrySendError::Disconnected(_)) => {}
+                                    }
+                                    if let Some(tap) = stream_tap_rt.as_ref() {
+                                        stream_tap::enqueue_frame_rt(tap, i16_samples);
                                     }
                                 }
                                 callback_drained_clone.store(true, Ordering::SeqCst);
@@ -543,6 +570,9 @@ impl AudioRecorder {
                             }
                             Err(TrySendError::Full(WriterMsg::Finalize)) => {}
                             Err(TrySendError::Disconnected(_)) => {}
+                        }
+                        if let Some(tap) = stream_tap_rt.as_ref() {
+                            stream_tap::enqueue_frame_rt(tap, i16_samples);
                         }
                     }));
                 }
@@ -693,6 +723,7 @@ impl AudioRecorder {
             finalize_flag.store(true, Ordering::SeqCst);
             let _ = writer_tx.try_send(WriterMsg::Finalize);
             drop(writer_tx);
+            let stream_tap_worker = stream_tap_finalizer.map(|finalizer| finalizer.finalize());
 
             // Bound the writer join so a slow/hung writer cannot block teardown
             // indefinitely. On timeout the worker is detached — hound's
@@ -702,6 +733,9 @@ impl AudioRecorder {
             // [`join_writer_bounded`].
             let writer_result = join_writer_bounded(writer_handle, WRITER_JOIN_TIMEOUT);
 
+            if let Some(worker) = stream_tap_worker {
+                let _ = join_stream_tap_bounded(worker, STREAM_TAP_JOIN_TIMEOUT);
+            }
             writer_result?;
 
             // Check if any errors occurred during recording after preserving writer integrity
@@ -779,7 +813,7 @@ impl AudioRecorder {
                         Err(_) => return Err("Recording thread panicked".to_string()),
                     }
                 }
-                std::thread::sleep(Duration::from_millis(100));
+                std::thread::sleep(Duration::from_millis(5));
             }
 
             // If we get here, the thread didn't finish within timeout
@@ -889,6 +923,30 @@ fn join_writer_bounded(
     Err("Writer thread failed to finalize within timeout".to_string())
 }
 
+fn join_stream_tap_bounded(
+    handle: thread::JoinHandle<StreamTapWorkerSummary>,
+    deadline: Duration,
+) -> Option<StreamTapWorkerSummary> {
+    let start = Instant::now();
+    while start.elapsed() < deadline {
+        if handle.is_finished() {
+            return match handle.join() {
+                Ok(summary) => Some(summary),
+                Err(_) => {
+                    log::warn!("Stream tap worker panicked after WAV finalization");
+                    None
+                }
+            };
+        }
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    log::warn!(
+        "Stream tap worker did not finish within {}ms; detaching so preview finalization cannot block the WAV stop path",
+        deadline.as_millis()
+    );
+    None
+}
+
 /// Classifies an error returned by [`AudioRecorder::stop_recording`]. Returns true when the
 /// recording worker did NOT finish, or the WAV writer could not finalize the file, so the
 /// capture must not be transcribed. A worker that finishes with an error (e.g. a CPAL device
@@ -980,6 +1038,27 @@ mod tests {
         assert!(!stop_error_is_integrity_failure(
             "WAV finalize failed: failed to seek"
         ));
+    }
+
+    #[test]
+    fn stream_tap_join_timeout_detaches_slow_worker() {
+        let handle = thread::spawn(|| {
+            thread::sleep(Duration::from_millis(80));
+            StreamTapWorkerSummary {
+                generation: 1,
+                frames: 0,
+                samples: 0,
+                dropped: 0,
+                cancelled: false,
+                stale: false,
+            }
+        });
+
+        let started = Instant::now();
+        let summary = join_stream_tap_bounded(handle, Duration::from_millis(10));
+
+        assert!(summary.is_none());
+        assert!(started.elapsed() < Duration::from_millis(60));
     }
 
     #[test]

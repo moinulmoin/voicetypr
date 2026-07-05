@@ -152,6 +152,7 @@ const ONBOARDING_HOTKEY_VALIDATION = ValidationPresets.custom({
 });
 
 const SAMPLE_SENTENCE = "The quick brown fox jumps over the lazy dog.";
+const SKIP_CONFIRM_TIMEOUT_MS = 5_000;
 
 const isSuccessfulOnboardingSampleEvent = (
   payload: TranscriptionAddedPayload,
@@ -233,6 +234,8 @@ export const OnboardingDesktop = function OnboardingDesktop({
   const [hotkey, setHotkey] = useState(
     settings?.hotkey || "Alt+Space",
   );
+  const hotkeyUserEditedRef = useRef(false);
+  const hotkeySyncedFromSettingsRef = useRef(settings != null);
   const [isEditingHotkey, setIsEditingHotkey] = useState(false);
   const [capturedBareModifier, setCapturedBareModifier] = useState<BareModifierSpec | null>(null);
   const [isRequestingPermission, setIsRequestingPermission] = useState<
@@ -256,10 +259,74 @@ export const OnboardingDesktop = function OnboardingDesktop({
   const [sampleError, setSampleError] = useState<string | null>(null);
   const [isSavingCompletion, setIsSavingCompletion] = useState(false);
   const [holdToTalk, setHoldToTalk] = useState(false);
+  const [skipConfirmActive, setSkipConfirmActive] = useState(false);
+  const skipConfirmTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const sampleTextareaRef = useRef<HTMLTextAreaElement | null>(null);
 
   useEffect(() => {
     sourceConfirmedRef.current = sourceConfirmed;
   }, [sourceConfirmed]);
+
+  useEffect(() => {
+    if (!settings || hotkeySyncedFromSettingsRef.current) return;
+    hotkeySyncedFromSettingsRef.current = true;
+    if (!hotkeyUserEditedRef.current) {
+      setHotkey(settings.hotkey || "Alt+Space");
+      setCapturedBareModifier(null);
+    }
+  }, [settings]);
+
+  const handleHotkeyChange = useCallback((value: string) => {
+    hotkeyUserEditedRef.current = true;
+    setHotkey(value);
+    setCapturedBareModifier(null);
+  }, []);
+
+  const handleBareModifier = useCallback((spec: BareModifierSpec) => {
+    hotkeyUserEditedRef.current = true;
+    setCapturedBareModifier(spec);
+    setHotkey("");
+  }, []);
+
+  const resetSkipConfirm = useCallback(() => {
+    if (skipConfirmTimeoutRef.current) {
+      clearTimeout(skipConfirmTimeoutRef.current);
+      skipConfirmTimeoutRef.current = null;
+    }
+    setSkipConfirmActive(false);
+  }, []);
+
+  const requestSkipConfirm = useCallback(() => {
+    if (skipConfirmTimeoutRef.current) {
+      clearTimeout(skipConfirmTimeoutRef.current);
+    }
+    setSkipConfirmActive(true);
+    skipConfirmTimeoutRef.current = setTimeout(() => {
+      skipConfirmTimeoutRef.current = null;
+      setSkipConfirmActive(false);
+    }, SKIP_CONFIRM_TIMEOUT_MS);
+  }, []);
+
+  useEffect(
+    () => () => {
+      if (skipConfirmTimeoutRef.current) {
+        clearTimeout(skipConfirmTimeoutRef.current);
+        skipConfirmTimeoutRef.current = null;
+      }
+    },
+    [],
+  );
+  const focusSampleTextarea = useCallback(() => {
+    window.setTimeout(() => {
+      sampleTextareaRef.current?.focus();
+    }, 0);
+  }, []);
+
+  useEffect(() => {
+    if (currentStep === "first_transcription") {
+      focusSampleTextarea();
+    }
+  }, [currentStep, focusSampleTextarea]);
 
   const permissions = {
     microphone: {
@@ -467,6 +534,12 @@ export const OnboardingDesktop = function OnboardingDesktop({
       setSampleError(recording.error || "Recording failed. Try again.");
     }
   }, [recording.error, recording.state]);
+
+  useEffect(() => {
+    if (currentStep !== "first_transcription" || recording.isActive) {
+      resetSkipConfirm();
+    }
+  }, [currentStep, recording.isActive, resetSkipConfirm]);
 
   useEffect(() => {
     if (previousSampleSelectionKey.current === sampleSelectionKey) {
@@ -781,6 +854,7 @@ export const OnboardingDesktop = function OnboardingDesktop({
   };
 
   const handleBack = () => {
+    resetSkipConfirm();
     const previousIndex = currentIndex - 1;
     if (previousIndex >= 0) {
       setCurrentStep(steps[previousIndex]);
@@ -788,14 +862,26 @@ export const OnboardingDesktop = function OnboardingDesktop({
   };
 
   const startSampleRecording = async () => {
+    resetSkipConfirm();
     setSampleError(null);
     setSampleTranscript(null);
+    focusSampleTextarea();
     await recording.startRecording();
   };
 
   const stopSampleRecording = async () => {
     setSampleError(null);
+    focusSampleTextarea();
     await recording.stopRecording();
+  };
+
+  const handleSkipFirstTranscription = () => {
+    if (skipConfirmActive) {
+      resetSkipConfirm();
+      setCurrentStep("success");
+      return;
+    }
+    requestSkipConfirm();
   };
 
   const canProceed = () => {
@@ -1283,9 +1369,9 @@ export const OnboardingDesktop = function OnboardingDesktop({
 
                 <HotkeyInput
                   value={hotkey}
-                  onChange={(v) => { setHotkey(v); setCapturedBareModifier(null); }}
+                  onChange={handleHotkeyChange}
                   onEditingChange={setIsEditingHotkey}
-                  onBareModifier={(spec) => { setCapturedBareModifier(spec); setHotkey(""); }}
+                  onBareModifier={handleBareModifier}
                   allowBareModifier
                   validationRules={ONBOARDING_HOTKEY_VALIDATION}
                   placeholder={capturedBareModifier
@@ -1338,8 +1424,9 @@ export const OnboardingDesktop = function OnboardingDesktop({
                 onNext={handleNext}
                 nextDisabled={!canProceed()}
                 nextLabel="Review result"
-                onSkip={() => setCurrentStep("success")}
-                skipLabel="Skip for now"
+                onSkip={hasCurrentSampleTranscript ? undefined : handleSkipFirstTranscription}
+                skipLabel={skipConfirmActive ? "Skip without testing?" : "Skip for now"}
+                skipHelper={skipConfirmActive ? "You can test anytime from the main window." : undefined}
               />
             }
           >
@@ -1401,6 +1488,7 @@ export const OnboardingDesktop = function OnboardingDesktop({
                 ) : null}
 
                 <Textarea
+                  ref={sampleTextareaRef}
                   key={currentSampleTranscript ?? "empty"}
                   defaultValue={currentSampleTranscript ?? ""}
                   placeholder="Your transcription will appear here as you speak."
@@ -1595,6 +1683,7 @@ function StepFooter({
   nextLabel,
   onSkip,
   skipLabel,
+  skipHelper,
 }: {
   onBack: () => void;
   onNext: () => void | Promise<void>;
@@ -1602,6 +1691,7 @@ function StepFooter({
   nextLabel: string;
   onSkip?: () => void;
   skipLabel?: string;
+  skipHelper?: string;
 }) {
   return (
     <div className="flex items-center justify-between gap-4">
@@ -1611,9 +1701,14 @@ function StepFooter({
       </Button>
       <div className="flex items-center gap-2">
         {onSkip ? (
-          <Button variant="ghost" onClick={onSkip}>
-            {skipLabel ?? "Skip"}
-          </Button>
+          <div className="flex flex-col items-end gap-1">
+            <Button variant="ghost" onClick={onSkip}>
+              {skipLabel ?? "Skip"}
+            </Button>
+            {skipHelper ? (
+              <p className="text-xs text-muted-foreground">{skipHelper}</p>
+            ) : null}
+          </div>
         ) : null}
         <Button onClick={() => void onNext()} disabled={nextDisabled}>
           {nextLabel}
