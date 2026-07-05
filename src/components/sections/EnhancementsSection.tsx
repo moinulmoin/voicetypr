@@ -81,13 +81,21 @@ const RESHAPING_PRESETS = new Set<EnhancementPreset>([
   "Message",
   "Code",
 ]);
-const GUIDED_PROVIDER_IDS = ["anthropic", "openai", "gemini", "openrouter"] as const;
+const GUIDED_PROVIDER_IDS = ["anthropic", "openai", "gemini", "openrouter", "claude-code"] as const;
 const GUIDED_PROVIDER_LABELS: Record<(typeof GUIDED_PROVIDER_IDS)[number], string> = {
   anthropic: "Anthropic",
   openai: "OpenAI",
   gemini: "Google",
   openrouter: "OpenRouter",
+  "claude-code": "Claude Code",
 };
+
+/// Agent-CLI provider ids (Phase 4C): subscription-authenticated local CLIs.
+/// Availability is probed via `probe_agent_cli`, not `hasApiKey`.
+const AGENT_CLI_PROVIDER_IDS = ["claude-code"] as const;
+
+const isAgentCliProvider = (providerId: string): boolean =>
+  (AGENT_CLI_PROVIDER_IDS as readonly string[]).includes(providerId);
 
 const isGuidedProviderId = (
   providerId: string,
@@ -202,6 +210,23 @@ export function EnhancementsSection() {
 
       await Promise.all(
         allProviders.map(async (providerId) => {
+          // Agent-CLI providers (Claude Code) are subscription-authenticated
+          // local CLIs — availability comes from probe_agent_cli (binary
+          // installed + authed), NOT hasApiKey. They have no API key to cache.
+          if (isAgentCliProvider(providerId)) {
+            try {
+              const probe = await invoke<{ installed: boolean; authed: boolean }>(
+                "probe_agent_cli",
+                { provider: providerId },
+              );
+              keyStatus[providerId] = Boolean(probe.installed && probe.authed);
+            } catch (error) {
+              log.error(`Failed to probe ${providerId} CLI:`, error);
+              keyStatus[providerId] = false;
+            }
+            return;
+          }
+
           const keyId = providerId;
           let isConfigured = await hasApiKey(keyId);
 
@@ -512,6 +537,15 @@ export function EnhancementsSection() {
     providerId: string,
     modelsByProvider: Record<string, string>,
   ) => {
+    // Agent-CLI providers (Claude Code) carry no catalog model — the CLI picks
+    // its own — so skip recommended-model resolution and enable directly with
+    // an empty model (the backend accepts this for agent_cli runtimes).
+    if (isAgentCliProvider(providerId)) {
+      await enablePolishForProviderModel(providerId, "", modelsByProvider);
+      toast.success("Polish on");
+      return true;
+    }
+
     const recommendedModel = await resolveRecommendedModel(providerId);
     if (!recommendedModel) {
       setAdvancedOpen(true);
@@ -527,7 +561,7 @@ export function EnhancementsSection() {
   const handleToggleEnabled = async (enabled: boolean) => {
     const hasActiveProviderKey = Boolean(providerApiKeys[aiSettings.provider]);
 
-    if (enabled && (!hasActiveProviderKey || !aiSettings.model)) {
+    if (enabled && (!hasActiveProviderKey || (!aiSettings.model && !isAgentCliProvider(aiSettings.provider)))) {
       toast.error("Polish is not set up yet. Connect an AI to turn it on.");
       return;
     }
@@ -721,7 +755,9 @@ export function EnhancementsSection() {
   const isUsingCustomProvider = aiSettings.provider === "custom";
   const hasSelectedModel = Boolean(
     aiSettings.provider &&
-      aiSettings.model &&
+      // Agent-CLI providers carry no model — waive the model requirement
+      // (availability still requires a probed provider key below).
+      (aiSettings.model || isAgentCliProvider(aiSettings.provider)) &&
       (isUsingCustomProvider || providerApiKeys[aiSettings.provider]),
   );
 
@@ -783,13 +819,17 @@ export function EnhancementsSection() {
           disabled={!hasSelectedModel}
         />
       </Field>
-      {hasSelectedModel && activeModelName ? (
+      {hasSelectedModel ? (
         <div className="flex max-w-80 flex-wrap items-center gap-x-1.5 gap-y-1 text-left text-xs text-muted-foreground sm:justify-end sm:text-right">
           <span>Using</span>
           {" "}
           <span className="text-foreground">{activeProviderName}</span>
-          {" · "}
-          <span className="text-foreground">{activeModelName}</span>
+          {activeModelName ? (
+            <>
+              {" · "}
+              <span className="text-foreground">{activeModelName}</span>
+            </>
+          ) : null}
           {aiSettings.enabled && (
             <>
               {" · "}
@@ -1016,7 +1056,7 @@ export function EnhancementsSection() {
                           <Settings2 className="h-3.5 w-3.5" />
                         </Button>
                       )}
-                      {!provider.isCustom && (
+                      {!provider.isCustom && !isAgentCliProvider(provider.id) && (
                         <Button
                           onClick={() => fetchModels(provider.id)}
                           variant="ghost"
@@ -1032,56 +1072,76 @@ export function EnhancementsSection() {
                           />
                         </Button>
                       )}
-                      <Button
-                        onClick={async () => {
-                          const message = provider.isCustom
-                            ? `Remove configuration for ${provider.name}?`
-                            : `Remove API key for ${provider.name}?`;
-                          const confirmed = await ask(message, {
-                            title: provider.isCustom ? "Remove Configuration" : "Remove API Key",
-                            kind: "warning",
-                          });
-                          if (confirmed) {
-                            handleRemoveApiKey(provider.id);
-                          }
-                        }}
-                        variant="ghost"
-                        size="sm"
-                        className="text-muted-foreground hover:text-destructive"
-                      >
-                        <Trash2 className="h-3.5 w-3.5" />
-                      </Button>
+                      {!isAgentCliProvider(provider.id) && (
+                        <Button
+                          onClick={async () => {
+                            const message = provider.isCustom
+                              ? `Remove configuration for ${provider.name}?`
+                              : `Remove API key for ${provider.name}?`;
+                            const confirmed = await ask(message, {
+                              title: provider.isCustom
+                                ? "Remove Configuration"
+                                : "Remove API Key",
+                              kind: "warning",
+                            });
+                            if (confirmed) {
+                              handleRemoveApiKey(provider.id);
+                            }
+                          }}
+                          variant="ghost"
+                          size="sm"
+                          className="text-muted-foreground hover:text-destructive"
+                        >
+                          <Trash2 className="h-3.5 w-3.5" />
+                        </Button>
+                      )}
+                      {isAgentCliProvider(provider.id) && (
+                        <span className="text-xs text-muted-foreground">Installed</span>
+                      )}
                     </>
                   ) : (
                     <>
-                      {!provider.isCustom && provider.apiKeyUrl && (
-                        <Button
-                          onClick={() => window.open(provider.apiKeyUrl, "_blank")}
-                          variant="ghost"
-                          size="sm"
-                          className="text-muted-foreground"
-                          title={`Get ${provider.name} API Key`}
-                        >
-                          <ExternalLink className="h-3.5 w-3.5" />
-                        </Button>
+                      {isAgentCliProvider(provider.id) ? (
+                        // CLI providers have no API key — show the install
+                        // hint instead of an "Add Key" button. Availability is
+                        // probed via probe_agent_cli at setup.
+                        Boolean(provider.installHint) && (
+                          <span className="text-xs text-muted-foreground">
+                            {provider.installHint}
+                          </span>
+                        )
+                      ) : (
+                        <>
+                          {!provider.isCustom && provider.apiKeyUrl && (
+                            <Button
+                              onClick={() => window.open(provider.apiKeyUrl, "_blank")}
+                              variant="ghost"
+                              size="sm"
+                              className="text-muted-foreground"
+                              title={`Get ${provider.name} API Key`}
+                            >
+                              <ExternalLink className="h-3.5 w-3.5" />
+                            </Button>
+                          )}
+                          <Button
+                            onClick={() => handleSetupApiKey(provider.id)}
+                            variant="outline"
+                            size="sm"
+                          >
+                            {provider.isCustom ? (
+                              <>
+                                <Settings2 className="mr-1.5 h-3.5 w-3.5" />
+                                Configure
+                              </>
+                            ) : (
+                              <>
+                                <Key className="mr-1.5 h-3.5 w-3.5" />
+                                Add Key
+                              </>
+                            )}
+                          </Button>
+                        </>
                       )}
-                      <Button
-                        onClick={() => handleSetupApiKey(provider.id)}
-                        variant="outline"
-                        size="sm"
-                      >
-                        {provider.isCustom ? (
-                          <>
-                            <Settings2 className="mr-1.5 h-3.5 w-3.5" />
-                            Configure
-                          </>
-                        ) : (
-                          <>
-                            <Key className="mr-1.5 h-3.5 w-3.5" />
-                            Add Key
-                          </>
-                        )}
-                      </Button>
                     </>
                   )}
                 </div>

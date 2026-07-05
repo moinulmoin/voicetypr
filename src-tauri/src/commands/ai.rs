@@ -125,6 +125,15 @@ fn check_has_api_key<R: tauri::Runtime>(
     }
 }
 
+/// Whether a selected (provider, model) pair satisfies the executor's model
+/// requirement. Agent-CLI runtimes (Claude Code) waive it — they carry no
+/// catalog model because the CLI selects its own; every other runtime requires
+/// a non-empty model. Shared by the readiness/selection guards below so the
+/// model-less-CLI exemption lives in exactly one place.
+fn selection_meets_model_requirement(provider: &str, model: &str) -> bool {
+    !model.is_empty() || catalog::runtime_kind(provider) == Some("agent_cli")
+}
+
 pub(crate) fn has_ai_model_and_key(app: &tauri::AppHandle) -> Result<bool, String> {
     let store = app.store("settings").map_err(|e| e.to_string())?;
     let provider = store
@@ -136,7 +145,17 @@ pub(crate) fn has_ai_model_and_key(app: &tauri::AppHandle) -> Result<bool, Strin
         .and_then(|v| v.as_str().map(|s| s.to_string()))
         .unwrap_or_default();
 
-    if provider.is_empty() || model.is_empty() {
+    if provider.is_empty() {
+        return Ok(false);
+    }
+    // Agent-CLI providers (Claude Code) are subscription-authenticated local
+    // CLIs — no API key, no catalog model. They are "ready" once selected;
+    // availability is resolved at spawn time (raw-transcript fallback if the
+    // CLI is missing or unauthenticated).
+    if catalog::runtime_kind(&provider) == Some("agent_cli") {
+        return Ok(true);
+    }
+    if model.is_empty() {
         return Ok(false);
     }
 
@@ -685,7 +704,7 @@ pub async fn update_ai_settings(
     }
 
     // Don't allow enabling without a model selected
-    if enabled && model.is_empty() {
+    if enabled && model.is_empty() && catalog::runtime_kind(&provider) != Some("agent_cli") {
         log::warn!("Attempted to enable AI enhancement without a model selected");
         return Err("Please select a model before enabling AI enhancement".to_string());
     }
@@ -727,6 +746,8 @@ pub async fn update_ai_settings(
                 );
                 return Err("API key not found. Please add an API key first.".to_string());
             }
+        } else if catalog::runtime_kind(&provider) == Some("agent_cli") {
+            // Subscription CLI — auth is out-of-band (no API key required).
         } else {
             let cache_has_key = {
                 let cache = API_KEY_CACHE
@@ -983,7 +1004,7 @@ fn selected_ai_provider_and_model(
         .get("ai_model")
         .and_then(|v| v.as_str().map(|s| s.to_string()))
         .unwrap_or_default();
-    if provider.is_empty() || model.is_empty() {
+    if provider.is_empty() || !selection_meets_model_requirement(&provider, &model) {
         return Err(AiProviderError::InvalidModel);
     }
     Ok((provider, model))
@@ -1064,6 +1085,17 @@ fn executor_for_provider(
             },
             keys,
         )
+    } else if catalog::runtime_kind(selected_provider) == Some("agent_cli") {
+        // Agent-CLI providers (Claude Code in 4C-i): no API key, no reqwest
+        // client — the CLI is subscription-authenticated. The OpenAiCompatible
+        // config here is unused (the executor dispatches agent_cli providers
+        // to AgentCliRuntime, never to the openai-compatible runtime); an empty
+        // base_url + no_auth=true keeps the construction safe and keyless.
+        (
+            selected_provider.to_string(),
+            OpenAiCompatibleConfig::custom(String::new(), true),
+            HashMap::new(),
+        )
     } else {
         let key = selected_key.ok_or(AiProviderError::MissingApiKey)?;
         let mut keys = HashMap::new();
@@ -1113,12 +1145,20 @@ async fn polish_text_with_prompt_result_typed(
     prompt: String,
 ) -> Result<crate::ai::contract::AiPolishResult, AiProviderError> {
     let (executor, runtime_provider) = executor_for_provider(app, &provider)?;
+    // CLI providers are cold-spawned with their own hard kill-timeout
+    // (AgentCliRuntime::COLD_SPAWN_TIMEOUT); cap the executor budget to ~9s so
+    // a wedged CLI surfaces promptly. HTTP providers keep the 30s budget.
+    let timeout_ms = if catalog::runtime_kind(&runtime_provider) == Some("agent_cli") {
+        9_000
+    } else {
+        30_000
+    };
     let request = AiPolishRequest {
         provider_id: runtime_provider.clone(),
         model_id: model,
         input_text: text.to_string(),
         prompt,
-        timeout_ms: 30_000,
+        timeout_ms,
     };
     let result = executor
         .polish(request, tokio_util::sync::CancellationToken::new())
@@ -1212,6 +1252,20 @@ pub async fn get_openai_config(app: tauri::AppHandle) -> Result<OpenAIConfig, St
         })
         .unwrap_or(false);
     Ok(OpenAIConfig { base_url, no_auth })
+}
+
+/// Re-export the probe result type so the Tauri command signature uses the
+/// canonical definition in `ai::agent_cli` (avoids a duplicate struct that the
+/// compiler sees as a distinct type).
+pub use crate::ai::agent_cli::AgentCliProbe;
+
+/// Probe an agent-CLI provider: locate its binary on the resolved login-shell
+/// PATH and run `<bin> --version`. Fixed argv — NEVER reads credential files.
+/// Cache-friendly (the frontend calls this at setup, not per-dictation).
+#[tauri::command]
+pub async fn probe_agent_cli(provider: String) -> Result<AgentCliProbe, String> {
+    let probe = crate::ai::agent_cli::probe(&provider).await;
+    Ok(probe)
 }
 
 /// A model available from a provider.
@@ -1312,6 +1366,22 @@ mod tests {
         assert!(validate_provider_name("test provider").is_err());
         assert!(validate_provider_name("test@provider").is_err());
         assert!(validate_provider_name("").is_err());
+    }
+
+    #[test]
+    fn selection_meets_model_requirement_waives_agent_cli() {
+        // Agent-CLI providers (Claude Code) carry no catalog model — the CLI
+        // picks its own — so an empty model must not fail the readiness guard
+        // (has_ai_model_and_key / selected_ai_provider_and_model). Key-based
+        // runtimes still require a non-empty model; unknown providers are not
+        // waived (no regression for non-agent_cli providers).
+        assert!(selection_meets_model_requirement("claude-code", ""));
+        assert!(selection_meets_model_requirement("claude-code", "anything"));
+        assert!(!selection_meets_model_requirement("gemini", ""));
+        assert!(selection_meets_model_requirement("gemini", "gemini-2.5-flash"));
+        assert!(!selection_meets_model_requirement("openai", ""));
+        assert!(selection_meets_model_requirement("openai", "gpt-5-nano"));
+        assert!(!selection_meets_model_requirement("unknown-provider", ""));
     }
 
     #[test]

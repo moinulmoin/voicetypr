@@ -225,8 +225,8 @@ use commands::{
     ai::{
         cache_ai_api_key, clear_ai_api_key_cache, disable_ai_enhancement, get_ai_settings,
         get_ai_settings_for_provider, get_enhancement_options, get_openai_config,
-        get_writing_settings, list_ai_providers, list_provider_models, set_openai_config,
-        test_openai_endpoint, update_ai_settings, update_enhancement_options,
+        get_writing_settings, list_ai_providers, list_provider_models, probe_agent_cli,
+        set_openai_config, test_openai_endpoint, update_ai_settings, update_enhancement_options,
         update_writing_settings, validate_ai_api_key,
     },
     audio::*,
@@ -1449,6 +1449,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             update_writing_settings,
             list_ai_providers,
             list_provider_models,
+            probe_agent_cli,
             keyring_set,
             keyring_get,
             keyring_delete,

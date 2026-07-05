@@ -67,6 +67,23 @@ fn parse_catalog(json: &str) -> Catalog {
         supports_reasoning: false,
         models: Vec::new(),
     });
+
+    // Agent-CLI providers (Phase 4C): subscription-authenticated local coding
+    // CLIs spawned headless. No API key, no base URL, no models (the CLI picks
+    // its own model). The `agent_cli` runtime dispatches in executor.rs to
+    // AgentCliRuntime (cold-spawn in 4C-i; warm-session in 4C-ii).
+    catalog.providers.push(CatalogProvider {
+        id: "claude-code".to_string(),
+        label: "Claude Code".to_string(),
+        status: "production".to_string(),
+        runtime: "agent_cli".to_string(),
+        adapter: None,
+        namespace: None,
+        requires_api_key: false,
+        supports_base_url: false,
+        supports_reasoning: false,
+        models: Vec::new(),
+    });
     catalog
 }
 
@@ -173,7 +190,7 @@ mod tests {
                         .adapter
                         .as_deref()
                         .is_some_and(|adapter| !adapter.is_empty())),
-                    "openai_compatible" => assert!(provider.adapter.is_none()),
+                    "openai_compatible" | "agent_cli" => assert!(provider.adapter.is_none()),
                     runtime => panic!("{} has unsupported runtime {runtime}", provider.id),
                 }
             }
@@ -217,7 +234,7 @@ mod tests {
                         provider.id
                     );
                 }
-                "openai_compatible" => {
+                "openai_compatible" | "agent_cli" => {
                     assert!(
                         adapter_name(&provider.id).is_none(),
                         "{} should not have a genai adapter",
@@ -238,7 +255,7 @@ mod tests {
                         .unwrap_or_else(|| panic!("{} should have a genai adapter", provider.id));
                     assert_eq!(provider_for_adapter(adapter), Some(provider.id.as_str()));
                 }
-                "openai_compatible" => {
+                "openai_compatible" | "agent_cli" => {
                     assert!(adapter_name(&provider.id).is_none());
                 }
                 runtime => panic!("{} has unsupported runtime {runtime}", provider.id),
@@ -292,5 +309,19 @@ mod tests {
                 assert!(model_ids.contains(model_id));
             }
         }
+    }
+
+    #[test]
+    fn claude_code_provider_is_agent_cli_runtime_and_not_native() {
+        // Phase 4C-i catalog invariant: claude-code is an agent_cli provider
+        // (cold-spawn), carries no genai adapter, requires no API key, and is
+        // NOT a native provider (so executor dispatch routes to AgentCliRuntime).
+        assert_eq!(runtime_kind("claude-code"), Some("agent_cli"));
+        assert!(!is_native_provider("claude-code"));
+        assert_eq!(adapter_name("claude-code"), None);
+        let provider = provider("claude-code").expect("claude-code must be in the catalog");
+        assert!(!provider.requires_api_key);
+        assert!(!provider.supports_base_url);
+        assert!(provider.models.is_empty());
     }
 }

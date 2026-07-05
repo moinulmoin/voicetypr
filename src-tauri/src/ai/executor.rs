@@ -1,3 +1,4 @@
+use super::agent_cli::AgentCliRuntime;
 use super::contract::{AiPolishRequest, AiPolishResult};
 use super::error::{AiProviderError, MappedAiProviderError};
 use super::genai_runtime::{AiKeyResolver, GenaiRuntime};
@@ -11,6 +12,7 @@ use tokio_util::sync::CancellationToken;
 pub struct AiExecutor {
     genai_runtime: GenaiRuntime,
     openai_compatible_runtime: OpenAiCompatibleRuntime,
+    agent_cli_runtime: AgentCliRuntime,
 }
 
 #[derive(Clone)]
@@ -67,6 +69,7 @@ impl AiExecutor {
                 openai_compatible_config.key_provider_id,
                 openai_compatible_config.extra_headers,
             ),
+            agent_cli_runtime: AgentCliRuntime::new(),
         }
     }
 
@@ -157,6 +160,8 @@ impl AiExecutor {
             == Some("openai_compatible")
         {
             self.openai_compatible_runtime.polish(request).await
+        } else if crate::ai::catalog::runtime_kind(&request.provider_id) == Some("agent_cli") {
+            self.agent_cli_runtime.polish(request).await
         } else {
             Err(MappedAiProviderError::new(
                 AiProviderError::UnsupportedProvider,

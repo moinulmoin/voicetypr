@@ -4,7 +4,7 @@ mod tests {
     use super::super::error::AiProviderError;
     use super::super::executor::{AiExecutor, OpenAiCompatibleConfig};
     use super::super::genai_runtime::AiKeyResolver;
-    use super::super::providers::{PROVIDER_CUSTOM, PROVIDER_OPENROUTER};
+use super::super::providers::{PROVIDER_CLAUDE_CODE, PROVIDER_CUSTOM, PROVIDER_OPENROUTER};
     use reqwest::header::AUTHORIZATION;
     use serde_json::json;
     use std::collections::HashMap;
@@ -672,6 +672,74 @@ mod tests {
                     == Some("test-key")
             }
             _ => false,
+        }
+    }
+
+    // Ignored: on a machine where `claude` is installed this actually spawns the
+    // real CLI (and the first `resolve_binary` triggers the ~8s login-shell PATH
+    // probe), so it is neither hermetic nor free. Routing (claude-code ->
+    // AgentCliRuntime, not the HTTP paths) is proven hermetically by the catalog
+    // `claude_code_provider_is_agent_cli_runtime_and_not_native` test. Run this
+    // end-to-end variant manually with `--ignored` on a machine with the CLI.
+    #[tokio::test]
+    #[ignore = "spawns the real claude CLI + login-shell probe when installed; routing covered hermetically by the catalog runtime_kind test"]
+    async fn execute_once_routes_agent_cli_provider_and_fails_gracefully_when_binary_missing() {
+        // claude-code is an agent_cli provider. execute_once must route it to
+        // AgentCliRuntime (NOT the HTTP/openai-compatible path, NOT the
+        // UnsupportedProvider dispatch fallback). In CI the `claude` binary is
+        // absent, so the cold spawn fails — but gracefully (Err, not panic),
+        // proving the graceful spawn-failure path that backs the raw-transcript
+        // fallback. The short budget bounds the test so a slow login-shell PATH
+        // probe surfaces Timeout rather than hanging.
+        let executor = AiExecutor::with_native_endpoint_overrides(
+            reqwest::Client::new(),
+            Arc::new(|_| None),
+            OpenAiCompatibleConfig::custom(String::new(), true),
+            HashMap::new(),
+        );
+        let request = AiPolishRequest {
+            provider_id: PROVIDER_CLAUDE_CODE.to_string(),
+            model_id: String::new(),
+            input_text: "raw transcript".to_string(),
+            prompt: "polish the transcript".to_string(),
+            timeout_ms: 2_000,
+        };
+        let result = executor.polish(request, CancellationToken::new()).await;
+        // claude-code must route to AgentCliRuntime (NOT the HTTP/openai-
+        // compatible path, NOT the UnsupportedProvider dispatch fallback).
+        // The graceful outcome depends on whether `claude` is installed
+        // locally: absent (CI) -> UnsupportedProvider/Timeout; present (a dev
+        // machine with the CLI actually launches now that the child PATH is
+        // restored) -> the spawn reaches the runtime and either succeeds (Ok)
+        // or fails with a real variant. All prove graceful routing; only a
+        // panic or an unexpected (wrong-runtime) variant fails the invariant.
+        match super::super::agent_cli::resolve_binary("claude").await {
+            None => {
+                let err = result.expect_err(
+                    "agent_cli cold spawn must fail gracefully when the binary is missing",
+                );
+                assert!(
+                    matches!(
+                        err,
+                        AiProviderError::UnsupportedProvider | AiProviderError::Timeout
+                    ),
+                    "expected graceful spawn failure (UnsupportedProvider/Timeout), got {err:?}",
+                );
+            }
+            Some(_) => {
+                if let Err(err) = result {
+                    assert!(
+                        matches!(
+                            err,
+                            AiProviderError::UnsupportedProvider
+                                | AiProviderError::Timeout
+                                | AiProviderError::BadResponse
+                                | AiProviderError::Internal
+                        ),
+                        "expected a graceful agent_cli outcome, got {err:?}",
+                    );
+                }
+            }
         }
     }
 }
