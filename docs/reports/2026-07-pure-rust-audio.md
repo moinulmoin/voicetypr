@@ -22,10 +22,13 @@ the ffmpeg removal — not build noise.
 Cross-check against what we actually shipped: VoiceTypr **v2.0.4**'s Apple-Silicon `.dmg`
 was **63 MB**. The new installer is **24 MB**. That is the number a user downloads.
 
-**Windows:** the v2.0.4 x64 installer is 308 MB (dominated by the GPU/Vulkan runtime, not
-ffmpeg), so the *percentage* is smaller there — but the same ~98 MB of ffmpeg/ffprobe binaries
-come out of every Windows package too. Exact Windows installer delta is being confirmed by the
-Store MSIX CI build. _(fill from run 28755782300)_
+**Windows:** the same ~98 MB of `ffmpeg.exe` + `ffprobe.exe` comes out of every Windows
+package. CI-proven: the full **Windows Store MSIX** now builds and packs cleanly with **zero
+ffmpeg** (`Voicetypr_2.0.4.0_x64.msix`, ~46 MB package), with the pure-Rust decoder compiled
+in (symphonia + rubato + audiopus). The 308 MB figure is the NSIS `setup.exe`, which is a
+different package dominated by the bundled GPU/Vulkan + VC runtime installers — its exact
+delta lands with the next tagged release build; the ffmpeg removal takes the same ~98 MB out
+of it regardless.
 
 ---
 
@@ -79,7 +82,9 @@ bounded-memory test.
   TikTok / pitch / WhatsApp exports) to 16 kHz mono s16 with **zero crashes**
 - The macOS `.app` bundles cleanly with **no ffmpeg present** (verified: only the app binary
   + the Parakeet sidecar ship in `Contents/MacOS/`)
-- Full cross-platform CI (macOS + Windows + Store MSIX) building the real bundles without ffmpeg
+- Full cross-platform CI is **green** on the real bundles without ffmpeg: `build-macos`
+  (aarch64 + Intel x86_64), `build-windows` (+ Vulkan sidecar), and the **Windows Store MSIX**
+  packaging job all pass
 
 ---
 
