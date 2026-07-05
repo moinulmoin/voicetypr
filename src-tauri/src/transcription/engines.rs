@@ -3,6 +3,8 @@ use std::time::Duration;
 
 use tauri::async_runtime::{Mutex as AsyncMutex, RwLock as AsyncRwLock};
 use tauri::{AppHandle, Manager};
+#[cfg(target_os = "windows")]
+use tauri_plugin_store::StoreExt;
 
 use crate::commands::settings::read_whisper_speed_mode;
 use crate::parakeet::manager::ParakeetManager;

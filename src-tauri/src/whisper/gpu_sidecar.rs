@@ -14,8 +14,6 @@ use super::transcriber::{WhisperTranscriptionOutput, WhisperTranscriptionTimings
 use crate::transcription::TranscriptionSegment;
 
 #[cfg(target_os = "windows")]
-use std::os::windows::process::CommandExt as _;
-#[cfg(target_os = "windows")]
 const CREATE_NO_WINDOW: u32 = 0x08000000;
 
 const CONTROL_REQUEST_TIMEOUT: Duration = Duration::from_secs(60);

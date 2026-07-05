@@ -13,7 +13,9 @@ use super::messages::{
     ParakeetCommand, ParakeetResponse, ParakeetStreamConfig, ParakeetStreamEngine,
     ParakeetVocabularyTerm,
 };
-use super::models::{get_available_models, ParakeetModelDefinition, AVAILABLE_MODELS};
+use super::models::{ParakeetModelDefinition, AVAILABLE_MODELS};
+#[cfg(target_os = "macos")]
+use super::models::get_available_models;
 use super::sidecar::{
     ParakeetClient, ParakeetStreamHandle, ParakeetStreamOpenRequest, ParakeetStreamPartial,
 };
