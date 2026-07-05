@@ -121,7 +121,7 @@ export interface TranscriptionWritingMeta {
   /** Pre-AI raw transcript saved when AI formatting changed the text (desktop only). Never logged; local history only. */
   original_text?: string;
   /** App that received the dictated text (set when App Rules capture the active app). */
-  context_hint?: { app_name?: string };
+  context_hint?: { app_name?: string; category?: string };
 }
 
 export interface TranscriptionHistory {

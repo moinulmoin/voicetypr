@@ -186,6 +186,15 @@ pub struct WritingWarning {
 pub struct ContextHint {
     #[serde(default)]
     pub app_name: Option<String>,
+    // window_title is potentially sensitive (document names, DM subjects).
+    // Captured for classification but NEVER serialized — #[serde(skip)] ensures
+    // it never reaches history metadata or any JSON output.
+    #[serde(skip)]
+    pub window_title: Option<String>,
+    #[serde(default)]
+    pub process_path: Option<String>,
+    #[serde(default)]
+    pub category: Option<crate::writing::AppCategory>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]

@@ -214,7 +214,7 @@ pub fn build_enhancement_prompt(
     options: &EnhancementOptions,
     language: Option<&str>,
 ) -> String {
-    build_enhancement_prompt_for_transcript_language(context, options, language, language)
+    build_enhancement_prompt_for_transcript_language(context, options, language, language, None)
 }
 
 pub fn build_enhancement_prompt_for_transcript_language(
@@ -222,6 +222,7 @@ pub fn build_enhancement_prompt_for_transcript_language(
     options: &EnhancementOptions,
     output_language: Option<&str>,
     transcript_language: Option<&str>,
+    app_category_hint: Option<&str>,
 ) -> String {
     let base_prompt = build_base_prompt(output_language);
     let output_language_name = output_language.map(get_language_name).unwrap_or("English");
@@ -249,6 +250,10 @@ pub fn build_enhancement_prompt_for_transcript_language(
         prompt.push_str(&format!(
             "\n\nThe dictation may be in another language; translate it into {output_language_name}."
         ));
+    }
+
+    if let Some(hint) = app_category_hint {
+        prompt.push_str(&format!("\n\n{}", hint));
     }
 
     // The transcript is NOT embedded here — it rides as the user message

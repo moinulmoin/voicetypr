@@ -1,8 +1,11 @@
+mod app_category;
 mod library_rules;
 mod pipeline;
 mod settings;
 mod vocabulary;
 
+#[allow(unused_imports)]
+pub use app_category::{AppCategory, category_label, category_prompt_hint, classify};
 #[allow(unused_imports)]
 pub use pipeline::{
     effective_personal_dictation_mode, effective_pipeline_config, process_transcription,

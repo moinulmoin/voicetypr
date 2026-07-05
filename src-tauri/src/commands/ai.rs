@@ -1092,6 +1092,7 @@ pub async fn polish_text_typed(
     output_language: Option<&str>,
     transcript_language: Option<&str>,
     context: Option<&str>,
+    app_category_hint: Option<&str>,
 ) -> Result<crate::ai::contract::AiPolishResult, crate::ai::error::AiProviderError> {
     let (provider, model) = selected_ai_provider_and_model(app)?;
     let prompt = crate::ai::prompts::build_enhancement_prompt_for_transcript_language(
@@ -1099,6 +1100,7 @@ pub async fn polish_text_typed(
         options,
         output_language,
         transcript_language,
+        app_category_hint,
     );
     polish_text_with_prompt_result_typed(app, text, model, provider, prompt).await
 }

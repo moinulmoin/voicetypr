@@ -15,7 +15,8 @@ use crate::whisper::languages::validate_language;
 
 use super::{
     apply_final_restoration_guard, apply_library_rules, apply_voice_command_stage,
-    compile_context_for_target, load_writing_settings, sanitize_transcript, AppFormattingRule,
+    category_label, category_prompt_hint, classify, compile_context_for_target,
+    load_writing_settings, sanitize_transcript, AppCategory, AppFormattingRule,
     AppliedWritingOperation, ContextHint, ProviderContextTarget, WritingError,
     WritingOperationKind, WritingProfile, WritingResult, WritingSettings, WritingStageTimings,
     WritingWarning,
@@ -47,12 +48,12 @@ impl PipelineAiState {
         }
     }
 }
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EffectiveConfig {
     pub preset: EnhancementPreset,
     pub final_text_language: String,
     pub ai_effective: bool,
+    pub category_hint: Option<AppCategory>,
 }
 
 struct PipelineConfigInputs {
@@ -87,7 +88,16 @@ pub fn resolve_pipeline_config(
     ai_state: PipelineAiState,
 ) -> EffectiveConfig {
     let ai_effective = ai_state.stored_ai_enabled && ai_state.has_model_and_key;
-    let app_preset = matching_app_formatting_preset(settings, active_app)
+    let matched_rule = matching_app_formatting_preset(settings, active_app);
+    // Explicit per-app rule wins: suppress the auto category nudge based on
+    // the raw rule match, not the AI-filtered preset, so a matching rule still
+    // wins (and suppresses the nudge) even when AI is unavailable.
+    let category_hint = if matched_rule.is_some() {
+        None
+    } else {
+        active_app.map(classify)
+    };
+    let app_preset = matched_rule
         .filter(|preset| ai_effective || !preset.requires_ai_formatting());
     let mut preset = app_preset.unwrap_or(global_preset);
 
@@ -100,11 +110,11 @@ pub fn resolve_pipeline_config(
     } else {
         final_text_language.into()
     };
-
     EffectiveConfig {
         preset,
         final_text_language,
         ai_effective,
+        category_hint,
     }
 }
 
@@ -156,7 +166,7 @@ pub fn effective_pipeline_config(
     ai_enabled: bool,
 ) -> Result<EffectiveConfig, String> {
     let settings = load_writing_settings(app)?;
-    let should_capture_active_app = app_rules_need_active_app(&settings);
+    let should_capture_active_app = app_rules_need_active_app(&settings) || ai_enabled;
     let active_app = capture_active_app_context(should_capture_active_app);
     let inputs = read_pipeline_config_inputs(app, ai_enabled)?;
 
@@ -240,6 +250,13 @@ fn capture_active_app_context(should_capture: bool) -> Option<ContextHint> {
 
     Some(ContextHint {
         app_name: Some(window.app_name),
+        window_title: if window.title.trim().is_empty() {
+            None
+        } else {
+            Some(window.title)
+        },
+        process_path: Some(window.process_path.to_string_lossy().to_string()),
+        ..Default::default()
     })
 }
 fn record_output_language_transform_fallback(
@@ -297,6 +314,22 @@ async fn run_smart_formatting(
     };
     let ai_context =
         smart_formatting_ai_context(request.settings, request.transcript_language.as_deref());
+    // Compose the behavioral nudge sentence for the resolved app category.
+    // EffectiveConfig.category_hint is None when an explicit per-app rule
+    // matched (user rule wins); Browser/Other carry no nudge, so we skip the
+    // sentence entirely instead of injecting a context-only preamble.
+    let app_category_hint: Option<String> = request
+        .config
+        .category_hint
+        .and_then(|cat| {
+            category_prompt_hint(cat).map(|hint| {
+                format!(
+                    "You are dictating into a {} context. {}",
+                    category_label(cat),
+                    hint
+                )
+            })
+        });
     match crate::commands::ai::polish_text_typed(
         &request.app,
         request.text,
@@ -304,6 +337,7 @@ async fn run_smart_formatting(
         Some(request.output_language.as_str()),
         request.transcript_language.as_deref(),
         ai_context.as_deref(),
+        app_category_hint.as_deref(),
     )
     .await
     {
@@ -385,11 +419,15 @@ pub async fn process_transcription(
     ai_enabled: bool,
 ) -> Result<WritingResult, WritingError> {
     let settings = load_writing_settings(&app).map_err(WritingError::Config)?;
-    let should_capture_active_app = app_rules_need_active_app(&settings);
-    let active_app = capture_active_app_context(should_capture_active_app);
+    let should_capture_active_app = app_rules_need_active_app(&settings) || ai_enabled;
+    let mut active_app = capture_active_app_context(should_capture_active_app);
     let pipeline_config = load_writing_profile(&app, ai_enabled, &settings, active_app.as_ref())
         .await
         .map_err(WritingError::Config)?;
+    // Stamp resolved category for transparency (history badge).
+    if let Some(hint) = &mut active_app {
+        hint.category = pipeline_config.category_hint;
+    }
     let transcript_language = transcription.transcript_language.clone().or_else(|| {
         transcription
             .task
@@ -640,9 +678,7 @@ mod tests {
             }],
             ..WritingSettings::default()
         };
-        let active_app = ContextHint {
-            app_name: Some("Slack Desktop".to_string()),
-        };
+        let active_app = ContextHint { app_name: Some("Slack Desktop".to_string()), ..Default::default() };
         let global_preset = EnhancementPreset::PersonalDictation;
         let effective = resolve_pipeline_config(
             &settings,
@@ -748,9 +784,7 @@ mod tests {
             ],
             ..WritingSettings::default()
         };
-        let active_app = ContextHint {
-            app_name: Some("Slack Desktop".to_string()),
-        };
+        let active_app = ContextHint { app_name: Some("Slack Desktop".to_string()), ..Default::default() };
 
         assert_eq!(
             resolve_pipeline_config(
@@ -786,9 +820,7 @@ mod tests {
             }],
             ..WritingSettings::default()
         };
-        let active_app = ContextHint {
-            app_name: Some("Cursor IDE".to_string()),
-        };
+        let active_app = ContextHint { app_name: Some("Cursor IDE".to_string()), ..Default::default() };
 
         assert_eq!(
             resolve_pipeline_config(
@@ -820,9 +852,7 @@ mod tests {
             ],
             ..WritingSettings::default()
         };
-        let active_app = ContextHint {
-            app_name: Some("Slack Desktop".to_string()),
-        };
+        let active_app = ContextHint { app_name: Some("Slack Desktop".to_string()), ..Default::default() };
 
         assert_eq!(
             resolve_pipeline_config(
@@ -847,9 +877,7 @@ mod tests {
             }],
             ..WritingSettings::default()
         };
-        let active_app = ContextHint {
-            app_name: Some("Slack Desktop".to_string()),
-        };
+        let active_app = ContextHint { app_name: Some("Slack Desktop".to_string()), ..Default::default() };
 
         assert_eq!(
             resolve_pipeline_config(
@@ -874,9 +902,7 @@ mod tests {
             }],
             ..WritingSettings::default()
         };
-        let active_app = ContextHint {
-            app_name: Some("Apple Notes".to_string()),
-        };
+        let active_app = ContextHint { app_name: Some("Apple Notes".to_string()), ..Default::default() };
 
         assert_eq!(
             resolve_pipeline_config(
@@ -901,9 +927,7 @@ mod tests {
             }],
             ..WritingSettings::default()
         };
-        let active_app = ContextHint {
-            app_name: Some("Slack Desktop".to_string()),
-        };
+        let active_app = ContextHint { app_name: Some("Slack Desktop".to_string()), ..Default::default() };
 
         assert_eq!(
             resolve_pipeline_config(
@@ -951,5 +975,107 @@ mod tests {
             .preset,
             EnhancementPreset::PersonalDictation
         );
+    }
+    #[test]
+    fn test_category_hint_none_when_explicit_app_rule_matches() {
+        let settings = WritingSettings {
+            app_formatting_rules: vec![AppFormattingRule {
+                app_name: "slack".to_string(),
+                preset: EnhancementPreset::Message,
+                enabled: true,
+            }],
+            ..WritingSettings::default()
+        };
+        let active_app = ContextHint {
+            app_name: Some("Slack Desktop".to_string()),
+            ..Default::default()
+        };
+        let effective = resolve_pipeline_config(
+            &settings,
+            EnhancementPreset::PersonalDictation,
+            FINAL_TEXT_LANGUAGE_SAME_AS_TRANSCRIPT,
+            Some(&active_app),
+            PipelineAiState::from_validated_ai_enabled(true),
+        );
+        assert_eq!(effective.preset, EnhancementPreset::Message);
+        assert_eq!(
+            effective.category_hint,
+            None,
+            "explicit rule must suppress category hint"
+        );
+    }
+
+    #[test]
+    fn test_category_hint_none_when_explicit_rule_matches_without_ai() {
+        // FIX 1 regression: suppression must key off the raw rule match, not
+        // the AI-filtered preset. With AI unavailable the rule's preset is
+        // filtered out, but an explicit rule still suppresses the nudge.
+        let settings = WritingSettings {
+            app_formatting_rules: vec![AppFormattingRule {
+                app_name: "slack".to_string(),
+                preset: EnhancementPreset::Message,
+                enabled: true,
+            }],
+            ..WritingSettings::default()
+        };
+        let active_app = ContextHint {
+            app_name: Some("Slack Desktop".to_string()),
+            ..Default::default()
+        };
+        let effective = resolve_pipeline_config(
+            &settings,
+            EnhancementPreset::PersonalDictation,
+            FINAL_TEXT_LANGUAGE_SAME_AS_TRANSCRIPT,
+            Some(&active_app),
+            PipelineAiState::from_validated_ai_enabled(false),
+        );
+        assert!(
+            !effective.ai_effective,
+            "AI must be ineffective in this scenario"
+        );
+        assert_eq!(
+            effective.preset,
+            EnhancementPreset::PersonalDictation,
+            "AI-requiring rule preset falls back to global when AI unavailable"
+        );
+        assert_eq!(
+            effective.category_hint,
+            None,
+            "explicit rule must suppress category hint even when AI unavailable"
+        );
+    }
+
+    #[test]
+    fn test_category_hint_some_when_no_explicit_rule_matches() {
+        let settings = WritingSettings::default();
+        let active_app = ContextHint {
+            app_name: Some("Slack Desktop".to_string()),
+            ..Default::default()
+        };
+        let effective = resolve_pipeline_config(
+            &settings,
+            EnhancementPreset::CleanDictation,
+            FINAL_TEXT_LANGUAGE_SAME_AS_TRANSCRIPT,
+            Some(&active_app),
+            PipelineAiState::from_validated_ai_enabled(true),
+        );
+        assert_eq!(effective.preset, EnhancementPreset::CleanDictation);
+        assert_eq!(
+            effective.category_hint,
+            Some(crate::writing::AppCategory::Chat)
+        );
+    }
+
+    #[test]
+    fn test_category_hint_none_when_no_active_app() {
+        let settings = WritingSettings::default();
+        let effective = resolve_pipeline_config(
+            &settings,
+            EnhancementPreset::CleanDictation,
+            FINAL_TEXT_LANGUAGE_SAME_AS_TRANSCRIPT,
+            None,
+            PipelineAiState::from_validated_ai_enabled(true),
+        );
+        assert_eq!(effective.category_hint, None);
     }
 }

@@ -1721,7 +1721,12 @@ mod tests {
                 detail: "Applied cleanup".to_string(),
             }],
             warnings: vec![],
-            context_hint: None,
+            context_hint: Some(crate::writing::ContextHint {
+                app_name: Some("Slack".to_string()),
+                window_title: Some("Secret DM subject line".to_string()),
+                process_path: Some("/Applications/Slack.app".to_string()),
+                category: Some(crate::writing::AppCategory::Chat),
+            }),
             stage_timings: crate::writing::WritingStageTimings {
                 deterministic_ms: 12,
                 ai_polish_ms: Some(34),
@@ -1737,6 +1742,15 @@ mod tests {
         assert_eq!(metadata["original_text"], "raw transcript");
         assert_eq!(metadata["stage_timings"]["deterministic_ms"], 12);
         assert_eq!(metadata["stage_timings"]["ai_polish_ms"], 34);
+
+        // Privacy: window_title must NEVER be serialized into history.
+        let hint = &metadata["context_hint"];
+        assert_eq!(hint["app_name"].as_str().unwrap(), "Slack");
+        assert_eq!(hint["category"].as_str().unwrap(), "chat");
+        assert!(
+            hint.get("window_title").is_none(),
+            "window_title must NOT be serialized into history"
+        );
     }
 
     #[test]
@@ -2266,6 +2280,7 @@ mod tests {
             warnings: vec![],
             context_hint: Some(crate::writing::ContextHint {
                 app_name: Some("Finder".into()),
+                ..Default::default()
             }),
             stage_timings: crate::writing::WritingStageTimings::default(),
             ai_error: None,
