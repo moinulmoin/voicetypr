@@ -36,6 +36,7 @@ cpal = "0.16.0"
 hound = "3.5.1"
 symphonia = { version = "0.5", features = ["all"] }
 rubato = "2.0"
+audiopus = "=0.3.0-rc.0"
 audioadapter-buffers = "3.0"
 parking_lot = "0.12"
 futures-util = "0.3.31"

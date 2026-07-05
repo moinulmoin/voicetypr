@@ -2,9 +2,10 @@
 //! PCM WAV consumed by Whisper, Parakeet, and the cloud transcription path.
 //!
 //! Mirrors ffmpeg -ac 1 -ar 16000 -sample_fmt s16 without spawning a process.
-//! Phase 1 handles every container/codec Symphonia supports EXCEPT Opus
-//! (Phase 2 adds libopus). This module is additive: it does NOT touch the
-//! existing ffmpeg converter and is only exercised by its own tests.
+//! Phase 1 handles every container/codec Symphonia supports; Phase 2 adds Opus
+//! via libopus (audiopus), since Symphonia 0.5's `all` feature set does not
+//! expose its native Opus decoder. This module is additive: it does NOT touch
+//! the existing ffmpeg converter and is only exercised by its own tests.
 
 #![allow(dead_code)]
 
@@ -13,9 +14,9 @@ use std::path::Path;
 
 use hound::{SampleFormat, WavReader, WavSpec, WavWriter};
 use symphonia::core::audio::{AudioBufferRef, Channels};
-use symphonia::core::codecs::{CODEC_TYPE_NULL, CODEC_TYPE_OPUS};
+use symphonia::core::codecs::{CodecParameters, CODEC_TYPE_NULL, CODEC_TYPE_OPUS};
 use symphonia::core::errors::Error;
-use symphonia::core::formats::FormatOptions;
+use symphonia::core::formats::{FormatOptions, FormatReader};
 use symphonia::core::io::MediaSourceStream;
 use symphonia::core::meta::MetadataOptions;
 use symphonia::core::probe::Hint;
@@ -30,8 +31,7 @@ const TARGET_BITS: u16 = 16;
 /// Parakeet / cloud WAV: 16 kHz, mono, signed-16-bit PCM.
 ///
 /// Non-streaming in this phase (decodes fully, then resamples); Phase 3 makes
-/// it streaming. Opus is NOT handled yet and returns Err("opus not yet
-/// supported").
+/// it streaming. Opus (webm/mkv/ogg) is decoded via libopus (Phase 2).
 ///
 /// This function NEVER panics to the caller: any panic raised by Symphonia,
 /// rubato, or hound on a corrupt or unsupported file is caught and converted to
@@ -97,7 +97,8 @@ fn try_passthrough_canonical_wav(input: &Path, output: &Path) -> Result<bool, St
 }
 
 /// Decode the first non-null audio track to per-channel f32 planes, then downmix
-/// to mono. Returns (mono_samples, source_sample_rate).
+/// to mono. Returns (mono_samples, source_sample_rate). Opus tracks go through
+/// libopus (Phase 2); every other codec Symphonia can decode goes through it.
 fn decode_to_mono(input: &Path) -> Result<(Vec<f32>, u32), String> {
     let file = std::fs::File::open(input)
         .map_err(|e| format!("Failed to open audio file: {e}"))?;
@@ -120,22 +121,42 @@ fn decode_to_mono(input: &Path) -> Result<(Vec<f32>, u32), String> {
         .find(|t| t.codec_params.codec != CODEC_TYPE_NULL)
         .ok_or_else(|| "no supported audio track".to_string())?;
 
-    if track.codec_params.codec == CODEC_TYPE_OPUS {
-        return Err("opus not yet supported".to_string());
-    }
-
     let track_id = track.id;
-    let mut src_rate = track.codec_params.sample_rate;
-    // Clone codec params so the decode loop below doesn't hold an immutable borrow
-    // of `format` (via `track`) while calling the mutable `format.next_packet()`.
+    // Clone codec params so the decode helpers below don't hold an immutable
+    // borrow of `format` (via `track`) while calling the mutable `next_packet`.
     let codec_params = track.codec_params.clone();
 
+    let (mut planes, layout, src_rate) = if codec_params.codec == CODEC_TYPE_OPUS {
+        decode_opus(&mut *format, track_id, &codec_params)?
+    } else {
+        decode_symphonia(&mut *format, track_id, &codec_params)?
+    };
+
+    // Equalize plane lengths (defend against trailing partial frames).
+    let min_len = planes.iter().map(|p| p.len()).min().unwrap_or(0);
+    for p in planes.iter_mut() {
+        p.truncate(min_len);
+    }
+
+    let mono = downmix_to_mono(&planes, layout);
+    Ok((mono, src_rate))
+}
+
+/// Symphonia decode path: decode every packet on `track_id` into per-channel
+/// f32 planes at the source sample rate, and return the accumulated channel
+/// layout. Recovers from a mid-stream decoder reset by recreating the decoder.
+fn decode_symphonia(
+    format: &mut dyn FormatReader,
+    track_id: u32,
+    codec_params: &CodecParameters,
+) -> Result<(Vec<Vec<f32>>, Channels, u32), String> {
     let mut decoder = symphonia::default::get_codecs()
-        .make(&codec_params, &Default::default())
+        .make(codec_params, &Default::default())
         .map_err(|e| format!("Failed to create audio decoder: {e}"))?;
 
     let mut planes: Vec<Vec<f32>> = Vec::new();
     let mut layout = Channels::empty();
+    let mut src_rate = codec_params.sample_rate;
 
     loop {
         let packet = match format.next_packet() {
@@ -163,7 +184,7 @@ fn decode_to_mono(input: &Path) -> Result<(Vec<f32>, u32), String> {
             }
             Err(Error::ResetRequired) => {
                 decoder = symphonia::default::get_codecs()
-                    .make(&codec_params, &Default::default())
+                    .make(codec_params, &Default::default())
                     .map_err(|e| format!("Failed to recreate audio decoder: {e}"))?;
             }
             Err(Error::IoError(ref e)) if e.kind() == std::io::ErrorKind::UnexpectedEof => break,
@@ -171,15 +192,125 @@ fn decode_to_mono(input: &Path) -> Result<(Vec<f32>, u32), String> {
         }
     }
 
-    // Equalize plane lengths (defend against trailing partial frames).
-    let min_len = planes.iter().map(|p| p.len()).min().unwrap_or(0);
-    for p in planes.iter_mut() {
-        p.truncate(min_len);
+    Ok((planes, layout, src_rate.unwrap_or(44_100)))
+}
+
+/// Opus decode path (Phase 2): decode every Opus packet on `track_id` with
+/// libopus into per-channel f32 planes. Opus ALWAYS decodes at 48 kHz regardless
+/// of the container's declared rate, so the returned rate is fixed at 48 000 and
+/// the caller's resampler takes 48k -> 16k.
+///
+/// Channel count and pre-skip come from the OpusHead blob stored in
+/// `codec_params.extra_data` (Matroska/WebM/Ogg stash it there but leave
+/// `codec_params.channels`/`.delay` unset); the `codec_params` fields are used
+/// directly when a demuxer does populate them. Only mono and stereo are
+/// supported; surround Opus returns a clean error rather than mis-decoding.
+fn decode_opus(
+    format: &mut dyn FormatReader,
+    track_id: u32,
+    codec_params: &CodecParameters,
+) -> Result<(Vec<Vec<f32>>, Channels, u32), String> {
+    use audiopus::{coder::Decoder, packet::Packet, Channels as OpusCh, MutSignals, SampleRate};
+
+    let opus_head = codec_params.extra_data.as_deref().and_then(parse_opus_head);
+
+    let ch_count: usize = codec_params
+        .channels
+        .map(|c| c.count().max(1))
+        .or_else(|| opus_head.map(|(ch, _)| ch as usize))
+        .unwrap_or(1);
+    if ch_count > 2 {
+        return Err("multichannel opus not supported".to_string());
     }
 
-    let mono = downmix_to_mono(&planes, layout);
-    let rate = src_rate.unwrap_or(44_100);
-    Ok((mono, rate))
+    // Pre-skip (drop from front) and end-trim (drop from back) so sample counts
+    // match ffmpeg. Pre-skip lives in OpusHead bytes 10-11 for Opus-in-MKV/WebM.
+    let pre_skip: usize = codec_params
+        .delay
+        .map(|d| d as usize)
+        .or_else(|| opus_head.map(|(_, ps)| ps as usize))
+        .unwrap_or(0);
+    let end_trim = codec_params.padding.unwrap_or(0) as usize;
+
+    let stereo = ch_count >= 2;
+    let opus_ch = if stereo { OpusCh::Stereo } else { OpusCh::Mono };
+    let layout = if stereo {
+        Channels::FRONT_LEFT | Channels::FRONT_RIGHT
+    } else {
+        Channels::FRONT_LEFT
+    };
+
+    let mut decoder = Decoder::new(SampleRate::Hz48000, opus_ch)
+        .map_err(|e| format!("opus decoder init failed: {e}"))?;
+
+    let mut planes: Vec<Vec<f32>> = vec![Vec::new(); ch_count];
+    // Max Opus frame = 120 ms @ 48 kHz = 5760 samples/channel, interleaved.
+    let mut buf = vec![0f32; 5760 * ch_count];
+
+    loop {
+        let packet = match format.next_packet() {
+            Ok(p) => p,
+            Err(Error::IoError(ref e)) if e.kind() == std::io::ErrorKind::UnexpectedEof => break,
+            Err(Error::ResetRequired) => break,
+            Err(_) => break,
+        };
+        if packet.track_id() != track_id || packet.data.is_empty() {
+            continue;
+        }
+
+        let opus_packet = Packet::try_from(&packet.data[..])
+            .map_err(|e| format!("opus packet wrap failed: {e}"))?;
+        // decode_float takes MutSignals by value, so confine buf's mutable borrow
+        // to this block; buf is readable again below for de-interleaving.
+        let decoded = {
+            let out = MutSignals::try_from(&mut buf[..])
+                .map_err(|e| format!("opus output wrap failed: {e}"))?;
+            decoder.decode_float(Some(opus_packet), out, false)
+        };
+        match decoded {
+            Ok(n_per_ch) => {
+                // buf[0..n_per_ch*ch_count] holds n_per_ch interleaved frames.
+                let total = n_per_ch * ch_count;
+                for (i, &s) in buf[..total].iter().enumerate() {
+                    planes[i % ch_count].push(s);
+                }
+            }
+            Err(_) => continue, // skip a bad packet rather than abort the stream
+        }
+    }
+
+    trim_planes(&mut planes, pre_skip, end_trim);
+    Ok((planes, layout, 48_000))
+}
+
+/// Parse (channel_count, pre_skip) from an OpusHead blob.
+///
+/// OpusHead: bytes 0-7 = "OpusHead" magic, byte 8 = version, byte 9 = output
+/// channel count, bytes 10-11 = pre-skip (LE u16). Returns None if the blob is
+/// too short or is not an OpusHead.
+fn parse_opus_head(extra: &[u8]) -> Option<(u8, u16)> {
+    if extra.len() < 12 || &extra[..8] != b"OpusHead" {
+        return None;
+    }
+    Some((extra[9], u16::from_le_bytes([extra[10], extra[11]])))
+}
+
+/// Drop `pre_skip` samples from the front and `end_trim` from the back of each
+/// plane, in place. Applies Opus pre-skip / end-trim so sample counts match ffmpeg.
+fn trim_planes(planes: &mut [Vec<f32>], pre_skip: usize, end_trim: usize) {
+    if pre_skip == 0 && end_trim == 0 {
+        return;
+    }
+    for plane in planes.iter_mut() {
+        let start = pre_skip.min(plane.len());
+        let end_cap = plane.len().saturating_sub(end_trim);
+        if start >= end_cap {
+            plane.clear();
+        } else {
+            plane.drain(..start);
+            plane.truncate(end_cap - start);
+        }
+    }
 }
 
 macro_rules! accumulate_planar {

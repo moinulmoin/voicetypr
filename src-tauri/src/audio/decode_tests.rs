@@ -150,24 +150,31 @@ mod tests {
 
     #[test]
     #[ignore = "reads machine-local realfiles fixtures"]
-    fn gen_opus_webm_returns_unsupported() {
-        let r = run_realfile("gen_opus.webm");
-        assert!(r.is_err());
-        assert!(
-            r.unwrap_err().contains("opus not yet supported"),
-            "opus files must report Phase 2 not-yet-supported"
-        );
+    fn gen_opus_webm_decodes() {
+        let input = realfiles_dir().join("gen_opus.webm");
+        let out_dir = TempDir::new().unwrap();
+        let output = out_dir.path().join("out.wav");
+        let r = normalize_to_wav(&input, &output);
+        assert!(r.is_ok(), "gen_opus.webm failed: {:?}", r.err());
+
+        // Opus decodes at 48 kHz internally, then resamples to the canonical
+        // 16 kHz / mono / s16 output.
+        let reader = WavReader::open(&output).expect("output WAV readable");
+        let spec = reader.spec();
+        assert_eq!(spec.sample_rate, 16_000, "expected 16 kHz");
+        assert_eq!(spec.channels, 1, "expected mono");
+        assert_eq!(spec.bits_per_sample, 16, "expected 16-bit");
+        assert_eq!(spec.sample_format, SampleFormat::Int, "expected int (s16)");
+
+        let n = reader.into_samples::<i16>().take_while(|s| s.is_ok()).count();
+        assert!(n > 0, "expected non-empty samples");
     }
 
     #[test]
     #[ignore = "reads machine-local realfiles fixtures"]
-    fn gen_opus_mkv_returns_unsupported() {
+    fn gen_opus_mkv_decodes() {
         let r = run_realfile("gen_opus.mkv");
-        assert!(r.is_err());
-        assert!(
-            r.unwrap_err().contains("opus not yet supported"),
-            "opus files must report Phase 2 not-yet-supported"
-        );
+        assert!(r.is_ok(), "gen_opus.mkv failed: {:?}", r.err());
     }
 
     #[test]
