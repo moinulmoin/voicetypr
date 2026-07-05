@@ -188,4 +188,44 @@ mod tests {
             "unexpected message: {msg}"
         );
     }
+
+    #[test]
+    #[ignore = "writes a multi-hundred-MB fixture; set VOICETYPR_TEST_LONG_DECODE=1 to run"]
+    fn streaming_decode_bounded_memory_long_file() {
+        // Opt-in: generates a ~20 min, ~230 MB 48 kHz stereo WAV into a temp
+        // dir. The legacy batch path accumulated several full-length decoded
+        // copies (>1 GB) and would OOM; the streaming path holds only one
+        // packet plus one resampler chunk and must complete. No hard RSS claim —
+        // completing the decode with the right sample count is the signal.
+        if std::env::var("VOICETYPR_TEST_LONG_DECODE").as_deref() != Ok("1") {
+            return;
+        }
+
+        let dir = TempDir::new().unwrap();
+        let input = dir.path().join("long.wav");
+        let output = dir.path().join("out.wav");
+
+        // 20 minutes, 48 kHz stereo 16-bit.
+        write_synthetic_stereo_48k(&input, 20.0 * 60.0);
+        normalize_to_wav(&input, &output).expect("long streaming decode should succeed");
+
+        let reader = WavReader::open(&output).unwrap();
+        let spec = reader.spec();
+        assert_eq!(spec.channels, 1, "must be mono");
+        assert_eq!(spec.sample_rate, 16_000, "must be 16 kHz");
+        assert_eq!(spec.bits_per_sample, 16, "must be 16-bit");
+        assert_eq!(spec.sample_format, SampleFormat::Int);
+
+        let count = reader
+            .into_samples::<i16>()
+            .take_while(|s| s.is_ok())
+            .count();
+        let expected = 20.0 * 60.0 * 16_000.0;
+        let lo = (expected * 0.97) as usize;
+        let hi = (expected * 1.03) as usize;
+        assert!(
+            (lo..=hi).contains(&count),
+            "expected ~{expected} samples (+/- 3%), got {count}"
+        );
+    }
 }

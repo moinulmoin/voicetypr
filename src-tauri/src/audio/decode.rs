@@ -9,8 +9,9 @@
 
 #![allow(dead_code)]
 
+use std::collections::VecDeque;
 use std::panic::{catch_unwind, AssertUnwindSafe};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use hound::{SampleFormat, WavReader, WavSpec, WavWriter};
 use symphonia::core::audio::{AudioBufferRef, Channels};
@@ -21,7 +22,7 @@ use symphonia::core::io::MediaSourceStream;
 use symphonia::core::meta::MetadataOptions;
 use symphonia::core::probe::Hint;
 
-use crate::audio::resampler::resample_to_16khz;
+use crate::audio::resampler::StreamingResampler;
 
 const TARGET_RATE: u32 = 16_000;
 const TARGET_CHANNELS: u16 = 1;
@@ -30,8 +31,9 @@ const TARGET_BITS: u16 = 16;
 /// Decode any supported audio/video-container file to the canonical Whisper /
 /// Parakeet / cloud WAV: 16 kHz, mono, signed-16-bit PCM.
 ///
-/// Non-streaming in this phase (decodes fully, then resamples); Phase 3 makes
-/// it streaming. Opus (webm/mkv/ogg) is decoded via libopus (Phase 2).
+/// Streaming (Phase 3): decodes packet-by-packet into a streaming resampler and
+/// s16 writer, so peak memory is bounded by one packet plus one resampler chunk
+/// regardless of file length. Opus (webm/mkv/ogg) is decoded via libopus (Phase 2).
 ///
 /// This function NEVER panics to the caller: any panic raised by Symphonia,
 /// rubato, or hound on a corrupt or unsupported file is caught and converted to
@@ -52,18 +54,26 @@ fn normalize_inner(input: &Path, output: &Path) -> Result<(), String> {
         return Ok(());
     }
 
-    // 2. Decode + downmix to mono f32 at the source sample rate.
-    let (mono, src_rate) = decode_to_mono(input)?;
+    // 2. Open the container and pick the first non-null audio track.
+    let (mut format, track_id, codec_params) = open_format(input)?;
+    let is_opus = codec_params.codec == CODEC_TYPE_OPUS;
 
-    // 3. Resample to 16 kHz via the existing rubato-based resampler.
-    let resampled = if src_rate == TARGET_RATE {
-        mono
+    // 3. Stream decode -> downmix -> resample -> s16 into a temp WAV, holding
+    //    only one packet plus one resampler chunk at a time. The guard removes
+    //    the temp file on any error or panic (catch_unwind drops it mid-unwind).
+    let temp_path = temp_path_for(output);
+    let guard = TempWavGuard::new(temp_path.clone());
+
+    if is_opus {
+        stream_opus(&mut *format, track_id, &codec_params, &temp_path)?;
     } else {
-        resample_to_16khz(&mono, src_rate)?
-    };
+        stream_symphonia(&mut *format, track_id, &codec_params, &temp_path)?;
+    }
 
-    // 4. Quantize to s16 and write the WAV atomically (temp + rename).
-    write_s16_wav(&resampled, output)?;
+    // 4. Atomically install the finished WAV.
+    let finalized_temp = guard.disarm();
+    std::fs::rename(&finalized_temp, output)
+        .map_err(|e| format!("Failed to rename temp WAV to output: {e}"))?;
     Ok(())
 }
 
@@ -96,10 +106,15 @@ fn try_passthrough_canonical_wav(input: &Path, output: &Path) -> Result<bool, St
     }
 }
 
-/// Decode the first non-null audio track to per-channel f32 planes, then downmix
-/// to mono. Returns (mono_samples, source_sample_rate). Opus tracks go through
-/// libopus (Phase 2); every other codec Symphonia can decode goes through it.
-fn decode_to_mono(input: &Path) -> Result<(Vec<f32>, u32), String> {
+/// hound writer backed by a buffered file: the incremental s16 sink.
+type WavFileWriter = WavWriter<std::io::BufWriter<std::fs::File>>;
+
+/// Probe the container and return the format reader, the first non-null audio
+/// track id, and an owned copy of its codec params (so the borrow of `format`
+/// via `track` is released before packet iteration begins).
+fn open_format(
+    input: &Path,
+) -> Result<(Box<dyn FormatReader>, u32, CodecParameters), String> {
     let file = std::fs::File::open(input)
         .map_err(|e| format!("Failed to open audio file: {e}"))?;
     let mss = MediaSourceStream::new(Box::new(file), Default::default());
@@ -112,51 +127,92 @@ fn decode_to_mono(input: &Path) -> Result<(Vec<f32>, u32), String> {
     let probed = symphonia::default::get_probe()
         .format(&hint, mss, &FormatOptions::default(), &MetadataOptions::default())
         .map_err(|e| format!("Failed to probe audio format: {e}"))?;
-
-    let mut format = probed.format;
+    let format = probed.format;
 
     let track = format
         .tracks()
         .iter()
         .find(|t| t.codec_params.codec != CODEC_TYPE_NULL)
         .ok_or_else(|| "no supported audio track".to_string())?;
-
     let track_id = track.id;
-    // Clone codec params so the decode helpers below don't hold an immutable
-    // borrow of `format` (via `track`) while calling the mutable `next_packet`.
     let codec_params = track.codec_params.clone();
 
-    let (mut planes, layout, src_rate) = if codec_params.codec == CODEC_TYPE_OPUS {
-        decode_opus(&mut *format, track_id, &codec_params)?
-    } else {
-        decode_symphonia(&mut *format, track_id, &codec_params)?
-    };
-
-    // Equalize plane lengths (defend against trailing partial frames).
-    let min_len = planes.iter().map(|p| p.len()).min().unwrap_or(0);
-    for p in planes.iter_mut() {
-        p.truncate(min_len);
-    }
-
-    let mono = downmix_to_mono(&planes, layout);
-    Ok((mono, src_rate))
+    Ok((format, track_id, codec_params))
 }
 
-/// Symphonia decode path: decode every packet on `track_id` into per-channel
-/// f32 planes at the source sample rate, and return the accumulated channel
-/// layout. Recovers from a mid-stream decoder reset by recreating the decoder.
-fn decode_symphonia(
+/// Sibling temp path for the streaming WAV; renamed to `output` on success.
+fn temp_path_for(output: &Path) -> PathBuf {
+    let dir = output.parent().unwrap_or_else(|| Path::new("."));
+    let stamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or_default();
+    dir.join(format!(".voicetypr_decode_tmp_{stamp}.wav"))
+}
+
+/// Open a 16 kHz / mono / s16 WAV writer at `path`.
+fn open_writer(path: &Path) -> Result<WavFileWriter, String> {
+    let spec = WavSpec {
+        channels: TARGET_CHANNELS,
+        sample_rate: TARGET_RATE,
+        bits_per_sample: TARGET_BITS,
+        sample_format: SampleFormat::Int,
+    };
+    WavWriter::create(path, spec).map_err(|e| format!("WAV create failed: {e}"))
+}
+
+/// Quantize normalized f32 to s16 and append to the writer.
+fn write_s16_samples(writer: &mut WavFileWriter, samples: &[f32]) -> Result<(), String> {
+    for &s in samples {
+        let v = (s.clamp(-1.0, 1.0) * 32767.0).round() as i16;
+        writer
+            .write_sample(v)
+            .map_err(|e| format!("WAV write failed: {e}"))?;
+    }
+    Ok(())
+}
+
+/// Per-packet decode sink: resample if a resampler is attached, else the mono
+/// audio is already at the target rate and is written directly.
+fn feed_and_write(
+    writer: &mut WavFileWriter,
+    resampler: &mut Option<StreamingResampler>,
+    mono: &[f32],
+) -> Result<(), String> {
+    if let Some(r) = resampler.as_mut() {
+        let out = r.push(mono)?;
+        write_s16_samples(writer, &out)?;
+    } else {
+        write_s16_samples(writer, mono)?;
+    }
+    Ok(())
+}
+
+/// Symphonia streaming path (Phase 3): decode each packet to a small per-channel
+/// plane set, downmix to mono, and feed a streaming resampler -> s16 writer.
+/// Only one packet and one resampler chunk are held at a time, so peak memory is
+/// independent of file length. Recovers from a mid-stream decoder reset.
+fn stream_symphonia(
     format: &mut dyn FormatReader,
     track_id: u32,
     codec_params: &CodecParameters,
-) -> Result<(Vec<Vec<f32>>, Channels, u32), String> {
+    temp_path: &Path,
+) -> Result<(), String> {
+    let mut writer = open_writer(temp_path)?;
     let mut decoder = symphonia::default::get_codecs()
         .make(codec_params, &Default::default())
         .map_err(|e| format!("Failed to create audio decoder: {e}"))?;
 
     let mut planes: Vec<Vec<f32>> = Vec::new();
     let mut layout = Channels::empty();
-    let mut src_rate = codec_params.sample_rate;
+
+    // Source rate is usually known up front; if not, it is read from the first
+    // decoded packet and the resampler is created then.
+    let mut resampler: Option<StreamingResampler> = match codec_params.sample_rate {
+        Some(r) if r != TARGET_RATE => Some(StreamingResampler::new(r as usize)?),
+        _ => None,
+    };
+    let mut rate_known = codec_params.sample_rate.is_some();
 
     loop {
         let packet = match format.next_packet() {
@@ -169,47 +225,66 @@ fn decode_symphonia(
             continue;
         }
 
-        match decoder.decode(&packet) {
-            Ok(decoded) => {
-                let spec = decoded.spec();
-                if src_rate.is_none() {
-                    src_rate = Some(spec.rate);
-                }
-                layout |= spec.channels;
-                if planes.is_empty() {
-                    let nch = spec.channels.count().max(1);
-                    planes = vec![Vec::new(); nch];
-                }
-                collect_planar(&decoded, &mut planes);
-            }
+        let decoded = match decoder.decode(&packet) {
+            Ok(d) => d,
             Err(Error::ResetRequired) => {
                 decoder = symphonia::default::get_codecs()
                     .make(codec_params, &Default::default())
                     .map_err(|e| format!("Failed to recreate audio decoder: {e}"))?;
+                continue;
             }
             Err(Error::IoError(ref e)) if e.kind() == std::io::ErrorKind::UnexpectedEof => break,
             Err(_) => continue,
+        };
+
+        let spec = decoded.spec();
+        layout |= spec.channels;
+        if planes.is_empty() {
+            let nch = spec.channels.count().max(1);
+            planes = vec![Vec::new(); nch];
         }
+        for p in planes.iter_mut() {
+            p.clear();
+        }
+        collect_planar(&decoded, &mut planes);
+        let mono = downmix_to_mono(&planes, layout);
+
+        if !rate_known {
+            rate_known = true;
+            if spec.rate != TARGET_RATE && resampler.is_none() {
+                resampler = Some(StreamingResampler::new(spec.rate as usize)?);
+            }
+        }
+
+        feed_and_write(&mut writer, &mut resampler, &mono)?;
     }
 
-    Ok((planes, layout, src_rate.unwrap_or(44_100)))
+    if let Some(r) = resampler.take() {
+        let out = r.finish()?;
+        write_s16_samples(&mut writer, &out)?;
+    }
+    writer
+        .finalize()
+        .map_err(|e| format!("WAV finalize failed: {e}"))?;
+    Ok(())
 }
 
-/// Opus decode path (Phase 2): decode every Opus packet on `track_id` with
-/// libopus into per-channel f32 planes. Opus ALWAYS decodes at 48 kHz regardless
-/// of the container's declared rate, so the returned rate is fixed at 48 000 and
-/// the caller's resampler takes 48k -> 16k.
+/// Opus streaming path (Phase 2 codec + Phase 3 streaming): decode each Opus
+/// packet with libopus at 48 kHz, apply pre-skip / end-trim per packet, downmix
+/// to mono, and feed a 48 kHz -> 16 kHz streaming resampler -> s16 writer. Opus
+/// ALWAYS decodes at 48 kHz regardless of the container's declared rate.
 ///
 /// Channel count and pre-skip come from the OpusHead blob stored in
 /// `codec_params.extra_data` (Matroska/WebM/Ogg stash it there but leave
 /// `codec_params.channels`/`.delay` unset); the `codec_params` fields are used
 /// directly when a demuxer does populate them. Only mono and stereo are
 /// supported; surround Opus returns a clean error rather than mis-decoding.
-fn decode_opus(
+fn stream_opus(
     format: &mut dyn FormatReader,
     track_id: u32,
     codec_params: &CodecParameters,
-) -> Result<(Vec<Vec<f32>>, Channels, u32), String> {
+    temp_path: &Path,
+) -> Result<(), String> {
     use audiopus::{coder::Decoder, packet::Packet, Channels as OpusCh, MutSignals, SampleRate};
 
     let opus_head = codec_params.extra_data.as_deref().and_then(parse_opus_head);
@@ -240,12 +315,16 @@ fn decode_opus(
         Channels::FRONT_LEFT
     };
 
+    let mut writer = open_writer(temp_path)?;
+    let mut resampler = StreamingResampler::new(48_000)?;
+    let mut front = FrontSkipper::new(pre_skip);
+    let mut tail = TailTrimmer::new(end_trim);
     let mut decoder = Decoder::new(SampleRate::Hz48000, opus_ch)
         .map_err(|e| format!("opus decoder init failed: {e}"))?;
 
-    let mut planes: Vec<Vec<f32>> = vec![Vec::new(); ch_count];
     // Max Opus frame = 120 ms @ 48 kHz = 5760 samples/channel, interleaved.
     let mut buf = vec![0f32; 5760 * ch_count];
+    let mut planes: Vec<Vec<f32>> = vec![Vec::new(); ch_count];
 
     loop {
         let packet = match format.next_packet() {
@@ -267,20 +346,45 @@ fn decode_opus(
                 .map_err(|e| format!("opus output wrap failed: {e}"))?;
             decoder.decode_float(Some(opus_packet), out, false)
         };
-        match decoded {
-            Ok(n_per_ch) => {
-                // buf[0..n_per_ch*ch_count] holds n_per_ch interleaved frames.
-                let total = n_per_ch * ch_count;
-                for (i, &s) in buf[..total].iter().enumerate() {
-                    planes[i % ch_count].push(s);
-                }
-            }
+        let n_per_ch = match decoded {
+            Ok(n) => n,
             Err(_) => continue, // skip a bad packet rather than abort the stream
+        };
+
+        let total = n_per_ch * ch_count;
+        for p in planes.iter_mut() {
+            p.clear();
+            p.reserve(n_per_ch);
+        }
+        for (i, &s) in buf[..total].iter().enumerate() {
+            planes[i % ch_count].push(s);
+        }
+        let mono = downmix_to_mono(&planes, layout);
+
+        // Trim pre-skip from the front and hold back end_trim from the back, at
+        // 48 kHz before resampling — matches the batch trim_planes ordering.
+        let skipped = front.skip(&mono);
+        let mut trimmed = Vec::with_capacity(skipped.len());
+        tail.push(skipped, &mut trimmed);
+
+        if !trimmed.is_empty() {
+            let out = resampler.push(&trimmed)?;
+            if !out.is_empty() {
+                write_s16_samples(&mut writer, &out)?;
+            }
         }
     }
 
-    trim_planes(&mut planes, pre_skip, end_trim);
-    Ok((planes, layout, 48_000))
+    // The tail trimmer still holds the last `end_trim` samples; they are the
+    // trimmed tail and are intentionally discarded. Flush the resampler.
+    let out = resampler.finish()?;
+    if !out.is_empty() {
+        write_s16_samples(&mut writer, &out)?;
+    }
+    writer
+        .finalize()
+        .map_err(|e| format!("WAV finalize failed: {e}"))?;
+    Ok(())
 }
 
 /// Parse (channel_count, pre_skip) from an OpusHead blob.
@@ -293,24 +397,6 @@ fn parse_opus_head(extra: &[u8]) -> Option<(u8, u16)> {
         return None;
     }
     Some((extra[9], u16::from_le_bytes([extra[10], extra[11]])))
-}
-
-/// Drop `pre_skip` samples from the front and `end_trim` from the back of each
-/// plane, in place. Applies Opus pre-skip / end-trim so sample counts match ffmpeg.
-fn trim_planes(planes: &mut [Vec<f32>], pre_skip: usize, end_trim: usize) {
-    if pre_skip == 0 && end_trim == 0 {
-        return;
-    }
-    for plane in planes.iter_mut() {
-        let start = pre_skip.min(plane.len());
-        let end_cap = plane.len().saturating_sub(end_trim);
-        if start >= end_cap {
-            plane.clear();
-        } else {
-            plane.drain(..start);
-            plane.truncate(end_cap - start);
-        }
-    }
 }
 
 macro_rules! accumulate_planar {
@@ -447,47 +533,82 @@ fn lfe_plane_index(layout: Channels) -> Option<usize> {
     Some(lower_bits.count_ones() as usize)
 }
 
-/// Write the samples as a 16 kHz / mono / s16 PCM WAV at output, atomically.
-///
-/// Writes to a sibling temp file first and renames on success, so a decode or IO
-/// error after the writer is open never leaves a half-written file at output.
-/// On any error the temp file is removed.
-fn write_s16_wav(samples: &[f32], output: &Path) -> Result<(), String> {
-    let dir = output.parent().unwrap_or_else(|| Path::new("."));
-    let stamp = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_nanos())
-        .unwrap_or_default();
-    let temp_path = dir.join(format!(".voicetypr_decode_tmp_{stamp}.wav"));
-
-    if let Err(e) = write_s16_wav_to(samples, &temp_path) {
-        let _ = std::fs::remove_file(&temp_path);
-        return Err(e);
-    }
-    if let Err(e) = std::fs::rename(&temp_path, output) {
-        let _ = std::fs::remove_file(&temp_path);
-        return Err(format!("Failed to rename temp WAV to output: {e}"));
-    }
-    Ok(())
+/// Drop the first N samples from a stream, in order. Used for Opus pre-skip.
+struct FrontSkipper {
+    remaining: usize,
 }
 
-fn write_s16_wav_to(samples: &[f32], path: &Path) -> Result<(), String> {
-    let spec = WavSpec {
-        channels: TARGET_CHANNELS,
-        sample_rate: TARGET_RATE,
-        bits_per_sample: TARGET_BITS,
-        sample_format: SampleFormat::Int,
-    };
-    let mut writer =
-        WavWriter::create(path, spec).map_err(|e| format!("WAV create failed: {e}"))?;
-    for &s in samples {
-        let v = (s.clamp(-1.0, 1.0) * 32767.0).round() as i16;
-        writer
-            .write_sample(v)
-            .map_err(|e| format!("WAV write failed: {e}"))?;
+impl FrontSkipper {
+    fn new(remaining: usize) -> Self {
+        Self { remaining }
     }
-    writer
-        .finalize()
-        .map_err(|e| format!("WAV finalize failed: {e}"))?;
-    Ok(())
+
+    /// Return the slice with the still-owed front samples removed.
+    fn skip<'a>(&mut self, samples: &'a [f32]) -> &'a [f32] {
+        if self.remaining == 0 {
+            return samples;
+        }
+        let take = self.remaining.min(samples.len());
+        self.remaining -= take;
+        &samples[take..]
+    }
+}
+
+/// Hold back the last N samples of a stream so they can be dropped at EOF.
+/// Used for Opus end-trim: emits each sample only once a newer one displaces it,
+/// and the final N (the trim tail) are discarded when streaming ends.
+struct TailTrimmer {
+    buf: VecDeque<f32>,
+    cap: usize,
+}
+
+impl TailTrimmer {
+    fn new(cap: usize) -> Self {
+        Self {
+            buf: VecDeque::with_capacity(cap.max(1)),
+            cap,
+        }
+    }
+
+    /// Buffer `samples` through the trim window; emit any frames aged out of it.
+    fn push(&mut self, samples: &[f32], out: &mut Vec<f32>) {
+        if self.cap == 0 {
+            out.extend_from_slice(samples);
+            return;
+        }
+        for &s in samples {
+            self.buf.push_back(s);
+            if self.buf.len() > self.cap {
+                out.push(self.buf.pop_front().unwrap());
+            }
+        }
+    }
+}
+
+/// RAII guard for the streaming temp WAV: removes the file on drop unless
+/// `disarm` consumed it, so a decode error or a caught panic never leaves a
+/// half-written file behind.
+struct TempWavGuard {
+    path: PathBuf,
+    armed: bool,
+}
+
+impl TempWavGuard {
+    fn new(path: PathBuf) -> Self {
+        Self { path, armed: true }
+    }
+
+    /// Mark the file as successfully finalized and return its path for rename.
+    fn disarm(mut self) -> PathBuf {
+        self.armed = false;
+        self.path.clone()
+    }
+}
+
+impl Drop for TempWavGuard {
+    fn drop(&mut self) {
+        if self.armed {
+            let _ = std::fs::remove_file(&self.path);
+        }
+    }
 }
