@@ -58,7 +58,13 @@ jobs:
         run: pnpm build
 
       - name: Clippy (-D warnings, all targets)
-        run: cd src-tauri && cargo clippy --all-targets -- -D warnings
+        run: cd src-tauri && cargo clippy --workspace --all-targets -- -D warnings
 
+      # Match the repo's Windows test contract: run-tests.ps1 builds tests
+      # (--no-run) then runs the exes with a Common-Controls manifest, working
+      # around the TaskDialogIndirect entry-point error (tauri-apps/tauri#13419).
+      # Plain `cargo test` fails on Windows, so it must NOT be used here.
       - name: Rust tests
-        run: cd src-tauri && cargo test
+        shell: pwsh
+        working-directory: src-tauri
+        run: ./run-tests.ps1
