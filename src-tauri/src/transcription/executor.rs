@@ -22,7 +22,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use tauri::{AppHandle, Manager};
-use tempfile::NamedTempFile;
+use tempfile::{NamedTempFile, TempPath};
 
 pub(crate) const LOCAL_ENGINE_TIMEOUT_GRACE: Duration = Duration::from_secs(2);
 
@@ -430,14 +430,18 @@ async fn run_with_policy(
 /// A 16 kHz mono WAV ready for a local engine: either a temp we normalized into
 /// (deleted on drop) or a borrow of a caller input that already conforms.
 enum PreparedInput {
-    Owned(NamedTempFile),
+    // A `TempPath` (not a live `NamedTempFile`): the decoder atomically renames its
+    // result onto this path, and on Windows you cannot rename over an *open* file. We
+    // keep only the path (handle closed) so the replace succeeds, while still deleting
+    // the normalized WAV on drop.
+    Owned(TempPath),
     AlreadyNormalized(PathBuf),
 }
 
 impl PreparedInput {
     fn path(&self) -> &Path {
         match self {
-            PreparedInput::Owned(temp) => temp.path(),
+            PreparedInput::Owned(temp) => temp.as_ref(),
             PreparedInput::AlreadyNormalized(path) => path.as_path(),
         }
     }
@@ -452,8 +456,12 @@ async fn prepare_normalized_input(
     if is_normalized_wav(input_path) {
         return Ok(PreparedInput::AlreadyNormalized(input_path.to_path_buf()));
     }
-    let out = NamedTempFile::new().map_err(|e| stage_error(source, "temp create", e))?;
-    crate::audio::decode::normalize_to_wav_async(input_path.to_path_buf(), out.path().to_path_buf())
+    // Reserve a temp path but release the file handle: the decoder finalizes by
+    // renaming onto this path, and Windows refuses to replace a still-open file.
+    let out = NamedTempFile::new()
+        .map_err(|e| stage_error(source, "temp create", e))?
+        .into_temp_path();
+    crate::audio::decode::normalize_to_wav_async(input_path.to_path_buf(), out.to_path_buf())
         .await
         .map_err(|e| from_local_engine_string(&e, source))?;
     Ok(PreparedInput::Owned(out))

@@ -101,6 +101,30 @@ mod tests {
         assert!(result.is_err(), "truncated WAV must error, not panic");
     }
 
+    /// Regression: the final step renames a temp WAV onto `output`. When `output`
+    /// already exists (a pre-reserved temp path — how the local-engine path calls
+    /// it), the replace must succeed. On Windows a rename cannot replace an *open*
+    /// file, so callers pass a closed path; here we assert the closed-but-existing
+    /// case works on every platform.
+    #[test]
+    fn normalizes_over_preexisting_output_file() {
+        let dir = TempDir::new().unwrap();
+        let input = dir.path().join("in.wav");
+        let output = dir.path().join("reserved.wav");
+
+        write_synthetic_stereo_48k(&input, 0.25);
+        // Pre-create (and close) the output path, as a reserved temp would be.
+        std::fs::write(&output, b"stale placeholder bytes").unwrap();
+
+        normalize_to_wav(&input, &output).expect("must replace an existing closed output");
+
+        let reader = WavReader::open(&output).unwrap();
+        let spec = reader.spec();
+        assert_eq!(spec.channels, 1, "must be mono");
+        assert_eq!(spec.sample_rate, 16_000, "must be 16 kHz");
+        assert_eq!(spec.bits_per_sample, 16, "must be 16-bit");
+    }
+
     // --- Machine-local integration tests against staged real-world fixtures ---
     // Run with: cargo test -- --ignored
     // These are ignored because they read files from a scratchpad path that

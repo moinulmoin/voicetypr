@@ -35,6 +35,11 @@ const TARGET_BITS: u16 = 16;
 /// This function NEVER panics to the caller: any panic raised by Symphonia,
 /// rubato, or hound on a corrupt or unsupported file is caught and converted to
 /// Err("audio decode failed (unsupported or corrupt file)").
+///
+/// The finished WAV is installed by atomically renaming a sibling temp onto
+/// `output`. If `output` already exists it is replaced — but callers must NOT
+/// hold an open handle to `output` on Windows, where a rename cannot replace an
+/// open file (pass a path, or a closed `TempPath`, not a live `NamedTempFile`).
 pub fn normalize_to_wav(input: &Path, output: &Path) -> Result<(), String> {
     let input = input.to_path_buf();
     let output = output.to_path_buf();
