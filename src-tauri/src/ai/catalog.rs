@@ -12,6 +12,8 @@ pub struct CatalogProvider {
     pub id: String,
     pub label: String,
     pub status: String,
+    #[serde(default = "default_runtime")]
+    pub runtime: String,
     pub adapter: Option<String>,
     pub namespace: Option<String>,
     pub requires_api_key: bool,
@@ -33,6 +35,10 @@ pub struct CatalogModel {
 
 type Catalog = CatalogFile;
 
+fn default_runtime() -> String {
+    "genai_adapter".to_string()
+}
+
 // Project rule prefers LazyLock when the initializer is known at declaration time;
 // this preserves the contract's parse-once behavior.
 static CATALOG: LazyLock<Catalog> =
@@ -53,6 +59,7 @@ fn parse_catalog(json: &str) -> Catalog {
         id: "custom".to_string(),
         label: "Custom (OpenAI-compatible)".to_string(),
         status: "production".to_string(),
+        runtime: "openai_compatible".to_string(),
         adapter: None,
         namespace: None,
         requires_api_key: false,
@@ -118,7 +125,12 @@ pub fn all_provider_models(provider_id: &str) -> Vec<&'static CatalogModel> {
 }
 
 pub fn is_native_provider(provider_id: &str) -> bool {
-    provider(provider_id).is_some_and(|provider| provider.adapter.is_some())
+    provider(provider_id)
+        .is_some_and(|provider| provider.runtime == "genai_adapter" && provider.adapter.is_some())
+}
+
+pub fn runtime_kind(provider_id: &str) -> Option<&'static str> {
+    provider(provider_id).map(|provider| provider.runtime.as_str())
 }
 
 pub fn adapter_name(provider_id: &str) -> Option<&'static str> {
@@ -155,13 +167,15 @@ mod tests {
         let mut provider_ids = HashSet::new();
         for provider in &catalog.providers {
             assert!(provider_ids.insert(provider.id.as_str()));
-            if provider.id != "custom"
-                && matches!(provider.status.as_str(), "production" | "experimental")
-            {
-                assert!(provider
-                    .adapter
-                    .as_deref()
-                    .is_some_and(|adapter| !adapter.is_empty()));
+            if matches!(provider.status.as_str(), "production" | "experimental") {
+                match provider.runtime.as_str() {
+                    "genai_adapter" => assert!(provider
+                        .adapter
+                        .as_deref()
+                        .is_some_and(|adapter| !adapter.is_empty())),
+                    "openai_compatible" => assert!(provider.adapter.is_none()),
+                    runtime => panic!("{} has unsupported runtime {runtime}", provider.id),
+                }
             }
 
             let mut model_ids = HashSet::new();
@@ -189,16 +203,28 @@ mod tests {
     }
 
     #[test]
-    fn production_and_experimental_providers_have_adapters() {
+    fn production_and_experimental_providers_have_valid_runtime_contracts() {
         for provider in &catalog().providers {
-            if provider.id != "custom"
-                && matches!(provider.status.as_str(), "production" | "experimental")
-            {
-                assert!(
-                    adapter_name(&provider.id).is_some(),
-                    "{} should have a genai adapter",
-                    provider.id
-                );
+            if !matches!(provider.status.as_str(), "production" | "experimental") {
+                continue;
+            }
+
+            match provider.runtime.as_str() {
+                "genai_adapter" => {
+                    assert!(
+                        adapter_name(&provider.id).is_some(),
+                        "{} should have a genai adapter",
+                        provider.id
+                    );
+                }
+                "openai_compatible" => {
+                    assert!(
+                        adapter_name(&provider.id).is_none(),
+                        "{} should not have a genai adapter",
+                        provider.id
+                    );
+                }
+                runtime => panic!("{} has unsupported runtime {runtime}", provider.id),
             }
         }
     }
@@ -206,13 +232,17 @@ mod tests {
     #[test]
     fn adapter_to_provider_mapping_round_trips() {
         for provider in &catalog().providers {
-            if provider.id == "custom" {
-                continue;
+            match provider.runtime.as_str() {
+                "genai_adapter" => {
+                    let adapter = adapter_name(&provider.id)
+                        .unwrap_or_else(|| panic!("{} should have a genai adapter", provider.id));
+                    assert_eq!(provider_for_adapter(adapter), Some(provider.id.as_str()));
+                }
+                "openai_compatible" => {
+                    assert!(adapter_name(&provider.id).is_none());
+                }
+                runtime => panic!("{} has unsupported runtime {runtime}", provider.id),
             }
-
-            let adapter = adapter_name(&provider.id)
-                .unwrap_or_else(|| panic!("{} should have a genai adapter", provider.id));
-            assert_eq!(provider_for_adapter(adapter), Some(provider.id.as_str()));
         }
     }
 

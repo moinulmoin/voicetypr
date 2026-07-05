@@ -2,9 +2,9 @@
 mod tests {
     use super::super::contract::AiPolishRequest;
     use super::super::error::AiProviderError;
-    use super::super::executor::AiExecutor;
+    use super::super::executor::{AiExecutor, OpenAiCompatibleConfig};
     use super::super::genai_runtime::AiKeyResolver;
-    use super::super::providers::PROVIDER_CUSTOM;
+    use super::super::providers::{PROVIDER_CUSTOM, PROVIDER_OPENROUTER};
     use reqwest::header::AUTHORIZATION;
     use serde_json::json;
     use std::collections::HashMap;
@@ -249,6 +249,86 @@ mod tests {
 
         let request = server.received_requests().await.unwrap().remove(0);
         assert!(request.headers.get(AUTHORIZATION).is_none());
+    }
+
+    #[tokio::test]
+    async fn ai_runtime_openrouter_routes_via_openai_compatible_with_attribution_headers() {
+        // OpenRouter must route through the OpenAI-compatible runtime (never the
+        // genai adapter), carrying its own bearer key plus the app-attribution
+        // headers. The embedded catalog marks `openrouter` as runtime
+        // "openai_compatible", so dispatch resolves it here.
+        let server = MockServer::start().await;
+        mount_sequence(
+            &server,
+            PROVIDER_OPENROUTER,
+            vec![ok_response(PROVIDER_OPENROUTER, "polished")],
+        )
+        .await;
+
+        let key_resolver: AiKeyResolver = Arc::new(|provider_id| {
+            if provider_id == PROVIDER_OPENROUTER {
+                Some("test-key".to_string())
+            } else {
+                None
+            }
+        });
+        let executor = AiExecutor::with_native_endpoint_overrides(
+            reqwest::Client::new(),
+            key_resolver,
+            OpenAiCompatibleConfig {
+                base_url: server.uri(),
+                no_auth: false,
+                key_provider_id: PROVIDER_OPENROUTER.to_string(),
+                extra_headers: vec![
+                    (
+                        "HTTP-Referer".to_string(),
+                        "https://voicetypr.com".to_string(),
+                    ),
+                    ("X-Title".to_string(), "VoiceTypr".to_string()),
+                ],
+            },
+            HashMap::new(),
+        );
+
+        let result = executor
+            .polish(
+                AiPolishRequest {
+                    provider_id: PROVIDER_OPENROUTER.to_string(),
+                    model_id: "google/gemini-2.5-flash-lite".to_string(),
+                    input_text: "raw transcript".to_string(),
+                    prompt: "polish the transcript".to_string(),
+                    timeout_ms: 1_000,
+                },
+                CancellationToken::new(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(result.output_text, "polished");
+        assert_eq!(result.provider_id, PROVIDER_OPENROUTER);
+
+        let request = server.received_requests().await.unwrap().remove(0);
+        assert_eq!(
+            request
+                .headers
+                .get(AUTHORIZATION)
+                .and_then(|value| value.to_str().ok()),
+            Some("Bearer test-key")
+        );
+        assert_eq!(
+            request
+                .headers
+                .get("HTTP-Referer")
+                .and_then(|value| value.to_str().ok()),
+            Some("https://voicetypr.com")
+        );
+        assert_eq!(
+            request
+                .headers
+                .get("X-Title")
+                .and_then(|value| value.to_str().ok()),
+            Some("VoiceTypr")
+        );
     }
 
     #[tokio::test]
@@ -505,8 +585,7 @@ mod tests {
         AiExecutor::with_native_endpoint_overrides(
             reqwest::Client::new(),
             key_resolver,
-            server.uri(),
-            custom_no_auth,
+            OpenAiCompatibleConfig::custom(server.uri(), custom_no_auth),
             overrides,
         )
     }

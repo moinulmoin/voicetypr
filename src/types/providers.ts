@@ -51,6 +51,10 @@ const PROVIDER_UI_METADATA: Record<string, { color: string; apiKeyUrl: string }>
     color: "text-orange-600",
     apiKeyUrl: "https://console.anthropic.com/settings/keys",
   },
+  openrouter: {
+    color: "text-indigo-600",
+    apiKeyUrl: "https://openrouter.ai/keys",
+  },
   custom: {
     color: "text-purple-600",
     apiKeyUrl: "",

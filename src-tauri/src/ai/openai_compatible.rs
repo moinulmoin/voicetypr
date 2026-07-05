@@ -1,7 +1,6 @@
 use super::contract::{output_token_cap_for_input, AiPolishRequest};
 use super::error::{map_http_status, map_reqwest_error, AiProviderError, MappedAiProviderError};
 use super::genai_runtime::AiKeyResolver;
-use super::providers::PROVIDER_CUSTOM;
 use reqwest::StatusCode;
 use serde_json::{json, Value};
 
@@ -11,6 +10,8 @@ pub struct OpenAiCompatibleRuntime {
     key_resolver: AiKeyResolver,
     base_url: String,
     no_auth: bool,
+    key_provider_id: String,
+    extra_headers: Vec<(String, String)>,
 }
 
 impl OpenAiCompatibleRuntime {
@@ -19,12 +20,16 @@ impl OpenAiCompatibleRuntime {
         key_resolver: AiKeyResolver,
         base_url: String,
         no_auth: bool,
+        key_provider_id: String,
+        extra_headers: Vec<(String, String)>,
     ) -> Self {
         Self {
             client,
             key_resolver,
             base_url,
             no_auth,
+            key_provider_id,
+            extra_headers,
         }
     }
 
@@ -42,9 +47,12 @@ impl OpenAiCompatibleRuntime {
         });
         let mut builder = self.client.post(url).json(&payload);
         if !self.no_auth {
-            let key = (self.key_resolver)(PROVIDER_CUSTOM)
+            let key = (self.key_resolver)(&self.key_provider_id)
                 .ok_or_else(|| MappedAiProviderError::new(AiProviderError::MissingApiKey))?;
             builder = builder.bearer_auth(key);
+        }
+        for (name, value) in &self.extra_headers {
+            builder = builder.header(name.as_str(), value.as_str());
         }
 
         let response = builder

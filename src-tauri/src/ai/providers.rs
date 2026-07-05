@@ -1,6 +1,7 @@
 use super::contract::{AiModel, AiProvider};
 
 pub const PROVIDER_CUSTOM: &str = "custom";
+pub const PROVIDER_OPENROUTER: &str = "openrouter";
 
 pub fn launch_providers() -> Vec<AiProvider> {
     crate::ai::catalog::launch_providers()

@@ -10,7 +10,26 @@ use tokio_util::sync::CancellationToken;
 #[derive(Clone)]
 pub struct AiExecutor {
     genai_runtime: GenaiRuntime,
-    custom_runtime: OpenAiCompatibleRuntime,
+    openai_compatible_runtime: OpenAiCompatibleRuntime,
+}
+
+#[derive(Clone)]
+pub struct OpenAiCompatibleConfig {
+    pub base_url: String,
+    pub no_auth: bool,
+    pub key_provider_id: String,
+    pub extra_headers: Vec<(String, String)>,
+}
+
+impl OpenAiCompatibleConfig {
+    pub fn custom(base_url: String, no_auth: bool) -> Self {
+        Self {
+            base_url,
+            no_auth,
+            key_provider_id: PROVIDER_CUSTOM.to_string(),
+            extra_headers: Vec::new(),
+        }
+    }
 }
 
 impl AiExecutor {
@@ -23,8 +42,7 @@ impl AiExecutor {
         Self::with_native_endpoint_overrides(
             http_client,
             key_resolver,
-            custom_base_url,
-            custom_no_auth,
+            OpenAiCompatibleConfig::custom(custom_base_url, custom_no_auth),
             HashMap::new(),
         )
     }
@@ -32,8 +50,7 @@ impl AiExecutor {
     pub fn with_native_endpoint_overrides(
         http_client: reqwest::Client,
         key_resolver: AiKeyResolver,
-        custom_base_url: String,
-        custom_no_auth: bool,
+        openai_compatible_config: OpenAiCompatibleConfig,
         native_endpoint_overrides: HashMap<String, String>,
     ) -> Self {
         Self {
@@ -42,11 +59,13 @@ impl AiExecutor {
                 key_resolver.clone(),
                 native_endpoint_overrides,
             ),
-            custom_runtime: OpenAiCompatibleRuntime::new(
+            openai_compatible_runtime: OpenAiCompatibleRuntime::new(
                 http_client,
                 key_resolver,
-                custom_base_url,
-                custom_no_auth,
+                openai_compatible_config.base_url,
+                openai_compatible_config.no_auth,
+                openai_compatible_config.key_provider_id,
+                openai_compatible_config.extra_headers,
             ),
         }
     }
@@ -134,8 +153,10 @@ impl AiExecutor {
     ) -> Result<String, MappedAiProviderError> {
         if crate::ai::catalog::is_native_provider(&request.provider_id) {
             self.genai_runtime.polish(request).await
-        } else if request.provider_id == PROVIDER_CUSTOM {
-            self.custom_runtime.polish(request).await
+        } else if crate::ai::catalog::runtime_kind(&request.provider_id)
+            == Some("openai_compatible")
+        {
+            self.openai_compatible_runtime.polish(request).await
         } else {
             Err(MappedAiProviderError::new(
                 AiProviderError::UnsupportedProvider,

@@ -81,11 +81,12 @@ const RESHAPING_PRESETS = new Set<EnhancementPreset>([
   "Message",
   "Code",
 ]);
-const GUIDED_PROVIDER_IDS = ["anthropic", "openai", "gemini"] as const;
+const GUIDED_PROVIDER_IDS = ["anthropic", "openai", "gemini", "openrouter"] as const;
 const GUIDED_PROVIDER_LABELS: Record<(typeof GUIDED_PROVIDER_IDS)[number], string> = {
   anthropic: "Anthropic",
   openai: "OpenAI",
   gemini: "Google",
+  openrouter: "OpenRouter",
 };
 
 const isGuidedProviderId = (

@@ -1,9 +1,9 @@
 use crate::ai::catalog;
 use crate::ai::contract::AiPolishRequest;
 use crate::ai::error::{user_facing_message, AiProviderError};
-use crate::ai::executor::AiExecutor;
+use crate::ai::executor::{AiExecutor, OpenAiCompatibleConfig};
 use crate::ai::genai_runtime::AiKeyResolver;
-use crate::ai::providers::{launch_providers, PROVIDER_CUSTOM};
+use crate::ai::providers::{launch_providers, PROVIDER_CUSTOM, PROVIDER_OPENROUTER};
 use crate::ai::EnhancementOptions;
 use crate::commands::settings::{
     persist_settings_and_invalidate, FINAL_TEXT_LANGUAGE_SAME_AS_TRANSCRIPT,
@@ -24,6 +24,7 @@ static API_KEY_CACHE: Lazy<Mutex<HashMap<String, String>>> =
     Lazy::new(|| Mutex::new(HashMap::new()));
 
 const DEFAULT_OPENAI_BASE_URL: &str = "https://api.openai.com/v1";
+const OPENROUTER_BASE_URL: &str = "https://openrouter.ai/api/v1";
 const CUSTOM_BASE_URL_KEY: &str = "ai_custom_base_url";
 const CUSTOM_NO_AUTH_KEY: &str = "ai_custom_no_auth";
 const LEGACY_OPENAI_BASE_URL_KEY: &str = "ai_openai_base_url";
@@ -525,6 +526,8 @@ pub async fn validate_ai_api_key(
             .filter(|candidate| !candidate.trim().is_empty())
             .or_else(|| custom_base_url_from_settings(&app))
             .unwrap_or_else(|| DEFAULT_OPENAI_BASE_URL.to_string())
+    } else if provider == PROVIDER_OPENROUTER {
+        OPENROUTER_BASE_URL.to_string()
     } else {
         DEFAULT_OPENAI_BASE_URL.to_string()
     };
@@ -544,7 +547,27 @@ pub async fn validate_ai_api_key(
     let http_client = reqwest::Client::builder()
         .build()
         .map_err(|error| format!("Failed to build validation client: {error}"))?;
-    let executor = AiExecutor::new(http_client, key_resolver, custom_base_url, no_auth);
+    let executor = if provider == PROVIDER_OPENROUTER {
+        AiExecutor::with_native_endpoint_overrides(
+            http_client,
+            key_resolver,
+            OpenAiCompatibleConfig {
+                base_url: custom_base_url,
+                no_auth: false,
+                key_provider_id: PROVIDER_OPENROUTER.to_string(),
+                extra_headers: vec![
+                    (
+                        "HTTP-Referer".to_string(),
+                        "https://voicetypr.com".to_string(),
+                    ),
+                    ("X-Title".to_string(), "VoiceTypr".to_string()),
+                ],
+            },
+            HashMap::new(),
+        )
+    } else {
+        AiExecutor::new(http_client, key_resolver, custom_base_url, no_auth)
+    };
     let request = AiPolishRequest {
         provider_id: provider.clone(),
         model_id: validation_model,
@@ -930,15 +953,13 @@ fn executor_for_provider(
         .cloned();
     drop(cache);
 
-    let (runtime_provider, custom_base_url, custom_no_auth, keys) = if selected_provider == "openai"
-    {
+    let (runtime_provider, openai_compatible_config, keys) = if selected_provider == "openai" {
         if let Some(key) = openai_key {
             let mut keys = HashMap::new();
             keys.insert("openai".to_string(), key);
             (
                 "openai".to_string(),
-                DEFAULT_OPENAI_BASE_URL.to_string(),
-                false,
+                OpenAiCompatibleConfig::custom(DEFAULT_OPENAI_BASE_URL.to_string(), false),
                 keys,
             )
         } else if let Some(base_url) = custom_base_url_from_settings(app) {
@@ -949,8 +970,10 @@ fn executor_for_provider(
             }
             (
                 PROVIDER_CUSTOM.to_string(),
-                base_url,
-                custom_no_auth_from_settings(app, has_key),
+                OpenAiCompatibleConfig::custom(
+                    base_url,
+                    custom_no_auth_from_settings(app, has_key),
+                ),
                 keys,
             )
         } else {
@@ -964,9 +987,31 @@ fn executor_for_provider(
         }
         (
             PROVIDER_CUSTOM.to_string(),
-            custom_base_url_from_settings(app)
-                .unwrap_or_else(|| DEFAULT_OPENAI_BASE_URL.to_string()),
-            custom_no_auth_from_settings(app, has_key),
+            OpenAiCompatibleConfig::custom(
+                custom_base_url_from_settings(app)
+                    .unwrap_or_else(|| DEFAULT_OPENAI_BASE_URL.to_string()),
+                custom_no_auth_from_settings(app, has_key),
+            ),
+            keys,
+        )
+    } else if selected_provider == PROVIDER_OPENROUTER {
+        let key = selected_key.ok_or(AiProviderError::MissingApiKey)?;
+        let mut keys = HashMap::new();
+        keys.insert(PROVIDER_OPENROUTER.to_string(), key);
+        (
+            PROVIDER_OPENROUTER.to_string(),
+            OpenAiCompatibleConfig {
+                base_url: OPENROUTER_BASE_URL.to_string(),
+                no_auth: false,
+                key_provider_id: PROVIDER_OPENROUTER.to_string(),
+                extra_headers: vec![
+                    (
+                        "HTTP-Referer".to_string(),
+                        "https://voicetypr.com".to_string(),
+                    ),
+                    ("X-Title".to_string(), "VoiceTypr".to_string()),
+                ],
+            },
             keys,
         )
     } else {
@@ -975,23 +1020,24 @@ fn executor_for_provider(
         keys.insert(selected_provider.to_string(), key);
         (
             selected_provider.to_string(),
-            DEFAULT_OPENAI_BASE_URL.to_string(),
-            false,
+            OpenAiCompatibleConfig::custom(DEFAULT_OPENAI_BASE_URL.to_string(), false),
             keys,
         )
     };
     if runtime_provider == PROVIDER_CUSTOM {
-        if let Err(reason) = validate_custom_base_url(&custom_base_url) {
+        if let Err(reason) = validate_custom_base_url(&openai_compatible_config.base_url) {
             log::error!(
                 "Refusing to use disallowed custom endpoint ({}): {}",
-                custom_base_url,
+                openai_compatible_config.base_url,
                 reason
             );
             return Err(AiProviderError::BadResponse);
         }
     }
 
-    if runtime_provider == PROVIDER_CUSTOM && !custom_no_auth && !keys.contains_key(PROVIDER_CUSTOM)
+    if runtime_provider == PROVIDER_CUSTOM
+        && !openai_compatible_config.no_auth
+        && !keys.contains_key(PROVIDER_CUSTOM)
     {
         return Err(AiProviderError::MissingApiKey);
     }
@@ -1001,7 +1047,12 @@ fn executor_for_provider(
         .build()
         .map_err(|_| AiProviderError::Internal)?;
     Ok((
-        AiExecutor::new(http_client, key_resolver, custom_base_url, custom_no_auth),
+        AiExecutor::with_native_endpoint_overrides(
+            http_client,
+            key_resolver,
+            openai_compatible_config,
+            HashMap::new(),
+        ),
         runtime_provider,
     ))
 }
