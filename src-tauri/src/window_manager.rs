@@ -292,7 +292,7 @@ impl WindowManager {
             if let Ok(hwnd) = pill_window.hwnd() {
                 unsafe {
                     // windows crate 0.62+: HWND wraps *mut c_void instead of isize
-                    let hwnd = HWND(hwnd.0 as *mut c_void);
+                    let hwnd = HWND(hwnd.0);
 
                     // Validate HWND before using it
                     if IsWindow(Some(hwnd)).as_bool() {

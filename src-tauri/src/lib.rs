@@ -65,6 +65,7 @@ fn show_main_window(app: &tauri::AppHandle) {
 }
 
 /// Hide the main window and the macOS Dock icon — back to the menubar/tray.
+#[allow(clippy::needless_return)]
 fn hide_main_window(app: &tauri::AppHandle) {
     // If the system tray failed to create (e.g. the Windows shell notification
     // area wasn't ready at startup), hiding the window would leave the app
@@ -381,6 +382,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     // egress chokepoint. Inert unless opted in AND a DSN was compiled in.
     let _sentry_guard = telemetry::init(telemetry_enabled, telemetry_install_id);
 
+    #[cfg_attr(not(target_os = "macos"), allow(unused_mut))]
     let mut builder = tauri::Builder::default()
         .plugin(tauri_plugin_os::init())
         .plugin(setup_logging().build())
@@ -1265,6 +1267,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
                 #[cfg(debug_assertions)]
                 let toast_builder = toast_builder;
 
+                #[cfg_attr(not(target_os = "macos"), allow(unused_variables))]
                 let toast_window = toast_builder.build()?;
 
                 // macOS: Convert toast to NSPanel to match pill behavior

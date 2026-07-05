@@ -108,6 +108,7 @@ enum SidecarResponse {
     Health {
         id: u64,
         ok: bool,
+        #[allow(dead_code)]
         backend: String,
     },
     Probe {
@@ -129,6 +130,7 @@ enum SidecarResponse {
     Shutdown {
         id: u64,
         ok: bool,
+        #[allow(dead_code)]
         backend: String,
     },
     Error {

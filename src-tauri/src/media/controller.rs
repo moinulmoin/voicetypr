@@ -175,6 +175,7 @@ impl MediaPauseController {
 
     /// Resume media if we paused it. Call when recording stops.
     /// Returns true if media was resumed.
+    #[allow(clippy::needless_return)]
     pub fn resume_if_we_paused(&self) -> bool {
         if self
             .was_playing_before_recording

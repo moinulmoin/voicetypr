@@ -189,6 +189,7 @@ impl ParakeetManager {
     /// - **macOS (Apple Silicon)**: Returns all Parakeet models
     /// - **macOS (Intel)**: Returns an empty list (Parakeet requires Apple Silicon)
     /// - **Windows/Linux**: Returns empty vector (compile-time exclusion)
+    #[allow(clippy::needless_return)]
     pub fn list_models(&self) -> Vec<ParakeetModelStatus> {
         // Parakeet Swift/FluidAudio integration is macOS-only
         // On non-macOS platforms, this returns empty at compile time
