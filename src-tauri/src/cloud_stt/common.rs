@@ -26,7 +26,10 @@ impl SttError {
     pub(crate) fn message(&self, provider_name: &str) -> String {
         match self {
             Self::Auth => format!("Invalid {} API key", provider_name),
-            Self::ModelUnavailable => format!("{}: model unavailable for this key", provider_name),
+            Self::ModelUnavailable => format!(
+                "{}: model unavailable for this API key — check the key's scopes and your plan/credits",
+                provider_name
+            ),
             Self::RateLimited => {
                 format!("{} rate limit reached. Try again shortly.", provider_name)
             }
@@ -40,7 +43,9 @@ impl SttError {
 
 pub(super) fn classify_status(status: reqwest::StatusCode) -> SttError {
     match status {
-        reqwest::StatusCode::UNAUTHORIZED | reqwest::StatusCode::FORBIDDEN => SttError::Auth,
+        reqwest::StatusCode::UNAUTHORIZED => SttError::Auth,
+        // 403 = valid key lacking scope or model access, not a bad key.
+        reqwest::StatusCode::FORBIDDEN => SttError::ModelUnavailable,
         reqwest::StatusCode::NOT_FOUND => SttError::ModelUnavailable,
         reqwest::StatusCode::REQUEST_TIMEOUT => SttError::Timeout,
         reqwest::StatusCode::TOO_MANY_REQUESTS => SttError::RateLimited,
@@ -108,8 +113,20 @@ fn build_client(timeout: std::time::Duration) -> reqwest::Client {
     builder.build().unwrap_or_else(|_| reqwest::Client::new())
 }
 
+static SHARED_CLIENT: std::sync::LazyLock<reqwest::Client> =
+    std::sync::LazyLock::new(|| build_client(REQUEST_TIMEOUT));
+
 pub(super) fn http_client() -> reqwest::Client {
-    build_client(REQUEST_TIMEOUT)
+    SHARED_CLIENT.clone()
+}
+
+// Fire-and-forget: warm the shared pool's DNS+TCP+TLS for `origin`; result ignored.
+pub(super) async fn warm_origin(origin: &str) {
+    let _ = http_client()
+        .head(origin)
+        .timeout(std::time::Duration::from_secs(8))
+        .send()
+        .await;
 }
 
 /// The per-request deadline applied to **validation** traffic. Production uses
@@ -155,7 +172,14 @@ where
 pub(super) async fn log_http_body(resp: reqwest::Response, label: &str) -> SttError {
     let status = resp.status();
     let err = classify_status(status);
-    log::warn!("{label}: HTTP {status}; response body suppressed for authenticated request");
+    // Body holds err_msg + a request id, never the key — safe to log, needed to diagnose.
+    let body = resp.text().await.unwrap_or_default();
+    let snippet: String = body.chars().take(500).collect();
+    if snippet.trim().is_empty() {
+        log::warn!("{label}: HTTP {status} (empty response body)");
+    } else {
+        log::warn!("{label}: HTTP {status}; response body: {snippet}");
+    }
     err
 }
 
@@ -309,7 +333,7 @@ pub(super) async fn openai_compatible_transcribe(
 
 #[cfg(test)]
 mod tests {
-    use super::{get_validate, openai_compatible_transcribe, AuthScheme, SttError};
+    use super::{get_validate, openai_compatible_transcribe, warm_origin, AuthScheme, SttError};
     use std::io::Write;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::Arc;
@@ -747,5 +771,28 @@ mod tests {
             "validation took {elapsed:?}; the short deadline is not in effect"
         );
         assert_eq!(server.received_requests().await.unwrap().len(), 2);
+    }
+
+    #[tokio::test]
+    async fn warm_origin_sends_head_and_is_nonfatal_on_error() {
+        // 200: the HEAD goes out on the shared client and completes (not a no-op).
+        let server = MockServer::start().await;
+        Mock::given(method("HEAD"))
+            .respond_with(ResponseTemplate::new(200))
+            .expect(1)
+            .mount(&server)
+            .await;
+        warm_origin(&server.uri()).await;
+        assert_eq!(server.received_requests().await.unwrap().len(), 1);
+
+        // 500: fire-and-forget swallows the non-2xx; still exactly one request.
+        let server = MockServer::start().await;
+        Mock::given(method("HEAD"))
+            .respond_with(ResponseTemplate::new(500))
+            .expect(1)
+            .mount(&server)
+            .await;
+        warm_origin(&server.uri()).await;
+        assert_eq!(server.received_requests().await.unwrap().len(), 1);
     }
 }

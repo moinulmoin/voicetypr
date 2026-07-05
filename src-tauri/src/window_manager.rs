@@ -634,18 +634,28 @@ impl WindowManager {
     fn get_screen_dimensions(&self) -> (f64, f64) {
         // Try to get monitor from main window
         if let Some(main_window) = self.get_main_window() {
-            if let Ok(Some(monitor)) = main_window.current_monitor() {
+            if let Some(dims) = crate::utils::monitor::catch_monitor_panic(|| {
+                let monitor = main_window.current_monitor().ok().flatten()?;
                 let size = monitor.size();
                 let scale = monitor.scale_factor();
-                return (size.width as f64 / scale, size.height as f64 / scale);
+                Some((size.width as f64 / scale, size.height as f64 / scale))
+            })
+            .flatten()
+            {
+                return dims;
             }
         }
 
         // Fallback to primary monitor
-        if let Ok(Some(monitor)) = self.app_handle.primary_monitor() {
+        if let Some(dims) = crate::utils::monitor::catch_monitor_panic(|| {
+            let monitor = self.app_handle.primary_monitor().ok().flatten()?;
             let size = monitor.size();
             let scale = monitor.scale_factor();
-            return (size.width as f64 / scale, size.height as f64 / scale);
+            Some((size.width as f64 / scale, size.height as f64 / scale))
+        })
+        .flatten()
+        {
+            return dims;
         }
 
         // Safe default for common screen sizes

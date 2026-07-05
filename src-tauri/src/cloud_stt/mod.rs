@@ -78,6 +78,16 @@ impl CloudProvider {
             Self::Cohere => "Cohere",
         }
     }
+    /// Underlying transcription model id used by this provider (single source of truth).
+    pub fn model_name(self) -> &'static str {
+        match self {
+            Self::Soniox => soniox::MODEL,
+            Self::Openai => openai::MODEL,
+            Self::Groq => groq::MODEL,
+            Self::Deepgram => deepgram::MODEL,
+            Self::Cohere => cohere::MODEL,
+        }
+    }
 
     /// Display label for menus/history, e.g. `Soniox (Cloud)`.
     pub fn cloud_label(self) -> String {
@@ -93,6 +103,22 @@ impl CloudProvider {
             Self::Deepgram => "stt_api_key_deepgram",
             Self::Cohere => "stt_api_key_cohere",
         }
+    }
+
+    /// HTTPS origin whose connection transcription will reuse.
+    pub fn base_origin(self) -> &'static str {
+        match self {
+            Self::Soniox => "https://api.soniox.com",
+            Self::Openai => "https://api.openai.com",
+            Self::Groq => "https://api.groq.com",
+            Self::Deepgram => "https://api.deepgram.com",
+            Self::Cohere => "https://api.cohere.com",
+        }
+    }
+
+    /// Pre-warm the connection so the next transcription reuses a hot pool.
+    pub async fn warm_up(self) {
+        common::warm_origin(self.base_origin()).await;
     }
 
     /// Catalog speed hint (0-9, higher = faster).
@@ -241,5 +267,14 @@ mod tests {
             );
             assert!(seen.insert(provider.key_name()), "duplicate key name");
         }
+    }
+
+    #[test]
+    fn base_origin_covers_each_provider() {
+        assert_eq!(CloudProvider::Soniox.base_origin(), "https://api.soniox.com");
+        assert_eq!(CloudProvider::Openai.base_origin(), "https://api.openai.com");
+        assert_eq!(CloudProvider::Groq.base_origin(), "https://api.groq.com");
+        assert_eq!(CloudProvider::Deepgram.base_origin(), "https://api.deepgram.com");
+        assert_eq!(CloudProvider::Cohere.base_origin(), "https://api.cohere.com");
     }
 }

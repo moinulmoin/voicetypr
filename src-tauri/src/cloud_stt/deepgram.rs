@@ -10,9 +10,10 @@ use tauri::AppHandle;
 
 pub(super) const MODEL: &str = "nova-3";
 
+// /v1/auth/token validates any key; /v1/projects needs `project:read`, absent on default tokens.
 pub(super) async fn validate_key(key: &str) -> Result<(), String> {
     common::get_validate(
-        "https://api.deepgram.com/v1/projects",
+        "https://api.deepgram.com/v1/auth/token",
         AuthScheme::Token,
         key,
         "Deepgram",

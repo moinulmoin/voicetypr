@@ -417,6 +417,7 @@ pub struct UnifiedModelInfo {
     pub engine: String,
     pub kind: String,
     pub requires_setup: bool,
+    pub underlying_model: Option<String>,
 }
 
 #[derive(serde::Serialize)]
@@ -747,6 +748,7 @@ fn convert_whisper_model(name: String, info: ModelInfo) -> UnifiedModelInfo {
         engine: ModelEngine::Whisper.as_str().to_string(),
         kind: "local".to_string(),
         requires_setup: false,
+        underlying_model: None,
     }
 }
 
@@ -764,6 +766,7 @@ fn convert_parakeet_model(status: ParakeetModelStatus) -> UnifiedModelInfo {
         engine: ModelEngine::Parakeet.as_str().to_string(),
         kind: "local".to_string(),
         requires_setup: false,
+        underlying_model: None,
     }
 }
 
@@ -793,6 +796,7 @@ fn collect_cloud_models(app: &AppHandle) -> Vec<UnifiedModelInfo> {
                 engine: provider.id().to_string(),
                 kind: "cloud".to_string(),
                 requires_setup: !has_key,
+                underlying_model: Some(provider.model_name().to_string()),
             }
         })
         .collect()
