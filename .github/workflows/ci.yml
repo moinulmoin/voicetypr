@@ -100,19 +100,8 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-${{ runner.arch }}-parakeet-swift-
 
-      - name: Cache FFmpeg sidecar
-        uses: actions/cache@v4
-        with:
-          path: sidecar/ffmpeg/dist
-          key: ${{ runner.os }}-${{ runner.arch }}-ffmpeg-${{ hashFiles('scripts/ensure-ffmpeg-sidecar.cjs') }}
-          restore-keys: |
-            ${{ runner.os }}-${{ runner.arch }}-ffmpeg-
-
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
-
-      - name: Ensure FFmpeg sidecar
-        run: pnpm run sidecar:ensure-ffmpeg
 
       - name: Build frontend
         run: pnpm build
@@ -176,14 +165,6 @@ jobs:
         with:
           workspaces: src-tauri
 
-      - name: Cache FFmpeg sidecar
-        uses: actions/cache@v4
-        with:
-          path: sidecar/ffmpeg/dist
-          key: ${{ runner.os }}-${{ runner.arch }}-ffmpeg-${{ hashFiles('scripts/ensure-ffmpeg-sidecar.cjs') }}
-          restore-keys: |
-            ${{ runner.os }}-${{ runner.arch }}-ffmpeg-
-
       - name: Install Vulkan SDK
         uses: jakoch/install-vulkan-sdk-action@v1
         with:
@@ -193,9 +174,6 @@ jobs:
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
-
-      - name: Ensure FFmpeg sidecar
-        run: pnpm run sidecar:ensure-ffmpeg
 
       - name: Build Whisper Vulkan sidecar
         shell: pwsh

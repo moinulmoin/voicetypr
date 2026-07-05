@@ -1,4 +1,3 @@
-pub mod converter;
 pub mod decode;
 pub mod device_watcher;
 pub mod level_meter;
@@ -9,8 +8,6 @@ pub mod resampler;
 pub mod silence_detector;
 pub mod stream_tap;
 
-#[cfg(test)]
-mod converter_tests;
 #[cfg(test)]
 mod decode_tests;
 #[cfg(test)]

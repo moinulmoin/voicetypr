@@ -69,43 +69,6 @@ fn main() {
         println!("cargo:rerun-if-changed=../sidecar/parakeet-swift/Package.swift");
         println!("cargo:rerun-if-changed=../sidecar/parakeet-swift/Package.resolved");
         println!("cargo:rerun-if-changed=../sidecar/parakeet-swift/build.sh");
-
-        // Verify ffmpeg/ffprobe sidecars exist for macOS (aarch64)
-        let ffmpeg_dir = std::path::Path::new("../sidecar/ffmpeg/dist");
-        let ffmpeg = ffmpeg_dir.join("ffmpeg");
-        let ffprobe = ffmpeg_dir.join("ffprobe");
-        if !ffmpeg.exists() {
-            panic!(
-                "FFmpeg sidecar missing: {}. Place the macOS aarch64 binary at this path.",
-                ffmpeg.display()
-            );
-        }
-        if !ffprobe.exists() {
-            panic!(
-                "FFprobe sidecar missing: {}. Place the macOS aarch64 binary at this path.",
-                ffprobe.display()
-            );
-        }
-    }
-
-    // On Windows, verify ffmpeg sidecars exist
-    #[cfg(target_os = "windows")]
-    {
-        let ffmpeg_dir = std::path::Path::new("../sidecar/ffmpeg/dist");
-        let ffmpeg = ffmpeg_dir.join("ffmpeg.exe");
-        let ffprobe = ffmpeg_dir.join("ffprobe.exe");
-        if !ffmpeg.exists() {
-            panic!(
-                "FFmpeg sidecar missing: {}. Place the Windows x64 binary at this path.",
-                ffmpeg.display()
-            );
-        }
-        if !ffprobe.exists() {
-            panic!(
-                "FFprobe sidecar missing: {}. Place the Windows x64 binary at this path.",
-                ffprobe.display()
-            );
-        }
     }
 
     if std::env::var("VOICETYPR_REQUIRE_VULKAN_SIDECAR").as_deref() == Ok("1") {

@@ -343,7 +343,7 @@ async fn run_with_policy(
     // need a 16 kHz mono WAV; cloud/remote take the input path as-is.
     let prepared = match active {
         ActiveEngineSelection::Whisper { .. } | ActiveEngineSelection::Parakeet { .. } => {
-            Some(prepare_normalized_input(app, input_path, source).await?)
+            Some(prepare_normalized_input(input_path, source).await?)
         }
         ActiveEngineSelection::Cloud { .. } | ActiveEngineSelection::Remote { .. } => None,
     };
@@ -443,10 +443,9 @@ impl PreparedInput {
     }
 }
 
-/// Prepare a 16 kHz mono WAV for a local engine, skipping ffmpeg when the input
-/// already conforms (e.g. the desktop pre-normalizes before dispatch).
+/// Prepare a 16 kHz mono WAV for a local engine, skipping the (CPU-bound) decode
+/// step when the input already conforms (e.g. the desktop pre-normalizes).
 async fn prepare_normalized_input(
-    app: &AppHandle,
     input_path: &Path,
     source: TranscriptionSource,
 ) -> Result<PreparedInput, TranscriptionError> {
@@ -454,7 +453,7 @@ async fn prepare_normalized_input(
         return Ok(PreparedInput::AlreadyNormalized(input_path.to_path_buf()));
     }
     let out = NamedTempFile::new().map_err(|e| stage_error(source, "temp create", e))?;
-    crate::ffmpeg::normalize_streaming(app, input_path, out.path())
+    crate::audio::decode::normalize_to_wav_async(input_path.to_path_buf(), out.path().to_path_buf())
         .await
         .map_err(|e| from_local_engine_string(&e, source))?;
     Ok(PreparedInput::Owned(out))

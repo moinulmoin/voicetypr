@@ -1,13 +1,10 @@
 //! Pure-Rust audio normalization to the canonical 16 kHz / mono / signed-16-bit
 //! PCM WAV consumed by Whisper, Parakeet, and the cloud transcription path.
 //!
-//! Mirrors ffmpeg -ac 1 -ar 16000 -sample_fmt s16 without spawning a process.
-//! Phase 1 handles every container/codec Symphonia supports; Phase 2 adds Opus
-//! via libopus (audiopus), since Symphonia 0.5's `all` feature set does not
-//! expose its native Opus decoder. This module is additive: it does NOT touch
-//! the existing ffmpeg converter and is only exercised by its own tests.
-
-#![allow(dead_code)]
+//! All decoding is in-process: every container/codec Symphonia supports is
+//! handled directly, and Opus is decoded via libopus (audiopus) since
+//! Symphonia 0.5's `all` feature set does not expose its native Opus decoder.
+//! No external binary is spawned.
 
 use std::collections::VecDeque;
 use std::panic::{catch_unwind, AssertUnwindSafe};
@@ -299,7 +296,8 @@ fn stream_opus(
     }
 
     // Pre-skip (drop from front) and end-trim (drop from back) so sample counts
-    // match ffmpeg. Pre-skip lives in OpusHead bytes 10-11 for Opus-in-MKV/WebM.
+    // match the Opus encoder's intent. Pre-skip lives in OpusHead bytes 10-11
+    // for Opus-in-MKV/WebM.
     let pre_skip: usize = codec_params
         .delay
         .map(|d| d as usize)
@@ -454,7 +452,7 @@ fn collect_planar(decoded: &AudioBufferRef, planes: &mut [Vec<f32>]) {
     }
 }
 
-/// Layout-aware downmix to mono, matching ffmpeg -ac 1 semantics: LFE is
+/// Layout-aware downmix to mono, matching standard -ac 1 downmix semantics: LFE is
 /// dropped; remaining channels are mixed with conventional coefficients (front
 /// L/R at unity, centre/surround at ~-3 dB / 0.707) and normalized by the sum of
 /// used weights. For unrecognized layouts, falls back to an equal-weight average
@@ -611,4 +609,16 @@ impl Drop for TempWavGuard {
             let _ = std::fs::remove_file(&self.path);
         }
     }
+}
+
+/// Async wrapper: runs the CPU-bound normalize on a blocking thread so it never
+/// stalls the tokio runtime. Same `Result<(), String>` shape as the old
+/// external-binary normalize, so callers just swap the call and drop the `app` arg.
+pub async fn normalize_to_wav_async(
+    input: std::path::PathBuf,
+    output: std::path::PathBuf,
+) -> Result<(), String> {
+    tokio::task::spawn_blocking(move || normalize_to_wav(&input, &output))
+        .await
+        .map_err(|e| format!("audio decode task join failed: {e}"))?
 }

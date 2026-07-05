@@ -4866,7 +4866,7 @@ pub async fn stop_recording(
         }
         _ => {
             // Normalize captured audio to Whisper contract (WAV PCM s16, mono, 16k):
-            // try in-process first (off the async runtime), fall back to ffmpeg sidecar.
+            // try in-process first (off the async runtime), fall back to the streaming decoder.
             let parent_dir = audio_path
                 .parent()
                 .map(|p| p.to_path_buf())
@@ -4888,15 +4888,15 @@ pub async fn stop_recording(
                             Err(e) => e.to_string(),
                         };
                         log::warn!(
-                            "In-process audio normalization failed; falling back to ffmpeg: {:?}",
+                            "In-process audio normalization failed; falling back to streaming decode: {:?}",
                             other_err
                         );
                         let ts = chrono::Local::now().format("%Y%m%d_%H%M%S");
                         let out_path = parent_dir.join(format!("normalized_{}.wav", ts));
                         if let Err(e) =
-                            crate::ffmpeg::normalize_streaming(&app, &audio_path, &out_path).await
+                            crate::audio::decode::normalize_to_wav_async(audio_path.to_path_buf(), out_path.to_path_buf()).await
                         {
-                            log::error!("Audio normalization (ffmpeg) failed: {}", e);
+                            log::error!("Audio normalization (decode) failed: {}", e);
                             update_recording_state(
                                 &app,
                                 RecordingState::Error,
@@ -6278,16 +6278,15 @@ pub async fn transcribe_audio_file_for_cli(
 }
 
 async fn normalize_upload_audio_for_cloud(
-    app: &AppHandle,
     recordings_dir: &Path,
     wav_path: &Path,
 ) -> Result<NormalizedTempFile, String> {
     log::debug!("[UPLOAD] Normalizing to WAV for cloud transcription...");
     let ts = chrono::Local::now().format("%Y%m%d_%H%M%S");
     let out_path = recordings_dir.join(format!("normalized_{}.wav", ts));
-    crate::ffmpeg::normalize_streaming(app, wav_path, &out_path)
+    crate::audio::decode::normalize_to_wav_async(wav_path.to_path_buf(), out_path.to_path_buf())
         .await
-        .map_err(|e| format!("Audio normalization (ffmpeg) failed: {}", e))?;
+        .map_err(|e| format!("Audio normalization (decode) failed: {}", e))?;
     Ok(NormalizedTempFile::new(out_path))
 }
 
@@ -6383,7 +6382,7 @@ async fn transcribe_audio_file_impl(
     std::fs::create_dir_all(&recordings_dir)
         .map_err(|e| format!("Failed to create recordings directory: {}", e))?;
 
-    // No pre-conversion needed; ffmpeg normalizer can read most formats directly.
+    // No pre-conversion needed; the normalizer can read most formats directly.
     let wav_path = audio_path.to_path_buf();
     log::info!("[UPLOAD] Input ready at {:?}", wav_path);
 
@@ -6461,9 +6460,9 @@ async fn transcribe_audio_file_impl(
         let normalized_file = NormalizedTempFile::new({
             let ts = chrono::Local::now().format("%Y%m%d_%H%M%S");
             let out_path = recordings_dir.join(format!("normalized_{}.wav", ts));
-            crate::ffmpeg::normalize_streaming(&app, &wav_path, &out_path)
+            crate::audio::decode::normalize_to_wav_async(wav_path.to_path_buf(), out_path.to_path_buf())
                 .await
-                .map_err(|e| format!("Audio normalization (ffmpeg) failed: {}", e))?;
+                .map_err(|e| format!("Audio normalization (decode) failed: {}", e))?;
             out_path
         });
         log::info!("[UPLOAD] Normalized WAV at {:?}", normalized_file.path());
@@ -6530,7 +6529,7 @@ async fn transcribe_audio_file_impl(
                 )
                 .map_err(upload_error_to_string)?;
                 let normalized_file =
-                    normalize_upload_audio_for_cloud(&app, &recordings_dir, &wav_path).await?;
+                    normalize_upload_audio_for_cloud(&recordings_dir, &wav_path).await?;
                 if let Some(diarized) = maybe_return_diarized_cloud_upload(
                     &app,
                     *provider,

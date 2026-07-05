@@ -48,12 +48,6 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
-      # Tauri's build embeds the ffmpeg sidecar + frontend dist, so the app crate
-      # needs them present to compile (same as the macOS check). No Vulkan sidecar
-      # is required for clippy/test — it's a separate binary spawned at runtime.
-      - name: Ensure FFmpeg sidecar
-        run: pnpm run sidecar:ensure-ffmpeg
-
       # tauri's Windows build.rs validates that every externalBin + resource path in
       # tauri.windows.conf.json EXISTS — even for clippy/cargo test. We check code, not
       # build an installer, so drop in empty placeholders instead of the slow/flaky

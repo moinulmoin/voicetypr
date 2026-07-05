@@ -16,7 +16,6 @@ mod audio;
 pub mod cli;
 mod cloud_stt;
 mod commands;
-mod ffmpeg;
 mod license;
 mod media;
 mod menu;

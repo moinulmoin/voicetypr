@@ -149,9 +149,6 @@ jobs:
           chmod +x dist/parakeet-sidecar-aarch64-apple-darwin
           ln -sfn parakeet-sidecar-aarch64-apple-darwin dist/parakeet-sidecar
 
-      - name: Ensure FFmpeg sidecar
-        run: pnpm run sidecar:ensure-ffmpeg
-
       - name: Build Tauri app
         env:
           APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
@@ -273,9 +270,6 @@ jobs:
           security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k actions build.keychain
           rm certificate.p12
 
-      - name: Ensure FFmpeg sidecar
-        run: pnpm run sidecar:ensure-ffmpeg
-
       - name: Build Tauri app
         env:
           APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
@@ -384,9 +378,6 @@ jobs:
           $cargoToml = Get-Content "src-tauri/Cargo.toml" -Raw
           $updated = [regex]::Replace($cargoToml, '(?m)^version = "[^"]*"', "version = `"$version`"", 1)
           Set-Content "src-tauri/Cargo.toml" $updated -Encoding utf8NoBOM
-
-      - name: Ensure FFmpeg sidecar
-        run: pnpm run sidecar:ensure-ffmpeg
 
       - name: Build whisper-vulkan sidecar (x86_64 only)
         shell: pwsh

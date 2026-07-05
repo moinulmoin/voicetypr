@@ -760,7 +760,7 @@ async fn normalize_audio_for_remote(
         "cli-remote-normalized-{}_{}.wav",
         timestamp, uuid_part
     ));
-    crate::ffmpeg::normalize_streaming(app, file, &output_path)
+    crate::audio::decode::normalize_to_wav_async(file.to_path_buf(), output_path.to_path_buf())
         .await
         .map_err(std::io::Error::other)?;
 

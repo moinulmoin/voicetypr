@@ -8,9 +8,7 @@ on:
       - 'package.json'
       - 'pnpm-lock.yaml'
       - 'scripts/build-msix-store.ps1'
-      - 'scripts/ensure-ffmpeg-sidecar.cjs'
       - 'src-tauri/**'
-      - 'sidecar/ffmpeg/**'
       - 'sidecar/whisper-vulkan/**'
       # Keep frontend changes in scope; Store package startup/updater behavior is UI-driven too.
       - 'src/**'
