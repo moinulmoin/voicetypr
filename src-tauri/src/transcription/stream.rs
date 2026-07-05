@@ -174,6 +174,9 @@ mod tests {
 
     #[test]
     fn stale_session_is_dropped() {
+        let _lifecycle_guard = crate::tests::RECORDING_LIFECYCLE_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         let stale_session = begin_recording_generation();
         let current_session = begin_recording_generation();
         let mut gate = StreamSessionGate::from_current_recording_generation();
@@ -188,6 +191,9 @@ mod tests {
 
     #[test]
     fn revision_ordering_rejects_stale_and_allows_forward_gaps() {
+        let _lifecycle_guard = crate::tests::RECORDING_LIFECYCLE_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         let session_id = begin_recording_generation();
         let mut gate = StreamSessionGate::new(session_id);
 
