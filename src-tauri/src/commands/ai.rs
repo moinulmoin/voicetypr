@@ -1329,7 +1329,9 @@ pub async fn list_provider_models(
 ) -> Result<Vec<ProviderModel>, String> {
     validate_provider_name(&provider)?;
 
-    if provider == PROVIDER_CUSTOM {
+    if provider == PROVIDER_CUSTOM || catalog::runtime_kind(&provider) == Some("agent_cli") {
+        // custom + agent-CLI providers expose no listable models (the CLI or the
+        // user selects the model) — an empty list is correct, NOT an error.
         return Ok(Vec::new());
     }
 

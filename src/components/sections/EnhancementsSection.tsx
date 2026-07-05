@@ -288,7 +288,7 @@ export function EnhancementsSection() {
       }
 
       listedProviders
-        .filter((provider) => !provider.isCustom)
+        .filter((provider) => !provider.isCustom && !isAgentCliProvider(provider.id))
         .forEach((provider) => {
           fetchModels(provider.id);
         });
