@@ -1,0 +1,58 @@
+# Phase 4C — Agent-CLI Polish Providers: implementation spec
+
+Status: **SPEC READY, 2 PREREQS OPEN** (verified vs worktree HEAD 2026-07-05). Implementer: GLM 5.2; reviewers: Codex + Claude; Claude gates. Companion to plan `030-ai-polish-personalization.md` §10 (CLI research) + §12 (4C blueprint).
+
+Goal: let the user pick a local coding CLI (`claude` / `pi` / `omp`) as the polish provider — NO API key (CLI is subscription-authenticated). VoiceTypr spawns it headless to polish dictated text. Design: WARM-PERSISTENT session + COLD-SPAWN fallback; capability-probe detection (never read cred files); hard kill-timeout → raw-transcript fallback. First cut: Claude Code + pi + omp.
+
+## ⚠️ PREREQS (resolve before building)
+1. **Branch is 9 commits behind `main`** (merge-base ec3d71f #102; main af63ab1). Missing #106 (`warm_ai_provider` connection-warming at recording start — the hook 4C-ii needs), #105 STT, #104 Windows guard, #103 hotkey, v2.0.3/2.0.4. **Merge `main` into the branch before 4C-ii** (4C-i can proceed without it). Watch for conflicts in `commands/ai.rs`/`audio.rs` (both #106 and 4A OpenRouter touched them). Founder decision: merge now (recommended) vs later.
+2. **macOS spawn feasibility (tauri-first, de-risk BEFORE building):** can a notarized/hardened-runtime VoiceTypr spawn user-`$PATH` `claude`/`pi`/`omp`? `tauri-plugin-shell` targets bundled `externalBin` sidecars, not arbitrary PATH binaries. If blocked by hardened runtime / sandbox / PATH, the whole approach changes. Validate (Tauri shell-plugin scope for allow-listed program names, or raw `tokio::process` + notarization implications) before committing.
+
+## Q1 — Runtime dispatch seam (`ai/executor.rs`)
+`execute_once` (executor.rs:150-165) is a 2-way branch (native genai vs `runtime_kind=="openai_compatible"`). Add a 3rd: `else if runtime_kind(id)==Some("agent_cli") { self.agent_cli_runtime.polish(request).await }`, + a field on `AiExecutor` (executor.rs:10-14) constructed in `with_native_endpoint_overrides` (executor.rs:50-71). Interface to mirror (openai_compatible.rs:36): `pub async fn polish(&self, req:&AiPolishRequest) -> Result<String, MappedAiProviderError>`. Return raw model string — the executor outer loop does sanitize/validate/retry (executor.rs:91-115); DO NOT duplicate. Constants in `ai/providers.rs:3-4` → add `PROVIDER_CLAUDE_CODE`/`PROVIDER_PI`/`PROVIDER_OMP`. Catalog: `runtime_kind()` (catalog.rs:132-134) returns the `runtime` field; CLI entry = `runtime:"agent_cli"`, `adapter:null`, `requires_api_key:false`, empty models (like the synthesized `custom` at catalog.rs:58-69). **Widen the 4 catalog tests that panic! on unknown runtimes: catalog.rs:170-178, 212-227, 235-245.**
+
+## Q2 — Warm-process template (`src-tauri/src/parakeet/`)
+Model the lifecycle on parakeet (but spawn differs — parakeet uses `tauri-plugin-shell` sidecar for a BUNDLED bin; CLIs are PATH bins → `app.shell().command(bin)` or `tokio::process`, see prereq 2). Key refs:
+- `ParakeetSidecar` (sidecar.rs:115-274) = one live child: `spawn()` :121-140; request/response framing `request_with_progress_and_cancel()` :150-265 (write JSON+`\n` to stdin :161-165, loop `rx.recv()` over `CommandEvent::{Stdout,Stderr,Terminated,Error}` :196-211, parse line JSON `parse_response_line` :23-39 + noisy-prefix recovery `extract_json_payload` :17-21); death = `Terminated` :199-205; `kill()` :267-273.
+- `ParakeetClient` (sidecar.rs:276-407) = warm manager: `RwLock<Option<..>>` :278, `ensure()` lazy-spawn :289-299 (keeps warm), `send()` :307-338 (Timeout→clear; Terminated→clear+ensure+retry-once = death+restart), `shutdown()` :402-406 (clean exit).
+- Deadline: `timed_request`/`dispatch_cancellable` :41-113 wrap each attempt in `tokio::time::timeout` — the kill-timeout invariant, unit-tested WITHOUT a real process (:502-598, via an injected closure). REUSE this pattern so 4C's timeout is testable.
+- Unavailable→UI: `manager.rs:471-516` emits a `parakeet-unavailable` event — model for "CLI missing/broke".
+Warm CLI framing (§10): `pi/omp --mode rpc` / `claude -p --input-format stream-json` = line-delimited JSON over stdio, identical shape. Recycle-every-N (~20) = a request counter forcing clear+respawn.
+
+## Q3 — Warm hook (needs main merged)
+`main:commands/audio.rs:3914-3939` `start_recording` spawns `warm_ai_provider(app, provider_id)` (main:ai.rs:911) when `ai_enabled`. Add a branch: when `runtime_kind==Some("agent_cli")`, call the CLI session manager's `ensure()` instead of HTTP HEAD. On THIS branch the block is absent — insertion point after `get_recording_config` (audio.rs:3941-3948) post-merge.
+
+## Q4 — "Preparing…" pill state
+State machine `usePillController.ts:7` (`idle|listening|transcribing|formatting`), events `FORMATTING_EVENTS` :9-13 (`enhancing-started/completed/failed`), labels `PillShell.tsx:14-19`. Backend emits at `audio.rs:5371/5417/5400/5438` (gated `should_emit_enhancing` :5365). Add `"preparing"` PillState + `PILL_LABELS.preparing="Preparing…"` + event pair `polish-preparing`/`polish-ready`; resolve `preparing` before `formatting` in the useMemo (:29-36). Emit source: thread `AppHandle` into the agent_cli runtime (from `executor_for_provider`, ai.rs:1050) → emit `polish-preparing` before cold spawn, `polish-ready` on first byte (fires only on actual cold spawn, not warm hits).
+
+## Q5 — Detection + selection UI
+`list_ai_providers` (ai.rs:1217 → launch_providers → catalog); guided set `GUIDED_PROVIDER_IDS/LABELS` (EnhancementsSection.tsx:84-90) + `PROVIDER_UI_METADATA` (providers.ts:41-62). Availability today = `hasApiKey` (EnhancementsSection.tsx:206) — WRONG for CLIs. Add Tauri command `probe_agent_cli(provider)->{installed,authed}` in commands/ai.rs (fixed-argv `<bin> --version` + an auth-status subcommand — NEVER read cred files), register in lib.rs:1449. Cache at setup, not per-dictation. Frontend: swap `hasApiKey`→probe for CLI ids; unavailable → "Install Claude Code" / "Run `/login` in omp" hint (not a "Get a key" link).
+
+## Q6 — `executor_for_provider` no-auth wiring
+commands/ai.rs:942-1058. No-auth precedent = PROVIDER_CUSTOM+no_auth (skips key_resolver; guard ai.rs:1038-1043 only demands a key for custom&&!no_auth). Add `else if runtime_kind(selected_provider)==Some("agent_cli")` before the fallback else (ai.rs:1017): skip keys/selected_key (:949-953) + reqwest build (:1046-1048); construct AiExecutor with the agent_cli runtime for that provider.
+
+## Q7 — Security / safe spawn
+- Dictated text via **stdin** (parakeet precedent sidecar.rs:159-165) or a discrete argv slot — NEVER a shell string, NEVER `sh -c`. `Command::args(&[...])` only.
+- Kill-timeout (§10 mandatory): reuse `timed_request`/`dispatch_cancellable`; on Timeout hard-`kill()` the child (no orphans). Lower `timeout_ms` for CLI to 8-10s (currently hardcoded 30_000 at ai.rs:1073 — branch per-runtime, don't regress HTTP).
+- Isolation argv: empty temp cwd + `--no-tools`/`--tools ""`/`--strict-mcp-config`/`--no-session-persistence`.
+- Raw-transcript fallback is FREE: any `polish()` Err → run_smart_formatting Err → process_transcription sets `ai_error` → audio.rs:5394-5415 delivers deterministic text + toast. CLI timeout degrades gracefully, no new plumbing.
+
+## Q8 — Design + spec table
+New `src-tauri/src/ai/agent_cli.rs`: `AgentCliRuntime { spec_table, warm_manager: Arc<CliSessionManager>, app: AppHandle }`. Static spec table:
+
+| provider | bin | cold argv | warm argv | parse |
+|---|---|---|---|---|
+| claude-code | claude | `--bare -p --tools "" --strict-mcp-config --no-session-persistence --system-prompt <PROMPT> --output-format json` + text on stdin | `-p --input-format stream-json` | JSON .result/.content |
+| pi | pi | `-p --no-tools --no-session -ne -ns -nc --thinking off --system-prompt <PROMPT> --mode json` + text | `--mode rpc` | JSON event |
+| omp | omp | pi argv + `--no-session --no-skills --no-rules --no-extensions --no-lsp --no-title`, empty temp cwd | `--mode rpc` | JSON event |
+
+Prompt = `request.prompt` (already built, ai/prompts.rs:220). JSON parse mirrors sidecar.rs:17-39. `CliSessionManager` (warm) modeled on `ParakeetClient` (RwLock<Option<CliSession>> + counter; ensure/polish/clear+respawn-once/recycle-N/shutdown), registered as Tauri managed `State` so warm-hook + executor share one. Extract the dispatch closure (like dispatch_cancellable) so lifecycle is unit-testable without a real process. Cold fallback: `tokio::process::Command` one-shot + `tokio::time::timeout(8-10s)` → `start_kill()` on elapse. Catalog: add claude-code/pi/omp to overlay.json (`runtime:"agent_cli"`) + regenerate, OR synthesize in parse_catalog like custom.
+
+## Sub-slots
+- **4C-i (no main-merge needed): cold-spawn + Claude Code end-to-end + detection.** providers.rs consts; catalog entry + test widening; agent_cli.rs (spec table + COLD only + kill-timeout); executor dispatch branch + field; executor_for_provider no-auth branch; probe_agent_cli + registration; frontend guided card + probe for claude-code; per-runtime timeout_ms. Tests: argv fixed (no interpolation); cold timeout→Err(Timeout)→deterministic fallback (mock sleeping bin); JSON parse incl noisy prefix; execute_once routes agent_cli; catalog runtime_kind/is_native. Integration: real `claude --bare -p` round-trip (ignored in CI). Frontend: probe mock → available/unavailable.
+- **4C-ii (needs main merged): warm-session manager + pi/omp + Preparing pill.** Merge main → CliSessionManager (State) + ensure-at-recording-start branch in warm hook; pi+omp specs; polish-preparing/ready events + preparing PillState/label; omp separate-`/login` copy. Tests: extracted dispatch closure (first+retry-once, deadline-bounded, no real process); recycle-after-N respawn; shutdown kills child; warm round-trip; kill mid-session→respawn; pill preparing→formatting; app-exit no leak.
+
+## Open risks
+1. Branch behind main (prereq 1). 2. macOS spawn feasibility (prereq 2 — validate first). 3. AppHandle in runtime for Preparing emit slightly breaks "runtime=pure transform" — keep it optional so genai/openai_compatible stay handle-free. 4. Flag drift (§10: pin versions; probe validates JSON schema with one live call at setup, not just --version). 5. Catalog test widening (4 panic! tests). 6. timeout_ms hardcoded 30s → per-runtime. 7. Token cost / subscription 5-hr window drain → "shares your subscription limits" copy + per-session budget (copy/UX owed).
+
+Gate: `pnpm typecheck && pnpm lint && pnpm test && (cd src-tauri && cargo test && cargo clippy --all-targets -- -D warnings)`.
