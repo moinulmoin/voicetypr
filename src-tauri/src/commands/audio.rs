@@ -2551,8 +2551,6 @@ mod tests {
         );
     }
 
-    static POST_TRANSCRIPTION_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
-
     fn unique_side_effect_path(label: &str) -> std::path::PathBuf {
         static COUNTER: AtomicU64 = AtomicU64::new(0);
         let n = COUNTER.fetch_add(1, Ordering::SeqCst);
@@ -2561,7 +2559,9 @@ mod tests {
 
     #[test]
     fn persist_if_current_skips_stale_generation_and_cancel() {
-        let _guard = POST_TRANSCRIPTION_TEST_LOCK.lock().unwrap();
+        let _lifecycle_guard = crate::tests::RECORDING_LIFECYCLE_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         let app_state = AppState::new();
         let generation = begin_recording_generation();
         let mut commits = 0;
@@ -2595,7 +2595,9 @@ mod tests {
     #[tokio::test(flavor = "current_thread")]
     #[allow(clippy::await_holding_lock)] // process-wide test serialization lock; current-thread runtime
     async fn stale_task_cannot_clear_newer_in_flight_tracker() {
-        let _guard = POST_TRANSCRIPTION_TEST_LOCK.lock().unwrap();
+        let _lifecycle_guard = crate::tests::RECORDING_LIFECYCLE_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         let stale_generation = begin_recording_generation();
         let stale_path = unique_side_effect_path("stale-audio");
         fs::write(&stale_path, b"stale audio").unwrap();
@@ -2631,7 +2633,9 @@ mod tests {
     #[tokio::test(flavor = "current_thread")]
     #[allow(clippy::await_holding_lock)] // process-wide test serialization lock; current-thread runtime
     async fn failed_history_after_late_cancel_is_skipped_at_commit_site() {
-        let _guard = POST_TRANSCRIPTION_TEST_LOCK.lock().unwrap();
+        let _lifecycle_guard = crate::tests::RECORDING_LIFECYCLE_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         let generation = begin_recording_generation();
         let app_state = Arc::new(AppState::new());
         let history_path = unique_side_effect_path("failed-history");
@@ -2667,7 +2671,9 @@ mod tests {
     #[tokio::test(flavor = "current_thread")]
     #[allow(clippy::await_holding_lock)] // process-wide test serialization lock; current-thread runtime
     async fn translation_failed_history_after_late_cancel_is_skipped_at_commit_site() {
-        let _guard = POST_TRANSCRIPTION_TEST_LOCK.lock().unwrap();
+        let _lifecycle_guard = crate::tests::RECORDING_LIFECYCLE_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         let generation = begin_recording_generation();
         let app_state = Arc::new(AppState::new());
         let history_path = unique_side_effect_path("translation-history");
@@ -2704,7 +2710,9 @@ mod tests {
     #[tokio::test(flavor = "current_thread")]
     #[allow(clippy::await_holding_lock)] // process-wide test serialization lock; current-thread runtime
     async fn cancel_between_gate_and_spawned_history_save_is_rechecked_inside_task() {
-        let _guard = POST_TRANSCRIPTION_TEST_LOCK.lock().unwrap();
+        let _lifecycle_guard = crate::tests::RECORDING_LIFECYCLE_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         let generation = begin_recording_generation();
         let app_state = Arc::new(AppState::new());
         let history_path = unique_side_effect_path("spawned-history");

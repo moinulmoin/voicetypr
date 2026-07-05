@@ -426,8 +426,10 @@ mod tests {
     }
 
     #[test]
-    #[serial_test::serial]
     fn fifo_ordering_frames_before_finalize() {
+        let _lifecycle_guard = crate::tests::RECORDING_LIFECYCLE_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         let generation = begin_recording_generation();
         let (tx, rx) = mpsc::sync_channel(STREAM_QUEUE_CAPACITY);
         let (pool_tx, _pool_rx) = mpsc::sync_channel(STREAM_RECYCLE_CAPACITY);
@@ -479,8 +481,10 @@ mod tests {
     }
 
     #[test]
-    #[serial_test::serial]
     fn cancel_drains_and_discards_without_content_summary() {
+        let _lifecycle_guard = crate::tests::RECORDING_LIFECYCLE_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         let generation = begin_recording_generation();
         let (tx, rx) = mpsc::sync_channel(STREAM_QUEUE_CAPACITY);
         let (pool_tx, _pool_rx) = mpsc::sync_channel(STREAM_RECYCLE_CAPACITY);
@@ -502,8 +506,10 @@ mod tests {
     }
 
     #[test]
-    #[serial_test::serial]
     fn pool_recycle_round_trip_and_exhaustion_drops_without_allocating() {
+        let _lifecycle_guard = crate::tests::RECORDING_LIFECYCLE_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         let generation = begin_recording_generation();
         let handle = spawn_noop_worker(generation, 4, not_cancelled(), None);
         let (rt, finalizer) = handle.into_rt();
@@ -535,8 +541,10 @@ mod tests {
     }
 
     #[test]
-    #[serial_test::serial]
     fn stale_generation_discards_frames() {
+        let _lifecycle_guard = crate::tests::RECORDING_LIFECYCLE_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         let stale_generation = begin_recording_generation();
         let _new_generation = begin_recording_generation();
         let (tx, rx) = mpsc::sync_channel(STREAM_QUEUE_CAPACITY);
@@ -559,8 +567,10 @@ mod tests {
     }
 
     #[test]
-    #[serial_test::serial]
     fn cancelled_finalize_cancels_sink_instead_of_abandoning_session() {
+        let _lifecycle_guard = crate::tests::RECORDING_LIFECYCLE_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         let generation = begin_recording_generation();
         let (tx, rx) = mpsc::sync_channel(STREAM_QUEUE_CAPACITY);
         let (pool_tx, _pool_rx) = mpsc::sync_channel(STREAM_RECYCLE_CAPACITY);
@@ -589,8 +599,10 @@ mod tests {
     }
 
     #[test]
-    #[serial_test::serial]
     fn disconnected_without_finalize_cancels_sink() {
+        let _lifecycle_guard = crate::tests::RECORDING_LIFECYCLE_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         let generation = begin_recording_generation();
         let (tx, rx) = mpsc::sync_channel(STREAM_QUEUE_CAPACITY);
         let (pool_tx, _pool_rx) = mpsc::sync_channel(STREAM_RECYCLE_CAPACITY);
@@ -617,8 +629,10 @@ mod tests {
     }
 
     #[test]
-    #[serial_test::serial]
     fn disconnected_after_finalize_flag_finalizes_sink() {
+        let _lifecycle_guard = crate::tests::RECORDING_LIFECYCLE_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         let generation = begin_recording_generation();
         let (tx, rx) = mpsc::sync_channel(STREAM_QUEUE_CAPACITY);
         let (pool_tx, _pool_rx) = mpsc::sync_channel(STREAM_RECYCLE_CAPACITY);
