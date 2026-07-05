@@ -54,6 +54,20 @@ jobs:
       - name: Ensure FFmpeg sidecar
         run: pnpm run sidecar:ensure-ffmpeg
 
+      # tauri's Windows build.rs validates that every externalBin + resource path in
+      # tauri.windows.conf.json EXISTS — even for clippy/cargo test. We check code, not
+      # build an installer, so drop in empty placeholders instead of the slow/flaky
+      # Vulkan SDK + sidecar compile + runtime-installer downloads.
+      - name: Stub Windows bundle resources (existence-only)
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path sidecar/whisper-vulkan/dist | Out-Null
+          New-Item -ItemType File -Force -Path sidecar/whisper-vulkan/dist/whisper-vulkan-sidecar-x86_64-pc-windows-msvc.exe | Out-Null
+          New-Item -ItemType Directory -Force -Path src-tauri/windows/resources | Out-Null
+          foreach ($f in @('vc_redist.x64.exe','VulkanRT-Installer.exe','voicetypr.pdb')) {
+            New-Item -ItemType File -Force -Path "src-tauri/windows/resources/$f" | Out-Null
+          }
+
       - name: Build frontend
         run: pnpm build
 
