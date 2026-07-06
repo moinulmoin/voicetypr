@@ -38,6 +38,11 @@ Verification commands used across all plans: `pnpm typecheck`, `pnpm lint`,
 | 026  | Wave 5 (F5) — actionable errors + feedback | P2 | S | 021 | DONE (code) — NEEDS-SMOKE 026-S1 |
 | 027  | Formatting & recording-pill UI/UX pass (naming, guidance, pill state legibility, app-category UI) | P2 | M | 016, 017 | TODO — captured 2026-06-19; backlog for post-2.0.0-smoke UAUX phase (notes only, not yet claimed) |
 | 028  | Transcription latency + streaming ("fast af" dictation) — investigation + phased design | P2 | XL | 015/020 smoke | TODO — drafted 2026-06-20; design/index only, not claimed. Phase 0 (insert-path plumbing tail + ffmpeg normalize) is S/LOW-risk and shippable alone; Phases 1–5 (decode-ahead, Parakeet/Whisper/cloud streaming, partial UX) graduate to 029+ |
+| 043  | Soniox WS streaming (real live preview; #14a capability routing folded in) | P1 | L | 037-042 substrate + 046-048 (all shipped) | TODO — grounded + verified 2026-07-03 (roadmap §7 correction applied); NOT implemented; live WS handshake needs owner's Soniox key (manual smoke ceiling). Deepgram WS = natural phase 2 via its own capability row; Groq/Cohere have no streaming STT; whisper can't stream (architecture); Parakeet local streaming already shipped |
+| 046  | Wave 0 correctness (too-short swallow, error misclass, hotkey overwrite, upload timeout) | P0 | M | — | DONE — `8b016ab`, merged to integrate |
+| 047  | Wave 1 dispatch surface (#18 dead bytes cmd, #21 engine layer out of audio.rs) | P1 | M | 046 | DONE — `7974cd0`, merged to integrate |
+| 048  | Wave 3a uploads through executor (#16-full) | P1 | L | 047 | DONE — `7514e26`, merged to integrate |
+| 050  | Structural refactor: god-file split + engine unification + settings hardening | P2 | XL | feat/049 merge; independent of 043 | TODO — authored 2026-07-06 from arch-roadmap remainder + 2026-07-06 deep-review; own branch `refactor/050-structure`; phases A(safe extractions)→B(engine unification)→C(settings)→D(monsters); planning only, awaiting owner greenlight |
 
 ## Code-done, awaiting batched manual smoke (`plans/SMOKE.md`)
 
