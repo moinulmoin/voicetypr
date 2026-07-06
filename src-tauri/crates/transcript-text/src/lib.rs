@@ -54,7 +54,7 @@ fn has_structural_guard(input: &str) -> bool {
 fn should_drop_space_before(ch: char) -> bool {
     matches!(
         ch,
-        '.' | ',' | '!' | '?' | ';' | ':' | ')' | ']' | '}' | '…'
+        '.' | ',' | '!' | '?' | ';' | ':' | ')' | ']' | '…'
     )
 }
 

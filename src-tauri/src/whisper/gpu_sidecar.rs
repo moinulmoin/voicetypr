@@ -316,6 +316,11 @@ impl GpuSidecarClient {
             }
             guard.take();
             self.abort_requested.store(false, Ordering::SeqCst);
+        } else {
+            log::warn!(
+                "abort_active_process: timed out acquiring process lock after 250ms; \
+                 GPU sidecar may remain resident (CPU fallback could double-load the model)"
+            );
         }
     }
 
