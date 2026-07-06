@@ -6,7 +6,7 @@ authors = ["moinulmoin"]
 edition = "2021"
 
 [workspace]
-members = [".", "crates/keytrigger"]
+members = [".", "crates/keytrigger", "crates/transcript-text", "crates/vulkan-device-select"]
 resolver = "2"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
@@ -27,6 +27,7 @@ tauri-build = { version = "2", features = [] }
 
 [dependencies]
 keytrigger = { path = "crates/keytrigger" }
+transcript-text = { path = "crates/transcript-text" }
 tauri = { version = "2", features = ["tray-icon"] }
 tauri-plugin-opener = "2"
 serde = { version = "1", features = ["derive"] }

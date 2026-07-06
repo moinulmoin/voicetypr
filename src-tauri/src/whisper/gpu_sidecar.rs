@@ -358,8 +358,9 @@ impl GpuSidecarClient {
             }
             Err(error) => {
                 log::warn!(
-                    "Whisper Vulkan sidecar warm on preload failed; CPU fallback remains available: {error}"
+                    "Whisper Vulkan sidecar warm on preload failed; unloading sidecar before CPU preload: {error}"
                 );
+                self.abort_active_process().await;
                 false
             }
         }

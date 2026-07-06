@@ -8439,6 +8439,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "transcript-text"
+version = "0.1.0"
+
+[[package]]
 name = "transpose"
 version = "0.2.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -8767,7 +8771,7 @@ dependencies = [
 
 [[package]]
 name = "voicetypr"
-version = "2.0.0"
+version = "2.0.4"
 dependencies = [
  "active-win-pos-rs",
  "aes-gcm",
@@ -8835,6 +8839,7 @@ dependencies = [
  "tokio",
  "tokio-test",
  "tokio-util",
+ "transcript-text",
  "uuid",
  "warp",
  "whisper-rs",
@@ -8862,6 +8867,10 @@ dependencies = [
  "cc",
  "libc",
 ]
+
+[[package]]
+name = "vulkan-device-select"
+version = "0.1.0"
 
 [[package]]
 name = "walkdir"

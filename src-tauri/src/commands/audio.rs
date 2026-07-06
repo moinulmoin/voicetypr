@@ -1418,7 +1418,8 @@ where
                 }
                 Err(error) => {
                     preserve_gpu_status = true;
-                    log::warn!("GPU sidecar failed, falling back to CPU: {error}");
+                    log::warn!("GPU sidecar failed, unloading sidecar before CPU fallback: {error}");
+                    gpu_client.abort_active_process().await;
                     if mode == "gpu" {
                         pill_toast(app, "GPU unavailable, using CPU", 4000);
                     }

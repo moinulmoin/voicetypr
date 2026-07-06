@@ -695,7 +695,8 @@ impl Transcriber {
             });
         }
 
-        let result = text.trim().to_string();
+        let trimmed = text.trim();
+        let result = transcript_text::normalize_transcript_spacing(trimmed).into_owned();
 
         // Log text extraction performance
         let extraction_time = text_extraction_start.elapsed().as_millis() as u64;
