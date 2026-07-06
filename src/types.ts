@@ -106,10 +106,16 @@ export interface AppSettings {
   pill_indicator_position?: PillIndicatorPosition;
   // Pill indicator offset from screen edge in pixels (10-50)
   pill_indicator_offset?: number;
+  // Custom dragged pill coordinate [x, y]; null = use pill_indicator_position.
+  // Persisted by the backend but was previously absent from this type.
+  pill_position?: [number, number] | null;
   // Pause system media during recording
   pause_media_during_recording?: boolean;
   // Network sharing settings
   sharing_port?: number;
+  // NOTE: read-managed in secure storage, NOT persisted via save_settings — the
+  // backend forces this to None on read and deletes it on save. Do not rely on
+  // setting it through updateSettings; the value is silently dropped.
   sharing_password?: string;
   // Recording persistence settings
   save_recordings?: boolean;

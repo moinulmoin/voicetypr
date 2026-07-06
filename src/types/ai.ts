@@ -79,7 +79,10 @@ export interface AISettings {
   model: string;
   hasApiKey: boolean;
   modelsByProvider: Record<string, string>;
-  enhancement_options?: EnhancementOptions;
+  // Sent by the backend (get_ai_settings) to flag a stale model pick after a
+  // provider swap; absent on TS-constructed settings. (enhancement_options is
+  // NOT part of this payload — it comes from the get_enhancement_options command.)
+  aiModelNeedsReselection?: boolean;
 }
 
 export interface AIModel {

@@ -16,7 +16,15 @@ use crate::whisper::manager::WhisperManager;
 use crate::whisper::transcriber::WhisperTranscriptionOutput;
 
 pub(crate) fn seconds_to_duration_ms(duration_seconds: Option<f32>) -> Option<u64> {
-    duration_seconds.map(|seconds| (seconds.max(0.0) * 1000.0) as u64)
+    // Guard non-finite/negative timestamps: an infinite segment time otherwise
+    // saturates the `as u64` cast to u64::MAX. Matches the stricter sidecar copy.
+    duration_seconds.and_then(|seconds| {
+        if seconds.is_finite() && seconds >= 0.0 {
+            Some((seconds * 1000.0) as u64)
+        } else {
+            None
+        }
+    })
 }
 
 pub(crate) fn transcription_watchdog_budget(audio_duration_ms: Option<u64>) -> Duration {
