@@ -120,3 +120,97 @@
 - Result-authority + billing decision documented in the plan Outcome after implementation.
 - Do not commit.
 ```
+
+---
+
+## Execution spec (RE-GROUNDED 2026-07-06 — supersedes the stale line refs above)
+
+The plan above was grounded 2026-07-03; **046/047/048/049 have all landed since**, so the
+old file:line anchors drifted. These are the verified current-tree anchors + the resolved
+engineering decisions. Branch: **`feat/043-soniox-streaming` off `integrate/perf-ux-2026-07`**
+(clean base; independent of feat/049 — streaming consumes raw i16 tap frames, not the decode
+path). Worktree: voicetypr-integration (same one; new branch, NOT a new worktree).
+
+### Verified current anchors
+- `StreamTapSink` trait: `audio/stream_tap.rs:28-31` — `send_frame(&mut self, &[i16])`,
+  `finalize(&mut self) -> Option<String>`, `cancel(&mut self)`. UNCHANGED.
+- Reference sink (COPY ITS SHAPE): `ParakeetPreviewStreamSink` `commands/audio.rs:77`
+  (struct), `impl StreamTapSink` `:96`, `emit_parakeet_stream_event` `:139`,
+  `build_parakeet_stream_sink_factory` `:157`.
+- Reference sync→async bridge (MIRROR IT): `ParakeetStreamHandle` `parakeet/sidecar.rs:40`
+  — `tokio::sync::mpsc::UnboundedSender<..Control>` + `tauri::async_runtime::spawn` (`:636`).
+- Event contract (NO schema change): `TranscriptionStreamEvent` `transcription/stream.rs:11`
+  — `Started{session_id,engine,revision}` / `Partial{..,committed,tentative}` /
+  `Final{..,text}` / `Cancelled` / `Error{..,error}`. `StreamSessionGate` + monotonic
+  `assert_committed_monotonic` in same file.
+- Capability row to flip: `EngineStreamCapabilities::SONIOX` `stream.rs:83` (fields:
+  `supports_streaming, supports_committed_prefix, supports_tentative_tail,
+  supports_endpointing, final_only`). `for_engine` map at `stream.rs:91-95`.
+- #14a gate sites (string-compare → capability dispatch): factory guard
+  `commands/audio.rs:167` (`config.current_engine != "parakeet"`); streaming enable
+  `commands/audio.rs:4002-4004` (`parakeet_streaming_enabled = config.current_engine ==
+  "parakeet"`).
+- Cloud dispatch + warm: `CloudProvider::from_id` `audio.rs:3827`; provider warm
+  `audio.rs:3838` (`provider.warm_up()`), AI warm `:3850`. Soniox `warm_up()` → warms
+  `api.soniox.com`; RT needs `stt-rt.soniox.com` added.
+- REST token join to CONTRAST (do NOT copy — RT tokens carry own spaces):
+  `cloud_stt/soniox.rs:230-241` inserts spaces between tokens. RT concatenation is verbatim.
+- Error classifier to PARALLEL: `SttError` `common.rs:15`, `classify_status` `:44-55`
+  (401→Auth, 403/404→ModelUnavailable, 408→Timeout, 429→RateLimited, 5xx→Server, else→BadResponse).
+
+### Dependency decision (resolved)
+`tokio-tungstenite` with the **rustls** connector. Rationale: `rustls`/`tokio-rustls`/
+`hyper-rustls` are ALREADY in the tree (reqwest pulls them) → reuses the existing TLS stack,
+**no second TLS backend, negligible binary growth** (we just shipped −60%; don't regress it).
+tokio-tungstenite is version-decoupled from reqwest (the tree already has reqwest 0.12 AND
+0.13). Enforce `wss://` only (mirror `common.rs` https_only rationale). Verify the added dep
+does NOT introduce a duplicate rustls major or native-tls.
+
+### ⚠️ CRITICAL trap for the #14a routing (C-ROUTE)
+`PARAKEET` capability is `FINAL_ONLY` (dormant — `stream.rs:82` comment: EOU broken upstream),
+YET the string-compare STILL wires Parakeet's streaming sink. A naive "string == parakeet" →
+`for_engine(...).supports_streaming` swap would **stop routing Parakeet to its sink and break
+the shipped Parakeet live preview**. C-ROUTE MUST reconcile this so Parakeet behavior is
+byte-identical (either keep a Parakeet arm, or route on "has a registered sink factory for
+this engine" rather than the raw capability bool). Behavior-preservation for Parakeet is a
+hard acceptance gate with an explicit test.
+
+### Split (Hybrid — default; adjust per owner's pick)
+**GLM slices (pure, unit-testable, no live socket, wired into nothing until C-ROUTE):**
+- `S-MAP` — a pure module (e.g. `cloud_stt/soniox_rt.rs`): `fn fold_tokens(resp) ->
+  {committed_append: String, tentative: String}`. committed = concat of `is_final:true`
+  token `text` VERBATIM (append-only → passes `assert_committed_monotonic`); tentative =
+  concat of this response's `is_final:false` token `text`, replaced each response. + a
+  revision counter helper. Unit tests: finals accumulate + monotonic; tentative replaced;
+  reissued non-finals don't corrupt committed; verbatim spacing (NOT the REST join).
+- `S-ERR` — `fn rt_error_to_stt(code: i64) -> SttError` paralleling `classify_status`. + tests.
+- `S-CAP` — flip `EngineStreamCapabilities::SONIOX` to
+  `{supports_streaming:true, supports_committed_prefix:true, supports_tentative_tail:true,
+  supports_endpointing:true, final_only:false}`; update the truth-table test at its
+  intentional site (`stream.rs` tests).
+- `S-WARM` — add the `stt-rt.soniox.com` warm origin alongside the REST one.
+
+**Claude slices (concurrency core — where no-compiler models fail):**
+- `C-WS` — `SonioxStreamSink` + the tokio-tungstenite task: connect `wss://stt-rt.soniox.com/
+  transcribe-websocket`; first frame = JSON config with `api_key` in BODY (NEVER logged),
+  `model:"stt-rt-v5"`, `audio_format:"pcm_s16le"` + `sample_rate` + `num_channels`,
+  `language_hints[]`, `context{}` (reuse `compile_soniox_context`),
+  `enable_endpoint_detection:true`, `enable_language_identification`; buffer frames until
+  config-ack; binary audio frames; 10s keepalive (`{"type":"keepalive"}`); finalize = empty
+  frame → drain late finals until `finished:true` or HARD ~1-2s timeout.
+- `C-BRIDGE` — sync `StreamTapSink` impl → `mpsc::UnboundedSender` → the WS task (mirror
+  `ParakeetStreamHandle`). `send_frame` NEVER blocks (must not stall the recorder mutex —
+  grounding risk #2); `finalize()` `block_on` gets a hard timeout then REST fallback.
+- `C-ROUTE` — generalize `build_parakeet_stream_sink_factory` + the `parakeet_streaming_enabled`
+  gate to capability/engine dispatch (see the CRITICAL trap above); register `SonioxStreamSink`
+  for Soniox + `live_preview`; suppress under active remote connection; rename
+  `emit_parakeet_stream_event` engine-neutral.
+- `C-AUTH` — result-authority: WS `Final` is the pasted result; REST-on-WAV runs only on WS
+  error/gap. Wired behind the mode so Parakeet stays batch-authoritative.
+
+### Verification ceiling (state honestly in the Outcome)
+Automated: build + clippy + `cargo test` (S-MAP/S-ERR/S-CAP + bridge non-block + finalize
+timeout→fallback + gate generalization + Parakeet-unchanged) + `pnpm typecheck/lint/test`.
+**The live WS handshake needs the owner's Soniox key in secure storage → MANUAL smoke only.**
+Billing: RT bills full stream duration incl. keepalive idle; WS-authoritative + REST-fallback
+avoids double-bill on the happy path but pays both on WS error. Opt-in (live_preview + Soniox).
