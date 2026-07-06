@@ -413,7 +413,7 @@ fn transcribe_with_context(
     params.set_initial_prompt(&prompt);
 
     params.set_temperature(0.0);
-    params.set_temperature_inc(0.0);
+    params.set_temperature_inc(0.2); // Match CPU: keep temperature fallback enabled
     params.set_max_initial_ts(1.0);
     params.set_max_len(0);
     params.set_length_penalty(-1.0);
