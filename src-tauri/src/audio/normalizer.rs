@@ -211,7 +211,6 @@ fn trailing_silence_windows(window_rms: &[f32]) -> usize {
         .count()
 }
 
-
 fn has_speech_like_modulation(samples: &[f32]) -> bool {
     const WINDOW_SAMPLES: usize = TARGET_RATE as usize / 50; // 20 ms at 16 kHz.
     const REQUIRED_VOICED_WINDOWS: usize = 15; // >= 300 ms of voiced energy.

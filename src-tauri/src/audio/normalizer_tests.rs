@@ -155,7 +155,6 @@ fn wav_duration_secs(path: &Path) -> f32 {
     reader.duration() as f32 / spec.sample_rate as f32
 }
 
-
 fn read_peak(path: &Path) -> f32 {
     let samples: Vec<i16> = hound::WavReader::open(path)
         .expect("open wav")
