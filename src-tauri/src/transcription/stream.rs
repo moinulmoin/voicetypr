@@ -88,7 +88,15 @@ impl EngineStreamCapabilities {
     // Dormant until upstream FluidAudio EOU produces non-empty transcripts again.
     // See plans/042-eou-streaming-live-preview.md for the 2026-07-02 evidence.
     pub const PARAKEET: Self = Self::FINAL_ONLY;
-    pub const SONIOX: Self = Self::FINAL_ONLY;
+    // Soniox realtime WebSocket (plan 043): committed prefix + tentative tail + native
+    // endpoint detection. No model download.
+    pub const SONIOX: Self = Self {
+        supports_streaming: true,
+        supports_committed_prefix: true,
+        supports_tentative_tail: true,
+        supports_endpointing: true,
+        final_only: false,
+    };
     pub const OPENAI: Self = Self::FINAL_ONLY;
     pub const GROQ: Self = Self::FINAL_ONLY;
     pub const DEEPGRAM: Self = Self::FINAL_ONLY;
@@ -328,8 +336,9 @@ mod tests {
 
     #[test]
     fn capability_shape_for_every_current_engine() {
-        // Whisper streams via decode-ahead (plan 032); every other engine is final-only
-        // today (Parakeet's EOU is dormant; Soniox/Deepgram WS are not wired yet).
+        // Whisper streams via decode-ahead (plan 032, no endpointing); Soniox via realtime
+        // WS (plan 043, with endpointing). The rest are final-only today (Parakeet's EOU is
+        // dormant; Deepgram WS not wired; OpenAI/Groq/Cohere have no streaming STT).
         assert_eq!(
             EngineStreamCapabilities::for_engine(ProviderEngine::Whisper),
             EngineStreamCapabilities {
@@ -340,10 +349,19 @@ mod tests {
                 final_only: false,
             },
         );
+        assert_eq!(
+            EngineStreamCapabilities::for_engine(ProviderEngine::Soniox),
+            EngineStreamCapabilities {
+                supports_streaming: true,
+                supports_committed_prefix: true,
+                supports_tentative_tail: true,
+                supports_endpointing: true,
+                final_only: false,
+            },
+        );
 
         let final_only_engines = [
             ProviderEngine::Parakeet,
-            ProviderEngine::Soniox,
             ProviderEngine::Openai,
             ProviderEngine::Groq,
             ProviderEngine::Deepgram,

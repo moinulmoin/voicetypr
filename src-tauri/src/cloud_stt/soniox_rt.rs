@@ -1,5 +1,3 @@
-#![allow(dead_code)] // Inert slice for plans/043 — wired in by C-WS/C-BRIDGE/C-ROUTE.
-
 //! Soniox realtime (WebSocket) STT response mapping — plan 043 (S-MAP + S-ERR).
 //!
 //! Pure, socket-free logic for the `stt-rt` streaming engine, wired into nothing

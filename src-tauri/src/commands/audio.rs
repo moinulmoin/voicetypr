@@ -438,6 +438,162 @@ fn build_whisper_stream_sink_factory(
     }))
 }
 
+/// Live-preview sink for Soniox realtime WebSocket streaming (plan 043). Mirrors the
+/// Whisper sink; `Partial`s come from the WS task's callback, this handles Final/Cancel.
+/// PREVIEW ONLY for now — the authoritative pasted text is still the REST-on-WAV result,
+/// so this double-bills until result-authority (WS-final) lands. Smoke-testable; not yet
+/// ship-ready.
+struct SonioxPreviewStreamSink {
+    app: AppHandle,
+    handle: crate::cloud_stt::soniox_ws::SonioxStreamHandle,
+    session_id: u64,
+    revision: Arc<AtomicU64>,
+    gate: Arc<Mutex<StreamSessionGate>>,
+}
+
+impl SonioxPreviewStreamSink {
+    fn next_revision(&self) -> u64 {
+        self.revision.fetch_add(1, AtomicOrdering::SeqCst) + 1
+    }
+
+    fn emit(&self, event: TranscriptionStreamEvent) {
+        emit_stream_event(&self.app, &self.gate, event);
+    }
+}
+
+impl StreamTapSink for SonioxPreviewStreamSink {
+    fn send_frame(&mut self, samples: &[i16]) {
+        if let Err(error) = self.handle.send_chunk(samples) {
+            log::warn!("Failed to enqueue Soniox stream audio chunk: {error:?}");
+        }
+    }
+
+    fn finalize(&mut self) -> Option<String> {
+        match tauri::async_runtime::block_on(self.handle.finalize()) {
+            Ok(text) => {
+                self.emit(TranscriptionStreamEvent::Final {
+                    session_id: self.session_id,
+                    revision: self.next_revision(),
+                    text: text.clone(),
+                });
+                Some(text)
+            }
+            Err(error) => {
+                // WS failed: emit Error; the executor's REST-on-WAV is the authoritative result.
+                self.emit(TranscriptionStreamEvent::Error {
+                    session_id: self.session_id,
+                    revision: self.next_revision(),
+                    error: format!("{error:?}"),
+                });
+                log::warn!("Soniox stream finalize failed: {error:?}");
+                None
+            }
+        }
+    }
+
+    fn cancel(&mut self) {
+        self.handle.cancel();
+        self.emit(TranscriptionStreamEvent::Cancelled {
+            session_id: self.session_id,
+            revision: self.next_revision(),
+        });
+    }
+}
+
+/// Build a Soniox realtime WS preview sink factory. None unless the engine is Soniox in
+/// live-preview mode with an API key in secure storage.
+fn build_soniox_stream_sink_factory(
+    app: &AppHandle,
+    config: &RecordingConfig,
+    streaming_tap_enabled: bool,
+    streaming_engine_enabled: bool,
+    live_preview_mode: bool,
+    recording_generation: u64,
+) -> Option<StreamTapSinkFactory> {
+    if !streaming_tap_enabled
+        || !streaming_engine_enabled
+        || !live_preview_mode
+        || config.current_engine != "soniox"
+    {
+        return None;
+    }
+
+    // No key -> no streaming preview (the REST path surfaces the missing-key error).
+    let api_key = crate::secure_store::secure_get(
+        app,
+        crate::cloud_stt::CloudProvider::Soniox.key_name(),
+    )
+    .ok()
+    .flatten()?;
+
+    let app = app.clone();
+    let language = {
+        let trimmed = config.speech_language.trim();
+        if trimmed.is_empty() {
+            None
+        } else {
+            Some(trimmed.to_string())
+        }
+    };
+
+    Some(Arc::new(move |sample_rate, channels| {
+        let app_for_stream = app.clone();
+        let api_key = api_key.clone();
+        let language = language.clone();
+        let gate = Arc::new(Mutex::new(StreamSessionGate::new(recording_generation)));
+        let revision = Arc::new(AtomicU64::new(0));
+
+        // Soniox biasing context (custom vocab etc.) from writing settings — best effort.
+        let context = match crate::writing::load_writing_settings(&app_for_stream) {
+            Ok(settings) => crate::writing::compile_soniox_context(&settings, language.as_deref()),
+            Err(_) => None,
+        };
+        let language_hints = language.clone().map(|lang| vec![lang]).unwrap_or_default();
+
+        let callback_app = app_for_stream.clone();
+        let callback_gate = gate.clone();
+        let callback_revision = revision.clone();
+        let on_partial = move |partial: crate::cloud_stt::soniox_rt::SonioxRtPartial| {
+            let event = TranscriptionStreamEvent::Partial {
+                session_id: recording_generation,
+                revision: callback_revision.fetch_add(1, AtomicOrdering::SeqCst) + 1,
+                committed: partial.committed,
+                tentative: partial.tentative,
+            };
+            emit_stream_event(&callback_app, &callback_gate, event);
+        };
+
+        let handle = crate::cloud_stt::soniox_ws::open(
+            crate::cloud_stt::soniox_ws::SonioxStreamConfig {
+                api_key,
+                sample_rate,
+                channels,
+                language_hints,
+                context,
+            },
+            on_partial,
+        );
+
+        emit_stream_event(
+            &app,
+            &gate,
+            TranscriptionStreamEvent::Started {
+                session_id: recording_generation,
+                engine: "soniox".to_string(),
+                revision: 0,
+            },
+        );
+
+        Some(Box::new(SonioxPreviewStreamSink {
+            app: app.clone(),
+            handle,
+            session_id: recording_generation,
+            revision,
+            gate,
+        }) as Box<dyn StreamTapSink>)
+    }))
+}
+
 /// Open a new recording generation. Called at the top of `start_recording`
 /// before `Starting` is published, so every stop/cancel and spawned
 /// transcription task within this attempt observes the same generation.
@@ -4151,7 +4307,7 @@ pub async fn start_recording(
         // dormant-FINAL_ONLY (the reconciliation trap); Whisper adds decode-ahead. The
         // streaming_* flags already encode live-preview mode from settings.
         let streaming_engine_supported =
-            matches!(config.current_engine.as_str(), "parakeet" | "whisper");
+            matches!(config.current_engine.as_str(), "parakeet" | "whisper" | "soniox");
         let streaming_tap_enabled = streaming_tap_enabled && streaming_engine_supported;
         let streaming_engine_enabled = streaming_engine_enabled && streaming_engine_supported;
         let cancellation_flag = app_state.should_cancel_recording.clone();
@@ -4167,6 +4323,14 @@ pub async fn start_recording(
                 recording_generation,
             ),
             "whisper" => build_whisper_stream_sink_factory(
+                &app,
+                &config,
+                streaming_tap_enabled,
+                streaming_engine_enabled,
+                live_preview_mode,
+                recording_generation,
+            ),
+            "soniox" => build_soniox_stream_sink_factory(
                 &app,
                 &config,
                 streaming_tap_enabled,

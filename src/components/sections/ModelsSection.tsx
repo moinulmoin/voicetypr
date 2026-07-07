@@ -179,10 +179,9 @@ export function ModelsSection({
   const whisperSpeedMode = settings?.whisper_speed_mode ?? false;
   const showSpeedModeRecommendation = currentEngine === "whisper" && whisperSpeedMode;
   const supportsLivePreview = streamCapabilities?.capabilities.supports_streaming === true;
-  // Only Parakeet's endpointing (EOU) path downloads a model to enable live preview;
-  // Whisper decode-ahead reuses the already-loaded model and enables instantly.
-  const livePreviewNeedsDownload =
-    streamCapabilities?.capabilities.supports_endpointing === true;
+  // Only Parakeet downloads a model (its EOU) to enable live preview; Whisper reuses the
+  // loaded model and Soniox is a cloud socket — both enable instantly, no download.
+  const livePreviewNeedsDownload = streamCapabilities?.active_engine === "parakeet";
 
   const isEnglishOnlyModel = useMemo(() => {
     if (!settings) return false;

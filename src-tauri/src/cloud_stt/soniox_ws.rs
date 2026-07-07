@@ -1,5 +1,3 @@
-#![allow(dead_code)] // Wired in by the factory/dispatch slice (C-ROUTE); remove then.
-
 //! Soniox realtime STT over WebSocket — plan 043 (C-WS + C-BRIDGE).
 //!
 //! A synchronous [`SonioxStreamHandle`] (used by the recorder tap on its worker
