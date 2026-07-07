@@ -76,7 +76,15 @@ impl EngineStreamCapabilities {
         final_only: true,
     };
 
-    pub const WHISPER: Self = Self::FINAL_ONLY;
+    // Local Whisper streams via sliding-window decode-ahead (plan 032): a committed
+    // prefix + tentative tail, no endpointing (no EOU). No model download required.
+    pub const WHISPER: Self = Self {
+        supports_streaming: true,
+        supports_committed_prefix: true,
+        supports_tentative_tail: true,
+        supports_endpointing: false,
+        final_only: false,
+    };
     // Dormant until upstream FluidAudio EOU produces non-empty transcripts again.
     // See plans/042-eou-streaming-live-preview.md for the 2026-07-02 evidence.
     pub const PARAKEET: Self = Self::FINAL_ONLY;
@@ -250,8 +258,20 @@ mod tests {
 
     #[test]
     fn capability_shape_for_every_current_engine() {
-        let engines = [
-            ProviderEngine::Whisper,
+        // Whisper streams via decode-ahead (plan 032); every other engine is final-only
+        // today (Parakeet's EOU is dormant; Soniox/Deepgram WS are not wired yet).
+        assert_eq!(
+            EngineStreamCapabilities::for_engine(ProviderEngine::Whisper),
+            EngineStreamCapabilities {
+                supports_streaming: true,
+                supports_committed_prefix: true,
+                supports_tentative_tail: true,
+                supports_endpointing: false,
+                final_only: false,
+            },
+        );
+
+        let final_only_engines = [
             ProviderEngine::Parakeet,
             ProviderEngine::Soniox,
             ProviderEngine::Openai,
@@ -260,17 +280,10 @@ mod tests {
             ProviderEngine::Cohere,
             ProviderEngine::Remote,
         ];
-
-        for engine in engines {
+        for engine in final_only_engines {
             assert_eq!(
                 EngineStreamCapabilities::for_engine(engine),
-                EngineStreamCapabilities {
-                    supports_streaming: false,
-                    supports_committed_prefix: false,
-                    supports_tentative_tail: false,
-                    supports_endpointing: false,
-                    final_only: true,
-                },
+                EngineStreamCapabilities::FINAL_ONLY,
                 "{engine:?}"
             );
         }

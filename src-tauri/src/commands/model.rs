@@ -162,48 +162,55 @@ pub async fn activate_live_preview(
     let active_engine = resolve_active_engine(&app).await?;
     let provider_engine = provider_engine_from_settings(&active_engine);
     let capabilities = EngineStreamCapabilities::for_engine(provider_engine);
-    if provider_engine != ProviderEngine::Parakeet || !capabilities.supports_streaming {
-        return Err("Live preview requires a local Parakeet model on macOS.".to_string());
+    if !capabilities.supports_streaming {
+        return Err(
+            "Live preview requires a streaming-capable engine (local Whisper).".to_string(),
+        );
     }
 
-    let status = parakeet_manager
-        .eou_model_status(&app, DEFAULT_EOU_CHUNK_MS)
-        .await
-        .map_err(|error| error.to_string())?;
-    if !status.downloaded {
-        let app_for_progress = app.clone();
+    // Parakeet needs its EOU model downloaded + warmed first; Whisper decode-ahead uses
+    // the already-loaded transcription model, so it enables instantly with no download.
+    if provider_engine == ProviderEngine::Parakeet {
+        let status = parakeet_manager
+            .eou_model_status(&app, DEFAULT_EOU_CHUNK_MS)
+            .await
+            .map_err(|error| error.to_string())?;
+        if !status.downloaded {
+            let app_for_progress = app.clone();
+            parakeet_manager
+                .download_eou_model(
+                    &app,
+                    DEFAULT_EOU_CHUNK_MS,
+                    move |downloaded, total, phase| {
+                        let progress = if total == 0 {
+                            0.0
+                        } else {
+                            (downloaded as f64 / total as f64) * 100.0
+                        };
+                        let _ = emit_to_all(
+                            &app_for_progress,
+                            "download-progress",
+                            json!({
+                                "model": EOU_MODEL_ID,
+                                "engine": "parakeet",
+                                "downloaded": downloaded,
+                                "total": total.max(EOU_MODEL_SIZE_BYTES),
+                                "progress": progress,
+                                "requestId": null,
+                                "phase": phase.as_deref(),
+                            }),
+                        );
+                    },
+                )
+                .await?;
+        }
+
         parakeet_manager
-            .download_eou_model(
-                &app,
-                DEFAULT_EOU_CHUNK_MS,
-                move |downloaded, total, phase| {
-                    let progress = if total == 0 {
-                        0.0
-                    } else {
-                        (downloaded as f64 / total as f64) * 100.0
-                    };
-                    let _ = emit_to_all(
-                        &app_for_progress,
-                        "download-progress",
-                        json!({
-                            "model": EOU_MODEL_ID,
-                            "engine": "parakeet",
-                            "downloaded": downloaded,
-                            "total": total.max(EOU_MODEL_SIZE_BYTES),
-                            "progress": progress,
-                            "requestId": null,
-                            "phase": phase.as_deref(),
-                        }),
-                    );
-                },
-            )
-            .await?;
+            .warmup_eou(&app, DEFAULT_EOU_CHUNK_MS)
+            .await
+            .map_err(|error| error.to_string())?;
     }
 
-    parakeet_manager
-        .warmup_eou(&app, DEFAULT_EOU_CHUNK_MS)
-        .await
-        .map_err(|error| error.to_string())?;
     persist_transcription_mode(&app, TRANSCRIPTION_MODE_LIVE_PREVIEW)?;
     get_active_stream_capabilities(app, parakeet_manager).await
 }
