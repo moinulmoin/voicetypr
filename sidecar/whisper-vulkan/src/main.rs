@@ -281,7 +281,7 @@ fn select_preferred_vulkan_device(
 
     let entry =
         unsafe { ash::Entry::load() }.map_err(|err| format!("failed to load Vulkan entry: {err}"))?;
-    let app_info = vk::ApplicationInfo::default().api_version(vk::make_api_version(1, 0, 0, 0));
+    let app_info = vk::ApplicationInfo::default().api_version(vk::make_api_version(0, 1, 0, 0));
     let create_info = vk::InstanceCreateInfo::default().application_info(&app_info);
     let instance = unsafe { entry.create_instance(&create_info, None) }
         .map_err(|err| format!("failed to create Vulkan instance for device selection: {err}"))?;

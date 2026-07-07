@@ -42,7 +42,6 @@ fn has_structural_guard(input: &str) -> bool {
         || input.contains('\r')
         || input.contains('\t')
         || input.contains('\u{a0}')
-        || input.contains("```")
         || input.contains('`')
         || input.contains(" = ")
         || input.contains("->")
