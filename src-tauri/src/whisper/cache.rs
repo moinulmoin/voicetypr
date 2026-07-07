@@ -45,6 +45,21 @@ impl TranscriberCache {
     }
 
     /// Retrieve a cached transcriber, or load and cache it if it isn't present yet.
+    /// Return an already-loaded transcriber for this model, or `None` if it is not
+    /// currently cached — WITHOUT loading it. The live-preview factory uses this so it
+    /// never blocks recorder start on a cold model load; a miss just means no preview
+    /// for this recording (best effort). Same cache key as `get_or_create`.
+    pub fn get_loaded(&mut self, model_path: &Path, speed_mode: bool) -> Option<Arc<Transcriber>> {
+        let path = model_path.to_string_lossy();
+        let key = format!("{path}|fa={speed_mode}");
+        if self.map.contains_key(&key) {
+            let transcriber = self.map.get(&key).cloned();
+            self.update_lru(&key);
+            return transcriber;
+        }
+        None
+    }
+
     pub fn get_or_create(
         &mut self,
         model_path: &Path,

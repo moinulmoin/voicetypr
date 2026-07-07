@@ -114,12 +114,17 @@ pub enum Admit {
     Accept,
     StaleSession,
     StaleRevision,
+    /// A terminal `Final`/`Cancelled` was already admitted; nothing may follow.
+    /// Closes the residual race where a preview decode still in flight at stop emits
+    /// a late same-session `Partial` after the pill has shown its final state.
+    Closed,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StreamSessionGate {
     active_session_id: u64,
     last_revision: Option<u64>,
+    terminal: bool,
 }
 
 impl StreamSessionGate {
@@ -127,6 +132,7 @@ impl StreamSessionGate {
         Self {
             active_session_id,
             last_revision: None,
+            terminal: false,
         }
     }
 
@@ -143,6 +149,11 @@ impl StreamSessionGate {
     }
 
     pub fn admit(&mut self, event: &TranscriptionStreamEvent) -> Admit {
+        // Once a terminal event is admitted the session is closed: reject everything
+        // after it (a late in-flight preview `Partial` must never land post-stop).
+        if self.terminal {
+            return Admit::Closed;
+        }
         if event.session_id() != self.active_session_id {
             return Admit::StaleSession;
         }
@@ -156,6 +167,12 @@ impl StreamSessionGate {
         }
 
         self.last_revision = Some(revision);
+        if matches!(
+            event,
+            TranscriptionStreamEvent::Final { .. } | TranscriptionStreamEvent::Cancelled { .. }
+        ) {
+            self.terminal = true;
+        }
         Admit::Accept
     }
 
@@ -177,6 +194,15 @@ mod tests {
             session_id,
             revision,
             text: "done".to_string(),
+        }
+    }
+
+    fn partial_event(session_id: u64, revision: u64) -> TranscriptionStreamEvent {
+        TranscriptionStreamEvent::Partial {
+            session_id,
+            revision,
+            committed: String::new(),
+            tentative: String::new(),
         }
     }
 
@@ -205,18 +231,36 @@ mod tests {
         let session_id = begin_recording_generation();
         let mut gate = StreamSessionGate::new(session_id);
 
-        assert_eq!(gate.admit(&final_event(session_id, 3)), Admit::Accept);
+        // Non-terminal Partials so the gate stays open across the revision checks.
+        assert_eq!(gate.admit(&partial_event(session_id, 3)), Admit::Accept);
         assert_eq!(gate.last_revision(), Some(3));
         assert_eq!(
-            gate.admit(&final_event(session_id, 3)),
+            gate.admit(&partial_event(session_id, 3)),
             Admit::StaleRevision
         );
         assert_eq!(
-            gate.admit(&final_event(session_id, 2)),
+            gate.admit(&partial_event(session_id, 2)),
             Admit::StaleRevision
         );
-        assert_eq!(gate.admit(&final_event(session_id, 8)), Admit::Accept);
+        assert_eq!(gate.admit(&partial_event(session_id, 8)), Admit::Accept);
         assert_eq!(gate.last_revision(), Some(8));
+    }
+
+    #[test]
+    fn terminal_event_closes_the_gate_against_late_partials() {
+        let _lifecycle_guard = crate::tests::RECORDING_LIFECYCLE_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let session_id = begin_recording_generation();
+        let mut gate = StreamSessionGate::new(session_id);
+
+        assert_eq!(gate.admit(&partial_event(session_id, 1)), Admit::Accept);
+        // A terminal Final closes the session.
+        assert_eq!(gate.admit(&final_event(session_id, 2)), Admit::Accept);
+        // Any later event — even a same-session, higher-revision Partial from a preview
+        // decode still in flight at stop — is now rejected as Closed.
+        assert_eq!(gate.admit(&partial_event(session_id, 3)), Admit::Closed);
+        assert_eq!(gate.admit(&final_event(session_id, 4)), Admit::Closed);
     }
 
     #[test]

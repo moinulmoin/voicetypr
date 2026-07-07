@@ -390,7 +390,9 @@ fn build_whisper_stream_sink_factory(
             let speed_mode = crate::commands::settings::read_whisper_speed_mode(&app_for_stream);
             let cache_state = app_for_stream.state::<AsyncMutex<crate::whisper::cache::TranscriberCache>>();
             let mut cache = cache_state.lock().await;
-            cache.get_or_create(&model_path, speed_mode).ok()
+            // Peek only — NEVER load the model on the recorder thread. A miss means the
+            // model isn't warm yet, so we skip preview this recording (best effort).
+            cache.get_loaded(&model_path, speed_mode)
         })?;
 
         let callback_app = app_for_stream.clone();
