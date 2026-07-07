@@ -167,9 +167,13 @@ impl StreamSessionGate {
         }
 
         self.last_revision = Some(revision);
+        // Final / Cancelled / Error all end the session — nothing may follow (a late
+        // in-flight preview Partial must never land after any terminal event).
         if matches!(
             event,
-            TranscriptionStreamEvent::Final { .. } | TranscriptionStreamEvent::Cancelled { .. }
+            TranscriptionStreamEvent::Final { .. }
+                | TranscriptionStreamEvent::Cancelled { .. }
+                | TranscriptionStreamEvent::Error { .. }
         ) {
             self.terminal = true;
         }
@@ -203,6 +207,14 @@ mod tests {
             revision,
             committed: String::new(),
             tentative: String::new(),
+        }
+    }
+
+    fn error_event(session_id: u64, revision: u64) -> TranscriptionStreamEvent {
+        TranscriptionStreamEvent::Error {
+            session_id,
+            revision,
+            error: "boom".to_string(),
         }
     }
 
@@ -261,6 +273,20 @@ mod tests {
         // decode still in flight at stop — is now rejected as Closed.
         assert_eq!(gate.admit(&partial_event(session_id, 3)), Admit::Closed);
         assert_eq!(gate.admit(&final_event(session_id, 4)), Admit::Closed);
+    }
+
+    #[test]
+    fn error_event_is_terminal_and_closes_the_gate() {
+        let _lifecycle_guard = crate::tests::RECORDING_LIFECYCLE_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let session_id = begin_recording_generation();
+        let mut gate = StreamSessionGate::new(session_id);
+
+        assert_eq!(gate.admit(&partial_event(session_id, 1)), Admit::Accept);
+        // An Error ends the session (executor falls back to the batch/REST result).
+        assert_eq!(gate.admit(&error_event(session_id, 2)), Admit::Accept);
+        assert_eq!(gate.admit(&partial_event(session_id, 3)), Admit::Closed);
     }
 
     #[test]
