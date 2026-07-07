@@ -179,6 +179,10 @@ export function ModelsSection({
   const whisperSpeedMode = settings?.whisper_speed_mode ?? false;
   const showSpeedModeRecommendation = currentEngine === "whisper" && whisperSpeedMode;
   const supportsLivePreview = streamCapabilities?.capabilities.supports_streaming === true;
+  // Only Parakeet's endpointing (EOU) path downloads a model to enable live preview;
+  // Whisper decode-ahead reuses the already-loaded model and enables instantly.
+  const livePreviewNeedsDownload =
+    streamCapabilities?.capabilities.supports_endpointing === true;
 
   const isEnglishOnlyModel = useMemo(() => {
     if (!settings) return false;
@@ -260,7 +264,9 @@ export function ModelsSection({
       }
 
       setIsActivatingLivePreview(true);
-      setLivePreviewProgress(streamCapabilities?.eou_model_downloaded ? 100 : 0);
+      setLivePreviewProgress(
+        livePreviewNeedsDownload && !streamCapabilities?.eou_model_downloaded ? 0 : 100,
+      );
       try {
         await invoke("activate_live_preview");
         await refreshSettings();
@@ -277,6 +283,7 @@ export function ModelsSection({
       }
     },
     [
+      livePreviewNeedsDownload,
       refreshSettings,
       refreshStreamCapabilities,
       streamCapabilities?.eou_model_downloaded,
@@ -835,7 +842,7 @@ export function ModelsSection({
         >
           <SettingRow
             title="Mode"
-            description="Regular waits for the final transcript. Live preview shows local Parakeet text while you speak."
+            description="Regular waits for the final transcript. Live preview shows text locally as you speak (final text still uses your selected model)."
             control={
               <div className="flex flex-col items-end gap-2">
                 <ToggleGroup
@@ -858,9 +865,11 @@ export function ModelsSection({
                   <div className="flex items-center gap-2 text-xs text-muted-foreground">
                     <Spinner className="size-3.5" />
                     <span>
-                      {livePreviewProgress !== null && livePreviewProgress < 100
-                        ? `Downloading EOU model ${Math.round(livePreviewProgress)}%`
-                        : "Verifying EOU model"}
+                      {livePreviewNeedsDownload
+                        ? livePreviewProgress !== null && livePreviewProgress < 100
+                          ? `Downloading EOU model ${Math.round(livePreviewProgress)}%`
+                          : "Verifying EOU model"
+                        : "Enabling live preview…"}
                     </span>
                   </div>
                 )}
