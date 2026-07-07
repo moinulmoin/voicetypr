@@ -81,18 +81,20 @@ const RESHAPING_PRESETS = new Set<EnhancementPreset>([
   "Message",
   "Code",
 ]);
-const GUIDED_PROVIDER_IDS = ["anthropic", "openai", "gemini", "openrouter", "claude-code"] as const;
+const GUIDED_PROVIDER_IDS = ["anthropic", "openai", "gemini", "openrouter", "claude-code", "pi", "omp"] as const;
 const GUIDED_PROVIDER_LABELS: Record<(typeof GUIDED_PROVIDER_IDS)[number], string> = {
   anthropic: "Anthropic",
   openai: "OpenAI",
   gemini: "Google",
   openrouter: "OpenRouter",
   "claude-code": "Claude Code",
+  pi: "pi",
+  omp: "oh-my-pi",
 };
 
 /// Agent-CLI provider ids (Phase 4C): subscription-authenticated local CLIs.
 /// Availability is probed via `probe_agent_cli`, not `hasApiKey`.
-const AGENT_CLI_PROVIDER_IDS = ["claude-code"] as const;
+const AGENT_CLI_PROVIDER_IDS = ["claude-code", "pi", "omp"] as const;
 
 const isAgentCliProvider = (providerId: string): boolean =>
   (AGENT_CLI_PROVIDER_IDS as readonly string[]).includes(providerId);

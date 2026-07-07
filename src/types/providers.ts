@@ -90,6 +90,20 @@ const PROVIDER_UI_METADATA: Record<
     apiKeyUrl: "",
     installHint: "Install the Claude Code CLI, then run `claude` to sign in.",
   },
+  pi: {
+    // pi is a local multi-provider CLI authenticated to its provider, not via
+    // an API key here. Copy is placeholder pending founder sign-off.
+    color: "text-pink-600",
+    apiKeyUrl: "",
+    installHint: "Install pi and sign in to a provider.",
+  },
+  omp: {
+    // oh-my-pi (omp) is a local multi-provider CLI authenticated to its
+    // provider, not via an API key here. Copy is placeholder pending sign-off.
+    color: "text-cyan-600",
+    apiKeyUrl: "",
+    installHint: "Install oh-my-pi (omp) and sign in.",
+  },
 };
 
 export function toProviderConfig(provider: AiProvider): AIProviderConfig {

@@ -26,10 +26,11 @@ pub enum AiProviderError {
     BadResponse,
     #[error("internal error")]
     Internal,
-    /// A local agent-CLI (e.g. Claude Code) reported a fatal outcome carrying
-    /// its OWN message (e.g. "Not logged in · Please run /login"). Surfaced
-    /// verbatim to the user so the exact fix comes from the CLI itself, and it
-    /// is never returned as polished text (parse_polish_output maps it to Err).
+    /// A local agent-CLI (e.g. Claude Code, pi, omp) reported a fatal outcome
+    /// carrying its OWN message (e.g. "Not logged in · Please run /login").
+    /// Surfaced verbatim to the user so the exact fix comes from the CLI itself,
+    /// and it is never returned as polished text (parse_claude_json /
+    /// parse_pi_jsonl map it to Err).
     #[error("{0}")]
     AgentCli(String),
 }

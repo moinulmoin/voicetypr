@@ -84,6 +84,34 @@ fn parse_catalog(json: &str) -> Catalog {
         supports_reasoning: false,
         models: Vec::new(),
     });
+    // pi: multi-provider coding CLI (pi). Same agent_cli contract as claude-code;
+    // cold-spawned with stdin input + JSONL output (see PI_SPEC).
+    catalog.providers.push(CatalogProvider {
+        id: "pi".to_string(),
+        label: "pi".to_string(),
+        status: "production".to_string(),
+        runtime: "agent_cli".to_string(),
+        adapter: None,
+        namespace: None,
+        requires_api_key: false,
+        supports_base_url: false,
+        supports_reasoning: false,
+        models: Vec::new(),
+    });
+    // omp (oh-my-pi): multi-provider coding CLI. Same agent_cli contract;
+    // cold-spawned with positional-arg input + JSONL output (see OMP_SPEC).
+    catalog.providers.push(CatalogProvider {
+        id: "omp".to_string(),
+        label: "oh-my-pi".to_string(),
+        status: "production".to_string(),
+        runtime: "agent_cli".to_string(),
+        adapter: None,
+        namespace: None,
+        requires_api_key: false,
+        supports_base_url: false,
+        supports_reasoning: false,
+        models: Vec::new(),
+    });
     catalog
 }
 
@@ -312,16 +340,21 @@ mod tests {
     }
 
     #[test]
-    fn claude_code_provider_is_agent_cli_runtime_and_not_native() {
-        // Phase 4C-i catalog invariant: claude-code is an agent_cli provider
-        // (cold-spawn), carries no genai adapter, requires no API key, and is
-        // NOT a native provider (so executor dispatch routes to AgentCliRuntime).
-        assert_eq!(runtime_kind("claude-code"), Some("agent_cli"));
-        assert!(!is_native_provider("claude-code"));
-        assert_eq!(adapter_name("claude-code"), None);
-        let provider = provider("claude-code").expect("claude-code must be in the catalog");
-        assert!(!provider.requires_api_key);
-        assert!(!provider.supports_base_url);
-        assert!(provider.models.is_empty());
+    fn agent_cli_providers_share_runtime_contract() {
+        // Phase 4C invariant: claude-code, pi, and omp are all agent_cli
+        // providers (cold-spawn), carry no genai adapter, require no API key,
+        // and are NOT native providers (so executor dispatch routes each to
+        // AgentCliRuntime). pi/omp are synthesized in parse_catalog like
+        // claude-code and custom.
+        for id in ["claude-code", "pi", "omp"] {
+            assert_eq!(runtime_kind(id), Some("agent_cli"), "{id} runtime");
+            assert!(!is_native_provider(id), "{id} not native");
+            assert_eq!(adapter_name(id), None, "{id} no adapter");
+            let provider =
+                provider(id).unwrap_or_else(|| panic!("{id} must be in the catalog"));
+            assert!(!provider.requires_api_key, "{id} no api key");
+            assert!(!provider.supports_base_url, "{id} no base url");
+            assert!(provider.models.is_empty(), "{id} empty models");
+        }
     }
 }
