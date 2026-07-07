@@ -89,7 +89,7 @@ impl ParakeetPreviewStreamSink {
     }
 
     fn emit(&self, event: TranscriptionStreamEvent) {
-        emit_parakeet_stream_event(&self.app, &self.gate, event);
+        emit_stream_event(&self.app, &self.gate, event);
     }
 }
 
@@ -136,7 +136,7 @@ impl StreamTapSink for ParakeetPreviewStreamSink {
     }
 }
 
-fn emit_parakeet_stream_event(
+fn emit_stream_event(
     app: &AppHandle,
     gate: &Arc<Mutex<StreamSessionGate>>,
     event: TranscriptionStreamEvent,
@@ -257,7 +257,7 @@ fn build_parakeet_stream_sink_factory(
                             committed: committed_text,
                             tentative: tentative_text,
                         };
-                        emit_parakeet_stream_event(&callback_app, &callback_gate, event);
+                        emit_stream_event(&callback_app, &callback_gate, event);
                     },
                 )
                 .await
@@ -265,7 +265,7 @@ fn build_parakeet_stream_sink_factory(
 
         match opened {
             Ok(handle) => {
-                emit_parakeet_stream_event(
+                emit_stream_event(
                     &app,
                     &gate,
                     TranscriptionStreamEvent::Started {
@@ -288,6 +288,151 @@ fn build_parakeet_stream_sink_factory(
                 None
             }
         }
+    }))
+}
+
+/// Live-preview sink for local Whisper via decode-ahead (plan 032). Mirrors
+/// `ParakeetPreviewStreamSink`, but the streaming `Partial` events are emitted from the
+/// decode thread's callback (Whisper isn't final-only); this sink handles Final/Cancel.
+struct WhisperPreviewStreamSink {
+    app: AppHandle,
+    handle: crate::whisper::decode_stream::WhisperDecodeStreamHandle,
+    session_id: u64,
+    revision: Arc<AtomicU64>,
+    gate: Arc<Mutex<StreamSessionGate>>,
+}
+
+impl WhisperPreviewStreamSink {
+    fn next_revision(&self) -> u64 {
+        self.revision.fetch_add(1, AtomicOrdering::SeqCst) + 1
+    }
+
+    fn emit(&self, event: TranscriptionStreamEvent) {
+        emit_stream_event(&self.app, &self.gate, event);
+    }
+}
+
+impl StreamTapSink for WhisperPreviewStreamSink {
+    fn send_frame(&mut self, samples: &[i16]) {
+        self.handle.send_chunk(samples);
+    }
+
+    fn finalize(&mut self) -> Option<String> {
+        // Preview only: the authoritative pasted text stays the batch decode at stop.
+        match self.handle.finalize() {
+            Some(text) => {
+                self.emit(TranscriptionStreamEvent::Final {
+                    session_id: self.session_id,
+                    revision: self.next_revision(),
+                    text: text.clone(),
+                });
+                Some(text)
+            }
+            None => None,
+        }
+    }
+
+    fn cancel(&mut self) {
+        self.handle.cancel();
+        self.emit(TranscriptionStreamEvent::Cancelled {
+            session_id: self.session_id,
+            revision: self.next_revision(),
+        });
+    }
+}
+
+/// Build a Whisper decode-ahead preview sink factory (mirror of the Parakeet one).
+/// Returns None unless the engine is Whisper in live-preview mode with a loaded model.
+fn build_whisper_stream_sink_factory(
+    app: &AppHandle,
+    config: &RecordingConfig,
+    streaming_tap_enabled: bool,
+    streaming_engine_enabled: bool,
+    live_preview_mode: bool,
+    recording_generation: u64,
+) -> Option<StreamTapSinkFactory> {
+    if !streaming_tap_enabled
+        || !streaming_engine_enabled
+        || !live_preview_mode
+        || config.current_engine != "whisper"
+        || config.current_model.is_empty()
+    {
+        return None;
+    }
+
+    let app = app.clone();
+    let model_name = config.current_model.clone();
+    let language = {
+        let trimmed = config.speech_language.trim();
+        if trimmed.is_empty() {
+            None
+        } else {
+            Some(trimmed.to_string())
+        }
+    };
+
+    Some(Arc::new(move |sample_rate, channels| {
+        let app_for_stream = app.clone();
+        let model_name = model_name.clone();
+        let language = language.clone();
+        let gate = Arc::new(Mutex::new(StreamSessionGate::new(recording_generation)));
+        let revision = Arc::new(AtomicU64::new(0));
+
+        // Resolve the already-loaded model from the shared cache (Arc clone — no second
+        // model load). If it isn't loaded, get_or_create loads it here; preview is best
+        // effort, so any failure just yields no sink (falls back to non-preview).
+        let transcriber = tauri::async_runtime::block_on(async {
+            let model_path = app_for_stream
+                .state::<AsyncRwLock<WhisperManager>>()
+                .read()
+                .await
+                .get_model_path(&model_name)?;
+            let speed_mode = crate::commands::settings::read_whisper_speed_mode(&app_for_stream);
+            let cache_state = app_for_stream.state::<AsyncMutex<crate::whisper::cache::TranscriberCache>>();
+            let mut cache = cache_state.lock().await;
+            cache.get_or_create(&model_path, speed_mode).ok()
+        })?;
+
+        let callback_app = app_for_stream.clone();
+        let callback_gate = gate.clone();
+        let callback_revision = revision.clone();
+        let on_partial = move |partial: crate::whisper::decode_ahead::DecodeAheadPartial| {
+            let event = TranscriptionStreamEvent::Partial {
+                session_id: recording_generation,
+                revision: callback_revision.fetch_add(1, AtomicOrdering::SeqCst) + 1,
+                committed: partial.committed,
+                tentative: partial.tentative,
+            };
+            emit_stream_event(&callback_app, &callback_gate, event);
+        };
+
+        let handle = crate::whisper::decode_stream::open(
+            crate::whisper::decode_stream::WhisperStreamConfig {
+                transcriber,
+                input_sample_rate: sample_rate,
+                channels,
+                language,
+            },
+            on_partial,
+        );
+
+        emit_stream_event(
+            &app,
+            &gate,
+            TranscriptionStreamEvent::Started {
+                session_id: recording_generation,
+                engine: "whisper".to_string(),
+                revision: 0,
+            },
+        );
+
+        Some(Box::new(WhisperPreviewStreamSink {
+            app: app.clone(),
+            handle,
+            session_id: recording_generation,
+            revision,
+            gate,
+        }) as Box<dyn StreamTapSink>)
     }))
 }
 
@@ -3999,20 +4144,36 @@ pub async fn start_recording(
 
         // Start recording and get side-channel receivers
         let recording_generation = current_recording_generation();
-        let parakeet_streaming_enabled = config.current_engine == "parakeet";
-        let streaming_tap_enabled = streaming_tap_enabled && parakeet_streaming_enabled;
-        let streaming_engine_enabled = streaming_engine_enabled && parakeet_streaming_enabled;
+        // Streaming preview is engine-dispatched (plan 032/043 #14a). Parakeet keeps its
+        // OWN factory so its behavior is byte-identical even though its capability row is
+        // dormant-FINAL_ONLY (the reconciliation trap); Whisper adds decode-ahead. The
+        // streaming_* flags already encode live-preview mode from settings.
+        let streaming_engine_supported =
+            matches!(config.current_engine.as_str(), "parakeet" | "whisper");
+        let streaming_tap_enabled = streaming_tap_enabled && streaming_engine_supported;
+        let streaming_engine_enabled = streaming_engine_enabled && streaming_engine_supported;
         let cancellation_flag = app_state.should_cancel_recording.clone();
         let stream_cancelled: Arc<dyn Fn() -> bool + Send + Sync> =
             Arc::new(move || cancellation_flag.load(AtomicOrdering::SeqCst));
-        let stream_sink_factory = build_parakeet_stream_sink_factory(
-            &app,
-            &config,
-            streaming_tap_enabled,
-            streaming_engine_enabled,
-            live_preview_mode,
-            recording_generation,
-        );
+        let stream_sink_factory = match config.current_engine.as_str() {
+            "parakeet" => build_parakeet_stream_sink_factory(
+                &app,
+                &config,
+                streaming_tap_enabled,
+                streaming_engine_enabled,
+                live_preview_mode,
+                recording_generation,
+            ),
+            "whisper" => build_whisper_stream_sink_factory(
+                &app,
+                &config,
+                streaming_tap_enabled,
+                streaming_engine_enabled,
+                live_preview_mode,
+                recording_generation,
+            ),
+            _ => None,
+        };
         let (audio_level_rx, silence_event_rx) = match recorder.start_recording(
             audio_path_str,
             selected_microphone.clone(),

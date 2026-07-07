@@ -250,6 +250,51 @@ impl Transcriber {
         })
     }
 
+    /// Decode a 16 kHz mono f32 window for LIVE PREVIEW (plan 032 decode-ahead).
+    ///
+    /// Uses fast greedy sampling (preview prioritizes latency over the batch path's
+    /// beam-search accuracy) and no cross-window context. Returns each segment's text
+    /// plus its END timestamp in centiseconds (window-relative) — exactly what
+    /// `decode_ahead::DecodeAheadBuffer::ingest` consumes. This runs on the preview
+    /// decode thread against a state created fresh each call, so it never disturbs the
+    /// authoritative batch decode at stop.
+    pub(crate) fn decode_window(
+        &self,
+        samples_16k: &[f32],
+        language: Option<&str>,
+    ) -> Result<Vec<crate::whisper::decode_ahead::DecodedSegment>, String> {
+        let mut params = FullParams::new(SamplingStrategy::Greedy { best_of: 1 });
+        params.set_no_context(true);
+        params.set_print_special(false);
+        params.set_print_progress(false);
+        params.set_print_realtime(false);
+        params.set_print_timestamps(false);
+
+        // English default everywhere; auto-detect is intentionally not offered.
+        let final_lang = match language {
+            Some("auto") | None => "en",
+            Some(lang) => super::languages::validate_language(Some(lang)),
+        };
+        params.set_language(Some(final_lang));
+
+        let mut state = self
+            .context
+            .create_state()
+            .map_err(|e| format!("preview state create failed: {e}"))?;
+        state
+            .full(params, samples_16k)
+            .map_err(|e| format!("preview decode failed: {e}"))?;
+
+        let mut segments = Vec::new();
+        for segment in state.as_iter() {
+            segments.push(crate::whisper::decode_ahead::DecodedSegment {
+                text: segment.to_string(),
+                end_cs: segment.end_timestamp(),
+            });
+        }
+        Ok(segments)
+    }
+
     #[allow(dead_code)]
     pub fn transcribe_with_translation(
         &self,
