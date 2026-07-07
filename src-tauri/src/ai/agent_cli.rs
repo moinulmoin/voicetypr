@@ -29,8 +29,9 @@
 //! Dictated text is fed via stdin — NEVER a shell string, NEVER `sh -c`. The
 //! argv is fixed in shape; only the `--system-prompt` slot receives
 //! `request.prompt`. Isolation flags (`--tools ""`, `--strict-mcp-config`,
-//! `--no-session-persistence`) prevent the CLI from touching the filesystem,
-//! running tools, or persisting session state.
+//! `--setting-sources ""`) prevent the CLI from touching the filesystem,
+//! running tools, or loading project CLAUDE.md/skills/plugins/hooks. The child
+//! also runs from an EMPTY temp cwd so claude discovers no project config.
 
 use super::contract::AiPolishRequest;
 use super::error::{AiProviderError, MappedAiProviderError};
@@ -67,20 +68,28 @@ struct AgentCliSpec {
 
 /// Claude Code spec (4C-i first cut).
 ///
-/// `claude --bare -p --tools "" --strict-mcp-config --no-session-persistence
-///  --system-prompt <PROMPT> --output-format json`, dictated text on stdin.
-/// Output is JSON; we read `.result` (string form) and fall back to
-/// `.content[].text` (the streamed-message shape).
+/// `claude -p --setting-sources "" --tools "" --strict-mcp-config --no-chrome
+///  --model haiku --system-prompt <PROMPT> --output-format json`, dictated text
+/// on stdin. `--setting-sources ""` skips CLAUDE.md/skills/plugins/hooks but
+/// KEEPS credentials (Keychain); `--no-chrome` skips the terminal UI, and the
+/// child runs from an EMPTY temp cwd so claude discovers no project config.
+/// (`--bare`, used in an earlier cut, skips credentials too and returns "Not
+/// logged in" for logged-in users — it is intentionally absent.) Output is
+/// JSON; we read `.result` (string form) and fall back to `.content[].text`
+/// (the streamed-message shape).
 const CLAUDE_CODE_SPEC: AgentCliSpec = AgentCliSpec {
     provider_id: PROVIDER_CLAUDE_CODE,
     binary: "claude",
     cold_argv_prefix: &[
-        "--bare",
         "-p",
+        "--setting-sources",
+        "",
         "--tools",
         "",
         "--strict-mcp-config",
-        "--no-session-persistence",
+        "--no-chrome",
+        "--model",
+        "haiku",
         "--system-prompt",
     ],
     cold_argv_suffix: &["--output-format", "json"],
@@ -158,6 +167,9 @@ async fn cold_spawn_and_collect(
     command.stdin(Stdio::piped());
     command.stdout(Stdio::piped());
     command.stderr(Stdio::null());
+    // Run from an EMPTY temp cwd so claude discovers no project CLAUDE.md /
+    // .claude config (which would re-add the setting sources we just disabled).
+    command.current_dir(std::env::temp_dir());
     // Dodge the tmux auto-start hook some shells fire under `-i -l`.
     command.env("ZSH_TMUX_AUTOSTART", "false");
     // The resolved binary is typically a node/bun script whose shebang
@@ -420,9 +432,11 @@ fn is_executable(path: &std::path::Path) -> bool {
 // ─── probe (detection) ──────────────────────────────────────────────────────
 
 /// Detection result for an agent-CLI provider. `installed` = the binary is on
-/// the resolved PATH and `--version` exits 0. `authed` is OPTIMISTIC in 4C-i
-/// (we never read credential files); a real auth failure surfaces at polish
-/// time and degrades to the raw transcript.
+/// the resolved PATH and `--version` exits 0. `authed` reflects a real
+/// `<bin> auth status` probe (bounded, JSON-first with a plain fallback); we
+/// NEVER read credential files. On any probe failure `authed` defaults to
+/// false so the UI surfaces a "log in" hint rather than a guaranteed-to-fail
+/// polish attempt.
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct AgentCliProbe {
     pub installed: bool,
@@ -438,9 +452,10 @@ impl AgentCliProbe {
     }
 }
 
-/// Probe an agent-CLI provider: locate its binary on the resolved PATH and run
-/// `<bin> --version`. Fixed argv — NEVER reads credential files. Cache-friendly
-/// (the frontend calls this at setup, not per-dictation).
+/// Probe an agent-CLI provider: locate its binary on the resolved PATH, run
+/// `<bin> --version`, then run `<bin> auth status` to detect a logged-in
+/// account. Fixed argv — NEVER reads credential files. Cache-friendly (the
+/// frontend calls this at setup, not per-dictation).
 pub async fn probe(provider: &str) -> AgentCliProbe {
     let Some(spec) = spec_for(provider) else {
         return AgentCliProbe::unavailable();
@@ -474,13 +489,93 @@ pub async fn probe(provider: &str) -> AgentCliProbe {
         return AgentCliProbe::unavailable();
     }
 
-    // 4C-i: optimistic authed. Claude Code's only safe non-cred-reading auth
-    // check is a live polish call (network-bound); we defer that to the real
-    // polish path, which degrades gracefully to the raw transcript on failure.
-    AgentCliProbe {
-        installed,
-        authed: true,
+    // Real auth check: run `<bin> auth status` (JSON first, plain fallback),
+    // bounded by a short timeout, in an empty temp cwd. NEVER reads credential
+    // files — only the CLI's own auth-status output. Defaults to false on any
+    // failure so the UI shows a "log in" hint instead of a failing polish.
+    let authed = check_auth_status(&binary_path).await;
+
+    AgentCliProbe { installed, authed }
+}
+
+/// Run `<binary> auth status` with a short timeout and report whether the CLI
+/// reports a logged-in account. Tries `--output-format json` first (clean parse
+/// of `loggedIn`); if that errors (unsupported flag / older CLI), retries plain
+/// `auth status`. NEVER reads credential files — only the CLI's own output.
+/// Defaults to `false` on any failure or timeout.
+async fn check_auth_status(binary_path: &str) -> bool {
+    /// Bound for the auth-status probe. A wedged CLI must not block detection.
+    const AUTH_STATUS_TIMEOUT: Duration = Duration::from_secs(3);
+
+    let path = resolved_path().await;
+
+    // `claude auth status` already emits JSON ({"loggedIn":true,...}) on its own.
+    // The `auth` subcommand does NOT accept --output-format (verified: it exits
+    // non-zero on the flag), so we call it plain.
+    match run_auth_status(binary_path, &["auth", "status"], &path, AUTH_STATUS_TIMEOUT).await {
+        Some(stdout) => parse_auth_status(&stdout),
+        None => false,
     }
+}
+
+/// Spawn `<binary> auth status <extra>` in an empty temp cwd with the resolved
+/// PATH, bounded by `timeout`. Returns the stdout bytes on a clean (exit 0)
+/// completion, or `None` on non-zero exit, spawn failure, or timeout (all map
+/// to "auth unknown → false").
+async fn run_auth_status(
+    binary_path: &str,
+    extra_argv: &[&str],
+    path: &str,
+    timeout: Duration,
+) -> Option<Vec<u8>> {
+    let mut command = Command::new(binary_path);
+    command.args(extra_argv);
+    // Empty temp cwd so claude discovers no project config (matches the polish
+    // spawn isolation).
+    command.current_dir(std::env::temp_dir());
+    command.stdin(Stdio::null());
+    command.stdout(Stdio::piped());
+    command.stderr(Stdio::null());
+    command.env("ZSH_TMUX_AUTOSTART", "false");
+    command.env("PATH", path);
+    command.kill_on_drop(true);
+    #[cfg(target_os = "windows")]
+    {
+        use std::os::windows::process::CommandExt as _;
+        const CREATE_NO_WINDOW: u32 = 0x08000000;
+        command.creation_flags(CREATE_NO_WINDOW);
+    }
+
+    match tokio::time::timeout(timeout, command.output()).await {
+        Ok(Ok(output)) if output.status.success() => Some(output.stdout),
+        _ => None,
+    }
+}
+
+/// Parse `<bin> auth status` output for a logged-in account. Returns `true`
+/// ONLY when the output is JSON with `"loggedIn": true`. Logged-out payloads
+/// (`"loggedIn": false`, `"is_error": true`, or plain "Not logged in" text) and
+/// any unparseable output all return `false` — the safe default so a broken
+/// probe never overstates auth.
+fn parse_auth_status(output: &[u8]) -> bool {
+    let Ok(text) = std::str::from_utf8(output) else {
+        return false;
+    };
+    // A notice line may precede the JSON; slice to the payload (parakeet
+    // precedent). Plain-text output ("Not logged in") has no braces → None.
+    let candidate = extract_json_payload(text).unwrap_or("");
+    let Ok(value) = serde_json::from_str::<Value>(candidate) else {
+        return false;
+    };
+    let Some(obj) = value.as_object() else {
+        return false;
+    };
+    if obj.get("is_error").and_then(|v| v.as_bool()).unwrap_or(false) {
+        return false;
+    }
+    obj.get("loggedIn")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false)
 }
 
 #[cfg(test)]
@@ -496,18 +591,25 @@ mod tests {
         assert_eq!(
             argv,
             vec![
-                "--bare",
                 "-p",
+                "--setting-sources",
+                "",
                 "--tools",
                 "",
                 "--strict-mcp-config",
-                "--no-session-persistence",
+                "--no-chrome",
+                "--model",
+                "haiku",
                 "--system-prompt",
                 "my system prompt",
                 "--output-format",
                 "json",
             ]
         );
+        // Regression guard: the `--bare` flag that disabled credentials and the
+        // dropped `--no-session-persistence` must never return to the argv.
+        assert!(!argv.contains(&"--bare".to_string()));
+        assert!(!argv.contains(&"--no-session-persistence".to_string()));
     }
 
     #[test]
@@ -653,6 +755,32 @@ mod tests {
                 assert!(path.contains(&format!("{home}/.bun/bin")));
             }
         }
+    }
+
+    #[test]
+    fn parse_auth_status_logged_in_json_is_true() {
+        let json = br#"{"loggedIn":true,"subscriptionType":"max","email":"user@example.com"}"#;
+        assert!(parse_auth_status(json));
+    }
+
+    #[test]
+    fn parse_auth_status_logged_out_markers_are_false() {
+        // loggedIn:false
+        assert!(!parse_auth_status(br#"{"loggedIn":false}"#));
+        // is_error JSON (logged-out shape)
+        assert!(!parse_auth_status(
+            br#"{"is_error":true,"content":"Not logged in"}"#
+        ));
+        // Plain-text logged-out marker
+        assert!(!parse_auth_status(b"Not logged in"));
+        // Noisy notice line before a logged-out JSON payload
+        assert!(!parse_auth_status(b"new version available\n{\"loggedIn\":false}"));
+    }
+
+    #[test]
+    fn parse_auth_status_garbage_defaults_false() {
+        assert!(!parse_auth_status(b""));
+        assert!(!parse_auth_status(b"totally not json"));
     }
 
     /// A real `claude` round-trip is gated behind `#[ignore]` — it requires the
