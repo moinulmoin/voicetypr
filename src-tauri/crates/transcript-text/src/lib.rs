@@ -2,6 +2,7 @@ use std::borrow::Cow;
 
 /// Normalize mechanical dictation spacing: collapse ASCII space runs, drop space-before-punctuation.
 /// Leaves newlines/tabs/non-breaking-spaces/non-ASCII intact. Returns [`Cow::Borrowed`] when no change needed.
+/// Expects already-trimmed input: a leading space is dropped and a trailing space run collapses to one (not zero).
 pub fn normalize_transcript_spacing(input: &str) -> Cow<'_, str> {
     if input.is_empty() || has_structural_guard(input) {
         return Cow::Borrowed(input);
