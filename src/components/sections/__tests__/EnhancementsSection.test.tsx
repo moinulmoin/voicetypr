@@ -330,6 +330,23 @@ describe('EnhancementsSection', () => {
     })
   })
 
+  it('does NOT open the API key modal for a not-ready CLI provider (guides sign-in instead)', async () => {
+    // Regression: CLI providers have no API key. Clicking a not-yet-ready CLI
+    // provider in the guided card must NOT open the key modal — it guides the
+    // user to install / sign in (toast), never the paste-a-key dialog.
+    agentCliProbeResponse = { installed: true, authed: false }
+    const user = userEvent.setup()
+    renderWithProviders()
+
+    await user.click(await screen.findByRole('button', { name: 'Claude Code' }))
+
+    await waitFor(() => {
+      expect(toast.info).toHaveBeenCalled()
+    })
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+    expect(screen.queryByLabelText('API Key')).not.toBeInTheDocument()
+  })
+
   it('auto-selects the recommended model and turns Polish on after guided key validation', async () => {
     const user = userEvent.setup()
     renderWithProviders()

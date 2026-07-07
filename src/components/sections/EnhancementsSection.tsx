@@ -675,6 +675,21 @@ export function EnhancementsSection() {
     setSelectedProvider(providerId);
 
     if (!providerApiKeys[providerId]) {
+      if (isAgentCliProvider(providerId)) {
+        // CLI providers have NO API key — never open the key modal. When not
+        // ready, guide the user to install / sign in to their CLI (the card
+        // badge + Refresh button handle re-checking).
+        const probe = agentCliStatus[providerId];
+        const label =
+          (GUIDED_PROVIDER_LABELS as Record<string, string>)[providerId] ?? providerId;
+        toast.info(
+          probe?.installed
+            ? `Sign in to ${label} (run it in your terminal), then Refresh.`
+            : `Install ${label} first, then Refresh.`,
+        );
+        setGuidedSetupProvider(null);
+        return;
+      }
       await handleSetupApiKey(providerId);
       return;
     }
