@@ -1492,7 +1492,11 @@ pub async fn test_transcription_acceleration(
         let mode =
             normalize_stored_transcription_acceleration(Some(&settings.transcription_acceleration));
         let client = app.state::<crate::whisper::gpu_sidecar::GpuSidecarClient>();
-        client.probe(&app, &model_path, &mode).await?;
+        // Unload the failed sidecar (mirror transcription/warm-preload) so its model doesn't stay resident.
+        if let Err(error) = client.probe(&app, &model_path, &mode).await {
+            client.abort_active_process().await;
+            return Err(error);
+        }
         Ok(client.status().await)
     }
 }
