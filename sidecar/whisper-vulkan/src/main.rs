@@ -253,7 +253,11 @@ fn ensure_preferred_vulkan_device_selected() {
 
     match select_preferred_vulkan_device() {
         Ok(Some((index, descriptor))) => {
-            std::env::set_var("GGML_VK_VISIBLE_DEVICES", index.to_string());
+            // SAFETY: sidecar main() is a single-threaded stdin loop with no concurrent
+            // env readers; unsafe is required under edition 2024, harmless under 2021.
+            unsafe {
+                std::env::set_var("GGML_VK_VISIBLE_DEVICES", index.to_string());
+            }
             eprintln!(
                 "Selected Vulkan device {} ({}, vendor=0x{:04X}, type={}); set GGML_VK_VISIBLE_DEVICES={}",
                 index,
