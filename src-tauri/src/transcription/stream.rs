@@ -107,7 +107,12 @@ impl EngineStreamCapabilities {
         match engine {
             ProviderEngine::Whisper => Self::WHISPER,
             ProviderEngine::Parakeet => Self::PARAKEET,
-            ProviderEngine::Soniox => Self::SONIOX,
+            // Soniox realtime streaming is DELIBERATELY NOT exposed to users yet: it is
+            // preview-only and double-bills (WS stream + the authoritative REST call) until
+            // result-authority lands. Reported as streaming only behind the dev opt-in so
+            // it can be smoke-tested without a user ever enabling a double-billing path.
+            ProviderEngine::Soniox if soniox_streaming_preview_enabled() => Self::SONIOX,
+            ProviderEngine::Soniox => Self::FINAL_ONLY,
             ProviderEngine::Openai => Self::OPENAI,
             ProviderEngine::Groq => Self::GROQ,
             ProviderEngine::Deepgram => Self::DEEPGRAM,
@@ -115,6 +120,17 @@ impl EngineStreamCapabilities {
             ProviderEngine::Remote => Self::REMOTE,
         }
     }
+}
+
+/// Whether the Soniox realtime streaming PREVIEW is opted in (dev/smoke only).
+///
+/// Soniox streaming is preview-only and double-bills (the WS stream plus the
+/// authoritative REST-on-WAV transcribe) until result-authority replaces the REST call.
+/// Until then it must not be user-reachable, so both the capability (which drives the UI
+/// toggle + `activate_live_preview`) and the recorder factory gate on this flag. Set
+/// `VOICETYPR_SONIOX_STREAMING_PREVIEW=1` to smoke-test.
+pub(crate) fn soniox_streaming_preview_enabled() -> bool {
+    std::env::var("VOICETYPR_SONIOX_STREAMING_PREVIEW").as_deref() == Ok("1")
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -336,9 +352,9 @@ mod tests {
 
     #[test]
     fn capability_shape_for_every_current_engine() {
-        // Whisper streams via decode-ahead (plan 032, no endpointing); Soniox via realtime
-        // WS (plan 043, with endpointing). The rest are final-only today (Parakeet's EOU is
-        // dormant; Deepgram WS not wired; OpenAI/Groq/Cohere have no streaming STT).
+        // Whisper streams via decode-ahead (plan 032, no endpointing). Soniox CAN stream
+        // (plan 043) but is gated off by default (preview-only/double-bills), so
+        // for_engine reports it FINAL_ONLY here. The rest are final-only today.
         assert_eq!(
             EngineStreamCapabilities::for_engine(ProviderEngine::Whisper),
             EngineStreamCapabilities {
@@ -349,18 +365,10 @@ mod tests {
                 final_only: false,
             },
         );
-        assert_eq!(
-            EngineStreamCapabilities::for_engine(ProviderEngine::Soniox),
-            EngineStreamCapabilities {
-                supports_streaming: true,
-                supports_committed_prefix: true,
-                supports_tentative_tail: true,
-                supports_endpointing: true,
-                final_only: false,
-            },
-        );
 
+        // Default (no VOICETYPR_SONIOX_STREAMING_PREVIEW) — Soniox is not user-exposed.
         let final_only_engines = [
+            ProviderEngine::Soniox,
             ProviderEngine::Parakeet,
             ProviderEngine::Openai,
             ProviderEngine::Groq,

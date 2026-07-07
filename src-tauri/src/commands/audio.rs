@@ -514,6 +514,8 @@ fn build_soniox_stream_sink_factory(
         || !streaming_engine_enabled
         || !live_preview_mode
         || config.current_engine != "soniox"
+        // Preview-only + double-bills until result-authority; dev/smoke opt-in only.
+        || !crate::transcription::stream::soniox_streaming_preview_enabled()
     {
         return None;
     }
