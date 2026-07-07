@@ -10,6 +10,7 @@
 //! returns the committed total (preview only; the authoritative text is still the batch
 //! decode at stop).
 
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc;
 use std::sync::Arc;
 use std::thread;
@@ -46,6 +47,11 @@ pub(crate) struct WhisperStreamConfig {
 pub(crate) struct WhisperDecodeStreamHandle {
     tx: mpsc::Sender<Control>,
     final_rx: mpsc::Receiver<String>,
+    /// Set synchronously by finalize/cancel/drop so the decode thread stops emitting
+    /// preview partials the instant stop is requested — even for a `whisper_full` already
+    /// in flight or chunks still queued. Prevents stale same-session partials reaching the
+    /// pill after the recording has stopped.
+    stopped: Arc<AtomicBool>,
 }
 
 impl WhisperDecodeStreamHandle {
@@ -54,8 +60,10 @@ impl WhisperDecodeStreamHandle {
         let _ = self.tx.send(Control::Chunk(samples.to_vec()));
     }
 
-    /// Request end-of-stream and block (bounded) for the final committed preview text.
+    /// Request end-of-stream and return the committed preview text. Returns immediately
+    /// (no extra decode — the authoritative full text is the batch decode at stop).
     pub(crate) fn finalize(&self) -> Option<String> {
+        self.stopped.store(true, Ordering::SeqCst);
         if self.tx.send(Control::Finalize).is_err() {
             return None;
         }
@@ -63,12 +71,14 @@ impl WhisperDecodeStreamHandle {
     }
 
     pub(crate) fn cancel(&self) {
+        self.stopped.store(true, Ordering::SeqCst);
         let _ = self.tx.send(Control::Cancel);
     }
 }
 
 impl Drop for WhisperDecodeStreamHandle {
     fn drop(&mut self) {
+        self.stopped.store(true, Ordering::SeqCst);
         let _ = self.tx.send(Control::Cancel);
     }
 }
@@ -80,8 +90,14 @@ where
 {
     let (tx, rx) = mpsc::channel();
     let (final_tx, final_rx) = mpsc::channel();
-    thread::spawn(move || run_decode_thread(config, rx, final_tx, on_partial));
-    WhisperDecodeStreamHandle { tx, final_rx }
+    let stopped = Arc::new(AtomicBool::new(false));
+    let stopped_for_thread = stopped.clone();
+    thread::spawn(move || run_decode_thread(config, rx, final_tx, on_partial, stopped_for_thread));
+    WhisperDecodeStreamHandle {
+        tx,
+        final_rx,
+        stopped,
+    }
 }
 
 /// Convert an interleaved device-rate i16 chunk to 16 kHz mono f32, feeding the
@@ -121,6 +137,7 @@ fn run_decode_thread<F>(
     rx: mpsc::Receiver<Control>,
     final_tx: mpsc::Sender<String>,
     on_partial: F,
+    stopped: Arc<AtomicBool>,
 ) where
     F: Fn(DecodeAheadPartial) + Send + 'static,
 {
@@ -145,26 +162,29 @@ fn run_decode_thread<F>(
                 if !target.is_empty() {
                     buffer.push(&target);
                 }
+                // Stop requested (finalize/cancel/drop): buffer only, never start a new
+                // decode or emit a partial once the recording is over.
+                if stopped.load(Ordering::SeqCst) {
+                    continue;
+                }
                 if buffer.should_decode(false) {
                     match config.transcriber.decode_window(buffer.window(), language) {
-                        Ok(segments) => on_partial(buffer.ingest(&segments, false)),
+                        Ok(segments) => {
+                            let partial = buffer.ingest(&segments, false);
+                            // Re-check AFTER the (slow) decode: if stop landed while this
+                            // whisper_full ran, drop the now-stale same-session partial.
+                            if !stopped.load(Ordering::SeqCst) {
+                                on_partial(partial);
+                            }
+                        }
                         Err(error) => log::warn!("Whisper preview decode failed: {error}"),
                     }
                 }
             }
             Control::Finalize => {
-                // Flush any resampler tail, then one forced eos decode of the remainder.
-                if let Some(r) = resampler.take() {
-                    if let Ok(tail) = r.finish() {
-                        buffer.push(&tail);
-                    }
-                }
-                let segments = config
-                    .transcriber
-                    .decode_window(buffer.window(), language)
-                    .unwrap_or_default();
-                let partial = buffer.ingest(&segments, true);
-                on_partial(partial);
+                // Preview Final = committed-so-far. Deliberately no eos decode here: it
+                // would delay stop teardown and duplicate the authoritative batch decode,
+                // which already covers the uncommitted tail.
                 let _ = final_tx.send(buffer.committed().to_string());
                 return;
             }
