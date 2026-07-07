@@ -256,6 +256,18 @@ fn parse_polish_output(stdout: &[u8]) -> Result<String, MappedAiProviderError> {
     let value: Value = serde_json::from_str(payload)
         .map_err(|_| MappedAiProviderError::new(AiProviderError::BadResponse))?;
 
+    // The CLI signals a fatal (non-result) outcome with `is_error: true` and/or
+    // a `subtype`/`type` of `error`. We must NOT return `result` as polished
+    // text — that would type the CLI's OWN message (e.g. "Not logged in ·
+    // Please run /login") at the user's cursor. Surface the CLI's words as Err
+    // (AgentCli) so the executor falls back to the raw transcript and the UI
+    // toasts the cause the CLI itself printed.
+    if is_cli_error_marker(&value) {
+        return Err(MappedAiProviderError::new(AiProviderError::AgentCli(
+            cli_error_message(&value),
+        )));
+    }
+
     if let Some(result) = value.get("result").and_then(Value::as_str) {
         return Ok(result.to_string());
     }
@@ -276,6 +288,34 @@ fn parse_polish_output(stdout: &[u8]) -> Result<String, MappedAiProviderError> {
         }
     }
     Err(MappedAiProviderError::new(AiProviderError::BadResponse))
+}
+
+/// True when the CLI's JSON marks a fatal (non-result) outcome. Claude emits
+/// `is_error: true`; some CLIs use a `subtype`/`type` of `error` instead.
+fn is_cli_error_marker(value: &Value) -> bool {
+    if value.get("is_error").and_then(Value::as_bool).unwrap_or(false) {
+        return true;
+    }
+    let marker = value
+        .get("subtype")
+        .or_else(|| value.get("type"))
+        .and_then(Value::as_str)
+        .unwrap_or("");
+    marker.eq_ignore_ascii_case("error")
+}
+
+/// Extract the CLI's own error text from its JSON. Prefers `result` (Claude's
+/// fatal-result message), then `error`/`message` fields, else a short generic.
+fn cli_error_message(value: &Value) -> String {
+    for field in ["result", "error", "message"] {
+        if let Some(s) = value.get(field).and_then(Value::as_str) {
+            let trimmed = s.trim();
+            if !trimmed.is_empty() {
+                return trimmed.to_string();
+            }
+        }
+    }
+    "The CLI could not complete this request.".to_string()
 }
 
 fn extract_json_payload(raw: &str) -> Option<&str> {
@@ -441,6 +481,11 @@ fn is_executable(path: &std::path::Path) -> bool {
 pub struct AgentCliProbe {
     pub installed: bool,
     pub authed: bool,
+    /// The CLI's OWN auth-status message (its login guidance, NOT a canned
+    /// string), shown on the sign-in badge when installed-but-not-authed.
+    /// Empty when nothing useful was captured so the UI falls back to its
+    /// static hint.
+    pub detail: String,
 }
 
 impl AgentCliProbe {
@@ -448,6 +493,7 @@ impl AgentCliProbe {
         Self {
             installed: false,
             authed: false,
+            detail: String::new(),
         }
     }
 }
@@ -489,32 +535,38 @@ pub async fn probe(provider: &str) -> AgentCliProbe {
         return AgentCliProbe::unavailable();
     }
 
-    // Real auth check: run `<bin> auth status` (JSON first, plain fallback),
-    // bounded by a short timeout, in an empty temp cwd. NEVER reads credential
-    // files — only the CLI's own auth-status output. Defaults to false on any
-    // failure so the UI shows a "log in" hint instead of a failing polish.
-    let authed = check_auth_status(&binary_path).await;
+    // Real auth check: run `<bin> auth status`, bounded by a short timeout, in
+    // an empty temp cwd. NEVER reads credential files — only the CLI's own
+    // auth-status output. Defaults to false on any failure so the UI shows a
+    // "log in" hint instead of a failing polish. We ALSO capture the raw stdout
+    // so the badge can show the CLI's own login guidance (its exact words,
+    // universal across claude/pi/omp) instead of a canned hint.
+    let auth_status_raw = check_auth_status(&binary_path).await;
+    let authed = parse_auth_status(auth_status_raw.as_bytes());
+    let detail = extract_auth_detail(&auth_status_raw);
 
-    AgentCliProbe { installed, authed }
+    AgentCliProbe {
+        installed,
+        authed,
+        detail,
+    }
 }
 
-/// Run `<binary> auth status` with a short timeout and report whether the CLI
-/// reports a logged-in account. Tries `--output-format json` first (clean parse
-/// of `loggedIn`); if that errors (unsupported flag / older CLI), retries plain
-/// `auth status`. NEVER reads credential files — only the CLI's own output.
-/// Defaults to `false` on any failure or timeout.
-async fn check_auth_status(binary_path: &str) -> bool {
+/// Run `<binary> auth status` with a short timeout and return the raw stdout.
+/// Empty on non-zero exit, spawn failure, or timeout (all map to "auth unknown
+/// → not authed"). The caller derives the `authed` bool and a human-readable
+/// badge line from it. `claude auth status` already emits JSON on its own; the
+/// `auth` subcommand does NOT accept `--output-format` (it exits non-zero on
+/// the flag), so we call it plain. NEVER reads credential files.
+async fn check_auth_status(binary_path: &str) -> String {
     /// Bound for the auth-status probe. A wedged CLI must not block detection.
     const AUTH_STATUS_TIMEOUT: Duration = Duration::from_secs(3);
 
     let path = resolved_path().await;
 
-    // `claude auth status` already emits JSON ({"loggedIn":true,...}) on its own.
-    // The `auth` subcommand does NOT accept --output-format (verified: it exits
-    // non-zero on the flag), so we call it plain.
     match run_auth_status(binary_path, &["auth", "status"], &path, AUTH_STATUS_TIMEOUT).await {
-        Some(stdout) => parse_auth_status(&stdout),
-        None => false,
+        Some(stdout) => String::from_utf8_lossy(&stdout).trim().to_string(),
+        None => String::new(),
     }
 }
 
@@ -576,6 +628,51 @@ fn parse_auth_status(output: &[u8]) -> bool {
     obj.get("loggedIn")
         .and_then(|v| v.as_bool())
         .unwrap_or(false)
+}
+
+/// Reduce the raw `<bin> auth status` stdout to a short, human-readable line
+/// for the sign-in badge — the CLI's OWN words, not a canned string. JSON
+/// payloads are mined for a message-like string field
+/// (`result`/`message`/`content`/`error`); plain-text output (pi/omp-style
+/// "run <bin> login") is kept verbatim. Returns empty when nothing useful is
+/// present so the badge falls back to its static hint.
+fn extract_auth_detail(raw: &str) -> String {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return String::new();
+    }
+    // JSON: pull the first non-empty message-like string field. A bare
+    // `{"loggedIn":false}` with no message yields nothing useful → "".
+    let candidate = extract_json_payload(trimmed).unwrap_or(trimmed);
+    if let Ok(value) = serde_json::from_str::<Value>(candidate) {
+        for field in ["result", "message", "error"] {
+            if let Some(s) = value.get(field).and_then(Value::as_str) {
+                let s = s.trim();
+                if !s.is_empty() {
+                    return truncate_detail(s);
+                }
+            }
+        }
+        if let Some(s) = value.get("content").and_then(Value::as_str) {
+            let s = s.trim();
+            if !s.is_empty() {
+                return truncate_detail(s);
+            }
+        }
+        return String::new();
+    }
+    // Plain text (pi/omp login guidance): keep the CLI's own line(s).
+    truncate_detail(trimmed)
+}
+
+/// Cap a badge detail line so a chatty CLI can't blow up the settings card.
+fn truncate_detail(s: &str) -> String {
+    const MAX_LEN: usize = 200;
+    if s.chars().count() <= MAX_LEN {
+        return s.to_string();
+    }
+    let truncated: String = s.chars().take(MAX_LEN).collect();
+    format!("{truncated}…")
 }
 
 #[cfg(test)]
@@ -660,6 +757,44 @@ mod tests {
         assert!(parse_polish_output(b"not json at all").is_err());
         assert!(parse_polish_output(b"{}").is_err());
         assert!(parse_polish_output(b"{\"unrelated\":\"field\"}").is_err());
+    }
+
+    #[test]
+    fn parse_polish_output_rejects_is_error_result_as_polish_text() {
+        // Latent-bug guard: an `is_error:true` `result` is the CLI's OWN message
+        // (e.g. "Not logged in · Please run /login"), NOT polished text. It must
+        // surface as Err(AgentCli) carrying that message so it is never typed at
+        // the cursor, and the executor falls back to the raw transcript.
+        let json = r#"{"type":"result","result":"Not logged in · Please run /login","is_error":true}"#.as_bytes();
+        let err = parse_polish_output(json)
+            .expect_err("an is_error result must NOT become polished text");
+        match err.error {
+            AiProviderError::AgentCli(message) => {
+                assert_eq!(message, "Not logged in · Please run /login");
+            }
+            other => panic!("expected AgentCli error, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_polish_output_rejects_subtype_error_marker() {
+        // CLIs that signal failure via `subtype`/`type` = "error" instead of
+        // `is_error` are also rejected; the message falls back to the `error`
+        // field, then `message`, then a short generic.
+        let json = br#"{"subtype":"error","error":"rate limit exceeded"}"#;
+        let err = parse_polish_output(json).expect_err("subtype=error must be rejected");
+        match err.error {
+            AiProviderError::AgentCli(message) => assert_eq!(message, "rate limit exceeded"),
+            other => panic!("expected AgentCli error, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_polish_output_keeps_success_path_for_is_error_false() {
+        // `is_error:false` (or absent) with a `result` stays on the success
+        // path — the guard must not over-trigger on normal results.
+        let json = br#"{"type":"result","result":"Hello, world.","is_error":false}"#;
+        assert_eq!(parse_polish_output(json).unwrap(), "Hello, world.");
     }
 
     #[tokio::test(start_paused = true)]
@@ -781,6 +916,42 @@ mod tests {
     fn parse_auth_status_garbage_defaults_false() {
         assert!(!parse_auth_status(b""));
         assert!(!parse_auth_status(b"totally not json"));
+    }
+
+    #[test]
+    fn extract_auth_detail_mines_json_message_field() {
+        // A logged-out CLI that prints a message-bearing JSON payload yields the
+        // CLI's own words for the badge (not a canned hint).
+        let json = r#"{"loggedIn":false,"message":"Run `claude /login` to sign in."}"#;
+        assert_eq!(extract_auth_detail(json), "Run `claude /login` to sign in.");
+        // `content` string field is also mined.
+        let json = r#"{"is_error":true,"content":"Not logged in"}"#;
+        assert_eq!(extract_auth_detail(json), "Not logged in");
+    }
+
+    #[test]
+    fn extract_auth_detail_keeps_plain_text_verbatim() {
+        // pi/omp-style CLIs print a plain login instruction — keep it as-is.
+        assert_eq!(
+            extract_auth_detail("Not logged in. Run `omp login` to continue."),
+            "Not logged in. Run `omp login` to continue."
+        );
+    }
+
+    #[test]
+    fn extract_auth_detail_returns_empty_when_nothing_useful() {
+        // Bare status JSON with no message field → "" (badge falls back to hint).
+        assert_eq!(extract_auth_detail(r#"{"loggedIn":false}"#), "");
+        assert_eq!(extract_auth_detail(""), "");
+        assert_eq!(extract_auth_detail("   "), "");
+    }
+
+    #[test]
+    fn extract_auth_detail_truncates_chatty_output() {
+        let long = "x".repeat(500);
+        let detail = extract_auth_detail(&long);
+        assert_eq!(detail.chars().count(), 201); // 200 chars + ellipsis
+        assert!(detail.ends_with('…'));
     }
 
     /// A real `claude` round-trip is gated behind `#[ignore]` — it requires the

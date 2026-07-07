@@ -1178,6 +1178,7 @@ fn ai_failure_category(error: &AiProviderError) -> &'static str {
         AiProviderError::Network => "network",
         AiProviderError::BadResponse => "bad_response",
         AiProviderError::Internal => "internal",
+        AiProviderError::AgentCli(_) => "cli_error",
     }
 }
 
@@ -1194,6 +1195,7 @@ fn ai_failure_notice(error: &AiProviderError) -> &'static str {
         AiProviderError::Network => "Couldn't reach the AI service",
         AiProviderError::BadResponse => "AI service error",
         AiProviderError::Internal => "AI formatting failed",
+        AiProviderError::AgentCli(_) => "Polish failed",
     }
 }
 

@@ -41,6 +41,18 @@ export interface AIProviderConfig extends AiProvider {
   isCustom: boolean;
 }
 
+/** Result of probing an agent-CLI provider (e.g. Claude Code): whether the
+ * local binary is installed and whether the user is signed in to it. Mirrors
+ * the `probe_agent_cli` Tauri command payload. */
+export interface AgentCliProbe {
+  installed: boolean;
+  authed: boolean;
+  /** The CLI's own auth-status message (its login guidance), shown on the
+   * sign-in badge when installed-but-not-authed. Empty when nothing useful was
+   * captured (fall back to the static hint). Mirrors the backend field. */
+  detail: string;
+}
+
 const PROVIDER_UI_METADATA: Record<
   string,
   { color: string; apiKeyUrl: string; installHint: string }

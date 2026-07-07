@@ -1,5 +1,6 @@
 use reqwest::{header::HeaderMap, StatusCode};
 use std::time::Duration;
+use std::borrow::Cow;
 
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum AiProviderError {
@@ -25,6 +26,12 @@ pub enum AiProviderError {
     BadResponse,
     #[error("internal error")]
     Internal,
+    /// A local agent-CLI (e.g. Claude Code) reported a fatal outcome carrying
+    /// its OWN message (e.g. "Not logged in · Please run /login"). Surfaced
+    /// verbatim to the user so the exact fix comes from the CLI itself, and it
+    /// is never returned as polished text (parse_polish_output maps it to Err).
+    #[error("{0}")]
+    AgentCli(String),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -42,19 +49,22 @@ impl MappedAiProviderError {
     }
 }
 
-pub fn user_facing_message(error: &AiProviderError) -> &'static str {
+pub fn user_facing_message(error: &AiProviderError) -> Cow<'static, str> {
     match error {
-        AiProviderError::MissingApiKey => "missing API key",
-        AiProviderError::InvalidApiKey => "invalid API key",
-        AiProviderError::InvalidModel => "invalid model",
-        AiProviderError::UnsupportedProvider => "unsupported provider",
-        AiProviderError::Timeout => "timed out",
-        AiProviderError::Canceled => "canceled",
-        AiProviderError::RateLimited => "rate limited",
-        AiProviderError::ServiceUnavailable => "service unavailable",
-        AiProviderError::Network => "network error",
-        AiProviderError::BadResponse => "bad response",
-        AiProviderError::Internal => "internal error",
+        AiProviderError::MissingApiKey => Cow::Borrowed("missing API key"),
+        AiProviderError::InvalidApiKey => Cow::Borrowed("invalid API key"),
+        AiProviderError::InvalidModel => Cow::Borrowed("invalid model"),
+        AiProviderError::UnsupportedProvider => Cow::Borrowed("unsupported provider"),
+        AiProviderError::Timeout => Cow::Borrowed("timed out"),
+        AiProviderError::Canceled => Cow::Borrowed("canceled"),
+        AiProviderError::RateLimited => Cow::Borrowed("rate limited"),
+        AiProviderError::ServiceUnavailable => Cow::Borrowed("service unavailable"),
+        AiProviderError::Network => Cow::Borrowed("network error"),
+        AiProviderError::BadResponse => Cow::Borrowed("bad response"),
+        AiProviderError::Internal => Cow::Borrowed("internal error"),
+        // Surface the CLI's OWN message verbatim so the user learns the exact
+        // fix from the CLI itself (claude/pi/omp each print their own guidance).
+        AiProviderError::AgentCli(message) => Cow::Owned(message.clone()),
     }
 }
 

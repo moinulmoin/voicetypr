@@ -30,7 +30,7 @@ import {
 } from "@/types/ai";
 import type { WritingSettings } from "@/types/writing";
 import { defaultWritingSettings, mergeWritingSettings } from "@/types/writing";
-import type { AiProvider, AIProviderConfig, AIProviderModel } from "@/types/providers";
+import type { AiProvider, AIProviderConfig, AIProviderModel, AgentCliProbe } from "@/types/providers";
 import { toProviderConfig } from "@/types/providers";
 import { useAllProviderModels } from "@/hooks/useProviderModels";
 import { hasApiKey, removeApiKey, saveApiKey, getApiKey } from "@/utils/keyring";
@@ -148,6 +148,12 @@ export function EnhancementsSection() {
   const [guidedSetupProvider, setGuidedSetupProvider] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [providerApiKeys, setProviderApiKeys] = useState<Record<string, boolean>>({});
+  // Per-provider probe result for agent-CLI providers (Claude Code). Lets the
+  // card distinguish "installed but not signed in" from "not installed",
+  // which `providerApiKeys` (installed && authed) collapses to a single false.
+  const [agentCliStatus, setAgentCliStatus] = useState<Record<string, AgentCliProbe>>({});
+  const [agentCliProbing, setAgentCliProbing] = useState<Record<string, boolean>>({});
+  const agentCliProbingRef = useRef<Set<string>>(new Set());
   const [enhancementOptions, setEnhancementOptions] = useState<{
     preset: EnhancementPreset;
   }>({
@@ -207,6 +213,7 @@ export function EnhancementsSection() {
       setProviders(listedProviders);
       const allProviders = listedProviders.map((provider) => provider.id);
       const keyStatus: Record<string, boolean> = {};
+      const agentCliStatusMap: Record<string, AgentCliProbe> = {};
 
       await Promise.all(
         allProviders.map(async (providerId) => {
@@ -215,13 +222,15 @@ export function EnhancementsSection() {
           // installed + authed), NOT hasApiKey. They have no API key to cache.
           if (isAgentCliProvider(providerId)) {
             try {
-              const probe = await invoke<{ installed: boolean; authed: boolean }>(
+              const probe = await invoke<AgentCliProbe>(
                 "probe_agent_cli",
                 { provider: providerId },
               );
+              agentCliStatusMap[providerId] = probe;
               keyStatus[providerId] = Boolean(probe.installed && probe.authed);
             } catch (error) {
               log.error(`Failed to probe ${providerId} CLI:`, error);
+              agentCliStatusMap[providerId] = { installed: false, authed: false, detail: "" };
               keyStatus[providerId] = false;
             }
             return;
@@ -261,6 +270,7 @@ export function EnhancementsSection() {
       );
 
       setProviderApiKeys(keyStatus);
+      setAgentCliStatus(agentCliStatusMap);
 
       try {
         const customConfig = await invoke<{ baseUrl: string }>("get_openai_config");
@@ -299,6 +309,42 @@ export function EnhancementsSection() {
       return null;
     }
   }, [readiness, fetchModels]);
+  // Re-probe a single agent-CLI provider (Refresh button). Updates both the
+ // per-provider probe status and the collapsed keyStatus used for gating, and
+ // toasts the outcome. The ref guards against double-clicks firing two probes.
+  const handleRefreshAgentCli = useCallback(async (provider: AIProviderConfig) => {
+    if (agentCliProbingRef.current.has(provider.id)) return;
+    agentCliProbingRef.current.add(provider.id);
+    setAgentCliProbing((prev) => ({ ...prev, [provider.id]: true }));
+    try {
+      const probe = await invoke<AgentCliProbe>("probe_agent_cli", {
+        provider: provider.id,
+      });
+      setAgentCliStatus((prev) => ({ ...prev, [provider.id]: probe }));
+      setProviderApiKeys((prev) => ({
+        ...prev,
+        [provider.id]: Boolean(probe.installed && probe.authed),
+      }));
+      if (probe.installed && probe.authed) {
+        toast.success(`${provider.name}: signed in`);
+      } else if (probe.installed) {
+        toast.info(`${provider.name}: still not signed in`);
+      } else {
+        toast.info(`${provider.name}: CLI not installed`);
+      }
+    } catch (error) {
+      log.error(`Failed to probe ${provider.name} CLI:`, error);
+      setAgentCliStatus((prev) => ({
+        ...prev,
+        [provider.id]: { installed: false, authed: false, detail: "" },
+      }));
+      setProviderApiKeys((prev) => ({ ...prev, [provider.id]: false }));
+      toast.error(`Could not check ${provider.name} sign-in.`);
+    } finally {
+      agentCliProbingRef.current.delete(provider.id);
+      setAgentCliProbing((prev) => ({ ...prev, [provider.id]: false }));
+    }
+  }, []);
 
   useEffect(() => {
     if (!settingsLoaded) {
@@ -1096,19 +1142,46 @@ export function EnhancementsSection() {
                         </Button>
                       )}
                       {isAgentCliProvider(provider.id) && (
-                        <span className="text-xs text-muted-foreground">Installed</span>
+                        // Installed AND signed in (probe.authed). Availability
+                        // gating already treats this provider as ready.
+                        <span className="text-xs text-muted-foreground">Signed in</span>
                       )}
                     </>
                   ) : (
                     <>
                       {isAgentCliProvider(provider.id) ? (
-                        // CLI providers have no API key — show the install
-                        // hint instead of an "Add Key" button. Availability is
-                        // probed via probe_agent_cli at setup.
-                        Boolean(provider.installHint) && (
-                          <span className="text-xs text-muted-foreground">
-                            {provider.installHint}
-                          </span>
+                        agentCliStatus[provider.id]?.installed ? (
+                          // Installed but not signed in: show the CLI's OWN
+                          // auth-status message when it printed one (its exact
+                          // login guidance), else fall back to a static hint.
+                          // Refresh re-probes after the user authenticates.
+                          <>
+                            <span className="text-xs text-muted-foreground">
+                              {agentCliStatus[provider.id]?.detail?.trim() ||
+                                "Installed — not signed in. Run `claude` in your terminal to sign in."}
+                            </span>
+                            <Button
+                              onClick={() => handleRefreshAgentCli(provider)}
+                              variant="ghost"
+                              size="sm"
+                              className="text-muted-foreground"
+                              disabled={agentCliProbing[provider.id]}
+                              title={`Re-check ${provider.name} sign-in`}
+                            >
+                              <RefreshCw
+                                className={`h-3.5 w-3.5 ${
+                                  agentCliProbing[provider.id] ? "animate-spin" : ""
+                                }`}
+                              />
+                            </Button>
+                          </>
+                        ) : (
+                          // Not installed — show the install hint.
+                          Boolean(provider.installHint) && (
+                            <span className="text-xs text-muted-foreground">
+                              {provider.installHint}
+                            </span>
+                          )
                         )
                       ) : (
                         <>

@@ -2,6 +2,8 @@ import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import { sendNotification, isPermissionGranted, requestPermission } from "@tauri-apps/plugin-notification";
 import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
+import type { UnlistenFn } from "@tauri-apps/api/event";
 import { AppErrorBoundary } from "./ErrorBoundary";
 import { AppShell } from "./AppShell";
 import type { ScreenId } from "./navigation";
@@ -241,6 +243,41 @@ export function AppContainer() {
       });
     };
   }, [registerEvent, modelAvailability.checkModels]);
+
+  // Surface a local agent-CLI's OWN message (e.g. Claude Code's "Not logged in ·
+  // Please run /login") as a toast so the user gets the exact fix in the CLI's
+  // words. Gated to `category === "cli_error"` ONLY: cloud-provider polish
+  // failures keep their existing SILENT raw-transcript fallback (no behavior
+  // change / no toast noise). This listener lives in the main window, which
+  // mounts the <Toaster>; the pill window handles the formatting-state flip.
+  useEffect(() => {
+    let isMounted = true;
+    let unlisten: UnlistenFn | undefined;
+    void listen<{ category?: string; message?: string } | null>(
+      "enhancing-failed",
+      (event) => {
+        if (!isMounted) return;
+        const message = event.payload?.message;
+        if (
+          event.payload?.category === "cli_error" &&
+          typeof message === "string" &&
+          message.trim()
+        ) {
+          toast.error(message);
+        }
+      },
+    ).then((nextUnlisten) => {
+      if (!isMounted) {
+        nextUnlisten();
+        return;
+      }
+      unlisten = nextUnlisten;
+    });
+    return () => {
+      isMounted = false;
+      unlisten?.();
+    };
+  }, []);
 
   useEffect(() => {
     const previous = previousHasModels.current;

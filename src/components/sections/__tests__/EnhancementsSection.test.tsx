@@ -98,11 +98,13 @@ const providerListResponse = [
   { id: 'anthropic', name: 'Anthropic', status: 'production', supportsReasoning: true },
   { id: 'custom', name: 'Custom (OpenAI-compatible)', status: 'production', supportsBaseUrl: true },
   { id: 'groq', name: 'Groq', status: 'experimental', supportsReasoning: false },
+  { id: 'claude-code', name: 'Claude Code', status: 'production', supportsReasoning: false },
 ]
 
 let rejectWritingSettingsUpdate = false
 let aiSettingsResponse = baseAISettings
 let enhancementOptionsResponse = { preset: 'PersonalDictation' }
+let agentCliProbeResponse: { installed: boolean; authed: boolean } = { installed: false, authed: false }
 
 const baseAppSettings = {
   hotkey: 'CommandOrControl+Shift+Space',
@@ -140,6 +142,7 @@ describe('EnhancementsSection', () => {
     rejectWritingSettingsUpdate = false
     aiSettingsResponse = baseAISettings
     enhancementOptionsResponse = { preset: 'PersonalDictation' }
+    agentCliProbeResponse = { installed: false, authed: false }
     ;(hasApiKey as ReturnType<typeof vi.fn>).mockResolvedValue(false)
     ;(invoke as ReturnType<typeof vi.fn>).mockImplementation((cmd: string, args?: Record<string, unknown>) => {
       if (cmd === 'list_ai_providers') {
@@ -189,6 +192,9 @@ describe('EnhancementsSection', () => {
       }
       if (cmd === 'cache_ai_api_key') {
         return Promise.resolve(undefined)
+      }
+      if (cmd === 'probe_agent_cli') {
+        return Promise.resolve(agentCliProbeResponse)
       }
       return Promise.resolve(undefined)
     })
@@ -1278,5 +1284,47 @@ describe('EnhancementsSection', () => {
       expect(within(dialog).getAllByText(/Static Rules/i).length).toBeGreaterThan(0)
       expect(toast.error).not.toHaveBeenCalled()
     })
+  })
+  it('shows a sign-in hint and Refresh for an installed-but-unauthed agent CLI', async () => {
+    agentCliProbeResponse = { installed: true, authed: false }
+    const user = userEvent.setup()
+    renderWithProviders()
+    await openAdvanced(user)
+    const providersPanel = getAdvancedProvidersPanel()
+
+    // Distinct sign-in hint (NOT the install hint) for state 2.
+    expect(
+      await within(providersPanel).findByText(/not signed in/i),
+    ).toBeInTheDocument()
+    expect(
+      within(providersPanel).queryByText(/Install the Claude Code CLI/i),
+    ).not.toBeInTheDocument()
+
+    // Refresh button re-probes and toasts once signed in.
+    const refresh = within(providersPanel).getByRole('button', {
+      name: /re-check claude code sign-in/i,
+    })
+    expect(refresh).toBeInTheDocument()
+
+    agentCliProbeResponse = { installed: true, authed: true }
+    await user.click(refresh)
+    await waitFor(() => {
+      expect(toast.success).toHaveBeenCalledWith('Claude Code: signed in')
+    })
+  })
+
+  it('shows "Signed in" for an authed agent CLI provider', async () => {
+    agentCliProbeResponse = { installed: true, authed: true }
+    const user = userEvent.setup()
+    renderWithProviders()
+    await openAdvanced(user)
+    const providersPanel = getAdvancedProvidersPanel()
+
+    expect(
+      await within(providersPanel).findByText('Signed in'),
+    ).toBeInTheDocument()
+    expect(
+      within(providersPanel).queryByText(/not signed in/i),
+    ).not.toBeInTheDocument()
   })
 })
