@@ -42,6 +42,9 @@ jobs:
       - name: Run tests
         run: pnpm test
 
+      - name: Test release channel tooling
+        run: node --test .github/scripts/should-update-beta-manifest.node-test.mjs
+
   # ===========================================
   # Build macOS (full build = catches all issues)
   # ===========================================
