@@ -13,6 +13,8 @@ concurrency:
 
 jobs:
   update-beta-manifest:
+    # Creating the synthetic rolling `beta` release also emits `release.published`.
+    # Ignore it or the pointer workflow would recursively trigger itself.
     if: ${{ github.event.release.tag_name != 'beta' }}
     runs-on: ubuntu-latest
     env:
@@ -61,6 +63,7 @@ jobs:
 
           jq -e --arg tag "$RELEASE_TAG" '
             (.platforms | type == "object") and
+            (.platforms | length > 0) and
             all(.platforms[];
               (.url | contains("/releases/download/\($tag)/")) and
               (.signature | type == "string" and length > 0)
@@ -103,4 +106,4 @@ jobs:
 
       - name: Keep newer Beta pointer
         if: ${{ env.should_update != 'true' }}
-        run: echo "Published release $candidate_version does not advance the current Beta pointer."
+        run: echo "::notice::Published release $candidate_version does not advance the current Beta pointer."
