@@ -89,6 +89,15 @@ git diff                      # Review changes
 git add -A && git commit -m "feat: description"
 ```
 
+## Planning and Release Discipline
+
+- **Claim non-trivial work** through `plans/README.md`; put irreducible desktop/hardware checks in `plans/SMOKE.md`. `NEEDS-SMOKE` means code-frozen and unverified—not permission to re-implement it.
+- **Triage before implementation**: issue reports need a reproducible path or diagnostic evidence (version, OS/hardware, logs, and expected vs. actual behavior). Do not turn an unconfirmed report into a speculative fix.
+- **Keep Beta scope explicit**: collect suggestions during Beta, but do not silently add them to the active release. Only reproduced release blockers or explicitly approved low-risk fixes enter the train; defer broader product/architecture suggestions to a separate plan.
+- **Re-cut after every product change**: once a beta is published, any code change requires `X.Y.Z-beta.(N+1)` and rerunning the affected smoke. A successful check against the same beta is not beta-to-beta proof.
+- **Promote the tested line**: Stable is cut only after the final beta passes its required runtime matrix. Do not mix unrelated product changes between the tested final beta and Stable promotion.
+- **CI is not runtime proof**: green checks establish compilation and automated contracts. Unperformed Windows/macOS hardware tests remain unchecked/`NEEDS-SMOKE` and must never be reported as passed.
+
 ## Gotchas
 
 1. **macOS only**: Parakeet models use Apple Neural Engine; Whisper uses Metal GPU

@@ -323,6 +323,37 @@ capped; near-silent noise unchanged). Residue = real mic capture + real ambient.
       NOT amplified into loud hiss or spurious words (stays at the 10x cap).
 - [ ] NORM-S3 Normal-volume dictation → unchanged quality.
 
+## 2.0.5 Beta train — Windows issue triage
+
+Current Beta: `2.0.5-beta.2`. Stable remains `2.0.4`. This train contains the
+Windows hotkey/GPU/transcript fixes plus shadow-only speech evidence.
+
+- [x] **BETA-UPD-M1** (macOS ARM64): signed `beta.1` selected Beta, discovered
+      `beta.2`, installed it, restarted as `beta.2`, retained Beta, then reported
+      latest-version with no update loop.
+- [ ] **BETA-UPD-W1** (Windows): repeat the real `beta.1` → `beta.2` signed
+      installer/update/restart flow; Beta persists and no update loop occurs.
+- [ ] **BETA-GPU-W1** (Windows hybrid GPU): Auto prefers discrete NVIDIA/AMD;
+      a Vulkan/sidecar failure cannot crash the main app; CPU fallback completes;
+      the failed sidecar model does not remain resident beside the CPU model.
+- [ ] **BETA-HOTKEY-W1** (Windows): Stream Deck/injected input starts and stops
+      recording; the physical shortcut still works after restart.
+- [ ] **BETA-TEXT-W1**: punctuation spacing has no double spaces or spaces before
+      punctuation, while guarded multiline/code-like text remains unchanged.
+- [ ] **BETA-SILENCE-W1**: speech followed by 2–5 seconds of silence does not
+      invent trailing text or truncate the real final words; soft speech and a
+      silence-only control are included.
+- [ ] **BETA-EVIDENCE-W1**: retain representative `SPEECH_EVIDENCE` logs covering
+      capture RMS/peak/duration, prepared-audio metrics, engine/route/outcome,
+      and the shadow classification.
+
+The reported A3 onboarding/hotkey crash blocks Stable only if it reproduces on
+`beta.2`; collect the exact stage, acceleration mode, model, GPU, OS, and logs.
+The reported C2 all-model accuracy issue needs selected-mic plus
+RMS/peak/prepared-audio evidence before attributing it to an engine. Any
+resulting product fix requires `beta.3` or newer and a rerun of the affected
+checks above.
+
 ## Release rule
 
 015 + 016 smoke are ship gates for the AI-polish release; 004/008 smoke are
