@@ -22,9 +22,41 @@ const MIN_TRAILING_SILENCE_TO_TRIM_WINDOWS: usize = 35; // 700ms
 const RETAIN_TRAILING_CONTEXT_WINDOWS: usize = 15; // keep 300ms after last speech
 const MIN_RETAINED_SAMPLES_AFTER_TRIM: usize = TARGET_RATE as usize / 2; // 0.5s floor
 
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct NormalizationMetrics {
+    pub pre_gain_peak: f32,
+    pub speech_like_modulation: bool,
+    pub applied_gain: f32,
+    pub input_duration_ms: u64,
+    pub output_duration_ms: u64,
+    pub trimmed_duration_ms: u64,
+}
+
+#[derive(Debug)]
+pub struct NormalizedAudio {
+    pub path: PathBuf,
+    pub metrics: NormalizationMetrics,
+}
+
+fn duration_ms(sample_count: usize) -> u64 {
+    (sample_count as u64)
+        .saturating_mul(1000)
+        .checked_div(u64::from(TARGET_RATE))
+        .unwrap_or(0)
+}
+
 /// Normalize any WAV (our recorder output) to the local engine contract:
 /// WAV PCM S16LE, mono, 16 kHz, peak-normalized with speech-gated quiet-clip gain and light dither.
 pub fn normalize_to_whisper_wav(input_wav: &Path, out_dir: &Path) -> Result<PathBuf, String> {
+    normalize_to_whisper_wav_with_metrics(input_wav, out_dir).map(|audio| audio.path)
+}
+
+/// Normalize audio and return evidence already computed while preparing the
+/// engine input. Metric collection adds no separate full-buffer traversal.
+pub fn normalize_to_whisper_wav_with_metrics(
+    input_wav: &Path,
+    out_dir: &Path,
+) -> Result<NormalizedAudio, String> {
     if !input_wav.exists() {
         return Err(format!("Input WAV does not exist: {:?}", input_wav));
     }
@@ -82,6 +114,7 @@ pub fn normalize_to_whisper_wav(input_wav: &Path, out_dir: &Path) -> Result<Path
     // (voiced energy AND genuine near-silent gaps); steady noise/tones stay at 10x.
     let peak = resampled.iter().fold(0.0f32, |m, &x| m.max(x.abs()));
     let speech_like = has_speech_like_modulation(&resampled);
+    let input_duration_ms = duration_ms(resampled.len());
     let gain = peak_normalization_gain(peak, speech_like);
     let normalized: Vec<f32> = if (gain - 1.0).abs() > 1e-3 {
         resampled
@@ -93,6 +126,15 @@ pub fn normalize_to_whisper_wav(input_wav: &Path, out_dir: &Path) -> Result<Path
     };
 
     let trimmed = trim_trailing_silence_for_whisper(&normalized);
+    let output_duration_ms = duration_ms(trimmed.len());
+    let metrics = NormalizationMetrics {
+        pre_gain_peak: peak,
+        speech_like_modulation: speech_like,
+        applied_gain: gain,
+        input_duration_ms,
+        output_duration_ms,
+        trimmed_duration_ms: input_duration_ms.saturating_sub(output_duration_ms),
+    };
 
     // Quantize to i16 with TPDF dither
     let mut rng = rand::thread_rng();
@@ -124,7 +166,10 @@ pub fn normalize_to_whisper_wav(input_wav: &Path, out_dir: &Path) -> Result<Path
         .finalize()
         .map_err(|e| format!("WAV finalize failed: {}", e))?;
 
-    Ok(out_path)
+    Ok(NormalizedAudio {
+        path: out_path,
+        metrics,
+    })
 }
 
 pub(crate) fn peak_normalization_gain(peak: f32, speech_like: bool) -> f32 {

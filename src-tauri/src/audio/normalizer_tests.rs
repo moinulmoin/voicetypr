@@ -1,4 +1,6 @@
-use super::normalizer::{normalize_to_whisper_wav, peak_normalization_gain};
+use super::normalizer::{
+    normalize_to_whisper_wav, normalize_to_whisper_wav_with_metrics, peak_normalization_gain,
+};
 use hound::{SampleFormat, WavSpec, WavWriter};
 use std::f32::consts::PI;
 use std::fs;
@@ -566,5 +568,71 @@ fn preserves_tail_above_silence_threshold() {
 
     let _ = fs::remove_file(&input);
     let _ = fs::remove_file(&out_path);
+    let _ = fs::remove_dir_all(&out_dir);
+}
+
+#[test]
+fn normalization_metrics_reuse_gapped_speech_decision_and_gain() {
+    let input = temp_file("metrics_gapped_speech_in.wav");
+    let out_dir = temp_file("metrics_gapped_speech_out_dir");
+    let _ = fs::create_dir_all(&out_dir);
+    write_gapped_tone_wav(&input, 16_000, 1.2, 0.03, 220.0, 200, 120);
+
+    let normalized =
+        normalize_to_whisper_wav_with_metrics(&input, &out_dir).expect("normalize with metrics");
+
+    assert!(normalized.metrics.speech_like_modulation);
+    assert!(normalized.metrics.pre_gain_peak > 0.02);
+    assert!(normalized.metrics.applied_gain > 10.0);
+    assert_eq!(normalized.metrics.input_duration_ms, 1200);
+    assert_eq!(normalized.metrics.output_duration_ms, 1200);
+    assert_eq!(normalized.metrics.trimmed_duration_ms, 0);
+
+    let _ = fs::remove_file(&input);
+    let _ = fs::remove_file(&normalized.path);
+    let _ = fs::remove_dir_all(&out_dir);
+}
+
+#[test]
+fn normalization_metrics_report_digital_silence_without_inventing_speech() {
+    let input = temp_file("metrics_silence_in.wav");
+    let out_dir = temp_file("metrics_silence_out_dir");
+    let _ = fs::create_dir_all(&out_dir);
+    write_silence_wav(&input, 16_000, 1.0);
+
+    let normalized =
+        normalize_to_whisper_wav_with_metrics(&input, &out_dir).expect("normalize with metrics");
+
+    assert_eq!(normalized.metrics.pre_gain_peak, 0.0);
+    assert!(!normalized.metrics.speech_like_modulation);
+    assert_eq!(normalized.metrics.applied_gain, 1.0);
+    assert_eq!(normalized.metrics.input_duration_ms, 1000);
+    assert_eq!(normalized.metrics.output_duration_ms, 1000);
+    assert_eq!(normalized.metrics.trimmed_duration_ms, 0);
+
+    let _ = fs::remove_file(&input);
+    let _ = fs::remove_file(&normalized.path);
+    let _ = fs::remove_dir_all(&out_dir);
+}
+
+#[test]
+fn normalization_metrics_account_for_trimmed_tail() {
+    let input = temp_file("metrics_trim_in.wav");
+    let out_dir = temp_file("metrics_trim_out_dir");
+    let _ = fs::create_dir_all(&out_dir);
+    write_speech_then_silence_wav(&input, 16_000, 1.0, 2.0, 0.5, 440.0);
+
+    let normalized =
+        normalize_to_whisper_wav_with_metrics(&input, &out_dir).expect("normalize with metrics");
+
+    assert_eq!(normalized.metrics.input_duration_ms, 3000);
+    assert!(normalized.metrics.trimmed_duration_ms >= 1500);
+    assert_eq!(
+        normalized.metrics.output_duration_ms + normalized.metrics.trimmed_duration_ms,
+        normalized.metrics.input_duration_ms
+    );
+
+    let _ = fs::remove_file(&input);
+    let _ = fs::remove_file(&normalized.path);
     let _ = fs::remove_dir_all(&out_dir);
 }

@@ -101,6 +101,7 @@ git add -A && git commit -m "feat: description"
 8. **Sidecar builds**: Parakeet Swift sidecar built via `build.rs` during `tauri build`
 
 9. **Windows CI is compile-only for Rust tests**: `cargo test --no-run` — Windows runtime behavior (hotkeys, Vulkan sidecar) needs manual smoke on a real machine.
+10. **Speech evidence is asymmetric**: live RMS/`SilenceDetector` and normalizer modulation are strong positive evidence that speech occurred, but failure to detect speech is not proof of silence (short/soft speech may miss thresholds). Instrument candidate pre-engine gates in shadow mode first; never reject uncertain audio or add a second full-buffer scan. Reuse recorder/normalizer aggregates and keep enforcement Beta-only until false negatives are ruled out.
 
 ## Key Files
 

@@ -4,6 +4,7 @@ use tauri::{AppHandle, Emitter, Manager, State};
 use crate::ai::error::{user_facing_message, AiProviderError};
 use crate::audio::recorder::AudioRecorder;
 use crate::audio::silence_detector::SilenceDetectorEvent;
+use crate::audio::speech_evidence::{SpeechEvidenceAttempt, SpeechEvidenceOutcome};
 use crate::commands::settings::{
     get_settings, normalize_final_text_language, normalize_speech_language_for_model,
     normalize_transcription_task, recording_retention_days_from_store, resolve_pill_indicator_mode,
@@ -1418,7 +1419,9 @@ where
                 }
                 Err(error) => {
                     preserve_gpu_status = true;
-                    log::warn!("GPU sidecar failed, unloading sidecar before CPU fallback: {error}");
+                    log::warn!(
+                        "GPU sidecar failed, unloading sidecar before CPU fallback: {error}"
+                    );
                     gpu_client.abort_active_process().await;
                     if mode == "gpu" {
                         pill_toast(app, "GPU unavailable, using CPU", 4000);
@@ -1506,9 +1509,10 @@ mod tests {
         set_in_flight_transcription_audio, should_hide_pill_when_idle, should_use_active_remote,
         silence_event_runs_in_state, silence_timeout_disposition, stop_should_reset_to_idle,
         sync_retranscription_failure_metadata, take_in_flight_transcription_audio,
-        toast_clear_is_current, transcription_watchdog_budget, LocalFailureKind,
-        NormalizedTempFile, PillToastEventPayload, RecordingLicenseState, SilenceDetectorEvent,
-        SilenceTimeoutDisposition, StopInFlightGuard, TranscriptionFailure, TranscriptionStatus,
+        toast_clear_is_current, transcription_watchdog_budget, ActiveEngineSelection,
+        LocalFailureKind, NormalizedTempFile, PillToastEventPayload, RecordingLicenseState,
+        SilenceDetectorEvent, SilenceTimeoutDisposition, StopInFlightGuard, TranscriptionFailure,
+        TranscriptionStatus,
     };
     use crate::commands::license::CachedLicense;
     use crate::license::{LicenseState, LicenseStatus};
@@ -2684,6 +2688,34 @@ mod tests {
             "spawned history task must recheck cancellation at the write site"
         );
     }
+    #[test]
+    fn active_engine_routes_are_stable_for_evidence_logs() {
+        let selections = [
+            ActiveEngineSelection::Whisper {
+                model_name: "base".to_string(),
+                model_path: std::path::PathBuf::new(),
+            },
+            ActiveEngineSelection::Parakeet {
+                model_name: "parakeet".to_string(),
+            },
+            ActiveEngineSelection::Cloud {
+                provider: crate::cloud_stt::CloudProvider::Openai,
+                model_name: "gpt-4o-mini-transcribe".to_string(),
+            },
+            ActiveEngineSelection::Remote {
+                server_id: "server".to_string(),
+                server_name: "Remote".to_string(),
+                host: "127.0.0.1".to_string(),
+                port: 47842,
+                password: None,
+            },
+        ];
+
+        assert_eq!(selections[0].route(), "local");
+        assert_eq!(selections[1].route(), "local");
+        assert_eq!(selections[2].route(), "cloud");
+        assert_eq!(selections[3].route(), "remote");
+    }
 }
 
 /// Play a system sound to confirm recording start (macOS only)
@@ -3182,6 +3214,16 @@ impl ActiveEngineSelection {
             ActiveEngineSelection::Whisper { .. } => "whisper",
             ActiveEngineSelection::Parakeet { .. } => "parakeet",
             ActiveEngineSelection::Cloud { provider, .. } => provider.id(),
+            ActiveEngineSelection::Remote { .. } => "remote",
+        }
+    }
+
+    pub(crate) const fn route(&self) -> &'static str {
+        match self {
+            ActiveEngineSelection::Whisper { .. } | ActiveEngineSelection::Parakeet { .. } => {
+                "local"
+            }
+            ActiveEngineSelection::Cloud { .. } => "cloud",
             ActiveEngineSelection::Remote { .. } => "remote",
         }
     }
@@ -3921,7 +3963,9 @@ pub async fn start_recording(
                 let guard = remote.lock().await;
                 guard.get_active_connection().is_some()
             };
-            if !remote_active && crate::secure_store::secure_has(&app, provider.key_name()).unwrap_or(false) {
+            if !remote_active
+                && crate::secure_store::secure_has(&app, provider.key_name()).unwrap_or(false)
+            {
                 provider.warm_up().await;
             }
         });
@@ -4434,6 +4478,7 @@ pub async fn stop_recording(
     // DO NOT request cancellation here - we want transcription to complete!
     // Cancellation should only happen in cancel_recording command
 
+    let capture_metrics;
     let mut stop_unfinalized = false;
     let mut stop_integrity_failure = false;
     // Stop recording (lock only within this scope to stay Send)
@@ -4486,6 +4531,7 @@ pub async fn stop_recording(
                 format!("Recorder stop error: {}", e)
             }
         };
+        capture_metrics = recorder.take_last_capture_metrics();
         log::info!("{}", stop_message);
 
         // Play sound on recording end if enabled
@@ -4899,7 +4945,14 @@ pub async fn stop_recording(
             }
         }
     };
+    let engine_route = engine_selection.route();
+    let mut speech_evidence_attempt = SpeechEvidenceAttempt::new(
+        engine_selection.engine_name().to_string(),
+        engine_route,
+        capture_metrics,
+    );
 
+    let mut prepared_metrics = None;
     // For Whisper/Parakeet: normalize and duration gate; for Cloud/Remote: skip both
     let audio_path = match &engine_selection {
         ActiveEngineSelection::Cloud { provider, .. } => {
@@ -4928,11 +4981,14 @@ pub async fn stop_recording(
                 let a = audio_path.clone();
                 let d = parent_dir.clone();
                 let in_proc = tokio::task::spawn_blocking(move || {
-                    crate::audio::normalizer::normalize_to_whisper_wav(&a, &d)
+                    crate::audio::normalizer::normalize_to_whisper_wav_with_metrics(&a, &d)
                 })
                 .await;
                 match in_proc {
-                    Ok(Ok(path)) => path,
+                    Ok(Ok(normalized)) => {
+                        prepared_metrics = Some(normalized.metrics);
+                        normalized.path
+                    }
                     other => {
                         let other_err = match &other {
                             Ok(Ok(_)) => unreachable!(),
@@ -4948,6 +5004,8 @@ pub async fn stop_recording(
                         if let Err(e) =
                             crate::ffmpeg::normalize_streaming(&app, &audio_path, &out_path).await
                         {
+                            speech_evidence_attempt
+                                .set_outcome(SpeechEvidenceOutcome::PreparationFailure);
                             log::error!("Audio normalization (ffmpeg) failed: {}", e);
                             update_recording_state(
                                 &app,
@@ -4961,6 +5019,7 @@ pub async fn stop_recording(
                     }
                 }
             };
+            speech_evidence_attempt.set_prepared(prepared_metrics);
 
             // Remove raw capture after successful normalization
             if let Err(e) = std::fs::remove_file(&audio_path) {
@@ -5007,6 +5066,7 @@ pub async fn stop_recording(
             })();
 
             if matches!(duration_gate, Ok((true, _))) {
+                speech_evidence_attempt.set_outcome(SpeechEvidenceOutcome::RecordingTooShort);
                 // Emit friendly feedback and stop here
                 let _ = emit_to_window(
                     &app,
@@ -5091,9 +5151,11 @@ pub async fn stop_recording(
     let language_for_task = language.clone();
     let selected_model_name_for_task = selected_model_name.clone();
     let transcription_job_for_task = transcription_job.clone();
+    let speech_evidence_attempt_for_task = speech_evidence_attempt;
     // Spawn and track the transcription task
     let app_for_task = app.clone();
     let task_handle = tokio::spawn(async move {
+        let mut speech_evidence_attempt = speech_evidence_attempt_for_task;
         log::debug!("Transcription task started");
 
         // Update state to transcribing
@@ -5106,6 +5168,7 @@ pub async fn stop_recording(
         // Check for cancellation before loading model
         let app_state = app_for_task.state::<AppState>();
         if app_state.is_cancellation_requested() {
+            speech_evidence_attempt.set_outcome(SpeechEvidenceOutcome::CancelledBeforeEngine);
             log::info!("Transcription cancelled before model loading");
             // The task observed cancellation itself (cancel set the flag but
             // either did not, or could not, abort this handle in time). Remove
@@ -5230,6 +5293,12 @@ pub async fn stop_recording(
                     .await
                 }
             };
+
+        speech_evidence_attempt.set_outcome(if transcription_result.is_ok() {
+            SpeechEvidenceOutcome::EngineSuccess
+        } else {
+            SpeechEvidenceOutcome::EngineFailure
+        });
 
         // Decide persistence BEFORE touching the file. PRIVACY: a cancelled
         // dictation — or one whose recording generation has gone stale (a newer

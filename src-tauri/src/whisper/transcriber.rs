@@ -599,8 +599,6 @@ impl Transcriber {
             return Err(error);
         }
 
-        log_audio_metrics("WHISPER_INPUT", 0.0, 0.0, duration_seconds, None);
-
         let inference_start = Instant::now();
         log_start("WHISPER_INFERENCE");
         log_with_context(

@@ -372,19 +372,12 @@ mod performance_tests {
 
         let result = std::panic::catch_unwind(|| {
             for i in 0..iterations {
-                let context = log_context! {
-                    "iteration" => &i.to_string(),
-                    "operation" => "performance_test",
-                    "timestamp" => &chrono::Utc::now().to_rfc3339()
-                };
-
                 log_start("PERF_TEST");
                 log_performance("TEST_METRIC", i as u64, Some("test_data"));
                 log_complete("PERF_TEST", 1);
 
                 if i % 100 == 0 {
-                    log_audio_metrics("PERF_AUDIO", 0.5, 0.8, 2.5, Some(&context));
-                    log_model_operation("LOAD", "test-model", "READY", Some(&context));
+                    log_model_operation("LOAD", "test-model", "READY", None);
                 }
             }
 
