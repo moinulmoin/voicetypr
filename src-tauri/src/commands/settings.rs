@@ -4,6 +4,7 @@ use crate::commands::key_normalizer::{
 };
 use crate::commands::remote::{resolve_shareable_model_config, save_remote_settings};
 use crate::commands::shortcuts;
+use crate::commands::updater::UpdateChannel;
 use crate::menu::should_include_remote_connection_in_tray;
 use crate::parakeet::models::AVAILABLE_MODELS;
 use crate::parakeet::ParakeetManager;
@@ -73,6 +74,9 @@ pub struct Settings {
     // Transcription hardware acceleration: "auto" | "gpu" | "cpu"
     #[serde(default = "default_transcription_acceleration")]
     pub transcription_acceleration: String,
+    // Direct-install updater channel: "stable" | "beta"
+    #[serde(default = "default_update_channel")]
+    pub update_channel: String,
 }
 
 impl Default for Settings {
@@ -107,8 +111,13 @@ impl Default for Settings {
             save_recordings: false,              // Default to not saving recordings
             recording_retention_days: Some(30),  // Default cleanup period when saving is enabled
             transcription_acceleration: "auto".to_string(),
+            update_channel: default_update_channel(),
         }
     }
+}
+
+fn default_update_channel() -> String {
+    UpdateChannel::Stable.as_str().to_string()
 }
 
 fn default_transcription_acceleration() -> String {
@@ -360,6 +369,9 @@ pub async fn get_settings(app: AppHandle) -> Result<Settings, String> {
         .and_then(|v| v.as_str().map(|s| s.to_string()));
     let final_text_language =
         normalize_final_text_language(stored_final_text_language.as_deref(), &transcription_task);
+    let stored_update_channel = store
+        .get("update_channel")
+        .and_then(|value| value.as_str().map(str::to_owned));
 
     let settings = Settings {
         hotkey: store
@@ -476,6 +488,9 @@ pub async fn get_settings(app: AppHandle) -> Result<Settings, String> {
                 .and_then(|v| v.as_str().map(|s| s.to_string()))
                 .as_deref(),
         ),
+        update_channel: UpdateChannel::from_stored(stored_update_channel.as_deref())
+            .as_str()
+            .to_string(),
     };
     let normalized_speech_language = normalize_speech_language_for_model(
         &settings.current_model_engine,
@@ -568,6 +583,7 @@ pub async fn save_settings(app: AppHandle, settings: Settings) -> Result<(), Str
     );
     let normalized_transcription_acceleration =
         normalize_stored_transcription_acceleration(Some(&settings.transcription_acceleration));
+    let normalized_update_channel = UpdateChannel::from_stored(Some(&settings.update_channel));
 
     let normalized_hotkey = normalize_shortcut_keys(&settings.hotkey);
     if !normalized_hotkey.is_empty() {
@@ -690,6 +706,7 @@ pub async fn save_settings(app: AppHandle, settings: Settings) -> Result<(), Str
         "transcription_acceleration",
         json!(&normalized_transcription_acceleration),
     );
+    store.set("update_channel", json!(normalized_update_channel.as_str()));
 
     // Network sharing settings
     if let Some(port) = settings.sharing_port {

@@ -6,6 +6,7 @@ mod tests {
         task_uses_translate_to_english, Settings, FINAL_TEXT_LANGUAGE_SAME_AS_TRANSCRIPT,
         TRANSCRIPTION_TASK_TRANSCRIBE, TRANSCRIPTION_TASK_TRANSLATE_TO_ENGLISH,
     };
+    use crate::commands::updater::UpdateChannel;
     use serde_json::json;
 
     #[test]
@@ -62,6 +63,7 @@ mod tests {
             save_recordings: true,
             recording_retention_days: Some(7),
             transcription_acceleration: "auto".to_string(),
+            update_channel: "stable".to_string(),
         };
 
         // Test serialization
@@ -144,6 +146,7 @@ mod tests {
             save_recordings: true,
             recording_retention_days: None,
             transcription_acceleration: "auto".to_string(),
+            update_channel: "beta".to_string(),
         };
 
         let cloned = settings.clone();
@@ -455,6 +458,25 @@ mod tests {
         assert_eq!(
             v["transcription_acceleration"],
             serde_json::Value::String("cpu".to_string())
+        );
+    }
+
+    #[test]
+    fn test_update_channel_defaults_and_serializes() {
+        let mut value = serde_json::to_value(Settings::default()).unwrap();
+        value.as_object_mut().unwrap().remove("update_channel");
+        let parsed: Settings = serde_json::from_value(value).unwrap();
+        assert_eq!(parsed.update_channel, "stable");
+
+        let settings = Settings {
+            update_channel: "beta".to_string(),
+            ..Settings::default()
+        };
+        let value = serde_json::to_value(settings).unwrap();
+        assert_eq!(value["update_channel"], "beta");
+        assert_eq!(
+            UpdateChannel::from_stored(value["update_channel"].as_str()),
+            UpdateChannel::Beta
         );
     }
 
@@ -840,6 +862,7 @@ mod tests {
             save_recordings: true,
             recording_retention_days: None,
             transcription_acceleration: "gpu".to_string(),
+            update_channel: "beta".to_string(),
         };
 
         let json = serde_json::to_string(&original).unwrap();
@@ -856,6 +879,7 @@ mod tests {
             restored.transcription_cleanup_days,
             original.transcription_cleanup_days
         );
+        assert_eq!(restored.update_channel, original.update_channel);
         assert_eq!(restored.pill_position, original.pill_position);
         assert_eq!(restored.launch_at_startup, original.launch_at_startup);
         assert_eq!(restored.onboarding_completed, original.onboarding_completed);

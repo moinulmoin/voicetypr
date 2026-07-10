@@ -102,6 +102,8 @@ git add -A && git commit -m "feat: description"
 
 9. **Windows CI is compile-only for Rust tests**: `cargo test --no-run` — Windows runtime behavior (hotkeys, Vulkan sidecar) needs manual smoke on a real machine.
 
+10. **Updater channels are a release contract, not only UI**: Stable stays on `releases/latest/download/latest.json`; Beta uses a separate fixed manifest and SemVer prereleases (`X.Y.Z-beta.N`). Betas must be published GitHub prereleases, never ordinary releases; Store/MSIX builds remain Store-managed. Switching Beta → Stable changes future checks and does not downgrade an installed beta.
+
 ## Key Files
 
 - `src-tauri/src/lib.rs` — Main Rust entry, command registration

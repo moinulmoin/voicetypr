@@ -34,8 +34,10 @@ const platformMock = vi.hoisted(() => ({ isMacOS: false, isWindows: false }));
 
 vi.mock('@/lib/platform', () => platformMock);
 
+const invokeMock = vi.hoisted(() => vi.fn());
+
 vi.mock('@tauri-apps/api/core', () => ({
-  invoke: vi.fn().mockResolvedValue(undefined),
+  invoke: invokeMock,
 }));
 
 vi.mock('@tauri-apps/plugin-autostart', () => ({
@@ -132,6 +134,20 @@ vi.mock('@/components/MicrophoneSelection', () => ({
 vi.mock('../NetworkSharingCard', () => ({
   NetworkSharingCard: () => <div data-testid="network-sharing-card" />,
 }));
+
+beforeEach(() => {
+  invokeMock.mockReset();
+  invokeMock.mockImplementation(async (command: string) => {
+    if (command === 'get_distribution_info') {
+      return {
+        channel: 'direct',
+        is_store_install: false,
+        package_family_name: null,
+      };
+    }
+    return undefined;
+  });
+});
 
 // ============================================================================
 // Transcription Acceleration — Windows
@@ -251,5 +267,55 @@ describe('GeneralSettings transcription acceleration — non-Windows', () => {
       expect(screen.queryByText('Transcription performance')).not.toBeInTheDocument();
       expect(screen.queryByTestId('select-item-gpu')).not.toBeInTheDocument();
     });
+  });
+});
+
+describe('GeneralSettings update distribution controls', () => {
+  beforeEach(() => {
+    mockSettings = { ...baseSettings, update_channel: 'stable' };
+    mockUpdateSettings.mockClear();
+    platformMock.isWindows = false;
+    platformMock.isMacOS = true;
+  });
+
+
+  it('hides direct update controls for Microsoft Store installs', async () => {
+    invokeMock.mockImplementation(async (command: string) => {
+      if (command === 'get_distribution_info') {
+        return {
+          channel: 'store_msix',
+          is_store_install: true,
+          package_family_name: 'IdeaplexaLLC.Voicetypr_test',
+        };
+      }
+      return undefined;
+    });
+
+    render(<GeneralSettings />);
+
+    expect(
+      await screen.findByText('Updates managed by Microsoft Store'),
+    ).toBeInTheDocument();
+    expect(screen.queryByText('Update channel')).not.toBeInTheDocument();
+  });
+
+  it('fails closed when distribution detection fails', async () => {
+    invokeMock.mockImplementation((command: string) =>
+      command === 'get_distribution_info'
+        ? Promise.reject(new Error('distribution unavailable'))
+        : Promise.resolve(undefined),
+    );
+
+    render(<GeneralSettings />);
+
+    expect(await screen.findByText('Update options unavailable')).toBeInTheDocument();
+    expect(screen.queryByText('Update channel')).not.toBeInTheDocument();
+  });
+
+  it('shows channel controls only after confirming a direct install', async () => {
+    render(<GeneralSettings />);
+
+    expect(await screen.findByText('Update channel')).toBeInTheDocument();
+    expect(screen.getByTestId('select-item-beta')).toBeInTheDocument();
   });
 });

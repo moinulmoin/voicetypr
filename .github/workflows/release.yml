@@ -3,6 +3,14 @@ name: Release
 on:
   workflow_dispatch:
     inputs:
+      channel:
+        description: 'Update channel'
+        required: true
+        default: stable
+        type: choice
+        options:
+          - stable
+          - beta
       release_type:
         description: 'Release type'
         required: true
@@ -12,6 +20,10 @@ on:
           - patch
           - minor
           - major
+      beta_number:
+        description: 'Beta sequence number (required for beta, e.g. 1)'
+        required: false
+        type: string
       dry_run:
         description: 'Dry run (build artifacts only, no version bump or release)'
         required: false
@@ -21,6 +33,10 @@ on:
 env:
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: 1
+
+concurrency:
+  group: voicetypr-release
+  cancel-in-progress: false
 
 jobs:
   # ===========================================
@@ -38,18 +54,39 @@ jobs:
 
       - name: Calculate version
         id: version
+        env:
+          INPUT_CHANNEL: ${{ inputs.channel }}
+          INPUT_RELEASE_TYPE: ${{ inputs.release_type }}
+          INPUT_BETA_NUMBER: ${{ inputs.beta_number }}
         run: |
           CURRENT=$(node -p "require('./package.json').version")
-          IFS='.' read -r MAJOR MINOR PATCH <<< "$CURRENT"
-          case "${{ inputs.release_type }}" in
-            current) NEW="$CURRENT" ;;
-            major) NEW="$((MAJOR + 1)).0.0" ;;
-            minor) NEW="${MAJOR}.$((MINOR + 1)).0" ;;
-            patch) NEW="${MAJOR}.${MINOR}.$((PATCH + 1))" ;;
+          CURRENT_BASE="${CURRENT%%-*}"
+          IFS='.' read -r MAJOR MINOR PATCH <<< "$CURRENT_BASE"
+          case "$INPUT_RELEASE_TYPE" in
+            current) NEXT="$CURRENT_BASE" ;;
+            major) NEXT="$((MAJOR + 1)).0.0" ;;
+            minor) NEXT="${MAJOR}.$((MINOR + 1)).0" ;;
+            patch) NEXT="${MAJOR}.${MINOR}.$((PATCH + 1))" ;;
           esac
-          echo "version=$NEW" >> $GITHUB_OUTPUT
-          echo "tag=v$NEW" >> $GITHUB_OUTPUT
-          echo "::notice::Release: $CURRENT → $NEW (${{ inputs.release_type }})"
+
+          if [[ "$INPUT_CHANNEL" == "beta" ]]; then
+            if [[ "$INPUT_RELEASE_TYPE" == "current" ]]; then
+              echo "::error::Beta releases must target a newer major, minor, or patch version."
+              exit 1
+            fi
+            BETA_NUMBER="$INPUT_BETA_NUMBER"
+            if ! [[ "$BETA_NUMBER" =~ ^[1-9][0-9]*$ ]]; then
+              echo "::error::beta_number must be a positive integer."
+              exit 1
+            fi
+            NEW="${NEXT}-beta.${BETA_NUMBER}"
+          else
+            NEW="$NEXT"
+          fi
+
+          echo "version=$NEW" >> "$GITHUB_OUTPUT"
+          echo "tag=v$NEW" >> "$GITHUB_OUTPUT"
+          echo "::notice::Release: $CURRENT → $NEW ($INPUT_CHANNEL, $INPUT_RELEASE_TYPE)"
 
       - name: Capture base commit
         id: base
@@ -573,9 +610,20 @@ jobs:
             const updated = cargo.replace(/^version = "[^"]*"/m, `version = "${version}"`);
             fs.writeFileSync(cargoPath, updated);
           '
+          cargo update \
+            --manifest-path src-tauri/Cargo.toml \
+            -p voicetypr \
+            --precise "$RELEASE_VERSION"
+          cargo metadata \
+            --manifest-path src-tauri/Cargo.toml \
+            --locked \
+            --format-version 1 \
+            --no-deps >/dev/null
 
       - name: Commit, tag, and push
         id: push
+        env:
+          RELEASE_CHANNEL: ${{ inputs.channel }}
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
@@ -584,11 +632,18 @@ jobs:
           if git diff --cached --quiet; then
             echo "No version file changes; tagging current commit"
           else
-            git commit -m "chore: release v${{ needs.prepare.outputs.version }}"
+            git commit -m "chore: release ${{ needs.prepare.outputs.tag }}"
           fi
           git tag -a "${{ needs.prepare.outputs.tag }}" -m "Release ${{ needs.prepare.outputs.tag }}"
-          git push origin main "${{ needs.prepare.outputs.tag }}"
-          echo "ref=$(git rev-parse HEAD)" >> $GITHUB_OUTPUT
+
+          if [[ "$RELEASE_CHANNEL" == "beta" ]]; then
+            # Keep prerelease versions out of main. The tag makes the release commit
+            # immutable/reachable; Stable promotion later performs the normal main bump.
+            git push origin "${{ needs.prepare.outputs.tag }}"
+          else
+            git push --atomic origin main "${{ needs.prepare.outputs.tag }}"
+          fi
+          echo "ref=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
 
   # ===========================================
   # Create Release (after publish succeeds)
@@ -670,5 +725,6 @@ jobs:
           tag_name: ${{ needs.prepare.outputs.tag }}
           name: Voicetypr ${{ needs.prepare.outputs.tag }}
           draft: true
+          prerelease: ${{ inputs.channel == 'beta' }}
           generate_release_notes: true
           files: release/*
