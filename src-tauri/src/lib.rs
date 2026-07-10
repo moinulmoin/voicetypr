@@ -264,6 +264,7 @@ use commands::{
     stt::{clear_stt_key_cache, validate_stt_key},
     system_info::get_system_specs,
     text::*,
+    updater::{check_for_app_update, install_app_update},
     utils::{export_transcriptions, save_transcript_file},
     window::*,
 };
@@ -1435,6 +1436,8 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             set_autostart,
             get_device_id,
             get_distribution_info,
+            check_for_app_update,
+            install_app_update,
             get_system_specs,
             // CLI launcher (voicetypr on PATH)
             install_cli_tool,

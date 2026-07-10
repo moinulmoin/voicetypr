@@ -1,13 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { invoke } from '@tauri-apps/api/core';
 import { ask } from '@tauri-apps/plugin-dialog';
-import { check, type Update } from '@tauri-apps/plugin-updater';
 import { toast } from 'sonner';
 
 // Mock Tauri plugins before importing the module under test
-vi.mock('@tauri-apps/plugin-updater', () => ({
-  check: vi.fn(),
-}));
 
 vi.mock('@tauri-apps/plugin-process', () => ({
   relaunch: vi.fn(),
@@ -36,7 +32,7 @@ vi.mock('sonner', () => ({
   },
 }));
 
-import { UpdateService } from './updateService';
+import { UpdateService, type AppUpdateInfo } from './updateService';
 import { sendNotification, isPermissionGranted } from '@tauri-apps/plugin-notification';
 import type { DistributionInfo } from '@/types/distribution';
 import type { AppSettings } from '@/types';
@@ -68,7 +64,7 @@ Object.defineProperty(window, 'localStorage', {
   },
 });
 
-function mockDirectDistribution(): void {
+function mockDirectDistribution(update: AppUpdateInfo | null = null): void {
   vi.mocked(invoke).mockImplementation(async (command) => {
     if (command === 'get_distribution_info') {
       return {
@@ -80,6 +76,14 @@ function mockDirectDistribution(): void {
 
     if (command === 'get_current_recording_state') {
       return { state: 'idle' };
+    }
+
+    if (command === 'check_for_app_update') {
+      return update;
+    }
+
+    if (command === 'install_app_update') {
+      return undefined;
     }
 
     return undefined;
@@ -162,27 +166,32 @@ describe('UpdateService update checks', () => {
   });
 
   it('initializes background checks by default without installing updates', async () => {
-    vi.mocked(check).mockResolvedValue(null);
     await service.initialize(testSettings());
 
-    expect(check).toHaveBeenCalledTimes(1);
+    expect(
+      vi.mocked(invoke).mock.calls.filter(([command]) => command === 'check_for_app_update'),
+    ).toHaveLength(1);
+    expect(
+      vi.mocked(invoke).mock.calls.filter(([command]) => command === 'install_app_update'),
+    ).toHaveLength(0);
   });
 
   it('background checks notify without installing updates', async () => {
-    const downloadAndInstall = vi.fn();
     vi.mocked(isPermissionGranted).mockResolvedValue(true);
-    vi.mocked(check).mockResolvedValue({
-      available: true,
+    mockDirectDistribution({
       version: '2.0.0',
       body: 'Release notes',
-      downloadAndInstall,
-      close: vi.fn().mockResolvedValue(undefined),
-    } as unknown as Update);
+      channel: 'stable',
+    });
 
     await service.initialize(testSettings({ check_updates_automatically: true }));
 
-    expect(check).toHaveBeenCalledTimes(1);
-    expect(downloadAndInstall).not.toHaveBeenCalled();
+    expect(
+      vi.mocked(invoke).mock.calls.filter(([command]) => command === 'check_for_app_update'),
+    ).toHaveLength(1);
+    expect(
+      vi.mocked(invoke).mock.calls.filter(([command]) => command === 'install_app_update'),
+    ).toHaveLength(0);
     expect(toast.info).toHaveBeenCalledWith(
       'Update 2.0.0 is available. Open Settings to install it.',
     );
@@ -193,19 +202,34 @@ describe('UpdateService update checks', () => {
   });
 
   it('manual checks still ask before installing', async () => {
-    const downloadAndInstall = vi.fn().mockResolvedValue(undefined);
-    vi.mocked(check).mockResolvedValue({
-      available: true,
-      version: '2.0.0',
-      body: 'Release notes',
-      downloadAndInstall,
-    } as never);
+    mockDirectDistribution({
+      version: '2.0.0-beta.1',
+      body: 'Beta notes',
+      channel: 'beta',
+    });
     vi.mocked(ask).mockResolvedValue(false);
 
     await service.checkForUpdatesManually();
 
     expect(ask).toHaveBeenCalled();
-    expect(downloadAndInstall).not.toHaveBeenCalled();
+    expect(
+      vi.mocked(invoke).mock.calls.filter(([command]) => command === 'install_app_update'),
+    ).toHaveLength(0);
+  });
+
+  it('installs the exact version confirmed by the user', async () => {
+    mockDirectDistribution({
+      version: '2.0.0-beta.2',
+      body: 'Beta notes',
+      channel: 'beta',
+    });
+    vi.mocked(ask).mockResolvedValue(true);
+
+    await service.checkForUpdatesManually();
+
+    expect(invoke).toHaveBeenCalledWith('install_app_update', {
+      expectedVersion: '2.0.0-beta.2',
+    });
   });
 
   it('deduplicates concurrent distribution info requests', async () => {
@@ -254,15 +278,20 @@ describe('UpdateService update checks', () => {
         return distributionInfoPromise;
       }
 
+      if (command === 'check_for_app_update') {
+        return null;
+      }
+
       return { state: 'idle' };
     });
-    vi.mocked(check).mockResolvedValue(null);
 
     const backgroundCheck = service.checkForUpdatesInBackground();
     const manualCheck = service.checkForUpdatesManually();
 
     expect(toast.info).toHaveBeenCalledWith('Update check already in progress');
-    expect(check).not.toHaveBeenCalled();
+    expect(
+      vi.mocked(invoke).mock.calls.filter(([command]) => command === 'check_for_app_update'),
+    ).toHaveLength(0);
 
     resolveDistribution({
       channel: 'direct',
@@ -272,7 +301,9 @@ describe('UpdateService update checks', () => {
 
     await Promise.all([backgroundCheck, manualCheck]);
 
-    expect(check).toHaveBeenCalledOnce();
+    expect(
+      vi.mocked(invoke).mock.calls.filter(([command]) => command === 'check_for_app_update'),
+    ).toHaveLength(1);
   });
 
   it('skips direct updater checks for Microsoft Store installs', async () => {
@@ -295,11 +326,15 @@ describe('UpdateService update checks', () => {
       theme: 'system',
     });
 
-    expect(check).not.toHaveBeenCalled();
+    expect(
+      vi.mocked(invoke).mock.calls.filter(([command]) => command === 'check_for_app_update'),
+    ).toHaveLength(0);
 
     await service.checkForUpdatesManually();
 
-    expect(check).not.toHaveBeenCalled();
+    expect(
+      vi.mocked(invoke).mock.calls.filter(([command]) => command === 'check_for_app_update'),
+    ).toHaveLength(0);
     expect(toast.info).toHaveBeenCalledWith('Updates are handled by Microsoft Store');
 
     localStorage.setItem(JUST_UPDATED_KEY, '1.12.5');
