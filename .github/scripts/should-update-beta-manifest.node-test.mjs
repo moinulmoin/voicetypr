@@ -4,6 +4,7 @@ import test from "node:test";
 import {
   compareSemver,
   releaseChannelForVersion,
+  releaseTagForVersion,
 } from "./should-update-beta-manifest.mjs";
 
 test("orders beta sequence numbers", () => {
@@ -33,6 +34,13 @@ test("accepts only stable and numbered beta release versions", () => {
     () => releaseChannelForVersion("2.0.5-rc.1"),
     /Unsupported release version/,
   );
+});
+
+test("normalizes updater manifest versions to one release tag prefix", () => {
+  assert.equal(releaseTagForVersion("2.0.5"), "v2.0.5");
+  assert.equal(releaseTagForVersion("v2.0.5"), "v2.0.5");
+  assert.equal(releaseTagForVersion("2.0.5-beta.1"), "v2.0.5-beta.1");
+  assert.equal(releaseTagForVersion("v2.0.5-beta.1"), "v2.0.5-beta.1");
 });
 
 test("rejects invalid versions", () => {

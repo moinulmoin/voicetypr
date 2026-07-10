@@ -43,7 +43,11 @@ jobs:
 
       - name: Validate release and immutable asset references
         run: |
-          if [[ "$RELEASE_TAG" != "v$candidate_version" ]]; then
+          EXPECTED_TAG="$(node --input-type=module -e '
+            import { releaseTagForVersion } from "./.github/scripts/should-update-beta-manifest.mjs";
+            process.stdout.write(releaseTagForVersion(process.env.candidate_version));
+          ')"
+          if [[ "$RELEASE_TAG" != "$EXPECTED_TAG" ]]; then
             echo "::error::Release tag $RELEASE_TAG does not match manifest version $candidate_version"
             exit 1
           fi

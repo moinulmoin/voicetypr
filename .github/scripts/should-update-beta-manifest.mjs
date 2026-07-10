@@ -26,6 +26,11 @@ export function releaseChannelForVersion(input) {
   throw new Error(`Unsupported release version: ${input}`);
 }
 
+export function releaseTagForVersion(input) {
+  releaseChannelForVersion(input);
+  return `v${input.trim().replace(/^v/, "")}`;
+}
+
 export function compareSemver(leftInput, rightInput) {
   const left = parseSemver(leftInput);
   const right = parseSemver(rightInput);
