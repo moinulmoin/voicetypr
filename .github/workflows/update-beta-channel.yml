@@ -3,6 +3,12 @@ name: Update Beta Channel
 on:
   release:
     types: [published]
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: 'Published Stable/Beta release tag to replay'
+        required: true
+        type: string
 
 permissions:
   contents: write
@@ -15,24 +21,37 @@ jobs:
   update-beta-manifest:
     # Creating the synthetic rolling `beta` release also emits `release.published`.
     # Ignore it or the pointer workflow would recursively trigger itself.
-    if: ${{ github.event.release.tag_name != 'beta' }}
+    if: ${{ (github.event_name == 'release' && github.event.release.tag_name != 'beta') || (github.event_name == 'workflow_dispatch' && inputs.release_tag != 'beta') }}
     runs-on: ubuntu-latest
     env:
       GH_TOKEN: ${{ github.token }}
-      RELEASE_TAG: ${{ github.event.release.tag_name }}
-      RELEASE_IS_PRERELEASE: ${{ github.event.release.prerelease }}
+      RELEASE_TAG: ${{ github.event.release.tag_name || inputs.release_tag }}
       REPOSITORY: ${{ github.repository }}
     steps:
       - name: Checkout channel tooling
         uses: actions/checkout@v4
+        with:
+          ref: main
+          persist-credentials: false
 
-      - name: Download published updater manifest
+      - name: Load published updater manifest
         run: |
+          RELEASE_METADATA="$(gh release view \
+            --repo "$REPOSITORY" \
+            --json isDraft,isPrerelease \
+            -- "$RELEASE_TAG")"
+          if [[ "$(jq -r '.isDraft' <<< "$RELEASE_METADATA")" == "true" ]]; then
+            echo "::error::Release $RELEASE_TAG is still a draft"
+            exit 1
+          fi
+          echo "RELEASE_IS_PRERELEASE=$(jq -r '.isPrerelease' <<< "$RELEASE_METADATA")" >> "$GITHUB_ENV"
+
           mkdir -p candidate
-          gh release download "$RELEASE_TAG" \
+          gh release download \
             --repo "$REPOSITORY" \
             --pattern latest.json \
-            --dir candidate
+            --dir candidate \
+            -- "$RELEASE_TAG"
 
           CANDIDATE_VERSION="$(jq -r '.version' candidate/latest.json)"
           if [[ -z "$CANDIDATE_VERSION" || "$CANDIDATE_VERSION" == "null" ]]; then
