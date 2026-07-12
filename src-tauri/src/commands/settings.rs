@@ -53,8 +53,12 @@ pub struct Settings {
     pub ptt_hotkey: Option<String>,
     pub keep_transcription_in_clipboard: bool,
     // Audio feedback
+    #[serde(default = "default_true")]
     pub play_sound_on_recording: bool,
-    pub play_sound_on_recording_end: bool,
+    #[serde(default = "default_true")]
+    pub play_sound_on_transcription_complete: bool,
+    #[serde(default = "default_true")]
+    pub play_sound_on_paste_success: bool,
     // Pill indicator visibility mode: "never", "always", or "when_recording"
     pub pill_indicator_mode: String,
     // Pill indicator screen position
@@ -99,8 +103,9 @@ impl Default for Settings {
             use_different_ptt_key: false,         // Default to using same key
             ptt_hotkey: Some("Alt+Space".to_string()), // Default PTT key
             keep_transcription_in_clipboard: false, // Default to restoring clipboard after paste
-            play_sound_on_recording: true,        // Default to playing sound on recording start
-            play_sound_on_recording_end: true,    // Default to playing sound on recording end
+            play_sound_on_recording: true,
+            play_sound_on_transcription_complete: true,
+            play_sound_on_paste_success: true,
             pill_indicator_mode: "when_recording".to_string(), // Default to showing only when recording
             pill_indicator_position: "bottom-center".to_string(), // Default to bottom center of screen
             pill_indicator_offset: DEFAULT_INDICATOR_OFFSET,
@@ -122,6 +127,17 @@ fn default_update_channel() -> String {
 
 fn default_transcription_acceleration() -> String {
     "auto".to_string()
+}
+
+fn default_true() -> bool {
+    true
+}
+
+pub fn resolve_transcription_complete_sound(
+    stored: Option<bool>,
+    legacy_recording_end: Option<bool>,
+) -> bool {
+    stored.or(legacy_recording_end).unwrap_or(true)
 }
 
 pub fn normalize_stored_transcription_acceleration(value: Option<&str>) -> String {
@@ -443,10 +459,18 @@ pub async fn get_settings(app: AppHandle) -> Result<Settings, String> {
             .get("play_sound_on_recording")
             .and_then(|v| v.as_bool())
             .unwrap_or_else(|| Settings::default().play_sound_on_recording),
-        play_sound_on_recording_end: store
-            .get("play_sound_on_recording_end")
+        play_sound_on_transcription_complete: resolve_transcription_complete_sound(
+            store
+                .get("play_sound_on_transcription_complete")
+                .and_then(|v| v.as_bool()),
+            store
+                .get("play_sound_on_recording_end")
+                .and_then(|v| v.as_bool()),
+        ),
+        play_sound_on_paste_success: store
+            .get("play_sound_on_paste_success")
             .and_then(|v| v.as_bool())
-            .unwrap_or_else(|| Settings::default().play_sound_on_recording_end),
+            .unwrap_or_else(|| Settings::default().play_sound_on_paste_success),
         // Migration: check for new pill_indicator_mode first, then fall back to old show_pill_indicator
         pill_indicator_mode: resolve_pill_indicator_mode(
             store
@@ -680,9 +704,14 @@ pub async fn save_settings(app: AppHandle, settings: Settings) -> Result<(), Str
         json!(settings.play_sound_on_recording),
     );
     store.set(
-        "play_sound_on_recording_end",
-        json!(settings.play_sound_on_recording_end),
+        "play_sound_on_transcription_complete",
+        json!(settings.play_sound_on_transcription_complete),
     );
+    store.set(
+        "play_sound_on_paste_success",
+        json!(settings.play_sound_on_paste_success),
+    );
+    store.delete("play_sound_on_recording_end");
     store.set("pill_indicator_mode", json!(settings.pill_indicator_mode));
     store.set(
         "pill_indicator_position",

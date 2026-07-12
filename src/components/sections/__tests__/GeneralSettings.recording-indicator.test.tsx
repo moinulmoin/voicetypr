@@ -9,7 +9,8 @@ const baseSettings = {
   hotkey: 'CommandOrControl+Shift+Space',
   keep_transcription_in_clipboard: false,
   play_sound_on_recording: true,
-  play_sound_on_recording_end: true,
+  play_sound_on_transcription_complete: true,
+  play_sound_on_paste_success: true,
   pill_indicator_mode: 'when_recording',
   pill_indicator_position: 'bottom-center',
   pill_indicator_offset: 10
@@ -77,8 +78,9 @@ vi.mock('@/components/ui/switch', () => ({
     <button
       type="button"
       role="switch"
-      aria-checked={checked}
+      id={id}
       data-testid={id ? `switch-${id}` : 'switch'}
+      aria-checked={checked}
       disabled={disabled}
       onClick={() => onCheckedChange?.(!checked)}
     />
@@ -227,128 +229,55 @@ describe('GeneralSettings recording indicator', () => {
 // Sound Settings Tests
 // ============================================================================
 
-describe('GeneralSettings sound settings', () => {
+describe('GeneralSettings audio feedback settings', () => {
   beforeEach(() => {
     mockSettings = { ...baseSettings };
     vi.clearAllMocks();
     setupDefaultInvoke();
   });
 
-  it('displays Sound on Recording label', async () => {
+  it('describes the three exact audio feedback events', async () => {
     render(<GeneralSettings />);
+
+    expect(await screen.findByText('Recording started')).toBeInTheDocument();
+    expect(screen.getByText('Transcript ready')).toBeInTheDocument();
+    expect(screen.getByText('Paste completed')).toBeInTheDocument();
+    expect(
+      screen.getByText('Play a sound when the microphone is ready for speech.')
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText('Play a sound after transcription and optional AI formatting finish.')
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText('Play a sound after VoiceTypr successfully sends the paste command.')
+    ).toBeInTheDocument();
+  });
+
+  it.each([
+    ['Recording started', 'play_sound_on_recording'],
+    ['Transcript ready', 'play_sound_on_transcription_complete'],
+    ['Paste completed', 'play_sound_on_paste_success'],
+  ] as const)('updates %s independently', async (label, setting) => {
+    render(<GeneralSettings />);
+    fireEvent.click(await screen.findByRole('switch', { name: label }));
+
     await waitFor(() => {
-      expect(screen.getByText('Sound on Recording')).toBeInTheDocument();
+      expect(mockUpdateSettings).toHaveBeenCalledWith({ [setting]: false });
     });
   });
 
-  it('displays Sound on Recording End label', async () => {
-    render(<GeneralSettings />);
-    await waitFor(() => {
-      expect(screen.getByText('Sound on Recording End')).toBeInTheDocument();
-    });
-  });
-
-  it('displays sound on recording description', async () => {
+  it.each([
+    ['Recording started', 'play_sound_on_recording'],
+    ['Transcript ready', 'play_sound_on_transcription_complete'],
+    ['Paste completed', 'play_sound_on_paste_success'],
+  ] as const)('reflects disabled state for %s', async (label, setting) => {
+    mockSettings = { ...baseSettings, [setting]: false };
     render(<GeneralSettings />);
 
-    await waitFor(() => {
-      expect(screen.getByText('Play a sound when recording starts')).toBeInTheDocument();
-    });
-  });
-
-  it('displays sound on recording end description', async () => {
-    render(<GeneralSettings />);
-    await waitFor(() => {
-      expect(screen.getByText('Play a sound when recording stops')).toBeInTheDocument();
-    });
-  });
-
-  it('renders sound on recording switch', async () => {
-    render(<GeneralSettings />);
-    await waitFor(() => {
-      expect(screen.getByTestId('switch-sound-on-recording')).toBeInTheDocument();
-    });
-  });
-
-  it('renders sound on recording end switch', async () => {
-    render(<GeneralSettings />);
-    await waitFor(() => {
-      expect(screen.getByTestId('switch-sound-on-recording-end')).toBeInTheDocument();
-    });
-  });
-
-  it('calls updateSettings when sound on recording switch is clicked', async () => {
-    render(<GeneralSettings />);
-
-    await waitFor(() => {
-      expect(screen.getByTestId('switch-sound-on-recording')).toBeInTheDocument();
-    });
-
-    const switchButton = screen.getByTestId('switch-sound-on-recording');
-    fireEvent.click(switchButton);
-
-    await waitFor(() => {
-      expect(mockUpdateSettings).toHaveBeenCalledWith({
-        play_sound_on_recording: false
-      });
-    });
-  });
-
-  it('calls updateSettings when sound on recording end switch is clicked', async () => {
-    render(<GeneralSettings />);
-
-    await waitFor(() => {
-      expect(screen.getByTestId('switch-sound-on-recording-end')).toBeInTheDocument();
-    });
-
-    const switchButton = screen.getByTestId('switch-sound-on-recording-end');
-    fireEvent.click(switchButton);
-
-    await waitFor(() => {
-      expect(mockUpdateSettings).toHaveBeenCalledWith({
-        play_sound_on_recording_end: false
-      });
-    });
-  });
-
-  it('reflects play_sound_on_recording=false in switch state', async () => {
-    mockSettings.play_sound_on_recording = false;
-    render(<GeneralSettings />);
-
-    await waitFor(() => {
-      const switchButton = screen.getByTestId('switch-sound-on-recording');
-      expect(switchButton).toHaveAttribute('aria-checked', 'false');
-    });
-  });
-
-  it('reflects play_sound_on_recording=true in switch state', async () => {
-    mockSettings.play_sound_on_recording = true;
-    render(<GeneralSettings />);
-
-    await waitFor(() => {
-      const switchButton = screen.getByTestId('switch-sound-on-recording');
-      expect(switchButton).toHaveAttribute('aria-checked', 'true');
-    });
-  });
-
-  it('reflects play_sound_on_recording_end=false in switch state', async () => {
-    mockSettings.play_sound_on_recording_end = false;
-    render(<GeneralSettings />);
-
-    await waitFor(() => {
-      const switchButton = screen.getByTestId('switch-sound-on-recording-end');
-      expect(switchButton).toHaveAttribute('aria-checked', 'false');
-    });
-  });
-
-  it('reflects play_sound_on_recording_end=true in switch state', async () => {
-    mockSettings.play_sound_on_recording_end = true;
-    render(<GeneralSettings />);
-
-    await waitFor(() => {
-      const switchButton = screen.getByTestId('switch-sound-on-recording-end');
-      expect(switchButton).toHaveAttribute('aria-checked', 'true');
-    });
+    expect(await screen.findByRole('switch', { name: label })).toHaveAttribute(
+      'aria-checked',
+      'false'
+    );
   });
 });
 
@@ -795,24 +724,27 @@ describe('GeneralSettings null handling', () => {
     // The component should handle null gracefully
   });
 
-  it('handles undefined sound settings with defaults', async () => {
-    // Remove sound settings to test ?? operator
+  it('handles undefined sound settings with enabled defaults', async () => {
     const settingsWithoutSound = {
       recording_mode: 'toggle',
       hotkey: 'CommandOrControl+Shift+Space',
       keep_transcription_in_clipboard: false,
       pill_indicator_mode: 'when_recording',
-      pill_indicator_position: 'bottom-center'
-      // play_sound_on_recording and play_sound_on_recording_end intentionally omitted
+      pill_indicator_position: 'bottom-center',
     };
     mockSettings = settingsWithoutSound as typeof mockSettings;
 
     render(<GeneralSettings />);
-    await waitFor(() => {
-      // Should still render with defaults (true)
-      const switchButton = screen.getByTestId('switch-sound-on-recording');
-      expect(switchButton).toHaveAttribute('aria-checked', 'true');
-    });
+    for (const label of [
+      'Recording started',
+      'Transcript ready',
+      'Paste completed',
+    ]) {
+      expect(await screen.findByRole('switch', { name: label })).toHaveAttribute(
+        'aria-checked',
+        'true'
+      );
+    }
   });
 });
 

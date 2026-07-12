@@ -82,7 +82,8 @@ export interface AppSettings {
   keep_transcription_in_clipboard?: boolean;
   // Audio feedback
   play_sound_on_recording?: boolean;
-  play_sound_on_recording_end?: boolean;
+  play_sound_on_transcription_complete?: boolean;
+  play_sound_on_paste_success?: boolean;
   // Pill indicator visibility mode
   pill_indicator_mode?: PillIndicatorMode;
   // Pill indicator screen position

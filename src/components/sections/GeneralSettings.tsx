@@ -13,6 +13,7 @@ import {
   FieldContent,
   FieldDescription,
   FieldGroup,
+  FieldLabel,
   FieldLegend,
   FieldSet,
   FieldTitle,
@@ -773,10 +774,17 @@ export function GeneralSettings() {
                     />
                   </Field>
 
+                </FieldSet>
+
+                <FieldSet className="gap-4 border-t border-border/60 pt-5">
+                  <FieldLegend className="mb-1 text-base font-semibold">Audio feedback</FieldLegend>
+
                   <Field orientation="responsive" className="items-center gap-3">
                     <FieldContent>
-                      <FieldTitle>Sound on Recording</FieldTitle>
-                      <FieldDescription>Play a sound when recording starts</FieldDescription>
+                      <FieldLabel htmlFor="sound-on-recording">Recording started</FieldLabel>
+                      <FieldDescription>
+                        Play a sound when the microphone is ready for speech.
+                      </FieldDescription>
                     </FieldContent>
                     <Switch
                       id="sound-on-recording"
@@ -791,15 +799,37 @@ export function GeneralSettings() {
 
                   <Field orientation="responsive" className="items-center gap-3">
                     <FieldContent>
-                      <FieldTitle>Sound on Recording End</FieldTitle>
-                      <FieldDescription>Play a sound when recording stops</FieldDescription>
+                      <FieldLabel htmlFor="sound-on-transcription-complete">
+                        Transcript ready
+                      </FieldLabel>
+                      <FieldDescription>
+                        Play a sound after transcription and optional AI formatting finish.
+                      </FieldDescription>
                     </FieldContent>
                     <Switch
-                      id="sound-on-recording-end"
-                      checked={settings.play_sound_on_recording_end ?? true}
+                      id="sound-on-transcription-complete"
+                      checked={settings.play_sound_on_transcription_complete ?? true}
                       onCheckedChange={async (checked) =>
                         await updateSettings({
-                          play_sound_on_recording_end: checked,
+                          play_sound_on_transcription_complete: checked,
+                        })
+                      }
+                    />
+                  </Field>
+
+                  <Field orientation="responsive" className="items-center gap-3">
+                    <FieldContent>
+                      <FieldLabel htmlFor="sound-on-paste-success">Paste completed</FieldLabel>
+                      <FieldDescription>
+                        Play a sound after VoiceTypr successfully sends the paste command.
+                      </FieldDescription>
+                    </FieldContent>
+                    <Switch
+                      id="sound-on-paste-success"
+                      checked={settings.play_sound_on_paste_success ?? true}
+                      onCheckedChange={async (checked) =>
+                        await updateSettings({
+                          play_sound_on_paste_success: checked,
                         })
                       }
                     />

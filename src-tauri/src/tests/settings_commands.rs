@@ -3,8 +3,9 @@ mod tests {
     use crate::commands::settings::{
         get_supported_languages, normalize_final_text_language,
         normalize_speech_language_for_model, normalize_stored_transcription_acceleration,
-        task_uses_translate_to_english, Settings, FINAL_TEXT_LANGUAGE_SAME_AS_TRANSCRIPT,
-        TRANSCRIPTION_TASK_TRANSCRIBE, TRANSCRIPTION_TASK_TRANSLATE_TO_ENGLISH,
+        resolve_transcription_complete_sound, task_uses_translate_to_english, Settings,
+        FINAL_TEXT_LANGUAGE_SAME_AS_TRANSCRIPT, TRANSCRIPTION_TASK_TRANSCRIBE,
+        TRANSCRIPTION_TASK_TRANSLATE_TO_ENGLISH,
     };
     use crate::commands::updater::UpdateChannel;
     use serde_json::json;
@@ -52,7 +53,8 @@ mod tests {
             ptt_hotkey: Some("Alt+Space".to_string()),
             keep_transcription_in_clipboard: false,
             play_sound_on_recording: true,
-            play_sound_on_recording_end: true,
+            play_sound_on_transcription_complete: true,
+            play_sound_on_paste_success: true,
             pill_indicator_mode: "when_recording".to_string(),
             pill_indicator_position: "bottom-center".to_string(),
             pill_indicator_offset: 10,
@@ -135,7 +137,8 @@ mod tests {
             ptt_hotkey: Some("CommandOrControl+Space".to_string()),
             keep_transcription_in_clipboard: true,
             play_sound_on_recording: false,
-            play_sound_on_recording_end: false,
+            play_sound_on_transcription_complete: false,
+            play_sound_on_paste_success: false,
             pill_indicator_mode: "never".to_string(),
             pill_indicator_position: "top-center".to_string(),
             pill_indicator_offset: 25,
@@ -404,15 +407,22 @@ mod tests {
     // ==================== Sound Settings Tests ====================
 
     #[test]
-    fn test_play_sound_on_recording_default() {
+    fn audio_feedback_defaults_on() {
         let settings = Settings::default();
         assert!(settings.play_sound_on_recording);
+        assert!(settings.play_sound_on_transcription_complete);
+        assert!(settings.play_sound_on_paste_success);
     }
 
     #[test]
-    fn test_play_sound_on_recording_end_default() {
-        let settings = Settings::default();
-        assert!(settings.play_sound_on_recording_end);
+    fn transcription_complete_sound_migrates_legacy_preference() {
+        assert!(!resolve_transcription_complete_sound(None, Some(false)));
+        assert!(resolve_transcription_complete_sound(None, Some(true)));
+        assert!(resolve_transcription_complete_sound(
+            Some(true),
+            Some(false)
+        ));
+        assert!(resolve_transcription_complete_sound(None, None));
     }
 
     #[test]
@@ -507,29 +517,35 @@ mod tests {
     fn test_sound_settings_can_be_disabled() {
         let settings = Settings {
             play_sound_on_recording: false,
-            play_sound_on_recording_end: false,
+            play_sound_on_transcription_complete: false,
+            play_sound_on_paste_success: false,
             ..Settings::default()
         };
 
         assert!(!settings.play_sound_on_recording);
-        assert!(!settings.play_sound_on_recording_end);
+        assert!(!settings.play_sound_on_transcription_complete);
+        assert!(!settings.play_sound_on_paste_success);
     }
 
     #[test]
     fn test_sound_settings_serialization() {
         let settings = Settings {
             play_sound_on_recording: false,
-            play_sound_on_recording_end: true,
+            play_sound_on_transcription_complete: true,
+            play_sound_on_paste_success: true,
             ..Settings::default()
         };
 
         let json = serde_json::to_string(&settings).unwrap();
         assert!(json.contains("\"play_sound_on_recording\":false"));
-        assert!(json.contains("\"play_sound_on_recording_end\":true"));
+        assert!(json.contains("\"play_sound_on_transcription_complete\":true"));
+        assert!(json.contains("\"play_sound_on_paste_success\":true"));
+        assert!(!json.contains("\"play_sound_on_recording_end\""));
 
         let deserialized: Settings = serde_json::from_str(&json).unwrap();
         assert!(!deserialized.play_sound_on_recording);
-        assert!(deserialized.play_sound_on_recording_end);
+        assert!(deserialized.play_sound_on_transcription_complete);
+        assert!(deserialized.play_sound_on_paste_success);
     }
 
     // ==================== Recording Mode Tests ====================
@@ -851,7 +867,8 @@ mod tests {
             ptt_hotkey: Some("Alt+R".to_string()),
             keep_transcription_in_clipboard: true,
             play_sound_on_recording: false,
-            play_sound_on_recording_end: false,
+            play_sound_on_transcription_complete: false,
+            play_sound_on_paste_success: false,
             pill_indicator_mode: "always".to_string(),
             pill_indicator_position: "top-left".to_string(),
             pill_indicator_offset: 42,
@@ -903,8 +920,12 @@ mod tests {
             original.play_sound_on_recording
         );
         assert_eq!(
-            restored.play_sound_on_recording_end,
-            original.play_sound_on_recording_end
+            restored.play_sound_on_transcription_complete,
+            original.play_sound_on_transcription_complete
+        );
+        assert_eq!(
+            restored.play_sound_on_paste_success,
+            original.play_sound_on_paste_success
         );
         assert_eq!(restored.pill_indicator_mode, original.pill_indicator_mode);
         assert_eq!(
@@ -956,7 +977,10 @@ mod tests {
         assert!(json_value.get("ptt_hotkey").is_some());
         assert!(json_value.get("keep_transcription_in_clipboard").is_some());
         assert!(json_value.get("play_sound_on_recording").is_some());
-        assert!(json_value.get("play_sound_on_recording_end").is_some());
+        assert!(json_value
+            .get("play_sound_on_transcription_complete")
+            .is_some());
+        assert!(json_value.get("play_sound_on_paste_success").is_some());
         assert!(json_value.get("pill_indicator_mode").is_some());
         assert!(json_value.get("pill_indicator_position").is_some());
         assert!(json_value.get("pill_indicator_offset").is_some());

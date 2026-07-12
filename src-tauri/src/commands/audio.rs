@@ -1505,14 +1505,15 @@ mod tests {
         build_transcription_job, build_translation_failed_history_metadata,
         build_writing_history_metadata, classify_local_failure, finalize_in_flight_audio,
         is_ai_auth_error, is_non_speech_transcript, persist_if_current,
-        plan_desktop_writing_success, recording_license_state, remote_server_error_pill_message,
-        set_in_flight_transcription_audio, should_hide_pill_when_idle, should_use_active_remote,
-        silence_event_runs_in_state, silence_timeout_disposition, stop_should_reset_to_idle,
+        plan_desktop_writing_success, recording_license_state, recording_started_cue_eligible,
+        remote_server_error_pill_message, set_in_flight_transcription_audio,
+        should_hide_pill_when_idle, should_use_active_remote, silence_event_runs_in_state,
+        silence_timeout_disposition, stop_should_reset_to_idle,
         sync_retranscription_failure_metadata, take_in_flight_transcription_audio,
-        toast_clear_is_current, transcription_watchdog_budget, ActiveEngineSelection,
-        LocalFailureKind, NormalizedTempFile, PillToastEventPayload, RecordingLicenseState,
-        SilenceDetectorEvent, SilenceTimeoutDisposition, StopInFlightGuard, TranscriptionFailure,
-        TranscriptionStatus,
+        toast_clear_is_current, transcript_ready_cue_eligible, transcription_watchdog_budget,
+        ActiveEngineSelection, LocalFailureKind, NormalizedTempFile, PillToastEventPayload,
+        RecordingLicenseState, SilenceDetectorEvent, SilenceTimeoutDisposition, StopInFlightGuard,
+        TranscriptionFailure, TranscriptionStatus,
     };
     use crate::commands::license::CachedLicense;
     use crate::license::{LicenseState, LicenseStatus};
@@ -1533,6 +1534,20 @@ mod tests {
             license_key: None,
             expires_at: None,
         })
+    }
+
+    #[test]
+    fn recording_started_cue_requires_no_pending_stop() {
+        assert!(recording_started_cue_eligible(false));
+        assert!(!recording_started_cue_eligible(true));
+    }
+
+    #[test]
+    fn transcript_ready_cue_requires_successful_writing_and_delivery() {
+        assert!(transcript_ready_cue_eligible(true, true));
+        assert!(!transcript_ready_cue_eligible(false, true));
+        assert!(!transcript_ready_cue_eligible(true, false));
+        assert!(!transcript_ready_cue_eligible(false, false));
     }
 
     #[test]
@@ -2718,67 +2733,6 @@ mod tests {
     }
 }
 
-/// Play a system sound to confirm recording start (macOS only)
-#[cfg(target_os = "macos")]
-fn play_recording_start_sound() {
-    std::thread::spawn(|| {
-        let _ = std::process::Command::new("afplay")
-            .arg("/System/Library/Sounds/Tink.aiff")
-            .spawn();
-    });
-}
-
-/// Play a system sound to confirm recording start (Windows)
-#[cfg(target_os = "windows")]
-fn play_recording_start_sound() {
-    use std::os::windows::process::CommandExt;
-    const CREATE_NO_WINDOW: u32 = 0x08000000;
-
-    std::thread::spawn(|| {
-        // Use PowerShell to play a system sound on Windows (hidden console)
-        let _ = std::process::Command::new("powershell")
-            .args(["-c", "[console]::beep(800, 100)"])
-            .creation_flags(CREATE_NO_WINDOW)
-            .spawn();
-    });
-}
-
-#[cfg(not(any(target_os = "macos", target_os = "windows")))]
-fn play_recording_start_sound() {
-    // No-op on other platforms
-}
-
-/// Play a system sound to confirm recording end (macOS only)
-#[cfg(target_os = "macos")]
-fn play_recording_end_sound() {
-    std::thread::spawn(|| {
-        // Use a different sound for recording end - Pop sound
-        let _ = std::process::Command::new("afplay")
-            .arg("/System/Library/Sounds/Pop.aiff")
-            .spawn();
-    });
-}
-
-/// Play a system sound to confirm recording end (Windows)
-#[cfg(target_os = "windows")]
-fn play_recording_end_sound() {
-    use std::os::windows::process::CommandExt;
-    const CREATE_NO_WINDOW: u32 = 0x08000000;
-
-    std::thread::spawn(|| {
-        // Use PowerShell with a lower frequency tone for recording end (hidden console)
-        let _ = std::process::Command::new("powershell")
-            .args(["-c", "[console]::beep(600, 100)"])
-            .creation_flags(CREATE_NO_WINDOW)
-            .spawn();
-    });
-}
-
-#[cfg(not(any(target_os = "macos", target_os = "windows")))]
-fn play_recording_end_sound() {
-    // No-op on other platforms
-}
-
 /// Cached recording configuration to avoid repeated store access during transcription flow
 /// Cache is invalidated when settings change via update hooks
 #[derive(Clone, Debug)]
@@ -3620,6 +3574,14 @@ pub(crate) fn clear_pending_stop_after_start(app_state: &AppState) {
         .store(false, std::sync::atomic::Ordering::SeqCst);
 }
 
+fn recording_started_cue_eligible(pending_stop_consumed: bool) -> bool {
+    !pending_stop_consumed
+}
+
+fn transcript_ready_cue_eligible(writing_succeeded: bool, should_deliver: bool) -> bool {
+    writing_succeeded && should_deliver
+}
+
 fn silence_event_runs_in_state(state: RecordingState) -> bool {
     matches!(state, RecordingState::Recording)
 }
@@ -3891,24 +3853,6 @@ pub async fn start_recording(
         crate::RecordingState::Starting
     ) {
         return Err("Cannot start recording in current state".to_string());
-    }
-
-    // Play sound on recording start if enabled
-    log::debug!(
-        "⏱️ [REC TIMING] about to play sound (+{}ms)",
-        recording_start.elapsed().as_millis()
-    );
-    if let Ok(store) = app.store("settings") {
-        let play_sound = store
-            .get("play_sound_on_recording")
-            .and_then(|v| v.as_bool())
-            .unwrap_or(true); // Default to true
-        if play_sound {
-            play_recording_start_sound();
-            // Capture first: play the chime concurrently with microphone/device initialization
-            // so we do not lose the first word. Users can disable the sound if a Bluetooth
-            // chime clips the start of capture.
-        }
     }
 
     // Pause system media if enabled (default: off)
@@ -4343,10 +4287,10 @@ pub async fn start_recording(
     // after entering Recording state. For PTT, key-up in Starting state sets this flag.
     // The second PTT guard above handles key-up during audio init; this handles the
     // narrow window between Starting transition and this point.
-    if app_state
+    let pending_stop_consumed = app_state
         .pending_stop_after_start
-        .swap(false, std::sync::atomic::Ordering::SeqCst)
-    {
+        .swap(false, std::sync::atomic::Ordering::SeqCst);
+    if pending_stop_consumed {
         log::info!("Toggle: pending stop triggered right after start; stopping now");
         let app_handle = app.clone();
         tauri::async_runtime::spawn(async move {
@@ -4355,6 +4299,11 @@ pub async fn start_recording(
                 log::error!("Toggle: pending stop failed: {}", e);
             }
         });
+    } else if recording_started_cue_eligible(pending_stop_consumed) {
+        crate::commands::audio_feedback::play_audio_feedback(
+            &app,
+            crate::commands::audio_feedback::AudioFeedbackCue::RecordingStarted,
+        );
     }
     if let Some(silence_event_rx) = silence_event_rx_to_spawn {
         spawn_silence_event_listener(app.clone(), silence_event_rx);
@@ -4533,17 +4482,6 @@ pub async fn stop_recording(
         };
         capture_metrics = recorder.take_last_capture_metrics();
         log::info!("{}", stop_message);
-
-        // Play sound on recording end if enabled
-        if let Ok(store) = app.store("settings") {
-            let play_sound = store
-                .get("play_sound_on_recording_end")
-                .and_then(|v| v.as_bool())
-                .unwrap_or(true); // Default to true
-            if play_sound {
-                play_recording_end_sound();
-            }
-        }
 
         // Resume system media if we paused it
         MEDIA_CONTROLLER.resume_if_we_paused();
@@ -5443,7 +5381,7 @@ pub async fn stop_recording(
 
                 tokio::spawn(async move {
                     // 1. Process the transcription and enhancement
-                    let (final_text, writing_metadata, should_deliver) =
+                    let (final_text, writing_metadata, should_deliver, writing_succeeded) =
                         match crate::writing::process_transcription(
                             app_for_process.clone(),
                             transcription_for_process.clone(),
@@ -5452,6 +5390,7 @@ pub async fn stop_recording(
                         .await
                         {
                             Ok(writing_result) => {
+                                let writing_succeeded = writing_result.ai_error.is_none();
                                 if let Some(error) = writing_result.ai_error.as_ref() {
                                     log::warn!(
                                         "AI polish failed with {}; delivering deterministic text",
@@ -5488,7 +5427,12 @@ pub async fn stop_recording(
                                     &writing_result,
                                 );
                                 debug_assert_eq!(plan.save_history_entries, 1);
-                                (plan.final_text, plan.writing_metadata, plan.should_deliver)
+                                (
+                                    plan.final_text,
+                                    plan.writing_metadata,
+                                    plan.should_deliver,
+                                    writing_succeeded,
+                                )
                             }
                             Err(crate::writing::WritingError::TranslationFailed {
                                 target_language,
@@ -5558,7 +5502,7 @@ pub async fn stop_recording(
                                     }
                                 }
 
-                                (text_for_process.clone(), None, false)
+                                (text_for_process.clone(), None, false, false)
                             }
                             Err(crate::writing::WritingError::OutputLanguageRequiresAi) => {
                                 log::warn!("Formatting failed: Final output language requires AI enhancement or native translation");
@@ -5572,7 +5516,7 @@ pub async fn stop_recording(
                                     1500,
                                 );
 
-                                (text_for_process.clone(), None, false)
+                                (text_for_process.clone(), None, false, false)
                             }
                             Err(crate::writing::WritingError::Config(e)) => {
                                 log::warn!("Formatting failed: {}", e);
@@ -5582,7 +5526,7 @@ pub async fn stop_recording(
 
                                 pill_toast(&app_for_process, "Formatting failed", 1500);
 
-                                (text_for_process.clone(), None, false)
+                                (text_for_process.clone(), None, false, false)
                             }
                         };
 
@@ -5658,6 +5602,26 @@ pub async fn stop_recording(
                         }
                         update_recording_state(&app_for_process, RecordingState::Idle, None);
                         return;
+                    }
+
+                    if transcript_ready_cue_eligible(writing_succeeded, should_deliver) {
+                        let cue_committed = persist_if_current(&app_state, task_generation, || {
+                            crate::commands::audio_feedback::play_audio_feedback(
+                                &app_for_process,
+                                crate::commands::audio_feedback::AudioFeedbackCue::TranscriptReady,
+                            );
+                        });
+                        if cue_committed.is_none() {
+                            log::info!(
+                                "Skipped transcript-ready cue for stale/cancelled generation {}",
+                                task_generation
+                            );
+                            if let Some(saved) = &recording_file_for_task {
+                                revoke_saved_recording(&app_for_process, saved).await;
+                            }
+                            update_recording_state(&app_for_process, RecordingState::Idle, None);
+                            return;
+                        }
                     }
 
                     if auto_paste {
