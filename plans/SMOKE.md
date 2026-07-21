@@ -11,7 +11,7 @@ against the named plan instead of hot-fixing inline.
 
 ## Plan 030 — Windows crash dependencies (NEEDS-SMOKE)
 
-Run these on the signed Windows Beta 4 build. Keep Bugsink open for recurrence
+Run these on the signed Windows Beta 7 build. Keep Bugsink open for recurrence
 of the `flush_paint_messages` assertion and invalid-monitor-handle error 1461.
 
 - [ ] 030-S1 With the tray menu and pill alternately open and closed, put a
@@ -25,6 +25,31 @@ of the `flush_paint_messages` assertion and invalid-monitor-handle error 1461.
       displays with different DPI/scaling → placement updates without panic.
 - [ ] 030-S4 Normal regression: record, transcribe, paste, open tray settings,
       then quit from the tray → unchanged behavior.
+
+## Plan 033 — tray recovery + upload result accessibility (NEEDS-SMOKE)
+
+Run these on signed `v2.0.5-beta.7`. The local macOS development build already
+proved first-attempt tray construction and ordinary tray-menu availability;
+the failure/recovery path and long-upload geometry still require real runtime
+conditions.
+
+- [ ] 033-S1 macOS cold launch and quit/relaunch → menu-bar icon appears once,
+      dashboard opens, tray actions work, and the launch log contains
+      `TRAY_CREATION | source=startup | attempt=1 | result=success`.
+- [ ] 033-S2 On the affected Mac, reproduce any tray creation failure →
+      dashboard stays visible, warning reports the attempt count, Retry icon
+      either restores one icon or leaves actionable help visible, and a copied
+      bug report includes tray availability/attempts/last error.
+- [ ] 033-S3 Crowded notched menu bar and external display → determine whether
+      an `available` tray is merely hidden by macOS placement; no duplicate
+      icon appears after sleep/wake or relaunch.
+- [ ] 033-S4 Upload a long Parakeet file with enough diarization segments to
+      scroll → the timeline stays inside its panel; Copy, Save, and Transcribe
+      Another File remain mouse- and keyboard-accessible; saved text matches
+      History.
+- [ ] 033-S5 Windows normal launch and autostart → delayed tray recovery does
+      not crash or duplicate the icon; complete Plan 030-S1..S4 on the same
+      signed build.
 
 ## Plan 004 — cancel during `Starting` (code at `9868fdc` era, NEEDS-SMOKE)
 

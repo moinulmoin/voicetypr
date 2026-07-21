@@ -1,6 +1,6 @@
 # 033 — Tray recovery and upload result accessibility
 
-Status: IN PROGRESS — claimed Main 2026-07-21.
+Status: DONE (code) — NEEDS-SMOKE on signed `v2.0.5-beta.7`.
 
 ## Problem
 

@@ -16,25 +16,6 @@ mod panic_prevention_scenarios {
     use super::*;
 
     #[test]
-    fn test_app_continues_without_icon() {
-        // Test that missing icon doesn't crash the app
-        // This simulates the scenario where default_window_icon() returns None
-
-        log::info!("Testing icon failure handling");
-
-        // In the real implementation, this would be caught and handled
-        let result = std::panic::catch_unwind(|| {
-            // Simulate the tray icon creation without icon
-            // In the real code, this returns an error instead of panicking
-            log::warn!("Icon not found, continuing without tray icon");
-            "no_icon_fallback"
-        });
-
-        assert!(result.is_ok());
-        log::info!("✅ App continues gracefully without icon");
-    }
-
-    #[test]
     fn test_app_continues_without_hotkey() {
         // Test that hotkey registration failure doesn't crash the app
 
