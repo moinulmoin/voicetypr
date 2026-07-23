@@ -39,6 +39,7 @@ Verification commands used across all plans: `pnpm typecheck`, `pnpm lint`,
 | 027  | Formatting & recording-pill UI/UX pass (naming, guidance, pill state legibility, app-category UI) | P2 | M | 016, 017 | TODO — captured 2026-06-19; backlog for post-2.0.0-smoke UAUX phase (notes only, not yet claimed) |
 | 028  | Transcription latency + streaming ("fast af" dictation) — investigation + phased design | P2 | XL | 015/020 smoke | TODO — drafted 2026-06-20; design/index only, not claimed. Phase 0 (insert-path plumbing tail + ffmpeg normalize) is S/LOW-risk and shippable alone; Phases 1–5 (decode-ahead, Parakeet/Whisper/cloud streaming, partial UX) graduate to 029+ |
 | 031  | GlitchTip observability — errors, symbols, curated logs, sampled traces | P0 | M | — | IN PROGRESS — claimed Main 2026-07-14; user approved stages 1–4 for next Beta |
+| 034  | Compact report problem page | P1 | S | 033 | IN PROGRESS — claimed Main 2026-07-23; dedicated page, one issue field, automatic diagnostics |
 | 040  | Punctuation consistency + AI-formatting decision diagnostics | P1 | S | 027 | DONE — reviewer pass; focused checks + local UI smoke passed 2026-07-24 |
 | 041  | Paid-license validation resilience | P0 | M | — | DONE — reviewer PASS; focused/full gates + local Account UI smoke passed 2026-07-24 |
 
