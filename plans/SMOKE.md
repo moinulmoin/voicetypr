@@ -51,6 +51,43 @@ conditions.
       not crash or duplicate the icon; complete Plan 030-S1..S4 on the same
       signed build.
 
+## Plans 034, 040, 041 — Beta 7 support, diagnostics, and licensing
+
+Run these on published prerelease `v2.0.5-beta.7`, built by release run
+`30105763790`. The signed macOS ARM64, macOS Intel, and Windows artifacts all
+passed their release jobs; the checks below cover runtime behavior that CI
+cannot prove.
+
+- [ ] 034-S1 Submit a Report a problem form successfully → required email and
+      issue fields are enforced, the prepared report previews the real system
+      configuration, the form clears only after success, and the received
+      diagnostics contain no raw full paths, credentials, secrets, or other
+      unredacted sensitive values.
+- [ ] 034-S2 Force report submission to fail → entered fields remain intact,
+      Copy report remains usable, and copied diagnostics are still redacted.
+- [ ] 040-S1 Reproduce the affected Windows/Russian punctuation scenario with
+      AI formatting disabled and then with Clean Dictation enabled → each
+      transcription emits exactly one privacy-safe `AI_FORMATTING_DECISION`
+      outcome: `disabled`, `mode_skipped`, `literal_preserved`, `applied`,
+      `unchanged`, or `fallback`. The record contains no dictated text, prompt,
+      API key, or target-application name.
+- [ ] 040-S2 Make a configured AI provider unavailable during Clean Dictation
+      → raw/deterministic text is preserved, the decision is `fallback`, and
+      the app returns to idle without losing the transcript.
+- [ ] 041-S1 Activate a paid license online, quit, and relaunch → Pro remains
+      active and recording is available without another activation.
+- [ ] 041-S2 After a successful verification, disconnect the network or force
+      timeout/5xx validation failures during three scheduled checks → failures
+      1–2 retain offline grace, failure 3 shows the truthful revalidation
+      warning, Pro and recording remain available throughout, Revalidate stays
+      reachable, and `Trial expired` never appears.
+- [ ] 041-S3 Restore service and click Revalidate → the warning clears and Pro
+      remains active. A definitive invalid/expired/revoked response instead
+      removes the entitlement immediately rather than entering offline grace.
+- [ ] 041-S4 Inspect logs and telemetry from activation, transient failures,
+      revalidation, and definitive rejection → no license key, device
+      identifier, hostname, or raw server response was captured.
+
 ## Plan 004 — cancel during `Starting` (code at `9868fdc` era, NEEDS-SMOKE)
 
 - [ ] 004-S1 Toggle mode: record hotkey, immediately press Escape repeatedly
@@ -367,14 +404,15 @@ capped; near-silent noise unchanged). Residue = real mic capture + real ambient.
 
 ## 2.0.5 Beta train — Windows issue triage
 
-Current Beta: `2.0.5-beta.2`. Stable remains `2.0.4`. This train contains the
-Windows hotkey/GPU/transcript fixes plus shadow-only speech evidence.
+Current Beta: `2.0.5-beta.7`. Stable remains `2.0.4`. This signed candidate
+adds tray/upload recovery, paid-license resilience, formatting diagnostics,
+and the dedicated problem-report page to the earlier Windows fixes.
 
 - [x] **BETA-UPD-M1** (macOS ARM64): signed `beta.1` selected Beta, discovered
       `beta.2`, installed it, restarted as `beta.2`, retained Beta, then reported
       latest-version with no update loop.
-- [ ] **BETA-UPD-W1** (Windows): repeat the real `beta.1` → `beta.2` signed
-      installer/update/restart flow; Beta persists and no update loop occurs.
+- [ ] **BETA-UPD-W1** (Windows): install/update from the previous signed Beta
+      to `beta.7`, restart, and confirm Beta persists with no update loop.
 - [ ] **BETA-GPU-W1** (Windows hybrid GPU): Auto prefers discrete NVIDIA/AMD;
       a Vulkan/sidecar failure cannot crash the main app; CPU fallback completes;
       the failed sidecar model does not remain resident beside the CPU model.
@@ -390,10 +428,10 @@ Windows hotkey/GPU/transcript fixes plus shadow-only speech evidence.
       and the shadow classification.
 
 The reported A3 onboarding/hotkey crash blocks Stable only if it reproduces on
-`beta.2`; collect the exact stage, acceleration mode, model, GPU, OS, and logs.
+`beta.7`; collect the exact stage, acceleration mode, model, GPU, OS, and logs.
 The reported C2 all-model accuracy issue needs selected-mic plus
 RMS/peak/prepared-audio evidence before attributing it to an engine. Any
-resulting product fix requires `beta.3` or newer and a rerun of the affected
+resulting product fix requires a newly cut beta and a rerun of the affected
 checks above.
 
 ## Release rule
