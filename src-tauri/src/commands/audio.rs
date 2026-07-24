@@ -1665,6 +1665,8 @@ mod tests {
             license_type: None,
             license_key: None,
             expires_at: None,
+            verification_state: None,
+            verification_expires_at: None,
         })
     }
 
@@ -2202,6 +2204,18 @@ mod tests {
         assert_eq!(
             recording_license_state(Some(&cached)),
             RecordingLicenseState::Blocked
+        );
+    }
+
+    #[test]
+    fn recording_license_state_requires_verification_after_offline_deadline() {
+        let mut cached = cached_license(LicenseState::Licensed);
+        cached.status.verification_state = Some(crate::license::LicenseVerificationState::Verified);
+        cached.status.verification_expires_at =
+            Some(chrono::Utc::now() - chrono::Duration::seconds(1));
+        assert_eq!(
+            recording_license_state(Some(&cached)),
+            RecordingLicenseState::VerificationRequired
         );
     }
 
@@ -3582,12 +3596,20 @@ enum RecordingLicenseState {
     Ready,
     Loading,
     Blocked,
+    VerificationRequired,
 }
 
 fn recording_license_state(
     cache: Option<&crate::commands::license::CachedLicense>,
 ) -> RecordingLicenseState {
     match cache {
+        Some(cached)
+            if cached
+                .status
+                .verification_window_expired(chrono::Utc::now()) =>
+        {
+            RecordingLicenseState::VerificationRequired
+        }
         Some(cached)
             if matches!(
                 cached.status.status,
@@ -3656,6 +3678,20 @@ async fn validate_recording_requirements(app: &AppHandle) -> Result<(), String> 
     let cache = app_state.license_cache.read().await;
 
     match recording_license_state(cache.as_ref()) {
+        RecordingLicenseState::VerificationRequired => {
+            log::warn!("Recording blocked: offline license verification window has ended");
+            let _ = crate::commands::window::focus_main_window(app.clone()).await;
+            let _ = emit_to_all(
+                app,
+                "license-required",
+                serde_json::json!({
+                    "title": "License Verification Required",
+                    "message": "Connect to the internet and revalidate your license to continue recording.",
+                    "action": "revalidate"
+                }),
+            );
+            return Err("License verification required to record".to_string());
+        }
         RecordingLicenseState::Blocked => {
             if let Some(cached) = cache.as_ref() {
                 log::warn!("Recording blocked: license is {:?}", cached.status.status);

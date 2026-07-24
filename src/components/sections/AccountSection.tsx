@@ -19,11 +19,13 @@ import { useLicense } from "@/contexts/LicenseContext";
 import { open } from '@tauri-apps/plugin-shell';
 import { ask } from '@tauri-apps/plugin-dialog';
 import {
+  AlertTriangle,
   Check,
   Clock,
   Crown,
   HelpCircle,
-  Shield
+  Shield,
+  RefreshCw,
 } from "lucide-react";
 import { useState } from 'react';
 import { toast } from 'sonner';
@@ -32,7 +34,15 @@ import { createLogger } from "@/lib/logger";
 const log = createLogger("account");
 
 export function AccountSection() {
-  const { status, isLoading, checkStatus, activateLicense, deactivateLicense, openPurchasePage } = useLicense();
+  const {
+    status,
+    isLoading,
+    checkStatus,
+    revalidateLicense,
+    activateLicense,
+    deactivateLicense,
+    openPurchasePage,
+  } = useLicense();
   const [licenseKey, setLicenseKey] = useState('');
   const [isActivating, setIsActivating] = useState(false);
 
@@ -179,6 +189,39 @@ export function AccountSection() {
           />
         )}
 
+        {status?.status === 'licensed' &&
+          status.verification_state &&
+          status.verification_state !== 'verified' && (
+            <div className="mt-4 rounded-lg border border-amber-500/30 bg-amber-500/10 p-4">
+              <div className="flex items-start gap-3">
+                <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-amber-600 dark:text-amber-400" />
+                <div className="min-w-0 flex-1 space-y-1">
+                  <p className="text-sm font-medium text-amber-900 dark:text-amber-200">
+                    {status.verification_state === 'needs_revalidation'
+                      ? 'License verification still unavailable'
+                      : 'Couldn’t verify license'}
+                  </p>
+                  <p className="text-xs text-amber-800 dark:text-amber-300">
+                    Offline access remains available. Your paid license has not expired.
+                  </p>
+                  {status.expires_at && (
+                    <p className="text-xs text-muted-foreground">{status.expires_at}</p>
+                  )}
+                </div>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={revalidateLicense}
+                  disabled={isLoading}
+                >
+                  <RefreshCw className={isLoading ? 'animate-spin' : undefined} />
+                  Revalidate now
+                </Button>
+              </div>
+            </div>
+          )}
+
         {/* Licensed user info */}
         {status && status.status === 'licensed' && (
           <div className="mt-4 space-y-4">
@@ -204,6 +247,18 @@ export function AccountSection() {
             </div>
 
             <div className="flex gap-2">
+              {status.verification_state === 'verified' && (
+                <Button
+                  onClick={revalidateLicense}
+                  disabled={isLoading}
+                  variant="outline"
+                  size="sm"
+                  className="flex-1"
+                >
+                  <RefreshCw className={isLoading ? 'animate-spin' : undefined} />
+                  Revalidate License
+                </Button>
+              )}
               <Button
                 onClick={() => openExternalLink("https://polar.sh/ideaplexa/portal")}
                 variant="outline"

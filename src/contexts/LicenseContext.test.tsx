@@ -1,4 +1,4 @@
-import { render, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { LicenseStatus } from '@/types';
 
@@ -26,6 +26,18 @@ const licensedStatus: LicenseStatus = {
 function Probe() {
   useLicense();
   return null;
+}
+
+function RevalidationProbe() {
+  const { status, revalidateLicense } = useLicense();
+  return (
+    <>
+      <span>{status?.verification_state ?? 'none'}</span>
+      <button type="button" onClick={revalidateLicense}>
+        Revalidate
+      </button>
+    </>
+  );
 }
 
 describe('LicenseContext', () => {
@@ -70,5 +82,26 @@ describe('LicenseContext', () => {
     const serialized = JSON.stringify(receivedLog);
     expect(serialized).toContain('"status":"licensed"');
     expect(serialized).toContain('"license_type":"lifetime"');
+  });
+
+  it('revalidates explicitly and replaces offline-grace metadata', async () => {
+    vi.mocked(invoke).mockImplementation(async (command) => {
+      if (command === 'revalidate_license') {
+        return { ...licensedStatus, verification_state: 'verified' };
+      }
+      return { ...licensedStatus, verification_state: 'offline_grace' };
+    });
+
+    render(
+      <LicenseProvider>
+        <RevalidationProbe />
+      </LicenseProvider>,
+    );
+
+    expect(await screen.findByText('offline_grace')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Revalidate' }));
+
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith('revalidate_license'));
+    expect(await screen.findByText('verified')).toBeInTheDocument();
   });
 });
