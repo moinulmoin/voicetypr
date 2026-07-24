@@ -370,7 +370,7 @@ fn attempt_tray_creation(
             status
         }
         Err(error) => {
-            let status = state.record_failure(error.clone());
+            let status = state.record_failure(&error);
             log::warn!(
                 "TRAY_CREATION | source={} | attempt={} | result=failure | error={}",
                 source,
@@ -1186,6 +1186,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
                     "Tray icon creation failed after {} startup attempts; keeping the main window visible and scheduling recovery",
                     tray_status.attempts
                 );
+                show_main_window(app.app_handle());
                 schedule_deferred_tray_recovery(
                     app.app_handle().clone(),
                     Arc::clone(&tray_builder),

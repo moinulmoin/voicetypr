@@ -3,6 +3,7 @@ use std::sync::{Mutex, MutexGuard};
 
 pub(crate) const STARTUP_TRAY_ATTEMPTS: u32 = 5;
 pub(crate) const DEFERRED_TRAY_RETRY_DELAYS_SECS: [u64; 3] = [2, 10, 30];
+pub(crate) const TRAY_CREATION_FAILURE_MESSAGE: &str = "System tray creation failed";
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -34,11 +35,13 @@ impl TrayStatusState {
         status.clone()
     }
 
-    pub(crate) fn record_failure(&self, error: String) -> TrayStatus {
+    /// Record only an allowlisted message. The platform error remains in the
+    /// local log, which is redacted before a user submits diagnostics.
+    pub(crate) fn record_failure(&self, _platform_error: &str) -> TrayStatus {
         let mut status = self.lock();
         status.available = false;
         status.attempts += 1;
-        status.last_error = Some(error);
+        status.last_error = Some(TRAY_CREATION_FAILURE_MESSAGE.to_string());
         status.clone()
     }
 
@@ -52,16 +55,24 @@ impl TrayStatusState {
 
 #[cfg(test)]
 mod tests {
-    use super::TrayStatusState;
+    use super::{TrayStatusState, TRAY_CREATION_FAILURE_MESSAGE};
 
     #[test]
     fn records_failure_then_recovery_without_losing_attempt_count() {
         let state = TrayStatusState::default();
 
-        let failed = state.record_failure("shell unavailable".to_string());
+        let failed = state.record_failure("/Users/alice/private/menu-error");
         assert!(!failed.available);
         assert_eq!(failed.attempts, 1);
-        assert_eq!(failed.last_error.as_deref(), Some("shell unavailable"));
+        assert_eq!(
+            failed.last_error.as_deref(),
+            Some(TRAY_CREATION_FAILURE_MESSAGE)
+        );
+        assert!(!failed
+            .last_error
+            .as_deref()
+            .unwrap_or_default()
+            .contains("/Users/alice"));
 
         let recovered = state.record_success();
         assert!(recovered.available);
@@ -72,7 +83,7 @@ mod tests {
     #[test]
     fn observing_an_existing_tray_does_not_count_as_an_attempt() {
         let state = TrayStatusState::default();
-        state.record_failure("first failure".to_string());
+        state.record_failure("first failure");
 
         let present = state.record_present();
         assert!(present.available);
