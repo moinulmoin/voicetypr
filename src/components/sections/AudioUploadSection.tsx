@@ -462,7 +462,7 @@ export function AudioUploadSection() {
                               {new Set(speakerSegments.map((segment) => segment.speaker_id)).size} speakers
                             </Badge>
                           </div>
-                          <ScrollArea className="max-h-48">
+                          <ScrollArea className="h-48" aria-label="Speaker timeline segments">
                             <div className="space-y-2 pr-2">
                               {speakerSegments.map((segment, index) => (
                                 <div

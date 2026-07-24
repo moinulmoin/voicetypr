@@ -110,6 +110,21 @@ describe('buildReportBody', () => {
     expect(body).toContain('| GPU | Apple M4 Pro |');
   });
 
+  it('includes unavailable tray diagnostics for support', () => {
+    const body = buildReportBody({
+      ...baseReport,
+      trayStatus: {
+        available: false,
+        attempts: 8,
+        lastError: 'status | area\nunavailable',
+      },
+    });
+
+    expect(body).toContain('| Menu-bar Icon | Unavailable |');
+    expect(body).toContain('| Tray Creation Attempts | 8 |');
+    expect(body).toContain('| Tray Creation Error | status area unavailable |');
+  });
+
   it('omits the System section when systemSpecs are absent (collection failed)', () => {
     const body = buildReportBody(baseReport);
     expect(body).not.toContain('## System');
@@ -155,6 +170,23 @@ describe('report submission payloads', () => {
         truncated: false,
         statusNote: '',
       },
+    });
+  });
+
+  it('includes tray status in the support endpoint payload', () => {
+    const payload = buildManualReportPayload({
+      ...baseReport,
+      trayStatus: {
+        available: false,
+        attempts: 5,
+        lastError: 'status area unavailable',
+      },
+    });
+
+    expect(payload.environment.trayStatus).toEqual({
+      available: false,
+      attempts: 5,
+      lastError: 'status area unavailable',
     });
   });
 

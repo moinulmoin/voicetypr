@@ -128,7 +128,7 @@ describe('AudioUploadSection - Essential User Flows', () => {
       expect(toast.success).toHaveBeenCalledWith('Transcription completed and saved to history!');
     });
 
-    it('shows a speaker timeline for Parakeet uploads', async () => {
+    it('keeps result actions available with a long Parakeet speaker timeline', async () => {
       const user = userEvent.setup();
       mockSettings.current_model = 'parakeet-tdt-0.6b-v3';
       mockSettings.current_model_engine = 'parakeet';
@@ -157,7 +157,11 @@ describe('AudioUploadSection - Essential User Flows', () => {
           return { text: 'Speaker transcript', words: null };
         }
         if (cmd === 'diarize_audio_file') {
-          return [{ speaker_id: 'speaker_1', start_ms: 0, end_ms: 2500 }];
+          return Array.from({ length: 100 }, (_, index) => ({
+            speaker_id: `speaker_${(index % 2) + 1}`,
+            start_ms: index * 2500,
+            end_ms: (index + 1) * 2500,
+          }));
         }
         return null;
       });
@@ -176,8 +180,12 @@ describe('AudioUploadSection - Essential User Flows', () => {
         filePath: '/audio/interview.wav',
       });
       expect(screen.getByText('Speaker timeline')).toBeInTheDocument();
-      expect(screen.getByText('speaker_1')).toBeInTheDocument();
       expect(screen.getByText('0:00–0:02')).toBeInTheDocument();
+      expect(screen.getByLabelText('Speaker timeline segments')).toBeVisible();
+      expect(screen.getAllByText('speaker_1')).toHaveLength(50);
+      expect(screen.getByRole('button', { name: 'Copy' })).toBeVisible();
+      expect(screen.getByRole('button', { name: 'Save' })).toBeVisible();
+      expect(screen.getByRole('button', { name: 'Transcribe Another File' })).toBeVisible();
     });
 
     it('user can copy transcribed text to clipboard', async () => {

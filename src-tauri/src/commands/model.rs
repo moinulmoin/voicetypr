@@ -127,7 +127,7 @@ pub async fn download_model(
             let progress = (downloaded as f64 / total as f64) * 100.0;
             log::debug!(
                 "Download progress for {}: {:.1}%",
-                &model_name_clone,
+                model_name_clone,
                 progress
             );
 
@@ -159,7 +159,7 @@ pub async fn download_model(
                 verification_emitted = true;
                 log::info!(
                     "Download complete, starting verification for model: {}",
-                    &model_name_clone
+                    model_name_clone
                 );
                 if let Err(e) = emit_to_all(
                     &app_handle,

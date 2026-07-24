@@ -2,6 +2,7 @@ import { getVersion } from '@tauri-apps/api/app';
 import { platform, version as osVersion, arch } from '@tauri-apps/plugin-os';
 import { invoke } from '@tauri-apps/api/core';
 import { getModelDisplayName } from '@/lib/model-display';
+import { getTrayStatus, type TrayStatus } from '@/lib/tray';
 import { createLogger } from "@/lib/logger";
 
 const log = createLogger("crash-report");
@@ -33,6 +34,7 @@ export interface CrashReportData {
   logTruncated: boolean;
   logStatusNote: string;
   systemSpecs?: SystemSpecs;
+  trayStatus?: TrayStatus;
 }
 
 export async function gatherCrashReportData(
@@ -41,11 +43,12 @@ export async function gatherCrashReportData(
   currentModel?: string | null
 ): Promise<CrashReportData> {
   // Get async values
-  const [appVer, deviceId, logAttachment, systemSpecs] = await Promise.all([
+  const [appVer, deviceId, logAttachment, systemSpecs, trayStatus] = await Promise.all([
     getVersion().catch(() => 'Unknown'),
     invoke<string>('get_device_id').catch(() => 'Unknown'),
     getLatestLogAttachment(),
     invoke<SystemSpecs>('get_system_specs').catch(() => undefined),
+    getTrayStatus().catch(() => undefined),
   ]);
 
   // Get sync values from OS plugin (these are not promises)
@@ -77,6 +80,7 @@ export async function gatherCrashReportData(
     logTruncated: logAttachment.truncated,
     logStatusNote: logAttachment.statusNote,
     systemSpecs,
+    trayStatus,
   };
 }
 
@@ -98,6 +102,7 @@ export interface ManualReportData {
   logTruncated: boolean;
   logStatusNote: string;
   systemSpecs?: SystemSpecs;
+  trayStatus?: TrayStatus;
 }
 
 interface LatestLogAttachment {
@@ -122,11 +127,12 @@ export async function gatherManualReportData(
   message: string,
   currentModel?: string | null
 ): Promise<ManualReportData> {
-  const [appVer, deviceId, logAttachment, systemSpecs] = await Promise.all([
+  const [appVer, deviceId, logAttachment, systemSpecs, trayStatus] = await Promise.all([
     getVersion().catch(() => 'Unknown'),
     invoke<string>('get_device_id').catch(() => 'Unknown'),
     getLatestLogAttachment(),
     invoke<SystemSpecs>('get_system_specs').catch(() => undefined),
+    getTrayStatus().catch(() => undefined),
   ]);
 
   let os = 'Unknown';
@@ -157,6 +163,7 @@ export async function gatherManualReportData(
     logTruncated: logAttachment.truncated,
     logStatusNote: logAttachment.statusNote,
     systemSpecs,
+    trayStatus,
   };
 }
 
@@ -188,6 +195,17 @@ export function buildReportBody(data: ManualReportData): string {
   parts.push(`| Current Model | ${getModelDisplayName(data.currentModel) || 'None'} |`);
   parts.push(`| Device ID | ${data.deviceId} |`);
   parts.push(`| Timestamp | ${data.timestamp} |`);
+  if (data.trayStatus) {
+    parts.push(`| Menu-bar Icon | ${data.trayStatus.available ? 'Available' : 'Unavailable'} |`);
+    parts.push(`| Tray Creation Attempts | ${data.trayStatus.attempts} |`);
+    if (data.trayStatus.lastError) {
+      const trayError = data.trayStatus.lastError
+        .replace(/[|\r\n]+/g, ' ')
+        .replace(/\s+/g, ' ')
+        .trim();
+      parts.push(`| Tray Creation Error | ${trayError} |`);
+    }
+  }
   parts.push('');
   if (data.systemSpecs) {
     const specs = data.systemSpecs;
@@ -245,6 +263,7 @@ interface ReportEnvironmentPayload {
   deviceId: string;
   timestamp: string;
   systemSpecs?: SystemSpecs;
+  trayStatus?: TrayStatus;
 }
 
 interface LatestLogPayload {
@@ -364,6 +383,9 @@ function buildEnvironmentPayload(data: ManualReportData | CrashReportData): Repo
 
   if (data.systemSpecs) {
     environment.systemSpecs = data.systemSpecs;
+  }
+  if (data.trayStatus) {
+    environment.trayStatus = data.trayStatus;
   }
 
   return environment;

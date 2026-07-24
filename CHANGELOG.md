@@ -1,3 +1,10 @@
+## Unreleased
+
+### Bug Fixes
+
+* **tray:** recover from transient system-tray startup failures, keep the dashboard reachable, expose retry help, and attach tray diagnostics to support reports
+* **uploads:** constrain long speaker timelines so Copy and Save remain reachable
+
 ## [2.0.4](https://github.com/moinulmoin/voicetypr/compare/v2.0.3...v2.0.4) (2026-07-01)
 
 ### Features

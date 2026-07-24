@@ -31,6 +31,7 @@ mod state;
 mod state_machine;
 mod telemetry;
 pub mod transcription;
+mod tray_status;
 mod trigger;
 mod utils;
 mod whisper;
@@ -65,22 +66,25 @@ fn show_main_window(app: &tauri::AppHandle) {
 }
 
 /// Hide the main window and the macOS Dock icon — back to the menubar/tray.
-fn hide_main_window(app: &tauri::AppHandle) {
+fn hide_main_window(app: &tauri::AppHandle) -> bool {
     // If the system tray failed to create (e.g. the Windows shell notification
     // area wasn't ready at startup), hiding the window would leave the app
     // running with no way to bring it back. Keep the window visible instead.
     if app.tray_by_id("main").is_none() {
         log::warn!("No tray icon present; keeping main window visible instead of hiding to tray");
-        return;
+        return false;
     }
-    if let Some(window) = app.get_webview_window("main") {
-        if let Err(e) = window.hide() {
-            log::error!("Failed to hide main window: {}", e);
-            return;
-        }
-        #[cfg(target_os = "macos")]
-        hide_dock_icon(app);
+    let Some(window) = app.get_webview_window("main") else {
+        log::warn!("Main window is unavailable; could not hide it to the tray");
+        return false;
+    };
+    if let Err(e) = window.hide() {
+        log::error!("Failed to hide main window: {}", e);
+        return false;
     }
+    #[cfg(target_os = "macos")]
+    hide_dock_icon(app);
+    true
 }
 
 // Read the Windows taskbar theme (SystemUsesLightTheme) — deliberately distinct
@@ -326,6 +330,127 @@ fn setup_logging() -> tauri_plugin_log::Builder {
         } else {
             log::LevelFilter::Info
         })
+}
+
+type TrayBuilder = Arc<dyn Fn() -> Result<(), String> + Send + Sync>;
+
+struct TrayRecovery {
+    builder: TrayBuilder,
+}
+
+fn current_tray_status(app: &tauri::AppHandle) -> tray_status::TrayStatus {
+    let state = app.state::<tray_status::TrayStatusState>();
+    if app.tray_by_id("main").is_some() {
+        state.record_present()
+    } else {
+        state.snapshot()
+    }
+}
+
+fn attempt_tray_creation(
+    app: &tauri::AppHandle,
+    builder: &TrayBuilder,
+    source: &'static str,
+) -> tray_status::TrayStatus {
+    let state = app.state::<tray_status::TrayStatusState>();
+    if app.tray_by_id("main").is_some() {
+        return state.record_present();
+    }
+
+    let status = match builder() {
+        Ok(()) => {
+            let status = state.record_success();
+            log::info!(
+                "TRAY_CREATION | source={} | attempt={} | result=success",
+                source,
+                status.attempts
+            );
+            #[cfg(target_os = "windows")]
+            apply_tray_theme_icon(app);
+            status
+        }
+        Err(error) => {
+            let status = state.record_failure(&error);
+            log::warn!(
+                "TRAY_CREATION | source={} | attempt={} | result=failure | error={}",
+                source,
+                status.attempts,
+                error
+            );
+            status
+        }
+    };
+
+    let _ = app.emit("tray-status-changed", &status);
+    status
+}
+
+async fn attempt_tray_creation_on_main_thread(
+    app: tauri::AppHandle,
+    builder: TrayBuilder,
+    source: &'static str,
+) -> Result<tray_status::TrayStatus, String> {
+    let (sender, receiver) = tokio::sync::oneshot::channel();
+    let attempt_app = app.clone();
+    app.run_on_main_thread(move || {
+        let status = attempt_tray_creation(&attempt_app, &builder, source);
+        let _ = sender.send(status);
+    })
+    .map_err(|error| format!("Failed to schedule tray creation: {error}"))?;
+
+    receiver
+        .await
+        .map_err(|_| "Tray creation task ended before returning a result".to_string())
+}
+
+fn schedule_deferred_tray_recovery(app: tauri::AppHandle, builder: TrayBuilder) {
+    tauri::async_runtime::spawn(async move {
+        for delay_secs in tray_status::DEFERRED_TRAY_RETRY_DELAYS_SECS {
+            tokio::time::sleep(std::time::Duration::from_secs(delay_secs)).await;
+
+            if app.tray_by_id("main").is_some() {
+                let status = app.state::<tray_status::TrayStatusState>().record_present();
+                let _ = app.emit("tray-status-changed", &status);
+                return;
+            }
+
+            match attempt_tray_creation_on_main_thread(
+                app.clone(),
+                Arc::clone(&builder),
+                "deferred",
+            )
+            .await
+            {
+                Ok(status) if status.available => return,
+                Ok(_) => {}
+                Err(error) => {
+                    log::error!("Deferred tray recovery could not run: {}", error);
+                    return;
+                }
+            }
+        }
+
+        let status = current_tray_status(&app);
+        log::error!(
+            "Tray icon remains unavailable after {} attempts; keeping the main window visible",
+            status.attempts
+        );
+    });
+}
+
+#[tauri::command]
+fn get_tray_status(app: tauri::AppHandle) -> tray_status::TrayStatus {
+    current_tray_status(&app)
+}
+
+#[tauri::command]
+async fn retry_tray_creation(app: tauri::AppHandle) -> Result<tray_status::TrayStatus, String> {
+    if app.tray_by_id("main").is_some() {
+        return Ok(current_tray_status(&app));
+    }
+
+    let builder = Arc::clone(&app.state::<TrayRecovery>().builder);
+    attempt_tray_creation_on_main_thread(app, builder, "manual").await
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -840,14 +965,17 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             display_watcher.start();
             app.manage(display_watcher);
 
+            app.manage(tray_status::TrayStatusState::default());
+
             // Create tray icon
             use tauri::tray::{TrayIconBuilder, TrayIconEvent};
 
             // Build the tray menu using our helper function
             // Note: We need to block here since setup is sync
             let tray_app = app.app_handle().clone();
-            let try_build_tray = move || -> Result<(), Box<dyn std::error::Error>> {
-            let menu = tauri::async_runtime::block_on(build_tray_menu(&tray_app))?;
+            let tray_builder: TrayBuilder = Arc::new(move || -> Result<(), String> {
+            let menu = tauri::async_runtime::block_on(build_tray_menu(&tray_app))
+                .map_err(|error| error.to_string())?;
 
 
             // Bare-mark template icon for the menubar (no background; adapts to light/dark).
@@ -1029,42 +1157,40 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
                         show_main_window(app);
                     }
                 })
-                .build(&tray_app)?;
+                .build(&tray_app)
+                .map_err(|error| error.to_string())?;
             Ok(())
-            };
+            });
+            app.manage(TrayRecovery {
+                builder: Arc::clone(&tray_builder),
+            });
 
-            // Tray creation can fail transiently on Windows (e.g. the shell's
-            // notification area isn't ready yet -> os error 0x80004005 / E_FAIL).
-            // This previously aborted the entire setup hook and stopped the app
-            // from launching at all. Retry a few times, then continue WITHOUT a
-            // tray instead of crashing -- a missing tray must never be fatal.
-            let mut tray_attempt: u32 = 0;
-            loop {
-                tray_attempt += 1;
-                match try_build_tray() {
-                    Ok(()) => {
-                        if tray_attempt > 1 {
-                            log::info!("Tray icon created on attempt {}", tray_attempt);
-                        }
-                        break;
-                    }
-                    Err(e) if tray_attempt < 5 => {
-                        log::warn!(
-                            "Tray icon creation failed (attempt {}/5): {} -- retrying in 400ms",
-                            tray_attempt,
-                            e
-                        );
-                        std::thread::sleep(std::time::Duration::from_millis(400));
-                    }
-                    Err(e) => {
-                        log::error!(
-                            "Tray icon creation failed after {} attempts; continuing without system tray: {}",
-                            tray_attempt,
-                            e
-                        );
-                        break;
-                    }
+            // Tray creation can fail transiently while the OS status area is
+            // starting. Preserve the nonfatal startup behavior from PR #96,
+            // then continue with bounded delayed recovery instead of requiring
+            // the user to restart the entire application.
+            let mut tray_status = current_tray_status(app.app_handle());
+            for startup_attempt in 1..=tray_status::STARTUP_TRAY_ATTEMPTS {
+                tray_status =
+                    attempt_tray_creation(app.app_handle(), &tray_builder, "startup");
+                if tray_status.available {
+                    break;
                 }
+                if startup_attempt < tray_status::STARTUP_TRAY_ATTEMPTS {
+                    std::thread::sleep(std::time::Duration::from_millis(400));
+                }
+            }
+
+            if !tray_status.available {
+                log::error!(
+                    "Tray icon creation failed after {} startup attempts; keeping the main window visible and scheduling recovery",
+                    tray_status.attempts
+                );
+                show_main_window(app.app_handle());
+                schedule_deferred_tray_recovery(
+                    app.app_handle().clone(),
+                    Arc::clone(&tray_builder),
+                );
             }
 
             // Windows ignores macOS template icons, so a single white mark is
@@ -1318,8 +1444,11 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             };
 
             if should_hide_main {
-                hide_main_window(app.app_handle());
-                log::info!("Main window hidden - menubar mode active");
+                if hide_main_window(app.app_handle()) {
+                    log::info!("Main window hidden - menubar mode active");
+                } else {
+                    log::warn!("Main window remains visible because menubar mode is unavailable");
+                }
             } else {
                 log::info!("👋 First launch or no source configured - keeping main window visible");
                 // Show dock icon when main window is visible
@@ -1365,6 +1494,8 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             get_supported_languages,
             set_model_from_tray,
             update_tray_menu,
+            get_tray_status,
+            retry_tray_creation,
             insert_text,
             delete_model,
             list_downloaded_models,
@@ -1482,8 +1613,9 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
                     // background process with no way back -> let the close proceed (quit).
                     if window.app_handle().tray_by_id("main").is_some() {
                         api.prevent_close();
-                        hide_main_window(window.app_handle());
-                        log::info!("Main window hidden instead of closed");
+                        if hide_main_window(window.app_handle()) {
+                            log::info!("Main window hidden instead of closed");
+                        }
                     } else {
                         log::warn!("No tray icon; allowing main window to close (quit) instead of hiding");
                     }
