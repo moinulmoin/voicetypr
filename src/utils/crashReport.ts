@@ -18,6 +18,10 @@ export interface SystemSpecs {
   gpus: string[];
 }
 
+export async function getSystemSpecs(): Promise<SystemSpecs | undefined> {
+  return invoke<SystemSpecs>('get_system_specs').catch(() => undefined);
+}
+
 export interface CrashReportData {
   errorMessage: string;
   errorStack?: string;
@@ -47,7 +51,7 @@ export async function gatherCrashReportData(
     getVersion().catch(() => 'Unknown'),
     invoke<string>('get_device_id').catch(() => 'Unknown'),
     getLatestLogAttachment(),
-    invoke<SystemSpecs>('get_system_specs').catch(() => undefined),
+    getSystemSpecs(),
     getTrayStatus().catch(() => undefined),
   ]);
 
@@ -131,7 +135,7 @@ export async function gatherManualReportData(
     getVersion().catch(() => 'Unknown'),
     invoke<string>('get_device_id').catch(() => 'Unknown'),
     getLatestLogAttachment(),
-    invoke<SystemSpecs>('get_system_specs').catch(() => undefined),
+    getSystemSpecs(),
     getTrayStatus().catch(() => undefined),
   ]);
 
