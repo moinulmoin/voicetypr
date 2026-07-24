@@ -4,6 +4,7 @@
 
 * **tray:** recover from transient system-tray startup failures, keep the dashboard reachable, expose retry help, and attach tray diagnostics to support reports
 * **uploads:** constrain long speaker timelines so Copy and Save remain reachable
+* **licensing:** preserve paid access through temporary verification outages, retry validation three times, repair stale device activation automatically, and show a revalidation warning instead of `Trial expired`.
 
 ## [2.0.4](https://github.com/moinulmoin/voicetypr/compare/v2.0.3...v2.0.4) (2026-07-01)
 

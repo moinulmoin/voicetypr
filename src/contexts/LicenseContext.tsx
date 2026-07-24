@@ -6,11 +6,13 @@ import { getErrorMessage } from '@/utils/error';
 import { createLogger } from "@/lib/logger";
 
 const log = createLogger("license");
+const LICENSE_COMMAND_TIMEOUT_MS = 60_000;
 
 interface LicenseContextValue {
   status: LicenseStatus | null;
   isLoading: boolean;
   checkStatus: () => Promise<void>;
+  revalidateLicense: () => Promise<void>;
   restoreLicense: () => Promise<void>;
   activateLicense: (key: string) => Promise<void>;
   deactivateLicense: () => Promise<void>;
@@ -78,7 +80,7 @@ export function LicenseProvider({ children }: { children: ReactNode }) {
         // Prevent unhandled rejections if we time out and ignore the result.
       });
 
-      const licenseStatus = await withTimeout(invokePromise, 10_000);
+      const licenseStatus = await withTimeout(invokePromise, LICENSE_COMMAND_TIMEOUT_MS);
 
       if (checkId !== latestCheckStatusId.current) return;
       log.debug('License status received:', {
@@ -86,6 +88,7 @@ export function LicenseProvider({ children }: { children: ReactNode }) {
         trial_days_left: licenseStatus.trial_days_left,
         license_type: licenseStatus.license_type,
         expires_at: licenseStatus.expires_at,
+        verification_state: licenseStatus.verification_state,
       });
       setStatus(licenseStatus);
     } catch (error) {
@@ -98,6 +101,35 @@ export function LicenseProvider({ children }: { children: ReactNode }) {
 
       const message = getErrorMessage(error, 'Failed to check license status');
       log.error('Failed to check license status:', error);
+      toast.error(message);
+    } finally {
+      if (checkId === latestCheckStatusId.current) {
+        setIsLoading(false);
+      }
+    }
+  };
+
+  const revalidateLicense = async () => {
+    const checkId = ++latestCheckStatusId.current;
+    try {
+      setIsLoading(true);
+      const invokePromise = invoke<LicenseStatus>('revalidate_license');
+      invokePromise.catch(() => {
+        // Prevent unhandled rejections if the UI timeout wins the race.
+      });
+      const licenseStatus = await withTimeout(invokePromise, LICENSE_COMMAND_TIMEOUT_MS);
+      if (checkId !== latestCheckStatusId.current) return;
+      setStatus(licenseStatus);
+
+      if (licenseStatus.verification_state === 'verified') {
+        toast.success('License verified');
+      } else {
+        toast.info('Couldn’t verify the license yet. Offline access remains available.');
+      }
+    } catch (error: unknown) {
+      if (checkId !== latestCheckStatusId.current) return;
+      const message = getErrorMessage(error, 'Failed to revalidate license');
+      log.error('Failed to revalidate license:', error);
       toast.error(message);
     } finally {
       if (checkId === latestCheckStatusId.current) {
@@ -163,6 +195,7 @@ export function LicenseProvider({ children }: { children: ReactNode }) {
     status,
     isLoading,
     checkStatus,
+    revalidateLicense,
     restoreLicense,
     activateLicense,
     deactivateLicense,

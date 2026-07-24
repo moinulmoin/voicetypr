@@ -676,11 +676,11 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
 
             }
 
-            // Clear license cache on app start to ensure fresh checks
+            // Force a fresh online check while preserving the last successful
+            // validation timestamp that anchors paid offline grace.
             {
                 use crate::simple_cache;
                 let _ = simple_cache::remove(app.app_handle(), "license_status");
-                let _ = simple_cache::remove(app.app_handle(), "last_license_validation");
             }
 
             // Initialize whisper manager
@@ -1528,6 +1528,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             request_microphone_permission,
             test_automation_permission,
             check_license_status,
+            revalidate_license,
             restore_license,
             activate_license,
             deactivate_license,

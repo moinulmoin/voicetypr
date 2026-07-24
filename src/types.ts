@@ -147,4 +147,6 @@ export interface LicenseStatus {
   license_type?: string;
   license_key?: string;
   expires_at?: string;
+  verification_state?: 'verified' | 'offline_grace' | 'needs_revalidation';
+  verification_expires_at?: string;
 }
