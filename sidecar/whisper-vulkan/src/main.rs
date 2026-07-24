@@ -408,6 +408,7 @@ fn transcribe_with_context(
     params.set_print_realtime(false);
     params.set_print_timestamps(false);
     params.set_suppress_blank(true);
+    // Suppress annotation-like tokens while keeping commas and sentence-ending punctuation.
     params.set_suppress_nst(true);
     params.set_no_speech_thold(0.6);
     params.set_entropy_thold(2.4);

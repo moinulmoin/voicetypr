@@ -277,7 +277,9 @@ describe('EnhancementsSection', () => {
 
     await waitFor(() => {
       expect(
-        screen.getByText('Rewrites your words for meaning and format. Needs a provider. Off by default.'),
+        screen.getByText(
+          'Speech models infer punctuation. Clean Dictation uses AI to correct grammar and punctuation. Needs a provider and is off by default.',
+        ),
       ).toBeInTheDocument()
       expect(
         screen.getByText('Add an API key and choose a model below to turn on AI formatting.'),
@@ -564,7 +566,7 @@ describe('EnhancementsSection', () => {
       expect(screen.getByText('AI polish (optional)')).toBeInTheDocument()
       expect(
         screen.getByText(
-          'Rewrites your words for meaning and format. Needs a provider. Off by default.',
+          'Speech models infer punctuation. Clean Dictation uses AI to correct grammar and punctuation. Needs a provider and is off by default.',
         ),
       ).toBeInTheDocument()
       expect(screen.getByText('Your text rules (always on)')).toBeInTheDocument()
