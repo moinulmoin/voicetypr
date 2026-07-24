@@ -557,7 +557,7 @@ impl Transcriber {
         // Suppress blank outputs to avoid empty transcriptions
         params.set_suppress_blank(true);
 
-        // Don't suppress non-speech tokens - they help with timing and context
+        // Suppress annotation-like tokens while keeping commas and sentence-ending punctuation.
         params.set_suppress_nst(true);
 
         // Adjust speech detection threshold

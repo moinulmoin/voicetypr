@@ -696,7 +696,7 @@ export function EnhancementsSection({ view = "all" }: { view?: EnhancementsView 
           <header>
             <h2 className="text-base font-semibold">AI polish (optional)</h2>
             <p className="mt-1 text-sm text-muted-foreground">
-              Rewrites your words for meaning and format. Needs a provider. Off by default.
+              Speech models infer punctuation. Clean Dictation uses AI to correct grammar and punctuation. Needs a provider and is off by default.
             </p>
           </header>
           <FieldSet className="rounded-xl border border-border/60 bg-card p-4">

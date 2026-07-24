@@ -1,5 +1,9 @@
 ## Unreleased
 
+### Improvements
+
+* **formatting:** explain that speech models infer punctuation, document Clean Dictation's AI correction role, and add privacy-safe decision diagnostics showing whether AI formatting ran or was skipped
+
 ### Bug Fixes
 
 * **tray:** recover from transient system-tray startup failures, keep the dashboard reachable, expose retry help, and attach tray diagnostics to support reports
