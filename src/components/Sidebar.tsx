@@ -1,12 +1,9 @@
-import { ReportBugDialog } from "@/components/ReportBugDialog";
 import { Brandmark } from "@/components/Brandmark";
 import {
   navGroups,
   footerScreens,
-  sidebarActions,
   type ScreenDefinition,
   type ScreenId,
-  type SidebarActionDefinition,
 } from "@/components/navigation";
 import { getVersion } from "@tauri-apps/api/app";
 import { Button } from "@/components/ui/button";
@@ -86,7 +83,6 @@ function getLicenseBadge(status: LicenseStatus | null, daysLeft: number) {
 export function Sidebar({ activeSection, onSectionChange }: SidebarProps) {
   const { status, isLoading } = useLicense();
   const [appVersion, setAppVersion] = useState("—");
-  const [showReportBugDialog, setShowReportBugDialog] = useState(false);
   const licenseBadge = getLicenseBadge(status, status?.trial_days_left ?? -1);
 
   useEffect(() => {
@@ -143,10 +139,6 @@ export function Sidebar({ activeSection, onSectionChange }: SidebarProps) {
               activeSection={activeSection}
               onSectionChange={onSectionChange}
             />
-            <SidebarActionGroup
-              actions={sidebarActions}
-              onReportBug={() => setShowReportBugDialog(true)}
-            />
           </div>
         </SidebarContent>
 
@@ -155,10 +147,6 @@ export function Sidebar({ activeSection, onSectionChange }: SidebarProps) {
         </SidebarFooter>
       </SidebarPrimitive>
 
-      <ReportBugDialog
-        isOpen={showReportBugDialog}
-        onClose={() => setShowReportBugDialog(false)}
-      />
     </>
   );
 }
@@ -228,37 +216,6 @@ function SidebarNavItem({
   );
 }
 
-function SidebarActionGroup({
-  actions,
-  onReportBug,
-}: {
-  actions: SidebarActionDefinition[];
-  onReportBug: () => void;
-}) {
-  return (
-    <SidebarGroup className="px-2 pb-2 pt-0">
-      <SidebarGroupContent>
-        <SidebarMenu>
-          {actions.map((action) => {
-            const Icon = action.icon;
-            return (
-              <SidebarMenuItem key={action.id}>
-                <SidebarMenuButton
-                  tooltip={action.description}
-                  onClick={onReportBug}
-                  className="rounded-xl text-sm transition-colors"
-                >
-                  <Icon />
-                  <span>{action.label}</span>
-                </SidebarMenuButton>
-              </SidebarMenuItem>
-            );
-          })}
-        </SidebarMenu>
-      </SidebarGroupContent>
-    </SidebarGroup>
-  );
-}
 
 function SidebarFooterStatus({
   appVersion,

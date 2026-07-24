@@ -12,6 +12,7 @@ import { NetworkSharingTab } from "./NetworkSharingTab";
 import { AgentCliTab } from "./AgentCliTab";
 import { TextRulesTab } from "./TextRulesTab";
 import { AudioUploadSection } from "../sections/AudioUploadSection";
+import { ReportProblemSection } from "../sections/ReportProblemSection";
 import type { ScreenId } from "@/components/navigation";
 
 interface TabContainerProps {
@@ -60,6 +61,9 @@ export function TabContainer({ activeSection }: TabContainerProps) {
 
       case "help":
         return <HelpTab />;
+
+      case "report-problem":
+        return <ReportProblemSection />;
 
 
       default:
