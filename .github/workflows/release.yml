@@ -97,7 +97,7 @@ jobs:
         if: ${{ !inputs.dry_run }}
         run: |
           TAG="v${{ steps.version.outputs.version }}"
-          if git ls-remote --tags origin | grep -q "refs/tags/$TAG"; then
+          if git ls-remote --exit-code --tags origin "refs/tags/$TAG" >/dev/null 2>&1; then
             echo "::error::Tag $TAG already exists. Delete it first or use a different release type."
             exit 1
           fi
@@ -702,7 +702,7 @@ jobs:
       - name: Ensure tag doesn't already exist
         run: |
           TAG="${{ needs.prepare.outputs.tag }}"
-          if git ls-remote --tags origin | grep -q "refs/tags/$TAG"; then
+          if git ls-remote --exit-code --tags origin "refs/tags/$TAG" >/dev/null 2>&1; then
             echo "::error::Tag $TAG already exists. Re-run with a different release type."
             exit 1
           fi
