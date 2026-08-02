@@ -1,0 +1,5 @@
+paths:
+  '.github/workflows/{ci,release}.yml':
+    ignore:
+      # GitHub-hosted Intel label is newer than actionlint's bundled runner list.
+      - 'label "macos-15-intel" is unknown'
