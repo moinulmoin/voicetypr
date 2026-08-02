@@ -433,8 +433,8 @@ jobs:
     needs: prepare
     runs-on: windows-2022
     env:
-      # Short path for whisper.cpp/ggml Vulkan build depth; honored by sidecar and main app builds.
-      CARGO_TARGET_DIR: C:\b
+      # Short paths keep whisper.cpp/ggml and Tauri builds below Windows path limits.
+      CARGO_TARGET_DIR: D:\b\app
       VULKAN_RUNTIME_VERSION: 1.3.290.0
     steps:
       - name: Checkout
@@ -460,9 +460,11 @@ jobs:
       - name: Rust cache
         uses: Swatinem/rust-cache@v2
         with:
+          shared-key: windows-x64-build
+          key: vulkan-${{ env.VULKAN_RUNTIME_VERSION }}
           workspaces: |
-            src-tauri
-            sidecar/whisper-vulkan
+            src-tauri -> ../../../../b/app
+            sidecar/whisper-vulkan -> ../../../../../b/vulkan
 
       - name: Install Vulkan SDK
         uses: jakoch/install-vulkan-sdk-action@v1
@@ -483,6 +485,7 @@ jobs:
       - name: Build whisper-vulkan sidecar (x86_64 only)
         shell: pwsh
         env:
+          CARGO_TARGET_DIR: D:\b\vulkan
           RUSTFLAGS: -C target-feature=+crt-static
         run: |
           cargo build --manifest-path sidecar/whisper-vulkan/Cargo.toml --release

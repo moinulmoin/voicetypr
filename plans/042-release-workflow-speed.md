@@ -1,6 +1,6 @@
 # 042 — Release workflow speed
 
-**Status: REVIEWER PASS — awaiting CI and release dry-run**
+**Status: REVIEWER PASS — final CI and cold/warm cache validation pending**
 
 ## Problem
 
@@ -27,7 +27,7 @@ Workflow-only pull requests currently run the complete macOS and Windows native 
 
 - CI classifies the complete pull-request/push diff. Workflow/docs-only changes run workflow contract checks; any product, build, dependency, script, or sidecar change retains the full frontend/macOS/Windows matrix.
 - Release version calculation, exact tag lookup, and package/Cargo version mutation now share `.github/scripts/release-tool.mjs`.
-- Windows Rust caching includes `sidecar/whisper-vulkan`.
+- Windows Rust caching maps the real short-path app and Vulkan sidecar targets; release/CI share their cache while Store builds remain isolated.
 - macOS caches SwiftPM outputs by runner architecture, Swift toolchain, package resolution, build script, and sources.
 - The Parakeet build script preserves SwiftPM incremental state instead of deleting `.build` before every Cargo invocation.
 - Only checksum-pinned Apple Silicon FFmpeg binaries are cached. Restored binaries are revalidated before use; mutable Intel downloads and Windows binaries are not cached by this change.
@@ -44,3 +44,4 @@ Workflow-only pull requests currently run the complete macOS and Windows native 
 - Frontend verification: lint, typecheck, production build, and 586 tests passed (1 skipped).
 - Native integration: `cargo check --lib` passed and exercised the incremental Swift build through `build.rs`.
 - Independent current-source review: PASS, no remaining P0-P2 findings after fail-closed classifier dependencies and pull-request merge-base handling were corrected.
+- Initial cold release dry-run `30765225391` passed all three signed artifact builds in 36m24s. Its logs exposed an ineffective Windows cache mapping to unused default targets; the final mapping was corrected before cold/warm timing.
