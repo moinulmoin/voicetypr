@@ -1,6 +1,6 @@
 # 042 — Release workflow speed
 
-**Status: REVIEWER PASS — final CI and cold/warm cache validation pending**
+**Status: DONE — reviewer PASS; workflow gates and cold/warm signed release dry-runs passed**
 
 ## Problem
 
@@ -44,6 +44,6 @@ Workflow-only pull requests currently run the complete macOS and Windows native 
 - FFmpeg first download verified both pinned Apple Silicon SHA-256 values; cached revalidation completed in 0.1 seconds; a deliberately corrupted cached binary was rejected and the restored binary revalidated successfully.
 - Frontend verification: lint, typecheck, production build, and 586 tests passed (1 skipped).
 - Native integration: `cargo check --lib` passed and exercised the incremental Swift build through `build.rs`.
-- Independent current-source review: PASS, no remaining P0-P2 findings after fail-closed classifier dependencies and pull-request merge-base handling were corrected.
-- Initial cold release dry-run `30765225391` passed all three signed artifact builds in 36m24s. Its logs exposed an ineffective Windows cache mapping to unused default targets; the final mapping was corrected before cold/warm timing.
-- Corrected warm-cache dry-run `30768296149` passed in 18m20s versus 36m43s cold. Windows Vulkan compilation fell from 4m24s to 50s and the Windows Tauri build from 25m02s to 11m29s.
+- Expanded independent current-source review: PASS, with no remaining P0-P2 findings across classifier fail-closed behavior, Windows target mappings, cache trust/keying, artifact paths, PowerShell/YAML, and release gates.
+- Corrected cold-cache release dry-run `30766863440` passed all three signed artifact builds in 36m43s.
+- Final cache-hit dry-run `30770027517` passed in 14m17s: 61% faster, saving 22m26s. Windows Vulkan compilation fell from 4m24s to 33s, Windows Tauri from 25m02s to 10m22s, and cached symbol upload from about four minutes to 22 seconds on the critical Windows job.

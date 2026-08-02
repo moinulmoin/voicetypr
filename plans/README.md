@@ -42,7 +42,7 @@ Verification commands used across all plans: `pnpm typecheck`, `pnpm lint`,
 | 034  | Compact report problem page | P1 | S | 033 | DONE — reviewer pass; contact fields + system configuration preview; local macOS UI smoke and frontend checks passed 2026-07-23 |
 | 040  | Punctuation consistency + AI-formatting decision diagnostics | P1 | S | 027 | DONE — reviewer pass; focused checks + local UI smoke passed 2026-07-24 |
 | 041  | Paid-license validation resilience | P0 | M | — | DONE — reviewer PASS; focused/full gates + local Account UI smoke passed 2026-07-24 |
-| 042  | Release workflow speed — CI fast path, tested release logic, sidecar caches | P1 | M | — | REVIEWER PASS — awaiting CI and release dry-run |
+| 042  | Release workflow speed — CI fast path, tested release logic, sidecar caches | P1 | M | — | DONE — reviewer PASS; workflow gates + cold/warm signed release dry-runs passed 2026-08-02 |
 
 ## Code-done, awaiting batched manual smoke (`plans/SMOKE.md`)
 
