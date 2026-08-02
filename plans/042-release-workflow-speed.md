@@ -31,6 +31,7 @@ Workflow-only pull requests currently run the complete macOS and Windows native 
 - macOS caches SwiftPM outputs by runner architecture, Swift toolchain, package resolution, build script, and sources.
 - The Parakeet build script preserves SwiftPM incremental state instead of deleting `.build` before every Cargo invocation.
 - Only checksum-pinned Apple Silicon FFmpeg binaries are cached. Restored binaries are revalidated before use; mutable Intel downloads and Windows binaries are not cached by this change.
+- The checksum-pinned patched GlitchTip CLI is cached by runner OS/architecture and exact installer source; symbol validation and server-side processing still remain release gates.
 
 ## Validation
 
@@ -45,3 +46,4 @@ Workflow-only pull requests currently run the complete macOS and Windows native 
 - Native integration: `cargo check --lib` passed and exercised the incremental Swift build through `build.rs`.
 - Independent current-source review: PASS, no remaining P0-P2 findings after fail-closed classifier dependencies and pull-request merge-base handling were corrected.
 - Initial cold release dry-run `30765225391` passed all three signed artifact builds in 36m24s. Its logs exposed an ineffective Windows cache mapping to unused default targets; the final mapping was corrected before cold/warm timing.
+- Corrected warm-cache dry-run `30768296149` passed in 18m20s versus 36m43s cold. Windows Vulkan compilation fell from 4m24s to 50s and the Windows Tauri build from 25m02s to 11m29s.

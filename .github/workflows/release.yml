@@ -211,9 +211,17 @@ jobs:
           path: artifacts/
           retention-days: 5
 
+      - name: Cache patched GlitchTip CLI
+        id: glitchtip-cli-cache
+        uses: actions/cache@v5
+        with:
+          path: ~/.cargo/bin/glitchtip-cli*
+          key: glitchtip-cli-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('.github/scripts/install-glitchtip-cli.mjs') }}
+
       - name: Upload debug symbols to GlitchTip
         env:
           GLITCHTIP_AUTH_TOKEN: ${{ secrets.GLITCHTIP_AUTH_TOKEN }}
+          GLITCHTIP_CLI_CACHE_HIT: ${{ steps.glitchtip-cli-cache.outputs.cache-hit }}
         run: |
           if [ -z "$GLITCHTIP_AUTH_TOKEN" ]; then
             echo "::notice::GLITCHTIP_AUTH_TOKEN not configured; skipping debug symbol upload."
@@ -242,7 +250,11 @@ jobs:
             exit 1
           fi
 
-          node .github/scripts/install-glitchtip-cli.mjs
+          if [ "$GLITCHTIP_CLI_CACHE_HIT" = "true" ]; then
+            glitchtip-cli --version
+          else
+            node .github/scripts/install-glitchtip-cli.mjs
+          fi
 
           export SENTRY_URL="https://glitchtip.ideaplexa.com"
           export SENTRY_AUTH_TOKEN="$GLITCHTIP_AUTH_TOKEN"
@@ -384,9 +396,17 @@ jobs:
           path: artifacts/
           retention-days: 5
 
+      - name: Cache patched GlitchTip CLI
+        id: glitchtip-cli-cache
+        uses: actions/cache@v5
+        with:
+          path: ~/.cargo/bin/glitchtip-cli*
+          key: glitchtip-cli-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('.github/scripts/install-glitchtip-cli.mjs') }}
+
       - name: Upload debug symbols to GlitchTip
         env:
           GLITCHTIP_AUTH_TOKEN: ${{ secrets.GLITCHTIP_AUTH_TOKEN }}
+          GLITCHTIP_CLI_CACHE_HIT: ${{ steps.glitchtip-cli-cache.outputs.cache-hit }}
         run: |
           if [ -z "$GLITCHTIP_AUTH_TOKEN" ]; then
             echo "::notice::GLITCHTIP_AUTH_TOKEN not configured; skipping debug symbol upload."
@@ -415,7 +435,11 @@ jobs:
             exit 1
           fi
 
-          node .github/scripts/install-glitchtip-cli.mjs
+          if [ "$GLITCHTIP_CLI_CACHE_HIT" = "true" ]; then
+            glitchtip-cli --version
+          else
+            node .github/scripts/install-glitchtip-cli.mjs
+          fi
 
           export SENTRY_URL="https://glitchtip.ideaplexa.com"
           export SENTRY_AUTH_TOKEN="$GLITCHTIP_AUTH_TOKEN"
@@ -616,9 +640,17 @@ jobs:
           path: artifacts/
           retention-days: 5
 
+      - name: Cache patched GlitchTip CLI
+        id: glitchtip-cli-cache
+        uses: actions/cache@v5
+        with:
+          path: ~/.cargo/bin/glitchtip-cli*
+          key: glitchtip-cli-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('.github/scripts/install-glitchtip-cli.mjs') }}
+
       - name: Upload debug symbols to GlitchTip
         env:
           GLITCHTIP_AUTH_TOKEN: ${{ secrets.GLITCHTIP_AUTH_TOKEN }}
+          GLITCHTIP_CLI_CACHE_HIT: ${{ steps.glitchtip-cli-cache.outputs.cache-hit }}
         shell: pwsh
         run: |
           if ([string]::IsNullOrWhiteSpace($env:GLITCHTIP_AUTH_TOKEN)) {
@@ -632,8 +664,13 @@ jobs:
             exit 1
           }
 
-          node .github/scripts/install-glitchtip-cli.mjs
-          if ($LASTEXITCODE -ne 0) { throw "GlitchTip CLI install failed with exit code $LASTEXITCODE" }
+          if ($env:GLITCHTIP_CLI_CACHE_HIT -eq "true") {
+            glitchtip-cli --version
+            if ($LASTEXITCODE -ne 0) { throw "Cached GlitchTip CLI failed with exit code $LASTEXITCODE" }
+          } else {
+            node .github/scripts/install-glitchtip-cli.mjs
+            if ($LASTEXITCODE -ne 0) { throw "GlitchTip CLI install failed with exit code $LASTEXITCODE" }
+          }
 
           $env:SENTRY_URL = "https://glitchtip.ideaplexa.com"
           $env:SENTRY_AUTH_TOKEN = $env:GLITCHTIP_AUTH_TOKEN
