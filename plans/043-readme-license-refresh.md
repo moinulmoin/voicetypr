@@ -1,6 +1,6 @@
 # 043 — README and license refresh
 
-**Status:** IN PROGRESS — claimed Main 2026-08-03  
+**Status:** DONE — GitHub detects AGPL-3.0; README link and formatting validation passed 2026-08-03  
 **Scope:** Repository presentation and license metadata only; no application or release behavior changes.
 
 ## Problem
