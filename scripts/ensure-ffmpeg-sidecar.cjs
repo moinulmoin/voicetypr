@@ -171,9 +171,16 @@ function removeObsoleteDoubleExtensionCopies(distDir) {
     const ffprobeDst = path.join(distDir, 'ffprobe');
     const ffmpegX64Dst = path.join(distDir, 'ffmpeg-x86_64-apple-darwin');
     const ffprobeX64Dst = path.join(distDir, 'ffprobe-x86_64-apple-darwin');
+    const macFfmpegBinSha = process.env.FFMPEG_MAC_BIN_SHA256 || '77d2c853f431318d55ec02676d9b2f185ebfdddb9f7677a251fbe453affe025a';
+    const macFfprobeBinSha = process.env.FFPROBE_MAC_BIN_SHA256 || 'babf170e86bd6b0b2fefee5fa56f57721b0acb98ad2794b095d8030b02857dfe';
 
     // Check if ARM64 binaries exist
     const arm64Present = fs.existsSync(ffmpegDst) && fs.existsSync(ffprobeDst);
+    if (arm64Present) {
+      // Revalidate restored/cached binaries before allowing the early-return paths below.
+      verifyChecksum(ffmpegDst, macFfmpegBinSha, 'macOS ffmpeg (binary)');
+      verifyChecksum(ffprobeDst, macFfprobeBinSha, 'macOS ffprobe (binary)');
+    }
     // Check if x86_64 binaries exist
     const x64Present = fs.existsSync(ffmpegX64Dst) && fs.existsSync(ffprobeX64Dst);
 
@@ -234,8 +241,6 @@ function removeObsoleteDoubleExtensionCopies(distDir) {
         fail('Downloaded archives did not contain expected ffmpeg/ffprobe binaries.');
       }
       // Verify checksums against extracted binaries (provider publishes hashes for binaries)
-      const macFfmpegBinSha = process.env.FFMPEG_MAC_BIN_SHA256 || '77d2c853f431318d55ec02676d9b2f185ebfdddb9f7677a251fbe453affe025a';
-      const macFfprobeBinSha = process.env.FFPROBE_MAC_BIN_SHA256 || 'babf170e86bd6b0b2fefee5fa56f57721b0acb98ad2794b095d8030b02857dfe';
       verifyChecksum(outFfmpeg, macFfmpegBinSha, 'macOS ffmpeg (binary)');
       verifyChecksum(outFfprobe, macFfprobeBinSha, 'macOS ffprobe (binary)');
       fs.copyFileSync(outFfmpeg, ffmpegDst); chmodx(ffmpegDst);

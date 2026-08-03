@@ -58,49 +58,18 @@ jobs:
           INPUT_CHANNEL: ${{ inputs.channel }}
           INPUT_RELEASE_TYPE: ${{ inputs.release_type }}
           INPUT_BETA_NUMBER: ${{ inputs.beta_number }}
-        run: |
-          CURRENT=$(node -p "require('./package.json').version")
-          CURRENT_BASE="${CURRENT%%-*}"
-          IFS='.' read -r MAJOR MINOR PATCH <<< "$CURRENT_BASE"
-          case "$INPUT_RELEASE_TYPE" in
-            current) NEXT="$CURRENT_BASE" ;;
-            major) NEXT="$((MAJOR + 1)).0.0" ;;
-            minor) NEXT="${MAJOR}.$((MINOR + 1)).0" ;;
-            patch) NEXT="${MAJOR}.${MINOR}.$((PATCH + 1))" ;;
-          esac
-
-          if [[ "$INPUT_CHANNEL" == "beta" ]]; then
-            if [[ "$INPUT_RELEASE_TYPE" == "current" ]]; then
-              echo "::error::Beta releases must target a newer major, minor, or patch version."
-              exit 1
-            fi
-            BETA_NUMBER="$INPUT_BETA_NUMBER"
-            if ! [[ "$BETA_NUMBER" =~ ^[1-9][0-9]*$ ]]; then
-              echo "::error::beta_number must be a positive integer."
-              exit 1
-            fi
-            NEW="${NEXT}-beta.${BETA_NUMBER}"
-          else
-            NEW="$NEXT"
-          fi
-
-          echo "version=$NEW" >> "$GITHUB_OUTPUT"
-          echo "tag=v$NEW" >> "$GITHUB_OUTPUT"
-          echo "::notice::Release: $CURRENT → $NEW ($INPUT_CHANNEL, $INPUT_RELEASE_TYPE)"
+        run: node .github/scripts/release-tool.mjs calculate "$INPUT_CHANNEL" "$INPUT_RELEASE_TYPE" "$INPUT_BETA_NUMBER"
 
       - name: Capture base commit
         id: base
         run: |
-          echo "sha=${GITHUB_SHA}" >> $GITHUB_OUTPUT
+          echo "sha=${GITHUB_SHA}" >> "$GITHUB_OUTPUT"
 
       - name: Check tag doesn't already exist
         if: ${{ !inputs.dry_run }}
-        run: |
-          TAG="v${{ steps.version.outputs.version }}"
-          if git ls-remote --exit-code --tags origin "refs/tags/$TAG" >/dev/null 2>&1; then
-            echo "::error::Tag $TAG already exists. Delete it first or use a different release type."
-            exit 1
-          fi
+        env:
+          RELEASE_TAG: ${{ steps.version.outputs.tag }}
+        run: node .github/scripts/release-tool.mjs check-tag "$RELEASE_TAG"
 
   # ===========================================
   # Build macOS (aarch64 - Apple Silicon)
@@ -121,6 +90,28 @@ jobs:
           echo "Selecting $xcode"
           sudo xcode-select -s "$xcode"
           swift --version
+
+      - name: Capture Swift toolchain cache key
+        id: swift-toolchain
+        run: echo "hash=$(swift --version | shasum -a 256 | cut -d ' ' -f1)" >> "$GITHUB_OUTPUT"
+
+      - name: Cache Swift Parakeet build
+        uses: actions/cache@v5
+        with:
+          path: sidecar/parakeet-swift/.build
+          key: parakeet-swift-${{ runner.os }}-${{ runner.arch }}-${{ steps.swift-toolchain.outputs.hash }}-${{ hashFiles('sidecar/parakeet-swift/Package.swift', 'sidecar/parakeet-swift/Package.resolved', 'sidecar/parakeet-swift/build.sh', 'sidecar/parakeet-swift/Sources/**') }}
+          restore-keys: |
+            parakeet-swift-${{ runner.os }}-${{ runner.arch }}-${{ steps.swift-toolchain.outputs.hash }}-
+
+      - name: Cache verified Apple Silicon FFmpeg sidecars
+        uses: actions/cache@v5
+        with:
+          path: |
+            sidecar/ffmpeg/dist/ffmpeg
+            sidecar/ffmpeg/dist/ffprobe
+            sidecar/ffmpeg/dist/ffmpeg-aarch64-apple-darwin
+            sidecar/ffmpeg/dist/ffprobe-aarch64-apple-darwin
+          key: ffmpeg-sidecars-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('scripts/ensure-ffmpeg-sidecar.cjs') }}
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
@@ -146,22 +137,7 @@ jobs:
         run: pnpm install --frozen-lockfile
 
       - name: Apply release version
-        run: |
-          export RELEASE_VERSION="${{ needs.prepare.outputs.version }}"
-          node -e '
-            const fs = require("fs");
-            const version = process.env.RELEASE_VERSION;
-            const pkgPath = "package.json";
-            const cargoPath = "src-tauri/Cargo.toml";
-
-            const pkg = JSON.parse(fs.readFileSync(pkgPath, "utf8"));
-            pkg.version = version;
-            fs.writeFileSync(pkgPath, JSON.stringify(pkg, null, 2) + "\n");
-
-            const cargo = fs.readFileSync(cargoPath, "utf8");
-            const updated = cargo.replace(/^version = "[^"]*"/m, `version = "${version}"`);
-            fs.writeFileSync(cargoPath, updated);
-          '
+        run: node .github/scripts/release-tool.mjs apply-version "${{ needs.prepare.outputs.version }}"
 
       - name: Import Apple Certificate
         env:
@@ -235,9 +211,17 @@ jobs:
           path: artifacts/
           retention-days: 5
 
+      - name: Cache patched GlitchTip CLI
+        id: glitchtip-cli-cache
+        uses: actions/cache@v5
+        with:
+          path: ~/.cargo/bin/glitchtip-cli*
+          key: glitchtip-cli-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('.github/scripts/install-glitchtip-cli.mjs') }}
+
       - name: Upload debug symbols to GlitchTip
         env:
           GLITCHTIP_AUTH_TOKEN: ${{ secrets.GLITCHTIP_AUTH_TOKEN }}
+          GLITCHTIP_CLI_CACHE_HIT: ${{ steps.glitchtip-cli-cache.outputs.cache-hit }}
         run: |
           if [ -z "$GLITCHTIP_AUTH_TOKEN" ]; then
             echo "::notice::GLITCHTIP_AUTH_TOKEN not configured; skipping debug symbol upload."
@@ -266,7 +250,11 @@ jobs:
             exit 1
           fi
 
-          node .github/scripts/install-glitchtip-cli.mjs
+          if [ "$GLITCHTIP_CLI_CACHE_HIT" = "true" ]; then
+            glitchtip-cli --version
+          else
+            node .github/scripts/install-glitchtip-cli.mjs
+          fi
 
           export SENTRY_URL="https://glitchtip.ideaplexa.com"
           export SENTRY_AUTH_TOKEN="$GLITCHTIP_AUTH_TOKEN"
@@ -297,6 +285,28 @@ jobs:
           sudo xcode-select -s "$xcode"
           swift --version
 
+      - name: Capture Swift toolchain cache key
+        id: swift-toolchain
+        run: echo "hash=$(swift --version | shasum -a 256 | cut -d ' ' -f1)" >> "$GITHUB_OUTPUT"
+
+      - name: Cache Swift Parakeet build
+        uses: actions/cache@v5
+        with:
+          path: sidecar/parakeet-swift/.build
+          key: parakeet-swift-${{ runner.os }}-${{ runner.arch }}-${{ steps.swift-toolchain.outputs.hash }}-${{ hashFiles('sidecar/parakeet-swift/Package.swift', 'sidecar/parakeet-swift/Package.resolved', 'sidecar/parakeet-swift/build.sh', 'sidecar/parakeet-swift/Sources/**') }}
+          restore-keys: |
+            parakeet-swift-${{ runner.os }}-${{ runner.arch }}-${{ steps.swift-toolchain.outputs.hash }}-
+
+      - name: Cache verified Apple Silicon FFmpeg sidecars
+        uses: actions/cache@v5
+        with:
+          path: |
+            sidecar/ffmpeg/dist/ffmpeg
+            sidecar/ffmpeg/dist/ffprobe
+            sidecar/ffmpeg/dist/ffmpeg-aarch64-apple-darwin
+            sidecar/ffmpeg/dist/ffprobe-aarch64-apple-darwin
+          key: ffmpeg-sidecars-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('scripts/ensure-ffmpeg-sidecar.cjs') }}
+
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
@@ -321,22 +331,7 @@ jobs:
         run: pnpm install --frozen-lockfile
 
       - name: Apply release version
-        run: |
-          export RELEASE_VERSION="${{ needs.prepare.outputs.version }}"
-          node -e '
-            const fs = require("fs");
-            const version = process.env.RELEASE_VERSION;
-            const pkgPath = "package.json";
-            const cargoPath = "src-tauri/Cargo.toml";
-
-            const pkg = JSON.parse(fs.readFileSync(pkgPath, "utf8"));
-            pkg.version = version;
-            fs.writeFileSync(pkgPath, JSON.stringify(pkg, null, 2) + "\n");
-
-            const cargo = fs.readFileSync(cargoPath, "utf8");
-            const updated = cargo.replace(/^version = "[^"]*"/m, `version = "${version}"`);
-            fs.writeFileSync(cargoPath, updated);
-          '
+        run: node .github/scripts/release-tool.mjs apply-version "${{ needs.prepare.outputs.version }}"
 
       - name: Import Apple Certificate
         env:
@@ -401,9 +396,17 @@ jobs:
           path: artifacts/
           retention-days: 5
 
+      - name: Cache patched GlitchTip CLI
+        id: glitchtip-cli-cache
+        uses: actions/cache@v5
+        with:
+          path: ~/.cargo/bin/glitchtip-cli*
+          key: glitchtip-cli-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('.github/scripts/install-glitchtip-cli.mjs') }}
+
       - name: Upload debug symbols to GlitchTip
         env:
           GLITCHTIP_AUTH_TOKEN: ${{ secrets.GLITCHTIP_AUTH_TOKEN }}
+          GLITCHTIP_CLI_CACHE_HIT: ${{ steps.glitchtip-cli-cache.outputs.cache-hit }}
         run: |
           if [ -z "$GLITCHTIP_AUTH_TOKEN" ]; then
             echo "::notice::GLITCHTIP_AUTH_TOKEN not configured; skipping debug symbol upload."
@@ -432,7 +435,11 @@ jobs:
             exit 1
           fi
 
-          node .github/scripts/install-glitchtip-cli.mjs
+          if [ "$GLITCHTIP_CLI_CACHE_HIT" = "true" ]; then
+            glitchtip-cli --version
+          else
+            node .github/scripts/install-glitchtip-cli.mjs
+          fi
 
           export SENTRY_URL="https://glitchtip.ideaplexa.com"
           export SENTRY_AUTH_TOKEN="$GLITCHTIP_AUTH_TOKEN"
@@ -450,8 +457,8 @@ jobs:
     needs: prepare
     runs-on: windows-2022
     env:
-      # Short path for whisper.cpp/ggml Vulkan build depth; honored by sidecar and main app builds.
-      CARGO_TARGET_DIR: C:\b
+      # Short paths keep whisper.cpp/ggml and Tauri builds below Windows path limits.
+      CARGO_TARGET_DIR: D:\b\app
       VULKAN_RUNTIME_VERSION: 1.3.290.0
     steps:
       - name: Checkout
@@ -473,10 +480,15 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
         with:
           targets: x86_64-pc-windows-msvc
+
       - name: Rust cache
         uses: Swatinem/rust-cache@v2
         with:
-          workspaces: src-tauri
+          shared-key: windows-x64-build
+          key: vulkan-${{ env.VULKAN_RUNTIME_VERSION }}
+          workspaces: |
+            src-tauri -> ../../../../b/app
+            sidecar/whisper-vulkan -> ../../../../../b/vulkan
 
       - name: Install Vulkan SDK
         uses: jakoch/install-vulkan-sdk-action@v1
@@ -489,22 +501,7 @@ jobs:
         run: pnpm install --frozen-lockfile
 
       - name: Apply release version
-        shell: pwsh
-        run: |
-          $version = "${{ needs.prepare.outputs.version }}"
-          $env:RELEASE_VERSION = $version
-
-          node -e "
-            const fs = require('fs');
-            const v = process.env.RELEASE_VERSION;
-            const pkg = JSON.parse(fs.readFileSync('package.json', 'utf8'));
-            pkg.version = v;
-            fs.writeFileSync('package.json', JSON.stringify(pkg, null, 2) + '\n');
-          "
-
-          $cargoToml = Get-Content "src-tauri/Cargo.toml" -Raw
-          $updated = [regex]::Replace($cargoToml, '(?m)^version = "[^"]*"', "version = `"$version`"", 1)
-          Set-Content "src-tauri/Cargo.toml" $updated -Encoding utf8NoBOM
+        run: node .github/scripts/release-tool.mjs apply-version "${{ needs.prepare.outputs.version }}"
 
       - name: Ensure FFmpeg sidecar
         run: pnpm run sidecar:ensure-ffmpeg
@@ -512,6 +509,7 @@ jobs:
       - name: Build whisper-vulkan sidecar (x86_64 only)
         shell: pwsh
         env:
+          CARGO_TARGET_DIR: D:\b\vulkan
           RUSTFLAGS: -C target-feature=+crt-static
         run: |
           cargo build --manifest-path sidecar/whisper-vulkan/Cargo.toml --release
@@ -642,9 +640,17 @@ jobs:
           path: artifacts/
           retention-days: 5
 
+      - name: Cache patched GlitchTip CLI
+        id: glitchtip-cli-cache
+        uses: actions/cache@v5
+        with:
+          path: ~/.cargo/bin/glitchtip-cli*
+          key: glitchtip-cli-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('.github/scripts/install-glitchtip-cli.mjs') }}
+
       - name: Upload debug symbols to GlitchTip
         env:
           GLITCHTIP_AUTH_TOKEN: ${{ secrets.GLITCHTIP_AUTH_TOKEN }}
+          GLITCHTIP_CLI_CACHE_HIT: ${{ steps.glitchtip-cli-cache.outputs.cache-hit }}
         shell: pwsh
         run: |
           if ([string]::IsNullOrWhiteSpace($env:GLITCHTIP_AUTH_TOKEN)) {
@@ -658,8 +664,13 @@ jobs:
             exit 1
           }
 
-          node .github/scripts/install-glitchtip-cli.mjs
-          if ($LASTEXITCODE -ne 0) { throw "GlitchTip CLI install failed with exit code $LASTEXITCODE" }
+          if ($env:GLITCHTIP_CLI_CACHE_HIT -eq "true") {
+            glitchtip-cli --version
+            if ($LASTEXITCODE -ne 0) { throw "Cached GlitchTip CLI failed with exit code $LASTEXITCODE" }
+          } else {
+            node .github/scripts/install-glitchtip-cli.mjs
+            if ($LASTEXITCODE -ne 0) { throw "GlitchTip CLI install failed with exit code $LASTEXITCODE" }
+          }
 
           $env:SENTRY_URL = "https://glitchtip.ideaplexa.com"
           $env:SENTRY_AUTH_TOKEN = $env:GLITCHTIP_AUTH_TOKEN
@@ -700,30 +711,14 @@ jobs:
           fi
 
       - name: Ensure tag doesn't already exist
-        run: |
-          TAG="${{ needs.prepare.outputs.tag }}"
-          if git ls-remote --exit-code --tags origin "refs/tags/$TAG" >/dev/null 2>&1; then
-            echo "::error::Tag $TAG already exists. Re-run with a different release type."
-            exit 1
-          fi
+        env:
+          RELEASE_TAG: ${{ needs.prepare.outputs.tag }}
+        run: node .github/scripts/release-tool.mjs check-tag "$RELEASE_TAG"
 
       - name: Bump version files
         run: |
           export RELEASE_VERSION="${{ needs.prepare.outputs.version }}"
-          node -e '
-            const fs = require("fs");
-            const version = process.env.RELEASE_VERSION;
-            const pkgPath = "package.json";
-            const cargoPath = "src-tauri/Cargo.toml";
-
-            const pkg = JSON.parse(fs.readFileSync(pkgPath, "utf8"));
-            pkg.version = version;
-            fs.writeFileSync(pkgPath, JSON.stringify(pkg, null, 2) + "\n");
-
-            const cargo = fs.readFileSync(cargoPath, "utf8");
-            const updated = cargo.replace(/^version = "[^"]*"/m, `version = "${version}"`);
-            fs.writeFileSync(cargoPath, updated);
-          '
+          node .github/scripts/release-tool.mjs apply-version "$RELEASE_VERSION"
           cargo update \
             --manifest-path src-tauri/Cargo.toml \
             -p voicetypr \
@@ -803,9 +798,9 @@ jobs:
           VERSION="${{ needs.prepare.outputs.version }}"
           TAG="${{ needs.prepare.outputs.tag }}"
 
-          AARCH64_SIG=$(cat "release/Voicetypr_${VERSION}_aarch64.app.tar.gz.sig" | tr -d '\n')
-          X86_64_SIG=$(cat "release/Voicetypr_${VERSION}_x86_64.app.tar.gz.sig" | tr -d '\n')
-          WINDOWS_SIG=$(cat "release/Voicetypr_${VERSION}_x64-setup.exe.sig" | tr -d '\n')
+          AARCH64_SIG=$(tr -d '\n' < "release/Voicetypr_${VERSION}_aarch64.app.tar.gz.sig")
+          X86_64_SIG=$(tr -d '\n' < "release/Voicetypr_${VERSION}_x86_64.app.tar.gz.sig")
+          WINDOWS_SIG=$(tr -d '\n' < "release/Voicetypr_${VERSION}_x64-setup.exe.sig")
 
           if [ -z "$AARCH64_SIG" ] || [ -z "$X86_64_SIG" ] || [ -z "$WINDOWS_SIG" ]; then
             echo "::error::One or more signature files are missing or empty"
