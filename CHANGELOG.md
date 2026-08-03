@@ -3,6 +3,7 @@
 ### Improvements
 
 * **formatting:** explain that speech models infer punctuation, document Clean Dictation's AI correction role, and add privacy-safe decision diagnostics showing whether AI formatting ran or was skipped
+* **release, store:** accelerate repeat signed-release and Store MSIX builds with fail-closed workflow routing plus checksum-validated Windows, SwiftPM, FFmpeg, and symbol-upload caches; the measured warm signed-release dry-run fell from 36m 43s to 14m 17s (61% faster) while retaining the full platform, signing, and publication gates ([#125](https://github.com/moinulmoin/voicetypr/pull/125))
 
 ### Bug Fixes
 
