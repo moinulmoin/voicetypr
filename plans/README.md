@@ -43,6 +43,7 @@ Verification commands used across all plans: `pnpm typecheck`, `pnpm lint`,
 | 040  | Punctuation consistency + AI-formatting decision diagnostics | P1 | S | 027 | DONE — reviewer pass; focused checks + local UI smoke passed 2026-07-24 |
 | 041  | Paid-license validation resilience | P0 | M | — | DONE — reviewer PASS; focused/full gates + local Account UI smoke passed 2026-07-24 |
 | 042  | Release workflow speed — CI fast path, tested release logic, sidecar caches | P1 | M | — | DONE — reviewer PASS; workflow gates + cold/warm signed release dry-runs passed 2026-08-02 |
+| 043  | README + canonical AGPL license refresh | P1 | S | — | IN PROGRESS — claimed Main 2026-08-03 |
 
 ## Code-done, awaiting batched manual smoke (`plans/SMOKE.md`)
 
