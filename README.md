@@ -20,7 +20,7 @@
 
 Voicetypr is an open-source desktop dictation app built with Tauri, Rust, and React. Use a global shortcut to record, transcribe locally or through an optional cloud provider, format the result, and insert it into the app you are already using.
 
-Local transcription is the default. The prebuilt app includes a trial and lifetime-license options, with no subscription required.
+Local transcription is the default. After the trial, a lifetime license keeps local models unmetered: no subscription, per-minute API fee, or cloud usage quota. Optional cloud modes still use the selected provider's billing and limits.
 
 ## Features
 
@@ -31,9 +31,25 @@ Local transcription is the default. The prebuilt app includes a trial and lifeti
 - **File transcription:** transcribe audio and video files, with supported cloud providers offering speaker diarization.
 - **Transcript history:** search, filter, inspect metadata, compare original and formatted text, copy, save, or re-transcribe.
 - **Network Sharing:** use another Voicetypr installation as a private transcription server on your LAN or configured network.
-- **CLI:** drive status, models, recording, and file transcription from terminals, scripts, and AI agents.
+- **Agent-ready CLI:** give scripts and local AI agents audio-to-text and microphone capture with plain-text or structured JSON output.
 - **Release channels:** choose Stable or Beta updates. Microsoft Store installations remain Store-managed.
 - **Native performance:** a small React interface backed by Rust audio, transcription, hotkey, and insertion pipelines.
+
+## Command-line interface
+
+Voicetypr's CLI gives scripts and AI agents access to local transcription: audio in, plain text or structured JSON out. With a lifetime license and a local model, there are no per-minute API fees or cloud usage quotas.
+
+Install the `voicetypr` command from **Settings → Advanced**, then use it from an agent or terminal:
+
+```bash
+voicetypr --help
+voicetypr status --json
+voicetypr models --json
+voicetypr transcribe --file note.wav --json
+voicetypr record --until-silence --json
+```
+
+Human-readable output is the default. Add `--json` for structured automation output. Audio stays on the machine unless the command explicitly selects a remote Voicetypr server.
 
 ## Privacy and data flow
 
@@ -78,19 +94,6 @@ Windows can use the bundled CPU transcription path on every supported machine. O
 3. Place the cursor in any text field.
 4. Press the shortcut, speak, and stop recording.
 5. Voicetypr inserts the transcript at the cursor and stores it in local history.
-
-## Command-line interface
-
-Install the `voicetypr` command from **Settings → Advanced**, then use it from a terminal:
-
-```bash
-voicetypr --help
-voicetypr status --json
-voicetypr models --json
-voicetypr transcribe <file> --json
-```
-
-Human-readable output is the default. Add `--json` for structured automation output.
 
 ## Architecture
 
