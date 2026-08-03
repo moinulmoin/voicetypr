@@ -3,143 +3,146 @@
 
   # Voicetypr
 
-  **Open Source AI Powered voice to text dictation tool, alternative to superwhisper, whispr flow**
+  **Private, open-source voice-to-text dictation for macOS & Windows — local-first, pay once.**
+
+  A fully open alternative to Wispr Flow and superwhisper: press a hotkey, speak, and your words appear at the cursor in any app. Transcription runs on your machine by default; optional AI polish and cloud speech-to-text are strictly opt-in and bring-your-own-key.
 
   [![GitHub release](https://img.shields.io/github/v/release/moinulmoin/voicetypr)](https://github.com/moinulmoin/voicetypr/releases)
   [![License](https://img.shields.io/badge/license-AGPL--3.0-blue.svg)](LICENSE.md)
-  [![macOS](https://img.shields.io/badge/macOS-14.0+-black)](https://www.apple.com/macos)
+  [![macOS](https://img.shields.io/badge/macOS-14.0+%20(Apple%20Silicon%20%26%20Intel)-black)](https://www.apple.com/macos)
   [![Windows](https://img.shields.io/badge/Windows-10%2F11-0078D6)](https://www.microsoft.com/windows)
   [![Downloads](https://img.shields.io/github/downloads/moinulmoin/voicetypr/total)](https://github.com/moinulmoin/voicetypr/releases)
 
-  [Download](https://github.com/moinulmoin/voicetypr/releases/latest) • [Features](#features) • [Installation](#installation) • [Usage](#usage)
+  [Download](https://github.com/moinulmoin/voicetypr/releases/latest) • [Why Voicetypr](#-why-voicetypr) • [Features](#-features) • [Install](#-installation) • [Build from source](#-building-from-source)
 </div>
+
+<!-- TODO(maintainer): add a hero demo GIF here, e.g. docs/demo.gif (record: hotkey → speak → text lands in an app). This is the single highest-impact addition for stars. -->
 
 ## 🎯 What is Voicetypr?
 
-Voicetypr is an open source AI voice-to-text dictation tool, alternative to Wispr Flow and SuperWhisper. Available for macOS and Windows. Pay once, use forever.
+Voicetypr is an open-source dictation tool. Bind a global hotkey, speak anywhere, and the text is typed into whatever app has focus — editors, terminals, Slack, browsers, your AI coding assistant. Speech recognition happens **locally by default** (Whisper / Parakeet), so your audio never has to leave your machine. Everything cloud-related — cloud transcription, AI polish — is optional, opt-in, and uses your own API keys.
+
+Available for **macOS (Apple Silicon & Intel) and Windows**. **Pay once, use forever** — no subscription.
+
+## 🔥 Why Voicetypr?
+
+- **Local-first & private** — audio is transcribed on-device by default; nothing is uploaded unless *you* pick a cloud provider. Telemetry is opt-in and off by default.
+- **Fully open & auditable** — the entire app is AGPL-3.0. No closed "black box" enhancement blob you have to trust.
+- **Cross-platform, today** — signed macOS *and* Windows installers with auto-update, shipping now.
+- **Pay once** — a one-time purchase, not a monthly bill.
+- **Bring your own everything** — your choice of local model, cloud STT provider, and AI-polish provider (including local LLMs via Ollama / LM Studio).
 
 ## ✨ Features
 
-### 🎙️ **Instant Voice-to-Text**
-- System-wide hotkey for quick recording
-- Automatic text insertion at cursor position
-- Works in any app - cursor, claude code, chatgpt, slack, etc
+### 🎙️ Instant voice-to-text
+- System-wide hotkey to record from anywhere; native trigger engine (combos, hold-to-talk, or tap-to-toggle)
+- Text inserted right at the cursor, in any app
+- Double-press `Esc` to cancel a recording
+- Media auto-pauses while you dictate, then resumes
 
-### 🤖 **Powered by local AI**
-- Local transcription by default — your raw audio stays on your machine
-- Multiple model sizes for accuracy vs speed tradeoffs
-- Support for 99+ languages out of the box
-- Hardware acceleration (Metal on macOS)
+### 🧠 Transcription — local by default, cloud optional
+- **Local:** Whisper (tiny → large) and Parakeet (Apple Neural Engine on macOS); 99+ languages; hardware-accelerated (Metal on macOS, GPU on Windows)
+- **Optional cloud STT (BYOK):** Soniox, Deepgram, OpenAI, Groq, Cohere
+- Your raw audio stays on-device with local models; it's only sent to a provider if you explicitly choose one
 
-### 🚀 **Native Performance**
-- Built with Rust and Tauri for blazing-fast performance
-- Optimized for each platform with hardware acceleration
-- Minimal resource usage with maximum efficiency
+### 🤖 AI polish (optional, bring-your-own-key)
+- Clean up dictation without changing your meaning — remove filler, fix grammar and punctuation
+- Presets: **Clean Dictation** (default), **Writing**, **Notes**, **Message**, **Code** — plus **Personal Dictation** (no AI, local cleanup only)
+- Providers: **OpenAI, Anthropic, Google Gemini, or any OpenAI-compatible endpoint** — including local models via Ollama / LM Studio
+- Optionally write the output in a different language than you spoke
+- API keys stored securely in the OS keychain
 
-### 🔒 **Privacy First**
-- Transcription runs locally by default; cloud speech-to-text only when you select a cloud provider. Telemetry is opt-in and off by default; only a license/trial check phones home
-- Recordings stay on your device with local transcription; if you choose a cloud provider, that audio is sent to it for transcription
-- Open source for full transparency
+### 📚 Your text rules (always-on, 100% local)
+- **Words & Names** — a personal dictionary that also improves recognition accuracy
+- **Corrections** — find-and-replace rules applied to every transcription
+- **Snippets** — expand spoken phrases into templates
+- **Voice commands** — "new line", "period", etc.
+- **Per-app rules** — different formatting for different apps
 
-### 🤖 **AI Enhancement** (NEW)
-- Transform your transcriptions with AI (Groq/Gemini)
-- Smart presets: Prompts, Email, Commits, Notes
-- Secure API key storage
-- Requires internet connection for enhancement only
+### 🌐 Network sharing & remote transcription
+- Run the heavy model on one machine and transcribe from another over your LAN (built-in server + client)
 
-### 🎨 **Clean Design**
-- Clean, user interface
-- Menubar integration for quick access
-- Visual feedback during recording
-- Auto-updates to keep you on the latest version
+### ⌨️ CLI / agent mode
+- Drive Voicetypr from the command line for scripting and agent workflows
+
+### 🔒 Privacy first
+- Local transcription by default — raw audio stays on your device
+- Telemetry is **opt-in and off by default**; only a license/trial check contacts our server
+- Cloud STT / AI polish are used **only** when you select them, with your own keys
+- Open source, end to end, for full transparency
+
+### 🖥️ Native & cross-platform
+- Built with Rust + Tauri for low latency and small footprint
+- Signed macOS (Apple Silicon & Intel) and Windows installers, with in-app auto-updates
 
 ## 📦 Installation
 
-### Requirements
-
-#### macOS
-- macOS 14.0 (Sonoma) or later
-- 3-4 GB free disk space (for AI models)
-- Microphone access permission
-- Accessibility access permission
-
-#### Windows
-- Windows 10/11 (64-bit)
-- 3-4 GB free disk space (for AI models)
-- GPU acceleration available (5-10x faster with NVIDIA, AMD, Intel GPUs)
-
-### Quick Install
-
-#### macOS
-1. Download the latest [Voicetypr.dmg](https://github.com/moinulmoin/voicetypr/releases/latest)
+### macOS
+1. Download the latest [`Voicetypr.dmg`](https://github.com/moinulmoin/voicetypr/releases/latest) (Apple Silicon or Intel)
 2. Open the DMG and drag Voicetypr to Applications
-3. Launch Voicetypr from Applications
-4. Follow the onboarding to download your preferred AI model
+3. Launch it and follow onboarding to grant permissions and download a model
 
-> **Note**: Voicetypr is fully signed and notarized by Apple, so you can run it without security warnings.
+> Voicetypr is signed and notarized by Apple — no security warnings.
 
-#### Windows
-1. Download the latest [Voicetypr installer](https://github.com/moinulmoin/voicetypr/releases/latest)
-2. Run the installer
-3. Launch Voicetypr from Start Menu
-4. Follow the onboarding to download your preferred AI model
+### Windows
+1. Download the latest [`Voicetypr_x64-setup.exe`](https://github.com/moinulmoin/voicetypr/releases/latest)
+2. Run the installer and launch from the Start Menu
+3. Follow onboarding to download a model
 
-> **GPU Acceleration (5-10x faster)**
-> - Voicetypr automatically uses your GPU if available
-> - For best performance, ensure your graphics drivers are up to date:
->   - [NVIDIA Drivers](https://www.nvidia.com/drivers)
->   - [AMD Drivers](https://www.amd.com/support)
->   - [Intel Drivers](https://www.intel.com/content/www/us/en/support/products/80939/graphics.html)
-> - Falls back to CPU automatically if GPU unavailable
+> **GPU acceleration:** Voicetypr uses your GPU automatically when available (keep [NVIDIA](https://www.nvidia.com/drivers) / [AMD](https://www.amd.com/support) / [Intel](https://www.intel.com/content/www/us/en/support/products/80939/graphics.html) drivers current) and falls back to CPU otherwise.
+
+### Requirements
+- **macOS** 14.0 (Sonoma)+ · **Windows** 10/11 (64-bit)
+- ~1–4 GB free disk (depending on model)
+- Microphone permission; Accessibility permission (macOS) for typing into other apps
 
 ## 🎮 Usage
 
-### Getting Started
+1. **Launch** Voicetypr (Applications / Start Menu)
+2. **Grant permissions** — microphone, plus Accessibility on macOS
+3. **Download a model** — pick tiny → large for your speed/accuracy needs
+4. **Set your hotkey** and start dictating anywhere
 
-1. **Launch Voicetypr** - Find it in your Applications folder (macOS) or Start Menu (Windows)
-2. **Grant Permissions** - Allow microphone access (and accessibility on macOS)
-3. **Download a Model** - Choose from tiny to large models based on your needs
-4. **Start Transcribing** - Press your hotkey anywhere to record
+**Tips**
+- 🎯 Double-press `Esc` to cancel a recording
+- 🌍 Just speak — the language is auto-detected
+- ⚡ Text lands wherever your cursor is
+- 📚 Add frequently-misheard names to **Words & Names** for better accuracy
 
-### Tips & Tricks
+## 🛠️ Building from source
 
-- 🎯 **Quick Cancel**: Double Press `Esc` while recording to cancel
-- 📝 **Long Recordings**: Voicetypr handles extended recordings seamlessly but shorter recordings are recommended to do.
-- 🌍 **Multiple Languages**: Just speak - Whisper auto-detects the language
-- ⚡ **Instant Insert**: Text appears right where your cursor is
+Voicetypr is a Tauri v2 app (Rust backend + React 19 frontend).
 
-### Project Structure
+**Prerequisites:** Rust (stable), Node.js + `pnpm`, and platform build tools (Xcode on macOS).
 
-```
-voicetypr/
-├── src/                    # React frontend
-│   ├── components/         # UI components
-│   ├── hooks/             # Custom React hooks
-│   └── types/             # TypeScript types
-├── src-tauri/             # Rust backend
-│   ├── src/
-│   │   ├── audio/         # Audio recording
-│   │   ├── whisper/       # Whisper integration
-│   │   └── commands/      # Tauri commands
-│   └── capabilities/      # Security capabilities
-├── scripts/               # Build and utility scripts
-└── tests/                 # Test suites
+```bash
+git clone https://github.com/moinulmoin/voicetypr.git
+cd voicetypr
+pnpm install
+
+pnpm tauri:dev      # run the full app (frontend + Rust) in dev
+pnpm tauri build    # produce a native installer
 ```
 
-## 🔧 Troubleshooting
+**Quality checks** (run before committing):
 
-### Windows GPU Acceleration
+```bash
+pnpm typecheck      # TypeScript
+pnpm lint           # ESLint
+pnpm test           # frontend tests (Vitest)
+pnpm test:backend   # Rust tests (cargo test)
+pnpm quality-gate   # all of the above
+```
 
-Voicetypr automatically detects and uses your GPU for faster transcription. If you're experiencing slower performance:
+## 🤝 Contributing
 
-**Update your graphics drivers** - This is the most common fix:
-   - [NVIDIA Drivers](https://www.nvidia.com/drivers)
-   - [AMD Drivers](https://www.amd.com/support)
-   - [Intel Drivers](https://www.intel.com/content/www/us/en/support/products/80939/graphics.html)
+Contributions are welcome! Please open an issue to discuss non-trivial changes before submitting a PR. Keep PRs focused (one feature/fix), and make sure `pnpm quality-gate` passes.
 
-> **Note**: Voicetypr always works - it automatically falls back to CPU if GPU acceleration is unavailable
+## 💬 Community & support
+
+- Website: [voicetypr.com](https://voicetypr.com)
+- Issues & feature requests: [GitHub Issues](https://github.com/moinulmoin/voicetypr/issues)
 
 ## 📄 License
 
 Voicetypr is licensed under the [GNU Affero General Public License v3.0](LICENSE.md).
-</div>
