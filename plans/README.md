@@ -44,6 +44,8 @@ Verification commands used across all plans: `pnpm typecheck`, `pnpm lint`,
 | 041  | Paid-license validation resilience | P0 | M | — | DONE — reviewer PASS; focused/full gates + local Account UI smoke passed 2026-07-24 |
 | 042  | Release workflow speed — CI fast path, tested release logic, sidecar caches | P1 | M | — | DONE — reviewer PASS; workflow gates + cold/warm signed release dry-runs passed 2026-08-02 |
 | 043  | README + canonical AGPL license refresh | P1 | S | — | DONE — GitHub detects AGPL-3.0; README link + formatting validation passed 2026-08-03 |
+| 044  | Agent-CLI Polish hardening + model selection | P1 | L | 030 | DONE (code) — NEEDS-SMOKE; automated gates + adversarial review passed 2026-08-06 |
+| 045  | Privacy-safe PostHog product analytics | P1 | L | 031 | IN PROGRESS — claimed Main 2026-08-06 |
 
 ## Code-done, awaiting batched manual smoke (`plans/SMOKE.md`)
 
