@@ -516,7 +516,7 @@ describe("OnboardingDesktop", () => {
     );
   });
 
-  it("defaults telemetry to ON and persists consent=true on completion", async () => {
+  it("defaults both privacy choices on and persists them on completion", async () => {
     const user = userEvent.setup();
     renderOnboarding();
 
@@ -530,19 +530,21 @@ describe("OnboardingDesktop", () => {
 
     await screen.findByRole("heading", { name: /you're all set/i });
 
-    // Anonymous error tracking is opt-out: the checkbox is checked by default.
-    const telemetryCheckbox = screen.getByRole("checkbox", { name: /send anonymous error reports/i });
-    expect(telemetryCheckbox).toBeChecked();
+    expect(screen.getByRole("checkbox", { name: /crash & error reporting/i })).toBeChecked();
+    expect(screen.getByRole("checkbox", { name: /usage analytics/i })).toBeChecked();
 
-    // Accepting the default and finishing must enable diagnostics.
     await user.click(screen.getByRole("button", { name: /continue/i }));
     await user.click(screen.getByRole("button", { name: /^continue$/i }));
-    await waitFor(() =>
-      expect(invokeMock).toHaveBeenCalledWith("set_telemetry_consent", { enabled: true }),
-    );
+    await waitFor(() => {
+      expect(invokeMock).toHaveBeenCalledWith("set_telemetry_consent", { enabled: true });
+      expect(invokeMock).toHaveBeenCalledWith("set_product_analytics_consent", {
+        enabled: true,
+      });
+      expect(invokeMock).toHaveBeenCalledWith("record_onboarding_completed");
+    });
   });
 
-  it("persists telemetry consent=false when the success-step checkbox is unchecked", async () => {
+  it("persists an analytics opt-out independently during onboarding", async () => {
     const user = userEvent.setup();
     renderOnboarding();
 
@@ -555,12 +557,14 @@ describe("OnboardingDesktop", () => {
 
     await screen.findByRole("heading", { name: /you're all set/i });
 
-    // Uncheck the default-on consent box before finishing.
-    await user.click(screen.getByRole("checkbox", { name: /send anonymous error reports/i }));
+    await user.click(screen.getByRole("checkbox", { name: /usage analytics/i }));
     await user.click(screen.getByRole("button", { name: /continue/i }));
     await user.click(screen.getByRole("button", { name: /^continue$/i }));
-    await waitFor(() =>
-      expect(invokeMock).toHaveBeenCalledWith("set_telemetry_consent", { enabled: false }),
-    );
+    await waitFor(() => {
+      expect(invokeMock).toHaveBeenCalledWith("set_telemetry_consent", { enabled: true });
+      expect(invokeMock).toHaveBeenCalledWith("set_product_analytics_consent", {
+        enabled: false,
+      });
+    });
   });
 });

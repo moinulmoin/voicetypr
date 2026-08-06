@@ -21,6 +21,7 @@ mod license;
 mod media;
 mod menu;
 mod parakeet;
+mod product_analytics;
 pub mod provider_capabilities;
 mod recognition;
 mod recording;
@@ -225,7 +226,11 @@ fn build_app_menu(app: &tauri::AppHandle) -> tauri::Result<tauri::menu::Menu<tau
 
 use audio::recorder::AudioRecorder;
 use commands::remote::load_remote_settings;
-use commands::telemetry::{get_telemetry_status, report_frontend_error, set_telemetry_consent};
+use commands::telemetry::{
+    defer_privacy_consent_for_session, get_product_analytics_status, get_telemetry_status,
+    record_onboarding_completed, report_frontend_error, set_product_analytics_consent,
+    set_telemetry_consent,
+};
 use commands::{
     ai::{
         cache_ai_api_key, clear_ai_api_key_cache, disable_ai_enhancement, get_ai_settings,
@@ -494,18 +499,16 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
         log::info!("✅ Encryption initialized successfully");
     }
 
-    // Initialize opt-in, anonymous error reporting. No-op unless the user has
-    // opted in AND a DSN was baked in at build time. Native minidumps are
-    // disabled, so no raw process memory is ever captured. The guard must
-    // outlive the app, so it is held until `run()` returns.
+    // Initialize independent diagnostics and product-analytics clients from
+    // their own persisted choices. Only new product analytics is held behind
+    // the one-time acknowledgement gate.
     let app_context = tauri::generate_context!();
+    let analytics_consent =
+        product_analytics::read_consent(app_context.config().identifier.as_str());
     let (telemetry_enabled, telemetry_install_id) =
         telemetry::read_consent(app_context.config().identifier.as_str());
-    // Held for the whole process so the Sentry client stays alive (Rust panics +
-    // frontend-error capture). We do NOT register tauri-plugin-sentry: no JS
-    // injection and no envelope/breadcrumb IPC, so `before_send` is the single
-    // egress chokepoint. Inert unless opted in AND a DSN was compiled in.
     let _sentry_guard = telemetry::init(telemetry_enabled, telemetry_install_id);
+    product_analytics::init(analytics_consent);
 
     let mut builder = tauri::Builder::default()
         .plugin(tauri_plugin_os::init())
@@ -1604,9 +1607,14 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             install_cli_tool,
             uninstall_cli_tool,
             cli_tool_status,
-            // Telemetry (opt-in error reporting) consent
+            // Independent privacy controls: GlitchTip diagnostics and PostHog
+            // product analytics.
             get_telemetry_status,
             set_telemetry_consent,
+            get_product_analytics_status,
+            set_product_analytics_consent,
+            defer_privacy_consent_for_session,
+            record_onboarding_completed,
             report_frontend_error,
             // Remote transcription commands
             refresh_active_remote_server_status,
@@ -1667,13 +1675,18 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             eprintln!("Voicetypr failed to start: {}", e);
             Box::new(e)
         })?
-        .run(|app_handle, event| {
+        .run(|app_handle, event| match event {
             #[cfg(target_os = "macos")]
-            if let tauri::RunEvent::Reopen { has_visible_windows, .. } = event {
+            tauri::RunEvent::Reopen {
+                has_visible_windows,
+                ..
+            } => {
                 if !has_visible_windows {
                     show_main_window(app_handle);
                 }
             }
+            tauri::RunEvent::Exit => product_analytics::shutdown(),
+            _ => {}
         });
 
     // Log successful application startup

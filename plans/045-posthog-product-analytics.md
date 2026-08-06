@@ -7,6 +7,7 @@
 - **Risk**: HIGH
 - **Depends on**: Plan 031 GlitchTip observability
 - **Claimed**: Main, 2026-08-06
+- **State**: DONE (code) — NEEDS-SMOKE 045-S1..S6
 
 ## Goal
 
@@ -32,8 +33,10 @@ Add consented, anonymous product analytics through PostHog while keeping GlitchT
 
 ## Verification
 
-- Focused Rust privacy/consent/event-schema tests.
-- Focused frontend consent/onboarding tests.
-- `pnpm quality-gate`.
-- Independent adversarial privacy and integration review.
-- Manual release-build network smoke in `plans/SMOKE.md` before Beta publication.
+- Focused Rust contracts: 9 product-analytics tests and 23 GlitchTip telemetry tests passed.
+- Focused frontend consent tests: 21 passed across the existing-user dialog, settings, and onboarding.
+- Full quality gate: TypeScript, ESLint, 608 frontend tests (1 skipped), 1,359 Rust tests (13 ignored), and Clippy with warnings denied passed.
+- Release-only compile path passed with a non-empty `POSTHOG_PROJECT_TOKEN`.
+- Two independent adversarial reviews finished with no findings after consent-race, queued-egress, stored-ID, and error-type hardening.
+- Local Tauri dev-server UI smoke verified the default-on dialog, independent opt-out/save order, session defer, and independent Advanced-settings toggle.
+- Signed release-build network verification remains in `plans/SMOKE.md` and gates Beta publication.

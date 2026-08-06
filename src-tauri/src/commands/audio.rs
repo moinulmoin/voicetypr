@@ -272,10 +272,14 @@ struct DecodeTelemetryGuard<'a> {
     _span: SpanFinishGuard,
     started: Instant,
     outcome: crate::telemetry::TranscriptionPhase,
+    analytics_engine: crate::product_analytics::EngineKind,
 }
 
 impl<'a> DecodeTelemetryGuard<'a> {
-    fn new(transaction: &'a TransactionFinishGuard) -> Self {
+    fn new(
+        transaction: &'a TransactionFinishGuard,
+        analytics_engine: crate::product_analytics::EngineKind,
+    ) -> Self {
         Self {
             transaction,
             _span: SpanFinishGuard::new(
@@ -283,6 +287,7 @@ impl<'a> DecodeTelemetryGuard<'a> {
             ),
             started: Instant::now(),
             outcome: crate::telemetry::TranscriptionPhase::DecodeCancelled,
+            analytics_engine,
         }
     }
 
@@ -293,10 +298,24 @@ impl<'a> DecodeTelemetryGuard<'a> {
 
 impl Drop for DecodeTelemetryGuard<'_> {
     fn drop(&mut self) {
-        self.transaction.log_transcription(
-            self.outcome,
-            Some(self.started.elapsed().as_millis() as u64),
-        );
+        let duration_ms = self.started.elapsed().as_millis() as u64;
+        self.transaction
+            .log_transcription(self.outcome, Some(duration_ms));
+        let outcome = match self.outcome {
+            crate::telemetry::TranscriptionPhase::DecodeSucceeded => {
+                crate::product_analytics::JourneyOutcome::Succeeded
+            }
+            crate::telemetry::TranscriptionPhase::DecodeFailed => {
+                crate::product_analytics::JourneyOutcome::Failed
+            }
+            _ => crate::product_analytics::JourneyOutcome::Cancelled,
+        };
+        crate::product_analytics::capture(crate::product_analytics::ProductEvent::StageFinished {
+            stage: crate::product_analytics::JourneyStage::Decode,
+            outcome,
+            duration_ms,
+            engine: Some(self.analytics_engine),
+        });
     }
 }
 
@@ -329,13 +348,25 @@ impl<'a> DeliveryTelemetryGuard<'a> {
 
 impl Drop for DeliveryTelemetryGuard<'_> {
     fn drop(&mut self) {
-        let phase = if self.succeeded {
-            crate::telemetry::TranscriptionPhase::DeliverySucceeded
+        let duration_ms = self.started.elapsed().as_millis() as u64;
+        let (phase, outcome) = if self.succeeded {
+            (
+                crate::telemetry::TranscriptionPhase::DeliverySucceeded,
+                crate::product_analytics::JourneyOutcome::Succeeded,
+            )
         } else {
-            crate::telemetry::TranscriptionPhase::DeliveryFailed
+            (
+                crate::telemetry::TranscriptionPhase::DeliveryFailed,
+                crate::product_analytics::JourneyOutcome::Failed,
+            )
         };
-        self.transaction
-            .log_transcription(phase, Some(self.started.elapsed().as_millis() as u64));
+        self.transaction.log_transcription(phase, Some(duration_ms));
+        crate::product_analytics::capture(crate::product_analytics::ProductEvent::StageFinished {
+            stage: crate::product_analytics::JourneyStage::Delivery,
+            outcome,
+            duration_ms,
+            engine: None,
+        });
     }
 }
 
@@ -3362,6 +3393,15 @@ impl ActiveEngineSelection {
         }
     }
 
+    pub(crate) const fn analytics_kind(&self) -> crate::product_analytics::EngineKind {
+        match self {
+            Self::Whisper { .. } => crate::product_analytics::EngineKind::Whisper,
+            Self::Parakeet { .. } => crate::product_analytics::EngineKind::Parakeet,
+            Self::Cloud { .. } => crate::product_analytics::EngineKind::Cloud,
+            Self::Remote { .. } => crate::product_analytics::EngineKind::Remote,
+        }
+    }
+
     pub(crate) const fn route(&self) -> &'static str {
         match self {
             ActiveEngineSelection::Whisper { .. } | ActiveEngineSelection::Parakeet { .. } => {
@@ -4498,6 +4538,7 @@ pub async fn start_recording(
         crate::telemetry::TranscriptionPhase::RecordingStarted,
         None,
     );
+    crate::product_analytics::capture(crate::product_analytics::ProductEvent::RecordingStarted);
 
     // If a stop was requested while starting (toggle or PTT), honor it immediately
     // after entering Recording state. For PTT, key-up in Starting state sets this flag.
@@ -4869,6 +4910,9 @@ pub async fn stop_recording(
         crate::telemetry::TranscriptionPhase::RecordingStopped,
         capture_metrics.as_ref().map(|m| m.duration_ms),
     );
+    crate::product_analytics::capture(crate::product_analytics::ProductEvent::RecordingStopped {
+        duration_ms: capture_metrics.as_ref().map(|metrics| metrics.duration_ms),
+    });
 
     // Decide engine early to optionally skip normalization for cloud providers
     let config = get_recording_config(&app).await.map_err(|e| {
@@ -5351,7 +5395,10 @@ pub async fn stop_recording(
 
         let mut telemetry_transaction =
             TransactionFinishGuard::new(crate::telemetry::start_transcription_transaction());
-        let mut decode_telemetry = DecodeTelemetryGuard::new(&telemetry_transaction);
+        let mut decode_telemetry = DecodeTelemetryGuard::new(
+            &telemetry_transaction,
+            engine_selection_for_task.analytics_kind(),
+        );
         telemetry_transaction
             .log_transcription(crate::telemetry::TranscriptionPhase::DecodeStarted, None);
 
@@ -5607,6 +5654,16 @@ pub async fn stop_recording(
                 let transcription_for_process = transcription.clone();
                 let ai_enabled_for_task = ai_enabled;
                 let should_emit_enhancing_for_task = should_emit_enhancing;
+                let ai_provider_for_task = if ai_enabled {
+                    config.ai_provider.clone()
+                } else {
+                    String::new()
+                };
+                let ai_model_for_task = if ai_enabled {
+                    config.ai_model.clone()
+                } else {
+                    String::new()
+                };
                 let recording_file_for_task = recording_file.clone();
                 let telemetry_transaction_for_process = telemetry_transaction.take();
 
@@ -5661,6 +5718,27 @@ pub async fn stop_recording(
                                 } else if !ai_enabled_for_task {
                                     log::debug!("AI enhancement is disabled, using original text");
                                 }
+                                let polish_outcome = if !ai_enabled_for_task {
+                                    crate::product_analytics::PolishOutcome::Disabled
+                                } else if writing_result.ai_error.is_some() {
+                                    crate::product_analytics::PolishOutcome::Fallback
+                                } else if writing_result.ai_applied {
+                                    crate::product_analytics::PolishOutcome::Applied
+                                } else if writing_result.mode
+                                    == crate::ai::prompts::EnhancementPreset::PersonalDictation
+                                {
+                                    crate::product_analytics::PolishOutcome::Skipped
+                                } else {
+                                    crate::product_analytics::PolishOutcome::Unchanged
+                                };
+                                crate::product_analytics::capture(
+                                    crate::product_analytics::ProductEvent::PolishFinished {
+                                        outcome: polish_outcome,
+                                        preset: writing_result.mode.into(),
+                                        provider_id: ai_provider_for_task.clone(),
+                                        model_id: ai_model_for_task.clone(),
+                                    },
+                                );
                                 let plan = plan_desktop_writing_success(
                                     &transcription_for_process,
                                     &writing_result,
@@ -5776,6 +5854,18 @@ pub async fn stop_recording(
                             crate::telemetry::TranscriptionPhase::FormattingFailed
                         },
                         Some(formatting_started.elapsed().as_millis() as u64),
+                    );
+                    crate::product_analytics::capture(
+                        crate::product_analytics::ProductEvent::StageFinished {
+                            stage: crate::product_analytics::JourneyStage::Formatting,
+                            outcome: if writing_succeeded {
+                                crate::product_analytics::JourneyOutcome::Succeeded
+                            } else {
+                                crate::product_analytics::JourneyOutcome::Failed
+                            },
+                            duration_ms: formatting_started.elapsed().as_millis() as u64,
+                            engine: None,
+                        },
                     );
 
                     // 2. Hide pill window first, then insert text with reduced delay

@@ -9,6 +9,7 @@ import { AppShell } from "./AppShell";
 import type { ScreenId } from "./navigation";
 import { OnboardingDesktop } from "./onboarding/OnboardingDesktop";
 import { UpdateAnnouncementDialog } from "./UpdateAnnouncementDialog";
+import { PrivacyConsentDialog } from "./PrivacyConsentDialog";
 import { useReadiness } from "@/contexts/ReadinessContext";
 import { useSettings } from "@/contexts/SettingsContext";
 import { useEventCoordinator } from "@/hooks/useEventCoordinator";
@@ -360,6 +361,7 @@ export function AppContainer() {
         activeSection={activeSection}
         onSectionChange={setActiveSection}
       />
+      <PrivacyConsentDialog />
       <UpdateAnnouncementDialog
         version={justUpdatedVersion}
         onClose={() => setJustUpdatedVersion(null)}

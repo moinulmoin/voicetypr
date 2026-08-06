@@ -169,8 +169,9 @@ export const OnboardingDesktop = function OnboardingDesktop({
   } = modelManagement;
 
   const [currentStep, setCurrentStep] = useState<Step>("welcome");
-  // Anonymous error tracking is opt-out: checkbox defaults to checked on the success screen.
+  // Both independent privacy choices are opt-out and default to checked.
   const [telemetryOptIn, setTelemetryOptIn] = useState(true);
+  const [analyticsOptIn, setAnalyticsOptIn] = useState(true);
   const [sourceType, setSourceType] = useState<SourceType>("local");
   const [sourceConfirmed, setSourceConfirmed] = useState(false);
   const sourceConfirmedRef = useRef(false);
@@ -565,11 +566,16 @@ export const OnboardingDesktop = function OnboardingDesktop({
     onCompletionStart?.();
     try {
       await updateSettings({ onboarding_completed: true });
-      // Persist the diagnostics choice from the success step (checked by default; opt-out).
+      // Save diagnostics first; analytics consent and its acknowledgement are
+      // persisted atomically by the second command.
       try {
         await invoke("set_telemetry_consent", { enabled: telemetryOptIn });
-      } catch (telemetryError) {
-        log.error("Failed to persist telemetry consent:", telemetryError);
+        await invoke("set_product_analytics_consent", {
+          enabled: analyticsOptIn,
+        });
+        await invoke("record_onboarding_completed");
+      } catch (privacyError) {
+        log.error("Failed to persist privacy choices:", privacyError);
       }
       onComplete(target);
     } catch (error) {
@@ -1178,19 +1184,39 @@ export const OnboardingDesktop = function OnboardingDesktop({
               Tip: turn on Polish in Settings to clean up your dictation automatically.
             </p>
 
-            <label className="flex w-full items-start gap-3 rounded-2xl border border-border bg-card p-4 text-left text-sm shadow-sm">
-              <input
-                type="checkbox"
-                checked={telemetryOptIn}
-                onChange={(event) => setTelemetryOptIn(event.target.checked)}
-                className="mt-0.5 size-4 shrink-0 accent-[var(--sage)]"
-              />
-              <span className="text-muted-foreground">
-                Send anonymous error reports to help make Voicetypr better. Never
-                your audio, transcripts, or personal data - just crash details.
-                Change this anytime in Settings &gt; Advanced.
-              </span>
-            </label>
+            <div className="flex w-full flex-col gap-3 text-left text-sm">
+              <label className="flex items-start gap-3 rounded-2xl border border-border bg-card p-4 shadow-sm">
+                <input
+                  type="checkbox"
+                  checked={telemetryOptIn}
+                  onChange={(event) => setTelemetryOptIn(event.target.checked)}
+                  className="mt-0.5 size-4 shrink-0 accent-[var(--sage)]"
+                />
+                <span className="text-muted-foreground">
+                  <strong className="block font-medium text-foreground">
+                    Crash &amp; error reporting
+                  </strong>
+                  Anonymous crash details go to GlitchTip. No audio, transcripts,
+                  clipboard contents, or prompts.
+                </span>
+              </label>
+
+              <label className="flex items-start gap-3 rounded-2xl border border-border bg-card p-4 shadow-sm">
+                <input
+                  type="checkbox"
+                  checked={analyticsOptIn}
+                  onChange={(event) => setAnalyticsOptIn(event.target.checked)}
+                  className="mt-0.5 size-4 shrink-0 accent-[var(--sage)]"
+                />
+                <span className="text-muted-foreground">
+                  <strong className="block font-medium text-foreground">
+                    Usage analytics
+                  </strong>
+                  Anonymous feature usage, outcomes, and performance buckets with
+                  PostHog. No session replay.
+                </span>
+              </label>
+            </div>
 
             <Button size="lg" onClick={() => setCurrentStep("upgrade")}>
               Continue

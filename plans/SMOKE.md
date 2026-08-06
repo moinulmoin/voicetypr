@@ -402,6 +402,43 @@ capped; near-silent noise unchanged). Residue = real mic capture + real ambient.
       NOT amplified into loud hiss or spurious words (stays at the 10x cap).
 - [ ] NORM-S3 Normal-volume dictation → unchanged quality.
 
+## Plan 045 — privacy-safe PostHog product analytics (NEEDS-SMOKE)
+
+Run these checks on the next newly cut signed Beta with the public
+`POSTHOG_PROJECT_TOKEN` repository variable configured. Inspect PostHog Live
+Events and GlitchTip while exercising the desktop app; CI and local debug builds
+cannot prove production ingestion boundaries.
+
+- [ ] 045-S1 Fresh install on macOS and Windows → onboarding shows separate
+      Crash & error reporting and Usage analytics choices, both checked by
+      default. Turn only Usage analytics off, finish onboarding, restart, and
+      confirm analytics remains off while diagnostics remains on.
+- [ ] 045-S2 Upgrade an existing profile with no `privacy_consent_version` →
+      no PostHog request occurs before Continue. `Not now` keeps analytics off
+      for the process and the prompt returns next launch. Continue persists both
+      independent choices; a failed save leaves the prompt recoverable.
+- [ ] 045-S3 With analytics enabled, launch once and complete successful local
+      recordings with Polish disabled and enabled → PostHog receives only the
+      closed journey events (`app.started`, `onboarding.completed` when
+      applicable, `recording.started`, `recording.stopped`,
+      `transcription.stage_finished`, and `polish.finished`). GlitchTip receives
+      no duplicate product events.
+- [ ] 045-S4 Inspect every captured PostHog property → the distinct ID is an
+      opaque UUID; person profiles and GeoIP are disabled; durations are
+      buckets; provider/model values are curated or bucketed; no audio,
+      transcript, clipboard, prompt, key, email, path, hostname, target app,
+      window title, hotkey, error string, or free-form property is present.
+- [ ] 045-S5 Trigger decode/formatting/delivery failure and cancellation paths,
+      then disable Usage analytics while events are queued → outcomes stay in
+      the closed vocabulary and queued events are dropped. After the command
+      returns, no new request starts; a request already handed to the HTTP stack
+      may complete. Diagnostics continues independently.
+- [ ] 045-S6 Build/run a debug app and a release app without
+      `POSTHOG_PROJECT_TOKEN` → neither sends PostHog traffic. Re-enable the
+      token only in the signed Beta, verify both macOS architectures and Windows
+      ingest to the EU endpoint, and confirm funnels/retention can join the
+      anonymous journey by installation ID.
+
 ## 2.0.5 Beta train — Windows issue triage
 
 Current Beta: `2.0.5-beta.7`. Stable remains `2.0.4`. This signed candidate

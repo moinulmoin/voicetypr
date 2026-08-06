@@ -83,6 +83,7 @@ genai = "=0.6.0"
 tokio-util = "0.7"
 sentry = { version = "0.42", default-features = false, features = ["backtrace", "panic", "transport", "rustls", "debug-images", "logs"] }
 which = "4.4.2"
+posthog-rs = { version = "0.22.0", default-features = false }
 [target.'cfg(target_os = "macos")'.dependencies]
 whisper-rs = { version = "0.16.0", features = ["metal"] }
 tauri = { version = "2", features = ["macos-private-api", "tray-icon"] }
