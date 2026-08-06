@@ -271,10 +271,22 @@ mod tests {
 
     #[test]
     fn base_origin_covers_each_provider() {
-        assert_eq!(CloudProvider::Soniox.base_origin(), "https://api.soniox.com");
-        assert_eq!(CloudProvider::Openai.base_origin(), "https://api.openai.com");
+        assert_eq!(
+            CloudProvider::Soniox.base_origin(),
+            "https://api.soniox.com"
+        );
+        assert_eq!(
+            CloudProvider::Openai.base_origin(),
+            "https://api.openai.com"
+        );
         assert_eq!(CloudProvider::Groq.base_origin(), "https://api.groq.com");
-        assert_eq!(CloudProvider::Deepgram.base_origin(), "https://api.deepgram.com");
-        assert_eq!(CloudProvider::Cohere.base_origin(), "https://api.cohere.com");
+        assert_eq!(
+            CloudProvider::Deepgram.base_origin(),
+            "https://api.deepgram.com"
+        );
+        assert_eq!(
+            CloudProvider::Cohere.base_origin(),
+            "https://api.cohere.com"
+        );
     }
 }

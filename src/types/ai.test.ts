@@ -7,6 +7,7 @@ import {
   presetRequiresAiFormatting,
   type EnhancementPreset,
 } from './ai';
+import parityFixture from '../../tests/fixtures/preset-parity.json';
 
 const CURRENT_MODES: EnhancementPreset[] = [
   'PersonalDictation',
@@ -69,5 +70,21 @@ describe('AI enhancement mode migration', () => {
     ).toEqual({
       preset: 'CleanDictation',
     });
+  });
+
+  it('matches the shared preset parity fixture', () => {
+    for (const testCase of parityFixture.migrations) {
+      expect(migratePreset(testCase.raw, testCase.aiEnabled)).toBe(testCase.expected);
+    }
+
+    for (const testCase of parityFixture.requiresAiFormatting) {
+      expect(presetRequiresAiFormatting(testCase.preset as EnhancementPreset)).toBe(
+        testCase.expected,
+      );
+    }
+
+    for (const testCase of parityFixture.defaults) {
+      expect(defaultPresetForAiEnabled(testCase.aiEnabled)).toBe(testCase.expected);
+    }
   });
 });

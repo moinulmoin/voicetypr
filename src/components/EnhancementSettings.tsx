@@ -2,6 +2,11 @@ import { LanguageSelection } from "@/components/LanguageSelection";
 import { Button } from "@/components/ui/button";
 import { ButtonGroup } from "@/components/ui/button-group";
 import {
+  Collapsible,
+  CollapsibleContent,
+  CollapsibleTrigger,
+} from "@/components/ui/collapsible";
+import {
   Empty,
   EmptyDescription,
   EmptyHeader,
@@ -41,30 +46,27 @@ import type {
   WritingSettings,
 } from "@/types/writing";
 import {
-  AudioLines,
-  Code,
-  FileText,
+  ChevronDown,
   Globe,
-  Lock,
-  MessageSquare,
-  PenLine,
   Plus,
-  StickyNote,
   Trash2,
 } from "lucide-react";
+import type { ReactNode } from "react";
 
 interface EnhancementSettingsProps {
   preset: EnhancementPreset;
   finalTextLanguage: string;
   writingSettings: WritingSettings;
   aiFormattingEnabled: boolean;
-  onPresetChange: (preset: EnhancementPreset) => void;
+  polishControls: ReactNode;
+  polishSetupContent?: ReactNode;
+  advancedProviderContent: ReactNode;
+  advancedOpen: boolean;
+  onAdvancedOpenChange: (open: boolean) => void;
   onFinalTextLanguageChange: (value: string) => void;
   onWritingSettingsChange: (settings: WritingSettings) => void;
   disabled?: boolean;
   writingSettingsDisabled?: boolean;
-  /** "ai" = modes/language/app-rules only · "rules" = always-on text rules only · "all" = both. */
-  view?: "ai" | "rules" | "all";
 }
 
 function updateItem<T>(items: T[], index: number, next: T): T[] {
@@ -75,15 +77,14 @@ function removeItem<T>(items: T[], index: number): T[] {
   return items.filter((_, itemIndex) => itemIndex !== index);
 }
 const FORMATTING_MODES = [
-  { id: "PersonalDictation", icon: AudioLines },
-  { id: "CleanDictation", icon: FileText },
-  { id: "Writing", icon: PenLine },
-  { id: "Notes", icon: StickyNote },
-  { id: "Message", icon: MessageSquare },
-  { id: "Code", icon: Code },
+  { id: "PersonalDictation" },
+  { id: "CleanDictation" },
+  { id: "Writing" },
+  { id: "Notes" },
+  { id: "Message" },
+  { id: "Code" },
 ] as const satisfies ReadonlyArray<{
   id: EnhancementPreset;
-  icon: typeof AudioLines;
 }>;
 
 const formattingModeLabel = (preset: EnhancementPreset) => presetDisplayLabel(preset);
@@ -108,7 +109,7 @@ function AppFormattingRulesEditor({
         <div>
           <FieldLegend className="mb-1 text-sm">App Rules</FieldLegend>
           <FieldDescription>
-            Switch mode when the active app matches. Uses the app name only — not URLs, titles, or
+            Switch preset when the active app matches. Uses the app name only — not URLs, titles, or
             clipboard.
           </FieldDescription>
         </div>
@@ -131,7 +132,7 @@ function AppFormattingRulesEditor({
 
       {!aiFormattingEnabled && hasAiRequiredSelection && (
         <div className="mt-3 rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-700 dark:text-amber-300">
-          One or more app rules use AI modes. Turn on AI formatting with a selected provider model to activate them.
+          One or more app rules use Polish presets. Turn on Polish with a selected provider model to activate them.
         </div>
       )}
 
@@ -187,8 +188,8 @@ function AppFormattingRulesEditor({
                       )
                     }
                   >
-                    <SelectTrigger size="sm" className="w-[11rem]" aria-label="Formatting mode">
-                      <SelectValue placeholder="Mode">
+                    <SelectTrigger size="sm" className="w-[11rem]" aria-label="App rule preset">
+                      <SelectValue placeholder="Preset">
                         {selectedMode ? formattingModeLabel(selectedMode.id) : rule.preset}
                       </SelectValue>
                     </SelectTrigger>
@@ -207,7 +208,7 @@ function AppFormattingRulesEditor({
                           >
                             {formattingModeLabel(modeOption.id)}
                             {requiresAi && !aiFormattingEnabled && !isSelected
-                              ? " (requires AI)"
+                              ? " (requires Polish)"
                               : ""}
                           </SelectItem>
                         );
@@ -710,164 +711,147 @@ export function EnhancementSettings({
   finalTextLanguage,
   writingSettings,
   aiFormattingEnabled,
-  onPresetChange,
+  polishControls,
+  polishSetupContent,
+  advancedProviderContent,
+  advancedOpen,
+  onAdvancedOpenChange,
   onFinalTextLanguageChange,
   onWritingSettingsChange,
   disabled = false,
   writingSettingsDisabled = disabled,
-  view = "all",
 }: EnhancementSettingsProps) {
   const allowsSpecificFinalLanguage = preset !== "PersonalDictation";
   const usingSpecificLanguage =
     allowsSpecificFinalLanguage && finalTextLanguage !== "same_as_transcript";
-  const selectedRequiresAi = presetRequiresAiFormatting(preset);
+
   return (
-    <div className={`space-y-4 ${disabled ? "opacity-60" : ""}`}>
-      {view !== "rules" && (
-      <>
-      <FieldSet className="rounded-xl border border-border/60 bg-card p-4">
-        <FieldLegend className="mb-1">Formatting mode</FieldLegend>
-        <FieldDescription className="mb-3">Pick how the final text is shaped.</FieldDescription>
-        {!aiFormattingEnabled && selectedRequiresAi && (
-          <div className="mb-3 rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-700 dark:text-amber-300">
-            {formattingModeLabel(preset)} needs AI. Turn on AI with a provider model, or pick
-            Personal Dictation.
+    <div className={`space-y-6 ${disabled ? "opacity-60" : ""}`}>
+      <section className="space-y-3">
+        <div className="flex flex-wrap items-start justify-between gap-4">
+          <div className="min-w-0">
+            <h2 className="text-base font-semibold">Polish</h2>
+            <p className="mt-1 text-sm text-muted-foreground">
+              Clean up grammar and punctuation while keeping your meaning.
+            </p>
           </div>
-        )}
-        <ButtonGroup className="w-full flex-wrap md:w-fit">
-          {FORMATTING_MODES.map((modeOption) => {
-            const Icon = modeOption.icon;
-            const isSelected = preset === modeOption.id;
-            const requiresAi = presetRequiresAiFormatting(modeOption.id);
-            const modeLabel = formattingModeLabel(modeOption.id);
-            const isModeDisabled =
-              disabled || (requiresAi && !aiFormattingEnabled && !isSelected);
-            const aiRequiredHint = requiresAi
-              ? `${modeLabel} requires AI formatting. Turn on AI formatting with a selected provider model.`
-              : undefined;
-            return (
-              <Button
-                key={modeOption.id}
-                type="button"
-                variant={isSelected ? "default" : "outline"}
-                size="sm"
-                disabled={isModeDisabled}
-                title={aiRequiredHint}
-                aria-label={
-                  requiresAi && !aiFormattingEnabled
-                    ? `${modeLabel} (requires AI formatting)`
-                    : modeLabel
-                }
-                onClick={() => !isModeDisabled && onPresetChange(modeOption.id)}
-              >
-                <Icon className="h-4 w-4" />
-                {modeLabel}
-                {requiresAi && !aiFormattingEnabled && (
-                  <Lock className="h-3 w-3 opacity-70" aria-hidden="true" />
-                )}
-              </Button>
-            );
-          })}
-        </ButtonGroup>
-        <FieldDescription className="mt-3">
-          {preset === "PersonalDictation" && "Just transcription with local cleanup. No AI."}
-          {preset === "CleanDictation" && "AI fixes grammar and punctuation. Keeps your meaning."}
-          {preset === "Writing" && "AI polishes it into clear prose."}
-          {preset === "Notes" && "AI turns it into short, structured notes."}
-          {preset === "Message" && "AI formats it as a short message."}
-          {preset === "Code" && "AI formats commits and code notes."}
-        </FieldDescription>
-      </FieldSet>
+          {polishControls}
+        </div>
 
-      <FieldSet className="rounded-xl border border-border/60 bg-card p-4">
-        <FieldLegend className="mb-1">Final Text Language</FieldLegend>
-        <FieldDescription className="mb-3">
-          Keep the transcript language, or pick a different written language. Changing it needs AI.
-        </FieldDescription>
-        {!aiFormattingEnabled && finalTextLanguage !== "same_as_transcript" && (
-          <div className="mb-3 rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-700 dark:text-amber-300">
-            Turn on AI and pick an AI mode to use a final text language different from the transcript.
+        {polishSetupContent}
+
+        <FieldSet className="rounded-xl border border-border/60 bg-card p-4">
+          <FieldLegend className="mb-1">Final Text Language</FieldLegend>
+          <FieldDescription className="mb-3">
+            Keep the transcript language, or pick a different written language. Changing it needs
+            Polish.
+          </FieldDescription>
+          {!aiFormattingEnabled && finalTextLanguage !== "same_as_transcript" && (
+            <div className="mb-3 rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-700 dark:text-amber-300">
+              Turn on Polish to use a final text language different from the transcript.
+            </div>
+          )}
+
+          <ButtonGroup className="w-full flex-wrap md:w-fit">
+            <Button
+              type="button"
+              variant={!usingSpecificLanguage ? "default" : "outline"}
+              size="sm"
+              disabled={disabled}
+              onClick={() => onFinalTextLanguageChange("same_as_transcript")}
+            >
+              Same as transcript
+            </Button>
+            <Button
+              type="button"
+              variant={usingSpecificLanguage ? "default" : "outline"}
+              size="sm"
+              disabled={disabled || !allowsSpecificFinalLanguage}
+              onClick={() =>
+                onFinalTextLanguageChange(usingSpecificLanguage ? finalTextLanguage : "en")
+              }
+            >
+              Specific language
+            </Button>
+          </ButtonGroup>
+
+          {usingSpecificLanguage && (
+            <div className="mt-3">
+              <LanguageSelection
+                value={finalTextLanguage}
+                onValueChange={onFinalTextLanguageChange}
+                className="w-full md:w-64"
+              />
+            </div>
+          )}
+        </FieldSet>
+      </section>
+
+      <section className="space-y-4">
+        <header>
+          <h2 className="text-base font-semibold">Static Rules</h2>
+          <p className="mt-1 text-sm text-muted-foreground">
+            Work with or without Polish — even better with it. They also sharpen recognition.
+          </p>
+        </header>
+        <ReplacementEditor
+          replacements={writingSettings.replacements}
+          disabled={writingSettingsDisabled}
+          onChange={(replacements) =>
+            onWritingSettingsChange({ ...writingSettings, replacements })
+          }
+        />
+
+        <CustomWordEditor
+          customWords={writingSettings.custom_words}
+          disabled={writingSettingsDisabled}
+          onChange={(custom_words) =>
+            onWritingSettingsChange({ ...writingSettings, custom_words })
+          }
+        />
+
+        <SnippetEditor
+          snippets={writingSettings.snippets}
+          disabled={writingSettingsDisabled}
+          onChange={(snippets) =>
+            onWritingSettingsChange({ ...writingSettings, snippets })
+          }
+        />
+      </section>
+
+      <Collapsible
+        open={advancedOpen}
+        onOpenChange={onAdvancedOpenChange}
+        className="rounded-xl border border-border/60 bg-card"
+      >
+        <div className="flex flex-wrap items-center justify-between gap-3 p-4">
+          <div className="min-w-0">
+            <h2 className="text-base font-semibold">Advanced</h2>
+            <p className="mt-1 text-sm text-muted-foreground">
+              Provider and model setup, plus per-app reshaping.
+            </p>
           </div>
-        )}
-
-        <ButtonGroup className="w-full flex-wrap md:w-fit">
-          <Button
-            type="button"
-            variant={!usingSpecificLanguage ? "default" : "outline"}
-            size="sm"
-            disabled={disabled}
-            onClick={() => onFinalTextLanguageChange("same_as_transcript")}
-          >
-            Same as transcript
-          </Button>
-          <Button
-            type="button"
-            variant={usingSpecificLanguage ? "default" : "outline"}
-            size="sm"
-            disabled={disabled || !allowsSpecificFinalLanguage}
-            onClick={() =>
-              onFinalTextLanguageChange(usingSpecificLanguage ? finalTextLanguage : "en")
+          <CollapsibleTrigger asChild>
+            <Button type="button" variant="outline" size="sm" aria-label="Toggle Advanced">
+              <ChevronDown
+                className={`h-4 w-4 transition-transform ${advancedOpen ? "rotate-180" : ""}`}
+              />
+              Advanced
+            </Button>
+          </CollapsibleTrigger>
+        </div>
+        <CollapsibleContent className="space-y-4 border-t border-border/60 p-4">
+          {advancedProviderContent}
+          <AppFormattingRulesEditor
+            rules={writingSettings.app_formatting_rules}
+            disabled={writingSettingsDisabled}
+            aiFormattingEnabled={aiFormattingEnabled}
+            onChange={(app_formatting_rules) =>
+              onWritingSettingsChange({ ...writingSettings, app_formatting_rules })
             }
-          >
-            Specific language
-          </Button>
-        </ButtonGroup>
-
-        {usingSpecificLanguage && (
-          <div className="mt-3">
-            <LanguageSelection
-              value={finalTextLanguage}
-              onValueChange={onFinalTextLanguageChange}
-              className="w-full md:w-64"
-            />
-          </div>
-        )}
-      </FieldSet>
-
-      <AppFormattingRulesEditor
-        rules={writingSettings.app_formatting_rules}
-        disabled={writingSettingsDisabled}
-        aiFormattingEnabled={aiFormattingEnabled}
-        onChange={(app_formatting_rules) =>
-          onWritingSettingsChange({ ...writingSettings, app_formatting_rules })
-        }
-      />
-      </>
-      )}
-
-      {view !== "ai" && (
-      <>
-      <header className="pt-2">
-        <h2 className="text-base font-semibold">Your text rules (always on)</h2>
-        <p className="mt-1 text-sm text-muted-foreground">
-          Exact, predictable edits. Run on every transcription, with or without AI.
-        </p>
-      </header>
-      <ReplacementEditor
-        replacements={writingSettings.replacements}
-        disabled={writingSettingsDisabled}
-        onChange={(replacements) =>
-          onWritingSettingsChange({ ...writingSettings, replacements })
-        }
-      />
-
-      <CustomWordEditor
-        customWords={writingSettings.custom_words}
-        disabled={writingSettingsDisabled}
-        onChange={(custom_words) =>
-          onWritingSettingsChange({ ...writingSettings, custom_words })
-        }
-      />
-
-      <SnippetEditor
-        snippets={writingSettings.snippets}
-        disabled={writingSettingsDisabled}
-        onChange={(snippets) =>
-          onWritingSettingsChange({ ...writingSettings, snippets })
-        }
-      />
-      </>
-      )}
+          />
+        </CollapsibleContent>
+      </Collapsible>
     </div>
   );
 }

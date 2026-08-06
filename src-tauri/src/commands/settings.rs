@@ -4,7 +4,7 @@ use crate::commands::key_normalizer::{
 };
 use crate::commands::remote::{resolve_shareable_model_config, save_remote_settings};
 use crate::commands::shortcuts;
-use crate::commands::updater::UpdateChannel;
+use crate::commands::updater::{UpdateChannel, UPDATE_CHANNEL_EXPLICIT_KEY};
 use crate::menu::should_include_remote_connection_in_tray;
 use crate::parakeet::models::AVAILABLE_MODELS;
 use crate::parakeet::ParakeetManager;
@@ -31,6 +31,24 @@ pub const DEFAULT_INDICATOR_OFFSET: u32 = 10;
 pub const TRANSCRIPTION_TASK_TRANSCRIBE: &str = "transcribe";
 pub const TRANSCRIPTION_TASK_TRANSLATE_TO_ENGLISH: &str = "translate_to_english";
 pub const FINAL_TEXT_LANGUAGE_SAME_AS_TRANSCRIPT: &str = "same_as_transcript";
+
+pub(crate) async fn persist_settings_and_invalidate<F, M>(
+    app: &AppHandle,
+    mutate: F,
+    map_save_error: M,
+) -> Result<(), String>
+where
+    F: FnOnce(&tauri_plugin_store::Store<tauri::Wry>) -> Result<(), String>,
+    M: FnOnce(String) -> String,
+{
+    let store = app.store("settings").map_err(|e| e.to_string())?;
+    mutate(&store)?;
+    store.save().map_err(|e| map_save_error(e.to_string()))?;
+    drop(store);
+
+    crate::commands::audio::invalidate_recording_config_cache(app).await;
+    Ok(())
+}
 
 #[derive(Serialize, Deserialize, Clone)]
 pub struct Settings {
@@ -122,7 +140,20 @@ impl Default for Settings {
 }
 
 fn default_update_channel() -> String {
-    UpdateChannel::Stable.as_str().to_string()
+    UpdateChannel::from_stored(None).as_str().to_string()
+}
+
+fn update_channel_to_persist(
+    stored_channel: Option<&str>,
+    stored_explicit: bool,
+    selected_now: bool,
+    requested: UpdateChannel,
+) -> Option<UpdateChannel> {
+    if stored_explicit || selected_now || stored_channel == Some("beta") {
+        Some(requested)
+    } else {
+        None
+    }
 }
 
 fn default_transcription_acceleration() -> String {
@@ -388,6 +419,10 @@ pub async fn get_settings(app: AppHandle) -> Result<Settings, String> {
     let stored_update_channel = store
         .get("update_channel")
         .and_then(|value| value.as_str().map(str::to_owned));
+    let stored_update_channel_explicit = store
+        .get(UPDATE_CHANNEL_EXPLICIT_KEY)
+        .and_then(|value| value.as_bool())
+        .unwrap_or(false);
 
     let settings = Settings {
         hotkey: store
@@ -512,9 +547,12 @@ pub async fn get_settings(app: AppHandle) -> Result<Settings, String> {
                 .and_then(|v| v.as_str().map(|s| s.to_string()))
                 .as_deref(),
         ),
-        update_channel: UpdateChannel::from_stored(stored_update_channel.as_deref())
-            .as_str()
-            .to_string(),
+        update_channel: UpdateChannel::from_preference(
+            stored_update_channel.as_deref(),
+            stored_update_channel_explicit,
+        )
+        .as_str()
+        .to_string(),
     };
     let normalized_speech_language = normalize_speech_language_for_model(
         &settings.current_model_engine,
@@ -570,7 +608,11 @@ async fn sync_running_sharing_server_to_model(
 }
 
 #[tauri::command]
-pub async fn save_settings(app: AppHandle, settings: Settings) -> Result<(), String> {
+pub async fn save_settings(
+    app: AppHandle,
+    settings: Settings,
+    update_channel_explicit: Option<bool>,
+) -> Result<(), String> {
     let store = app.store("settings").map_err(|e| e.to_string())?;
 
     // Check if model, recording mode, onboarding, and pill indicator mode changed
@@ -605,6 +647,13 @@ pub async fn save_settings(app: AppHandle, settings: Settings) -> Result<(), Str
             .and_then(|v| v.as_str().map(str::to_owned))
             .as_deref(),
     );
+    let stored_update_channel = store
+        .get("update_channel")
+        .and_then(|value| value.as_str().map(str::to_owned));
+    let stored_update_channel_explicit = store
+        .get(UPDATE_CHANNEL_EXPLICIT_KEY)
+        .and_then(|value| value.as_bool())
+        .unwrap_or(false);
     let normalized_transcription_acceleration =
         normalize_stored_transcription_acceleration(Some(&settings.transcription_acceleration));
     let normalized_update_channel = UpdateChannel::from_stored(Some(&settings.update_channel));
@@ -735,7 +784,21 @@ pub async fn save_settings(app: AppHandle, settings: Settings) -> Result<(), Str
         "transcription_acceleration",
         json!(&normalized_transcription_acceleration),
     );
-    store.set("update_channel", json!(normalized_update_channel.as_str()));
+    match update_channel_to_persist(
+        stored_update_channel.as_deref(),
+        stored_update_channel_explicit,
+        update_channel_explicit.unwrap_or(false),
+        normalized_update_channel,
+    ) {
+        Some(channel) => {
+            store.set("update_channel", json!(channel.as_str()));
+            store.set(UPDATE_CHANNEL_EXPLICIT_KEY, json!(true));
+        }
+        None => {
+            store.delete("update_channel");
+            store.delete(UPDATE_CHANNEL_EXPLICIT_KEY);
+        }
+    }
 
     // Network sharing settings
     if let Some(port) = settings.sharing_port {
@@ -785,7 +848,7 @@ pub async fn save_settings(app: AppHandle, settings: Settings) -> Result<(), Str
         );
     }
 
-    // Invalidate recording config cache when settings change
+    // This command reloads on save failure and rebuilds bindings after save; keep one explicit invalidation.
     crate::commands::audio::invalidate_recording_config_cache(&app).await;
 
     // Preload new model and update tray menu if model changed
@@ -1258,7 +1321,7 @@ pub async fn set_model_from_tray(app: AppHandle, model_name: String) -> Result<(
         settings.speech_language = "en".to_string();
     }
     // Save settings (this will also preload the model)
-    save_settings(app.clone(), settings).await?;
+    save_settings(app.clone(), settings, None).await?;
 
     // Keep a running sharing server truthful after the selected model changes
     sync_running_sharing_server_to_model(&app, &model_name, &engine).await?;
@@ -1403,7 +1466,7 @@ pub async fn set_audio_device(app: AppHandle, device_name: Option<String>) -> Re
     settings.selected_microphone = device_name.clone();
 
     // Save the updated settings
-    save_settings(app.clone(), settings).await?;
+    save_settings(app.clone(), settings, None).await?;
 
     // Update tray menu to reflect the change
     update_tray_menu(app.clone()).await?;
@@ -1552,7 +1615,9 @@ mod tests {
     use super::{
         get_autostart_status, recording_retention_days_from_legacy_count,
         recording_retention_days_to_value, resolve_pill_indicator_mode, set_autostart,
+        update_channel_to_persist,
     };
+    use crate::commands::updater::UpdateChannel;
     use serde_json::json;
 
     #[test]
@@ -1624,5 +1689,28 @@ mod tests {
         assert_eq!(recording_retention_days_from_legacy_count(0), None);
         assert_eq!(recording_retention_days_from_legacy_count(250), None);
         assert_eq!(recording_retention_days_from_legacy_count(1), None);
+    }
+    #[test]
+    fn legacy_implicit_stable_channel_is_removed() {
+        assert_eq!(
+            update_channel_to_persist(Some("stable"), false, false, UpdateChannel::Stable,),
+            None
+        );
+    }
+
+    #[test]
+    fn explicit_and_legacy_beta_channels_remain_authoritative() {
+        assert_eq!(
+            update_channel_to_persist(None, false, true, UpdateChannel::Stable),
+            Some(UpdateChannel::Stable)
+        );
+        assert_eq!(
+            update_channel_to_persist(Some("stable"), true, false, UpdateChannel::Stable,),
+            Some(UpdateChannel::Stable)
+        );
+        assert_eq!(
+            update_channel_to_persist(Some("beta"), false, false, UpdateChannel::Beta),
+            Some(UpdateChannel::Beta)
+        );
     }
 }

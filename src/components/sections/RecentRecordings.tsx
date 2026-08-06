@@ -834,6 +834,11 @@ export function RecentRecordings({ history, hotkey = "Cmd+Shift+Space", onHistor
                                 {item.writing.context_hint.app_name}
                               </span>
                             )}
+                            {item.writing?.context_hint?.category && (
+                              <span className="rounded-md bg-muted/60 px-1.5 py-0.5 text-[11px] font-medium capitalize">
+                                {item.writing.context_hint.category}
+                              </span>
+                            )}
                             {hasOriginal && (
                               <button
                                 onClick={(e) => {
@@ -845,9 +850,9 @@ export function RecentRecordings({ history, hotkey = "Cmd+Shift+Space", onHistor
                                   });
                                 }}
                                 className="text-[11px] font-medium text-sage hover:underline"
-                                title={showOriginal ? "Show AI-formatted text" : "Show original text before AI formatting"}
+                                title={showOriginal ? "Show polished text" : "Show original text before Polish"}
                               >
-                                {showOriginal ? "Show formatted" : "Show original"}
+                                {showOriginal ? "Show polished" : "Show original"}
                               </button>
                             )}
                           </div>

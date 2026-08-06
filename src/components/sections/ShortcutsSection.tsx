@@ -392,7 +392,7 @@ export function ShortcutsSection() {
     <SettingsPage>
       <SettingsHeader
         title="Shortcuts"
-        description="Keyboard shortcuts for recording, history, formatting, and the dashboard."
+        description="Keyboard shortcuts for recording, history, Polish, and the dashboard."
       />
 
       <div className="rounded-2xl border border-border bg-muted/40 p-4 text-sm text-muted-foreground">

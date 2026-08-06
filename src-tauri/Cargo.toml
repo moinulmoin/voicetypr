@@ -72,6 +72,8 @@ tauri-plugin-notification = "2.3.3"
 warp = "0.3"
 bytes = "1"
 tempfile = "3.10"
+command-group = { version = "5.0.1", features = ["with-tokio"] }
+libc = "0.2"
 hostname = "0.4"
 local-ip-address = "0.6"
 uuid = { version = "1", features = ["v4"] }
@@ -80,6 +82,8 @@ clap = { version = "4.5", features = ["derive"] }
 genai = "=0.6.0"
 tokio-util = "0.7"
 sentry = { version = "0.42", default-features = false, features = ["backtrace", "panic", "transport", "rustls", "debug-images", "logs"] }
+which = "4.4.2"
+posthog-rs = { version = "0.22.0", default-features = false }
 [target.'cfg(target_os = "macos")'.dependencies]
 whisper-rs = { version = "0.16.0", features = ["metal"] }
 tauri = { version = "2", features = ["macos-private-api", "tray-icon"] }

@@ -12,6 +12,8 @@ pub struct CatalogProvider {
     pub id: String,
     pub label: String,
     pub status: String,
+    #[serde(default = "default_runtime")]
+    pub runtime: String,
     pub adapter: Option<String>,
     pub namespace: Option<String>,
     pub requires_api_key: bool,
@@ -33,6 +35,10 @@ pub struct CatalogModel {
 
 type Catalog = CatalogFile;
 
+fn default_runtime() -> String {
+    "genai_adapter".to_string()
+}
+
 // Project rule prefers LazyLock when the initializer is known at declaration time;
 // this preserves the contract's parse-once behavior.
 static CATALOG: LazyLock<Catalog> =
@@ -53,10 +59,56 @@ fn parse_catalog(json: &str) -> Catalog {
         id: "custom".to_string(),
         label: "Custom (OpenAI-compatible)".to_string(),
         status: "production".to_string(),
+        runtime: "openai_compatible".to_string(),
         adapter: None,
         namespace: None,
         requires_api_key: false,
         supports_base_url: true,
+        supports_reasoning: false,
+        models: Vec::new(),
+    });
+
+    // Agent-CLI providers (Phase 4C): subscription-authenticated local coding
+    // CLIs spawned headless. No API key, no base URL, no models (the CLI picks
+    // its own model). The `agent_cli` runtime dispatches in executor.rs to
+    // AgentCliRuntime (cold-spawn in 4C-i; warm-session in 4C-ii).
+    catalog.providers.push(CatalogProvider {
+        id: "claude-code".to_string(),
+        label: "Claude Code".to_string(),
+        status: "production".to_string(),
+        runtime: "agent_cli".to_string(),
+        adapter: None,
+        namespace: None,
+        requires_api_key: false,
+        supports_base_url: false,
+        supports_reasoning: false,
+        models: Vec::new(),
+    });
+    // pi: multi-provider coding CLI (pi). Same agent_cli contract as claude-code;
+    // cold-spawned with stdin input + JSONL output (see PI_SPEC).
+    catalog.providers.push(CatalogProvider {
+        id: "pi".to_string(),
+        label: "pi".to_string(),
+        status: "production".to_string(),
+        runtime: "agent_cli".to_string(),
+        adapter: None,
+        namespace: None,
+        requires_api_key: false,
+        supports_base_url: false,
+        supports_reasoning: false,
+        models: Vec::new(),
+    });
+    // omp (oh-my-pi): multi-provider coding CLI. Same agent_cli contract;
+    // cold-spawned with positional-arg input + JSONL output (see OMP_SPEC).
+    catalog.providers.push(CatalogProvider {
+        id: "omp".to_string(),
+        label: "oh-my-pi".to_string(),
+        status: "production".to_string(),
+        runtime: "agent_cli".to_string(),
+        adapter: None,
+        namespace: None,
+        requires_api_key: false,
+        supports_base_url: false,
         supports_reasoning: false,
         models: Vec::new(),
     });
@@ -118,7 +170,12 @@ pub fn all_provider_models(provider_id: &str) -> Vec<&'static CatalogModel> {
 }
 
 pub fn is_native_provider(provider_id: &str) -> bool {
-    provider(provider_id).is_some_and(|provider| provider.adapter.is_some())
+    provider(provider_id)
+        .is_some_and(|provider| provider.runtime == "genai_adapter" && provider.adapter.is_some())
+}
+
+pub fn runtime_kind(provider_id: &str) -> Option<&'static str> {
+    provider(provider_id).map(|provider| provider.runtime.as_str())
 }
 
 pub fn adapter_name(provider_id: &str) -> Option<&'static str> {
@@ -155,13 +212,15 @@ mod tests {
         let mut provider_ids = HashSet::new();
         for provider in &catalog.providers {
             assert!(provider_ids.insert(provider.id.as_str()));
-            if provider.id != "custom"
-                && matches!(provider.status.as_str(), "production" | "experimental")
-            {
-                assert!(provider
-                    .adapter
-                    .as_deref()
-                    .is_some_and(|adapter| !adapter.is_empty()));
+            if matches!(provider.status.as_str(), "production" | "experimental") {
+                match provider.runtime.as_str() {
+                    "genai_adapter" => assert!(provider
+                        .adapter
+                        .as_deref()
+                        .is_some_and(|adapter| !adapter.is_empty())),
+                    "openai_compatible" | "agent_cli" => assert!(provider.adapter.is_none()),
+                    runtime => panic!("{} has unsupported runtime {runtime}", provider.id),
+                }
             }
 
             let mut model_ids = HashSet::new();
@@ -189,16 +248,28 @@ mod tests {
     }
 
     #[test]
-    fn production_and_experimental_providers_have_adapters() {
+    fn production_and_experimental_providers_have_valid_runtime_contracts() {
         for provider in &catalog().providers {
-            if provider.id != "custom"
-                && matches!(provider.status.as_str(), "production" | "experimental")
-            {
-                assert!(
-                    adapter_name(&provider.id).is_some(),
-                    "{} should have a genai adapter",
-                    provider.id
-                );
+            if !matches!(provider.status.as_str(), "production" | "experimental") {
+                continue;
+            }
+
+            match provider.runtime.as_str() {
+                "genai_adapter" => {
+                    assert!(
+                        adapter_name(&provider.id).is_some(),
+                        "{} should have a genai adapter",
+                        provider.id
+                    );
+                }
+                "openai_compatible" | "agent_cli" => {
+                    assert!(
+                        adapter_name(&provider.id).is_none(),
+                        "{} should not have a genai adapter",
+                        provider.id
+                    );
+                }
+                runtime => panic!("{} has unsupported runtime {runtime}", provider.id),
             }
         }
     }
@@ -206,13 +277,17 @@ mod tests {
     #[test]
     fn adapter_to_provider_mapping_round_trips() {
         for provider in &catalog().providers {
-            if provider.id == "custom" {
-                continue;
+            match provider.runtime.as_str() {
+                "genai_adapter" => {
+                    let adapter = adapter_name(&provider.id)
+                        .unwrap_or_else(|| panic!("{} should have a genai adapter", provider.id));
+                    assert_eq!(provider_for_adapter(adapter), Some(provider.id.as_str()));
+                }
+                "openai_compatible" | "agent_cli" => {
+                    assert!(adapter_name(&provider.id).is_none());
+                }
+                runtime => panic!("{} has unsupported runtime {runtime}", provider.id),
             }
-
-            let adapter = adapter_name(&provider.id)
-                .unwrap_or_else(|| panic!("{} should have a genai adapter", provider.id));
-            assert_eq!(provider_for_adapter(adapter), Some(provider.id.as_str()));
         }
     }
 
@@ -261,6 +336,24 @@ mod tests {
                     .expect("recommended model id must be a string");
                 assert!(model_ids.contains(model_id));
             }
+        }
+    }
+
+    #[test]
+    fn agent_cli_providers_share_runtime_contract() {
+        // Phase 4C invariant: claude-code, pi, and omp are all agent_cli
+        // providers (cold-spawn), carry no genai adapter, require no API key,
+        // and are NOT native providers (so executor dispatch routes each to
+        // AgentCliRuntime). pi/omp are synthesized in parse_catalog like
+        // claude-code and custom.
+        for id in ["claude-code", "pi", "omp"] {
+            assert_eq!(runtime_kind(id), Some("agent_cli"), "{id} runtime");
+            assert!(!is_native_provider(id), "{id} not native");
+            assert_eq!(adapter_name(id), None, "{id} no adapter");
+            let provider = provider(id).unwrap_or_else(|| panic!("{id} must be in the catalog"));
+            assert!(!provider.requires_api_key, "{id} no api key");
+            assert!(!provider.supports_base_url, "{id} no base url");
+            assert!(provider.models.is_empty(), "{id} empty models");
         }
     }
 }

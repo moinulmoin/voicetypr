@@ -21,9 +21,11 @@ mod license;
 mod media;
 mod menu;
 mod parakeet;
+mod product_analytics;
 pub mod provider_capabilities;
 mod recognition;
 mod recording;
+mod release_channel;
 mod remote;
 mod secure_store;
 mod simple_cache;
@@ -224,13 +226,17 @@ fn build_app_menu(app: &tauri::AppHandle) -> tauri::Result<tauri::menu::Menu<tau
 
 use audio::recorder::AudioRecorder;
 use commands::remote::load_remote_settings;
-use commands::telemetry::{get_telemetry_status, report_frontend_error, set_telemetry_consent};
+use commands::telemetry::{
+    defer_privacy_consent_for_session, get_product_analytics_status, get_telemetry_status,
+    record_onboarding_completed, report_frontend_error, set_product_analytics_consent,
+    set_telemetry_consent,
+};
 use commands::{
     ai::{
-        cache_ai_api_key, clear_ai_api_key_cache, disable_ai_enhancement, enhance_transcription,
-        get_ai_settings, get_ai_settings_for_provider, get_enhancement_options, get_openai_config,
-        get_writing_settings, list_ai_providers, list_provider_models, set_openai_config,
-        test_openai_endpoint, update_ai_settings, update_enhancement_options,
+        cache_ai_api_key, clear_ai_api_key_cache, disable_ai_enhancement, get_ai_settings,
+        get_ai_settings_for_provider, get_enhancement_options, get_openai_config,
+        get_writing_settings, list_ai_providers, list_provider_models, probe_agent_cli,
+        set_openai_config, test_openai_endpoint, update_ai_settings, update_enhancement_options,
         update_writing_settings, validate_ai_api_key,
     },
     audio::*,
@@ -493,18 +499,16 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
         log::info!("✅ Encryption initialized successfully");
     }
 
-    // Initialize opt-in, anonymous error reporting. No-op unless the user has
-    // opted in AND a DSN was baked in at build time. Native minidumps are
-    // disabled, so no raw process memory is ever captured. The guard must
-    // outlive the app, so it is held until `run()` returns.
+    // Initialize independent diagnostics and product-analytics clients from
+    // their own persisted choices. Only new product analytics is held behind
+    // the one-time acknowledgement gate.
     let app_context = tauri::generate_context!();
+    let analytics_consent =
+        product_analytics::read_consent(app_context.config().identifier.as_str());
     let (telemetry_enabled, telemetry_install_id) =
         telemetry::read_consent(app_context.config().identifier.as_str());
-    // Held for the whole process so the Sentry client stays alive (Rust panics +
-    // frontend-error capture). We do NOT register tauri-plugin-sentry: no JS
-    // injection and no envelope/breadcrumb IPC, so `before_send` is the single
-    // egress chokepoint. Inert unless opted in AND a DSN was compiled in.
     let _sentry_guard = telemetry::init(telemetry_enabled, telemetry_install_id);
+    product_analytics::init(analytics_consent);
 
     let mut builder = tauri::Builder::default()
         .plugin(tauri_plugin_os::init())
@@ -1060,6 +1064,34 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
                             }
                         });
                     }
+                    else if event_id == "polish_on" || event_id == "polish_off" {
+                        let app_handle = app.app_handle().clone();
+                        let desired_enabled = event_id == "polish_on";
+                        tauri::async_runtime::spawn(async move {
+                            let current_enabled = app_handle
+                                .store("settings")
+                                .ok()
+                                .and_then(|store| store.get("ai_enabled"))
+                                .and_then(|value| value.as_bool())
+                                .unwrap_or(false);
+
+                            if current_enabled != desired_enabled {
+                                match crate::commands::shortcuts::toggle_ai_formatting(app_handle.clone()).await {
+                                    Ok(()) => {
+                                        log::info!("Polish toggled from tray to requested state: {}", desired_enabled);
+                                    }
+                                    Err(e) => {
+                                        log::error!("Failed to toggle Polish from tray: {}", e);
+                                        let _ = app_handle.emit("tray-action-error", &format!("Failed to change Polish: {}", e));
+                                    }
+                                }
+                            }
+
+                            if let Err(e) = crate::commands::settings::update_tray_menu(app_handle.clone()).await {
+                                log::warn!("Failed to refresh tray after Polish change: {}", e);
+                            }
+                        });
+                    }
                     else if event_id == "copy_last_transcription" {
                         let app_handle = app.app_handle().clone();
                         tauri::async_runtime::spawn(async move {
@@ -1125,7 +1157,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
                             match crate::commands::settings::get_settings(app_handle.clone()).await {
                                 Ok(mut s) => {
                                     s.recording_mode = mode.to_string();
-                                    match crate::commands::settings::save_settings(app_handle.clone(), s).await {
+                                    match crate::commands::settings::save_settings(app_handle.clone(), s, None).await {
                                         Err(e) => {
                                             log::error!("Failed to save recording mode from tray: {}", e);
                                             let _ = app_handle.emit("tray-action-error", &format!("Failed to change recording mode: {}", e));
@@ -1547,7 +1579,6 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             test_openai_endpoint,
             clear_ai_api_key_cache,
             update_ai_settings,
-            enhance_transcription,
             disable_ai_enhancement,
             get_enhancement_options,
             update_enhancement_options,
@@ -1555,6 +1586,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             update_writing_settings,
             list_ai_providers,
             list_provider_models,
+            probe_agent_cli,
             keyring_set,
             keyring_get,
             keyring_delete,
@@ -1575,9 +1607,14 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             install_cli_tool,
             uninstall_cli_tool,
             cli_tool_status,
-            // Telemetry (opt-in error reporting) consent
+            // Independent privacy controls: GlitchTip diagnostics and PostHog
+            // product analytics.
             get_telemetry_status,
             set_telemetry_consent,
+            get_product_analytics_status,
+            set_product_analytics_consent,
+            defer_privacy_consent_for_session,
+            record_onboarding_completed,
             report_frontend_error,
             // Remote transcription commands
             refresh_active_remote_server_status,
@@ -1638,13 +1675,18 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             eprintln!("Voicetypr failed to start: {}", e);
             Box::new(e)
         })?
-        .run(|app_handle, event| {
+        .run(|app_handle, event| match event {
             #[cfg(target_os = "macos")]
-            if let tauri::RunEvent::Reopen { has_visible_windows, .. } = event {
+            tauri::RunEvent::Reopen {
+                has_visible_windows,
+                ..
+            } => {
                 if !has_visible_windows {
                     show_main_window(app_handle);
                 }
             }
+            tauri::RunEvent::Exit => product_analytics::shutdown(),
+            _ => {}
         });
 
     // Log successful application startup

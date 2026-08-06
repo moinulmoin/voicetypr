@@ -47,6 +47,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, LazyLock};
 use std::time::{Duration, SystemTime};
 
+use crate::release_channel::RELEASE_CHANNEL;
 use regex::Regex;
 use sentry::protocol::{
     DebugImage, DebugMeta, Event, Exception, Frame, Level, Log, LogAttribute, LogLevel, Map,
@@ -68,29 +69,6 @@ const SENTRY_DSN: Option<&str> =
 /// Environment tag attached to every event/transaction. Always `production` for
 /// release builds (debug builds never send — no DSN).
 const ENVIRONMENT: &str = "production";
-
-/// Returns true when the semver version string contains a prerelease suffix
-/// (e.g. `"2.0.4-beta"` → true, `"2.0.4"` → false). Const-evaluated so the
-/// result is computed at compile time.
-const fn is_prerelease(version: &str) -> bool {
-    let bytes = version.as_bytes();
-    let mut i = 0;
-    while i < bytes.len() {
-        if bytes[i] == b'-' {
-            return true;
-        }
-        i += 1;
-    }
-    false
-}
-
-/// Release channel tag: derived at compile time from the crate version — `beta`
-/// when the version is a prerelease (contains `-`), `stable` otherwise.
-pub const RELEASE_CHANNEL: &str = if is_prerelease(env!("CARGO_PKG_VERSION")) {
-    "beta"
-} else {
-    "stable"
-};
 
 /// Trace sample rate: 1% of transactions are sampled and sent to GlitchTip.
 const TRACES_SAMPLE_RATE: f32 = 0.01;
@@ -127,6 +105,15 @@ pub fn is_enabled() -> bool {
 /// Flip the in-process gate. Disabling takes effect immediately.
 pub fn set_enabled(enabled: bool) {
     TELEMETRY_ENABLED.store(enabled, Ordering::SeqCst);
+}
+
+/// Closes the in-process gate and discards envelopes still queued by the
+/// current Sentry transport. Re-enabling diagnostics requires a restart.
+pub fn disable_and_drop_queued() {
+    set_enabled(false);
+    if let Some(client) = sentry::Hub::current().client() {
+        let _ = client.close(Some(Duration::ZERO));
+    }
 }
 
 // --- Scrubbing ---------------------------------------------------------------
@@ -333,8 +320,9 @@ pub fn read_consent_from_path(path: &Path) -> (bool, Option<String>) {
         .unwrap_or(TELEMETRY_DEFAULT_ENABLED);
     let install_id = value
         .get(KEY_TELEMETRY_INSTALL_ID)
-        .and_then(|v| v.as_str())
-        .map(|s| s.to_string());
+        .and_then(|value| value.as_str())
+        .and_then(|value| uuid::Uuid::parse_str(value).ok())
+        .map(|value| value.to_string());
     (enabled, install_id)
 }
 
@@ -458,6 +446,19 @@ pub fn capture_frontend_error(name: Option<&str>, message: &str) {
 /// Max characters of a frontend error message forwarded to telemetry.
 const FRONTEND_ERROR_MAX_LEN: usize = 2000;
 
+fn frontend_error_type(name: Option<&str>) -> &'static str {
+    match name {
+        Some("Error") => "Error",
+        Some("TypeError") => "TypeError",
+        Some("RangeError") => "RangeError",
+        Some("ReferenceError") => "ReferenceError",
+        Some("SyntaxError") => "SyntaxError",
+        Some("URIError") => "URIError",
+        Some("EvalError") => "EvalError",
+        _ => "FrontendError",
+    }
+}
+
 /// Constructs the event for a frontend-reported error: the stable error
 /// type/category plus the length-capped message. Pure (no Sentry client needed)
 /// so it is unit-testable; structured-secret redaction runs in `before_send`.
@@ -467,7 +468,7 @@ fn build_frontend_error_event(name: Option<&str>, message: &str) -> Event<'stati
         level: Level::Error,
         exception: Values {
             values: vec![Exception {
-                ty: name.unwrap_or("FrontendError").to_string(),
+                ty: frontend_error_type(name).to_string(),
                 value: Some(value),
                 ..Default::default()
             }],
@@ -874,15 +875,26 @@ mod tests {
         assert_eq!(read_consent_from_path(&bad), (true, None));
 
         let good = dir.path().join("good");
+        let install_id = "018f3f5e-70b6-7ef0-a9d0-2d8c594cf0b3";
         std::fs::write(
             &good,
-            br#"{"telemetry_enabled": true, "telemetry_install_id": "abc", "hotkey": "Cmd+Space"}"#,
+            format!(
+                r#"{{"telemetry_enabled": true, "telemetry_install_id": "{install_id}", "hotkey": "Cmd+Space"}}"#
+            ),
         )
         .unwrap();
         assert_eq!(
             read_consent_from_path(&good),
-            (true, Some("abc".to_string()))
+            (true, Some(install_id.to_string()))
         );
+
+        let invalid_id = dir.path().join("invalid-id");
+        std::fs::write(
+            &invalid_id,
+            br#"{"telemetry_enabled": true, "telemetry_install_id": "/Users/alice/private"}"#,
+        )
+        .unwrap();
+        assert_eq!(read_consent_from_path(&invalid_id), (true, None));
 
         // Explicit opt-out must always be honored even under the opt-out default.
         let off = dir.path().join("off");
@@ -913,6 +925,12 @@ mod tests {
         let event = build_frontend_error_event(None, "boom");
         assert_eq!(event.exception.values[0].ty, "FrontendError");
         assert_eq!(event.level, Level::Error);
+    }
+
+    #[test]
+    fn frontend_error_event_buckets_untrusted_type() {
+        let event = build_frontend_error_event(Some("/Users/alice/private-transcript.txt"), "boom");
+        assert_eq!(event.exception.values[0].ty, "FrontendError");
     }
 
     // --- Native debug-metadata scrubbing tests --------------------------------
@@ -1117,26 +1135,6 @@ mod tests {
             }
             _ => panic!("expected Symbolic image"),
         }
-    }
-
-    // --- Release channel derivation test --------------------------------------
-
-    #[test]
-    fn release_channel_derived_from_version() {
-        assert!(is_prerelease("2.0.4-beta"), "prerelease with dash");
-        assert!(is_prerelease("3.0.0-rc.1"), "rc prerelease");
-        assert!(!is_prerelease("2.0.4"), "stable release");
-        assert!(!is_prerelease("2.1.0"), "stable release");
-        // The actual crate version — currently "2.0.4" (no dash) → stable.
-        // When bumped to e.g. "2.1.0-beta", the const switches to "beta".
-        assert_eq!(
-            RELEASE_CHANNEL,
-            if is_prerelease(env!("CARGO_PKG_VERSION")) {
-                "beta"
-            } else {
-                "stable"
-            }
-        );
     }
 
     // --- Operational log API tests -------------------------------------------

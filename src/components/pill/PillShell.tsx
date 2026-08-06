@@ -11,6 +11,13 @@ interface PillStatusProps {
   state: PillState;
 }
 
+const PILL_LABELS: Record<PillState, string | null> = {
+  idle: null,
+  listening: "Listening",
+  transcribing: "Transcribing...",
+  formatting: "Polishing...",
+};
+
 export function PillShell({ children, isActive }: PillShellProps) {
   return (
     <div className="pointer-events-none fixed inset-0 z-50 flex items-center justify-center">
@@ -24,5 +31,20 @@ export function PillShell({ children, isActive }: PillShellProps) {
 }
 
 export function PillStatus({ audioLevel, state }: PillStatusProps) {
-  return <AudioBars audioLevel={audioLevel} state={state} />;
+  const label = PILL_LABELS[state];
+
+  return (
+    <div
+      aria-live="polite"
+      className="flex items-center justify-center gap-2"
+      role={label ? "status" : undefined}
+    >
+      <AudioBars audioLevel={audioLevel} state={state} />
+      {label ? (
+        <span className="whitespace-nowrap text-[11px] font-medium leading-none text-neutral-300/80">
+          {label}
+        </span>
+      ) : null}
+    </div>
+  );
 }

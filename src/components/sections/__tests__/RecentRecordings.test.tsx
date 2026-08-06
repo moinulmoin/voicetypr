@@ -401,10 +401,10 @@ describe('original text toggle', () => {
     await user.click(screen.getByText('Show original'));
     expect(await screen.findByText('raw transcript before AI')).toBeInTheDocument();
     expect(screen.queryByText('AI formatted text')).not.toBeInTheDocument();
-    expect(screen.getByText('Show formatted')).toBeInTheDocument();
+    expect(screen.getByText('Show polished')).toBeInTheDocument();
 
-    // Click again to restore formatted
-    await user.click(screen.getByText('Show formatted'));
+    // Click again to restore polished text
+    await user.click(screen.getByText('Show polished'));
     expect(await screen.findByText('AI formatted text')).toBeInTheDocument();
     expect(screen.queryByText('raw transcript before AI')).not.toBeInTheDocument();
     expect(screen.getByText('Show original')).toBeInTheDocument();

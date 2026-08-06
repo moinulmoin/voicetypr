@@ -13,7 +13,6 @@ import {
   Share2,
   Sparkles,
   Terminal,
-  Type,
 } from "lucide-react";
 
 export type ScreenId =
@@ -25,7 +24,6 @@ export type ScreenId =
   | "models"
   | "network"
   | "formatting"
-  | "text-rules"
   | "license"
   | "agent"
   | "advanced"
@@ -73,15 +71,9 @@ export const primaryScreens: ScreenDefinition[] = [
   },
   {
     id: "formatting",
-    label: "AI Formatting",
+    label: "Polish",
     icon: Sparkles,
-    description: "AI polish, formatting modes, and provider/model setup.",
-  },
-  {
-    id: "text-rules",
-    label: "Default Formatting",
-    icon: Type,
-    description: "Always-on text rules — corrections, Words & Names, and shortcuts. Work with or without AI, even better with AI Formatting on.",
+    description: "Clean up your dictation automatically, plus always-on text rules.",
   },
   {
     id: "general",
@@ -158,7 +150,6 @@ export const navGroups: NavGroup[] = [
       screenById("models"),
       screenById("network"),
       screenById("formatting"),
-      screenById("text-rules"),
       screenById("agent"),
     ],
   },

@@ -7,99 +7,154 @@ import { toast } from "sonner";
 
 const log = createLogger("telemetry");
 
-interface TelemetryStatus {
+interface DiagnosticsStatus {
   enabled: boolean;
   available: boolean;
 }
 
-interface ConsentResult {
+interface AnalyticsStatus {
   enabled: boolean;
-  restart_required: boolean;
+  available: boolean;
+  consent_required: boolean;
 }
 
-/**
- * Privacy-first diagnostics, on by default (opt-out). When enabled it sends only
- * anonymous crash/error reports. Disabling takes effect immediately, while
- * enabling needs an app restart to actually begin reporting. The backend's
- * `available` flag is false in dev builds and true in official releases.
- */
+type PendingControl = "diagnostics" | "analytics" | null;
+
 export function TelemetrySection() {
-  const [status, setStatus] = useState<TelemetryStatus | null>(null);
-  const [pending, setPending] = useState(false);
+  const [diagnostics, setDiagnostics] = useState<DiagnosticsStatus | null>(
+    null,
+  );
+  const [analytics, setAnalytics] = useState<AnalyticsStatus | null>(null);
+  const [pending, setPending] = useState<PendingControl>(null);
 
   useEffect(() => {
     let cancelled = false;
-    invoke<TelemetryStatus>("get_telemetry_status")
-      .then((next) => {
-        if (!cancelled) setStatus(next);
+    Promise.all([
+      invoke<DiagnosticsStatus>("get_telemetry_status"),
+      invoke<AnalyticsStatus>("get_product_analytics_status"),
+    ])
+      .then(([nextDiagnostics, nextAnalytics]) => {
+        if (cancelled) return;
+        setDiagnostics(nextDiagnostics);
+        setAnalytics(nextAnalytics);
       })
       .catch((error) => {
-        // Swallow: leave status null and keep the checking affordance.
-        log.error("Failed to read telemetry status:", error);
+        log.error("Failed to read privacy settings:", error);
       });
+
     return () => {
       cancelled = true;
     };
   }, []);
 
-  const onCheckedChange = async (next: boolean) => {
-    setPending(true);
+  const updateDiagnostics = async (enabled: boolean) => {
+    setPending("diagnostics");
     try {
-      const res = await invoke<ConsentResult>("set_telemetry_consent", {
-        enabled: next,
-      });
-      setStatus((prev) => (prev ? { ...prev, enabled: res.enabled } : prev));
-      if (res.restart_required) {
-        toast.info("Restart Voicetypr to start sending diagnostics.");
-      } else {
-        toast.success("Diagnostics turned off.");
-      }
+      await invoke("set_telemetry_consent", { enabled });
+      setDiagnostics((current) =>
+        current ? { ...current, enabled } : current,
+      );
+      toast.success(
+        enabled ? "Crash reporting turned on." : "Crash reporting turned off.",
+      );
     } catch (error) {
-      log.error("Failed to update telemetry consent:", error);
-      toast.error("Could not update diagnostics setting.");
+      log.error("Failed to update crash reporting:", error);
+      toast.error("Could not update crash reporting.");
     } finally {
-      setPending(false);
+      setPending(null);
     }
   };
 
-  return (
-    <div className="space-y-4">
-      <h2 className="text-base font-semibold">Diagnostics</h2>
+  const updateAnalytics = async (enabled: boolean) => {
+    setPending("analytics");
+    try {
+      await invoke("set_product_analytics_consent", { enabled });
+      setAnalytics((current) =>
+        current ? { ...current, enabled, consent_required: false } : current,
+      );
+      toast.success(
+        enabled ? "Usage analytics turned on." : "Usage analytics turned off.",
+      );
+    } catch (error) {
+      log.error("Failed to update usage analytics:", error);
+      toast.error("Could not update usage analytics.");
+    } finally {
+      setPending(null);
+    }
+  };
 
-      <div className="rounded-lg border border-border/50 bg-card p-4 space-y-4">
+  const loading = diagnostics === null || analytics === null;
+
+  return (
+    <div className="flex flex-col gap-4">
+      <div>
+        <h2 className="text-base font-semibold">Privacy &amp; diagnostics</h2>
+        <p className="mt-1 text-xs text-muted-foreground">
+          Control anonymous crash reporting and product analytics independently.
+        </p>
+      </div>
+
+      <div className="flex flex-col gap-3 rounded-lg border border-border/50 bg-card p-4">
         <div className="flex items-start justify-between gap-4">
           <div className="min-w-0">
-            <p className="text-sm font-medium">
-              Help improve Voicetypr with anonymous diagnostics
-            </p>
+            <p className="text-sm font-medium">Crash &amp; error reporting</p>
             <p className="mt-1 text-xs text-muted-foreground">
-              On by default — turn it off anytime. Sends only anonymous crash and
-              error reports to help us fix bugs, never your audio, transcripts, or
-              personal data.
+              Sends scrubbed crashes and errors to GlitchTip for diagnostics and
+              native symbolication.
             </p>
           </div>
-
           <Switch
             className="shrink-0"
-            checked={status?.enabled ?? true}
-            disabled={pending || status === null || (!status.available && !status.enabled)}
-            onCheckedChange={onCheckedChange}
-            aria-label="Enable anonymous diagnostics"
+            checked={diagnostics?.enabled ?? true}
+            disabled={
+              pending !== null ||
+              diagnostics === null ||
+              (!diagnostics.available && !diagnostics.enabled)
+            }
+            onCheckedChange={updateDiagnostics}
+            aria-label="Enable crash and error reporting"
           />
         </div>
 
-        {status === null && (
+        <div className="flex items-start justify-between gap-4 border-t border-border/50 pt-3">
+          <div className="min-w-0">
+            <p className="text-sm font-medium">Usage analytics</p>
+            <p className="mt-1 text-xs text-muted-foreground">
+              Sends anonymous feature usage, outcomes, and performance buckets
+              to PostHog. No autocapture or session replay.
+            </p>
+          </div>
+          <Switch
+            className="shrink-0"
+            checked={analytics?.enabled ?? true}
+            disabled={
+              pending !== null ||
+              analytics === null ||
+              (!analytics.available && !analytics.enabled)
+            }
+            onCheckedChange={updateAnalytics}
+            aria-label="Enable usage analytics"
+          />
+        </div>
+
+        {loading && (
           <div className="flex items-center gap-2 text-muted-foreground">
-            <Loader2 className="h-3.5 w-3.5 animate-spin" />
+            <Loader2 className="size-3.5 animate-spin" />
             <span className="text-xs">Checking…</span>
           </div>
         )}
 
-        {status !== null && !status.available && (
+        {!loading && (!diagnostics.available || !analytics.available) && (
           <p className="text-xs text-muted-foreground">
-            Not available in this build — no reports are sent.
+            Unavailable categories are inert in this build. Your saved choices
+            still apply to official releases.
           </p>
         )}
+
+        <p className="text-xs text-muted-foreground">
+          Neither category includes audio, transcripts, clipboard contents,
+          prompts, API keys, paths, window titles, or session replay.
+        </p>
       </div>
     </div>
   );

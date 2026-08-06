@@ -44,6 +44,8 @@ Verification commands used across all plans: `pnpm typecheck`, `pnpm lint`,
 | 041  | Paid-license validation resilience | P0 | M | — | DONE — reviewer PASS; focused/full gates + local Account UI smoke passed 2026-07-24 |
 | 042  | Release workflow speed — CI fast path, tested release logic, sidecar caches | P1 | M | — | DONE — reviewer PASS; workflow gates + cold/warm signed release dry-runs passed 2026-08-02 |
 | 043  | README + canonical AGPL license refresh | P1 | S | — | DONE — GitHub detects AGPL-3.0; README link + formatting validation passed 2026-08-03 |
+| 044  | Agent-CLI Polish hardening + model selection | P1 | L | 030 | DONE (code) — NEEDS-SMOKE; automated gates + adversarial review passed 2026-08-06 |
+| 045  | Privacy-safe PostHog product analytics | P1 | L | 031 | DONE (code) — NEEDS-SMOKE 045-S1..S6; full gate, release compile, local dev UI smoke, and adversarial reviews passed 2026-08-06 |
 
 ## Code-done, awaiting batched manual smoke (`plans/SMOKE.md`)
 
@@ -58,6 +60,7 @@ Verification commands used across all plans: `pnpm typecheck`, `pnpm lint`,
 | 020  | Shared transcription contract — Stage 2 (desktop local/cloud → `transcribe_with_app`) | `6ac9b00` (this session) | NEEDS-SMOKE — desktop record→transcribe→insert hot path now runs through the shared executor for local+cloud (remote stays inline, Stage 5); plan 015's watchdog/retry/cancel moved to the executor seam (integrated path supersedes 015-S3/S4); behavior-preserving, reviewer-clean (8 never-lose-speech invariants verified); all automated gates green (clippy --all-targets, 927 tests incl. +5 seam tests); hot-path smoke in `SMOKE.md` (020-S1..S10) |
 | 030  | Windows crash dependencies — stale monitors + tray device-change paint loop | `2026-07-14` (this session) | NEEDS-SMOKE — `tao 0.34.6` + `tray-icon 0.21.2`; local quality gate and release clippy green; Windows CI/build + signed Beta 7 device-change/monitor-transition smoke remain |
 | 033  | Tray recovery + upload result accessibility | this PR | NEEDS-SMOKE 033-S1..S5 — bounded tray recovery/status/help + fixed-height upload speaker timeline; local quality gate, release clippy, production build, and live macOS first-attempt tray creation passed |
+| 045  | Privacy-safe PostHog product analytics | this PR | NEEDS-SMOKE 045-S1..S6 — closed Rust event/property contract; independent consent/IDs; no frontend SDK, replay, autocapture, identify, or PostHog error tracking; automated gates and adversarial reviews green; signed release network proof remains |
 
 ## Archived (closed — `plans/archive/`)
 

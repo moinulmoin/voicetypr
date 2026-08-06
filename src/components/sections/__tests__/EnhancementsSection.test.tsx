@@ -19,6 +19,14 @@ vi.mock('@tauri-apps/api/event', () => ({
   listen: vi.fn().mockResolvedValue(() => {}),
 }))
 
+const readinessState = vi.hoisted(() => ({
+  value: null as { ai_ready: boolean } | null,
+}))
+
+vi.mock('@/contexts/ReadinessContext', () => ({
+  useReadinessState: () => readinessState.value,
+}))
+
 vi.mock('sonner', () => ({
   toast: {
     error: vi.fn(),
@@ -41,6 +49,8 @@ const providerModels = vi.hoisted(
     recommended: boolean
     reasoning?: boolean
     contextWindow?: number | null
+    sourceProvider?: string | null
+    cliDefault?: boolean
     costInput?: number | null
     costOutput?: number | null
   }>> => ({
@@ -59,17 +69,53 @@ const providerModels = vi.hoisted(
     ],
     anthropic: [{ id: 'claude-sonnet-4', name: 'Claude Sonnet 4', recommended: true }],
     groq: [{ id: 'llama-3.3-70b-versatile', name: 'Llama 3.3 70B Versatile', recommended: true }],
-    deepseek: [{ id: 'deepseek-chat', name: 'DeepSeek Chat', recommended: true }],
+    'claude-code': [
+      { id: 'haiku', name: 'Haiku', recommended: true },
+      { id: 'sonnet', name: 'Sonnet', recommended: false },
+      { id: 'opus', name: 'Opus', recommended: false },
+    ],
+    pi: [
+      { id: '', name: 'CLI default', recommended: true, cliDefault: true },
+      {
+        id: 'openai/gpt-5-mini',
+        name: 'GPT-5 Mini',
+        recommended: false,
+        sourceProvider: 'OpenAI',
+      },
+      {
+        id: 'anthropic/claude-sonnet-4',
+        name: 'Claude Sonnet 4',
+        recommended: false,
+        sourceProvider: 'Anthropic',
+      },
+    ],
+    omp: [
+      { id: '', name: 'CLI default', recommended: true, cliDefault: true },
+      {
+        id: 'google/gemini-2.5-flash',
+        name: 'Gemini 2.5 Flash',
+        recommended: false,
+        sourceProvider: 'Google',
+      },
+    ],
   }),
 )
+const modelDiscovery = vi.hoisted(() => ({
+  loading: {} as Record<string, boolean>,
+  errors: {} as Record<string, string | null>,
+  fetchModels: vi.fn((providerId: string) => Promise.resolve(providerModels[providerId] || [])),
+}))
 
 vi.mock('@/hooks/useProviderModels', () => ({
   useAllProviderModels: () => ({
-    fetchModels: vi.fn(),
+    fetchModels: (providerId: string) => modelDiscovery.fetchModels(providerId),
     getModels: (providerId: string) => providerModels[providerId] || [],
-    isLoading: () => false,
-    getError: () => null,
-    clearModels: vi.fn(),
+    isLoading: (providerId: string) => modelDiscovery.loading[providerId] || false,
+    getError: (providerId: string) => modelDiscovery.errors[providerId] || null,
+    clearModels: (providerId: string) => {
+      delete modelDiscovery.errors[providerId]
+      delete modelDiscovery.loading[providerId]
+    },
   }),
 }))
 
@@ -81,6 +127,7 @@ const baseAISettings = {
   modelsByProvider: {},
   aiModelNeedsReselection: false,
 }
+let aiSettingsResponse: typeof baseAISettings = baseAISettings
 
 const enabledAISettings = {
   enabled: true,
@@ -99,11 +146,19 @@ const providerListResponse = [
   { id: 'anthropic', name: 'Anthropic', status: 'production', supportsReasoning: true },
   { id: 'custom', name: 'Custom (OpenAI-compatible)', status: 'production', supportsBaseUrl: true },
   { id: 'groq', name: 'Groq', status: 'experimental', supportsReasoning: false },
-  { id: 'deepseek', name: 'DeepSeek', status: 'hidden', supportsReasoning: false },
+  { id: 'claude-code', name: 'Claude Code', status: 'production', supportsReasoning: false },
+  { id: 'pi', name: 'pi', status: 'production', supportsReasoning: false },
+  { id: 'omp', name: 'oh-my-pi', status: 'production', supportsReasoning: false },
 ]
 
 let rejectWritingSettingsUpdate = false
-let aiSettingsResponse = baseAISettings
+let agentCliProbeResponse: {
+  state?: 'ready' | 'not_authenticated' | 'missing' | 'unsafe_launcher' | 'incompatible'
+  installed: boolean
+  authed: boolean
+  detail?: string
+} = { state: 'missing', installed: false, authed: false }
+let enhancementOptionsResponse = { preset: 'PersonalDictation' }
 
 const baseAppSettings = {
   hotkey: 'CommandOrControl+Shift+Space',
@@ -123,11 +178,28 @@ function renderWithProviders() {
   )
 }
 
+async function openAdvanced(user: ReturnType<typeof userEvent.setup>) {
+  await user.click(await screen.findByRole('button', { name: /toggle advanced/i }))
+}
+
+function getAdvancedProvidersPanel() {
+  const providersHeading = screen.getByText('Providers & Models')
+  const providersPanel = providersHeading.closest('fieldset')
+  expect(providersPanel).toBeTruthy()
+  return providersPanel as HTMLElement
+}
+
 describe('EnhancementsSection', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    readinessState.value = null
+    modelDiscovery.loading = {}
+    modelDiscovery.errors = {}
+    window.localStorage.clear()
     rejectWritingSettingsUpdate = false
     aiSettingsResponse = baseAISettings
+    enhancementOptionsResponse = { preset: 'PersonalDictation' }
+    agentCliProbeResponse = { state: 'missing', installed: false, authed: false }
     ;(hasApiKey as ReturnType<typeof vi.fn>).mockResolvedValue(false)
     ;(invoke as ReturnType<typeof vi.fn>).mockImplementation((cmd: string, args?: Record<string, unknown>) => {
       if (cmd === 'list_ai_providers') {
@@ -140,7 +212,7 @@ describe('EnhancementsSection', () => {
         return Promise.resolve(undefined)
       }
       if (cmd === 'get_enhancement_options') {
-        return Promise.resolve({ preset: 'PersonalDictation' })
+        return Promise.resolve(enhancementOptionsResponse)
       }
       if (cmd === 'update_enhancement_options') {
         return Promise.resolve(undefined)
@@ -178,25 +250,28 @@ describe('EnhancementsSection', () => {
       if (cmd === 'cache_ai_api_key') {
         return Promise.resolve(undefined)
       }
+      if (cmd === 'probe_agent_cli') {
+        return Promise.resolve(agentCliProbeResponse)
+      }
       return Promise.resolve(undefined)
     })
   })
 
-  it('renders production providers, experimental badges, and gates hidden providers behind Advanced', async () => {
+  it('renders available providers and experimental badges in Advanced', async () => {
     const user = userEvent.setup()
     renderWithProviders()
+    await openAdvanced(user)
+    const providersPanel = getAdvancedProvidersPanel()
 
-    expect(await screen.findByText('OpenAI')).toBeInTheDocument()
-    expect(screen.getByText('Google Gemini')).toBeInTheDocument()
-    expect(screen.getByText('Anthropic')).toBeInTheDocument()
-    expect(screen.getByText('Custom (OpenAI-compatible)')).toBeInTheDocument()
-    expect(screen.getByText('Groq')).toBeInTheDocument()
-    expect(screen.getByText('Experimental')).toBeInTheDocument()
-    expect(screen.queryByText('DeepSeek')).not.toBeInTheDocument()
-
-    await user.click(screen.getByRole('switch', { name: /show advanced ai providers/i }))
-
-    expect(await screen.findByText('DeepSeek')).toBeInTheDocument()
+    expect(within(providersPanel).getByRole('heading', { name: 'OpenAI' })).toBeInTheDocument()
+    expect(within(providersPanel).getByRole('heading', { name: 'Google Gemini' })).toBeInTheDocument()
+    expect(within(providersPanel).getByRole('heading', { name: 'Anthropic' })).toBeInTheDocument()
+    expect(
+      within(providersPanel).getByRole('heading', { name: 'Custom (OpenAI-compatible)' }),
+    ).toBeInTheDocument()
+    expect(within(providersPanel).getByRole('heading', { name: 'Groq' })).toBeInTheDocument()
+    expect(within(providersPanel).getByText('Experimental')).toBeInTheDocument()
+    expect(within(providersPanel).getByLabelText('Search providers and models')).toBeInTheDocument()
   })
 
   it('filters providers and grouped models by search text', async () => {
@@ -205,14 +280,18 @@ describe('EnhancementsSection', () => {
     )
     const user = userEvent.setup()
     renderWithProviders()
+    await openAdvanced(user)
 
     await user.type(await screen.findByLabelText('Search providers and models'), 'llama')
+    const providersPanel = getAdvancedProvidersPanel()
 
     await waitFor(() => {
-      expect(screen.queryByText('OpenAI')).not.toBeInTheDocument()
-      expect(screen.getByText('Groq')).toBeInTheDocument()
-      expect(screen.getByRole('button', { name: /llama 3\.3 70b versatile/i })).toBeInTheDocument()
-      expect(screen.getByText('Recommended')).toBeInTheDocument()
+      expect(within(providersPanel).queryByRole('heading', { name: 'OpenAI' })).not.toBeInTheDocument()
+      expect(within(providersPanel).getByRole('heading', { name: 'Groq' })).toBeInTheDocument()
+      expect(
+        within(providersPanel).getByRole('button', { name: /llama 3\.3 70b versatile/i }),
+      ).toBeInTheDocument()
+      expect(within(providersPanel).getByText('Recommended')).toBeInTheDocument()
     })
   })
 
@@ -222,6 +301,7 @@ describe('EnhancementsSection', () => {
     )
     const user = userEvent.setup()
     renderWithProviders()
+    await openAdvanced(user)
 
     await user.click(await screen.findByRole('button', { name: /gpt-5 nano/i }))
 
@@ -235,75 +315,199 @@ describe('EnhancementsSection', () => {
   })
 
   it('renders providers and writing controls', async () => {
+    const user = userEvent.setup()
     renderWithProviders()
 
     await waitFor(() => {
-      expect(screen.getByText('AI polish (optional)')).toBeInTheDocument()
-      expect(screen.getByText('Your text rules (always on)')).toBeInTheDocument()
-      expect(screen.getByText('AI Providers')).toBeInTheDocument()
+      expect(screen.getAllByText('Polish').length).toBeGreaterThan(0)
+      expect(screen.getByText('Static Rules')).toBeInTheDocument()
+      expect(screen.getByRole('button', { name: /toggle advanced/i })).toBeInTheDocument()
       expect(screen.getByText('Corrections')).toBeInTheDocument()
       expect(screen.getByText('Words & Names')).toBeInTheDocument()
       expect(screen.getByText('Text Shortcuts')).toBeInTheDocument()
-      expect(screen.getByRole('button', { name: 'Personal Dictation' })).toBeInTheDocument()
-      expect(screen.getByRole('button', { name: /Code \(requires AI formatting\)/i })).toBeInTheDocument()
-      expect(screen.getByText('OpenAI')).toBeInTheDocument()
-      expect(screen.getByText('Google Gemini')).toBeInTheDocument()
+      expect(screen.queryByRole('button', { name: 'Personal Dictation' })).not.toBeInTheDocument()
+    })
+
+    await openAdvanced(user)
+
+    await waitFor(() => {
+      expect(screen.getByText('Providers & Models')).toBeInTheDocument()
+      const providersPanel = getAdvancedProvidersPanel()
+      expect(within(providersPanel).getByRole('heading', { name: 'OpenAI' })).toBeInTheDocument()
+      expect(
+        within(providersPanel).getByRole('heading', { name: 'Google Gemini' }),
+      ).toBeInTheDocument()
       expect(invoke).toHaveBeenCalledWith('list_ai_providers')
     })
   })
 
-  it('disables AI modes when AI formatting is off', async () => {
+  it('removes the global mode picker from the simple Polish surface', async () => {
     renderWithProviders()
 
     await waitFor(() => {
-      const writingButton = screen.getByRole('button', {
-        name: /Writing \(requires AI formatting\)/i,
-      })
-      expect(writingButton).toBeDisabled()
-      expect(writingButton).toHaveAttribute(
-        'title',
-        'Writing requires AI formatting. Turn on AI formatting with a selected provider model.',
-      )
-      expect(screen.getByRole('button', { name: 'Personal Dictation' })).toBeEnabled()
+      expect(screen.getByText('Static Rules')).toBeInTheDocument()
     })
-
-    expect(
-      screen.queryByText(/requires AI formatting\. Turn on AI formatting above or/i),
-    ).not.toBeInTheDocument()
+    expect(screen.queryByText('Formatting mode')).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Writing' })).not.toBeInTheDocument()
   })
 
-  it('explains how to enable AI formatting when setup is incomplete', async () => {
+  it('shows the guided setup card when Polish is unconfigured', async () => {
     renderWithProviders()
 
     await waitFor(() => {
+      expect(
+        screen.getByText('Clean up grammar and punctuation while keeping your meaning.'),
+      ).toBeInTheDocument()
+      expect(
+        screen.getByText('Connect an AI to turn on Polish'),
+      ).toBeInTheDocument()
       expect(
         screen.getByText(
-          'Speech models infer punctuation. Clean Dictation uses AI to correct grammar and punctuation. Needs a provider and is off by default.',
+          'Polish uses a cloud AI you bring a key for. Pick one — setup takes about two minutes.',
         ),
       ).toBeInTheDocument()
-      expect(
-        screen.getByText('Add an API key and choose a model below to turn on AI formatting.'),
-      ).toBeInTheDocument()
-      expect(screen.getByRole('switch', { name: /ai formatting/i })).toBeDisabled()
+      expect(screen.getByRole('button', { name: 'Anthropic' })).toBeInTheDocument()
+      expect(screen.getByRole('button', { name: 'OpenAI' })).toBeInTheDocument()
+      expect(screen.getByRole('button', { name: 'Google' })).toBeInTheDocument()
+      expect(screen.getByText('Your key stays on this device.')).toBeInTheDocument()
+      expect(screen.getByRole('switch', { name: /polish/i })).toBeDisabled()
     })
   })
 
-  it('shows the selected model when AI formatting is off', async () => {
+  it('opens the existing API key modal from a guided provider button', async () => {
+    const user = userEvent.setup()
+    renderWithProviders()
+
+    await user.click(await screen.findByRole('button', { name: 'Anthropic' }))
+
+    await waitFor(() => {
+      expect(screen.getByRole('dialog')).toBeInTheDocument()
+      expect(screen.getByText('Add Anthropic API Key')).toBeInTheDocument()
+      expect(screen.getByLabelText('API Key')).toBeInTheDocument()
+    })
+  })
+
+  it('does NOT open the API key modal for a not-ready CLI provider (guides sign-in instead)', async () => {
+    // Regression: CLI providers have no API key. Clicking a not-yet-ready CLI
+    // provider in the guided card must NOT open the key modal — it guides the
+    // user to install / sign in (toast), never the paste-a-key dialog.
+    agentCliProbeResponse = { installed: true, authed: false }
+    const user = userEvent.setup()
+    renderWithProviders()
+
+    await user.click(await screen.findByRole('button', { name: 'Claude Code' }))
+
+    await waitFor(() => {
+      expect(toast.info).toHaveBeenCalled()
+    })
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+    expect(screen.queryByLabelText('API Key')).not.toBeInTheDocument()
+  })
+
+  it('auto-selects the recommended model and turns Polish on after guided key validation', async () => {
+    const user = userEvent.setup()
+    renderWithProviders()
+
+    await user.click(await screen.findByRole('button', { name: 'OpenAI' }))
+    await user.type(await screen.findByLabelText('API Key'), 'openai-key')
+    await user.click(screen.getByRole('button', { name: 'Save API Key' }))
+
+    await waitFor(() => {
+      expect(saveApiKey).toHaveBeenCalledWith('openai', 'openai-key')
+      expect(invoke).toHaveBeenCalledWith('update_ai_settings', {
+        enabled: true,
+        provider: 'openai',
+        model: 'gpt-5-mini',
+      })
+      expect(invoke).toHaveBeenCalledWith('update_enhancement_options', {
+        options: { preset: 'CleanDictation' },
+      })
+      expect(toast.success).toHaveBeenCalledWith('Polish on')
+    })
+  })
+
+  it('keeps a loaded key-based provider connected when backend AI readiness is ready', async () => {
+    readinessState.value = { ai_ready: true }
+    aiSettingsResponse = {
+      ...enabledAISettings,
+      provider: 'anthropic',
+      model: 'claude-sonnet-4',
+      modelsByProvider: { anthropic: 'claude-sonnet-4' },
+    }
+    vi.mocked(hasApiKey).mockResolvedValue(false)
+
+    renderWithProviders()
+
+    await waitFor(() => {
+      const polishSwitch = screen.getByRole('switch', { name: 'Polish' })
+      expect(polishSwitch).toBeChecked()
+      expect(polishSwitch).not.toBeDisabled()
+      expect(
+        screen.getAllByText((_, element) =>
+          element?.textContent === 'Using Anthropic · Claude Sonnet 4 · Active · Change',
+        ).length,
+      ).toBeGreaterThan(0)
+    })
+  })
+
+  it('does not promote a non-ready agent CLI from backend AI readiness', async () => {
+    readinessState.value = { ai_ready: true }
+    aiSettingsResponse = {
+      ...enabledAISettings,
+      provider: 'claude-code',
+      model: 'haiku',
+      modelsByProvider: { 'claude-code': 'haiku' },
+    }
+    agentCliProbeResponse = {
+      state: 'not_authenticated',
+      installed: true,
+      authed: false,
+    }
+    vi.mocked(hasApiKey).mockResolvedValue(false)
+
+    renderWithProviders()
+
+    await waitFor(() => {
+      const polishSwitch = screen.getByRole('switch', { name: 'Polish' })
+      expect(polishSwitch).toBeDisabled()
+      expect(screen.queryByText(/Using Claude Code/)).not.toBeInTheDocument()
+    })
+  })
+
+  it('shows the connected status line when Polish is configured but off', async () => {
     aiSettingsResponse = { ...enabledAISettings, enabled: false }
     ;(hasApiKey as ReturnType<typeof vi.fn>).mockImplementation(async (providerId: string) =>
       providerId === 'openai',
     )
 
+    const user = userEvent.setup()
     renderWithProviders()
 
     await waitFor(() => {
       expect(
         screen.getAllByText((_, element) =>
-          element?.textContent === 'Selected model: GPT-5 Mini (AI formatting off)',
+          element?.textContent === 'Using OpenAI · GPT-5 Mini · Change',
         ).length,
       ).toBeGreaterThan(0)
-      expect(screen.queryByText('Add an API key and choose a model below to turn on AI formatting.')).not.toBeInTheDocument()
+      expect(screen.queryByText('Connect an AI to turn on Polish')).not.toBeInTheDocument()
     })
+
+    await user.click(screen.getByRole('button', { name: /change polish provider or model/i }))
+
+    await waitFor(() => {
+      expect(screen.getByText('Providers & Models')).toBeInTheDocument()
+    })
+  })
+
+  it('keeps the simple Polish surface free of paywall or locked cues', async () => {
+    const { container } = renderWithProviders()
+
+    await waitFor(() => {
+      expect(screen.getByText('Connect an AI to turn on Polish')).toBeInTheDocument()
+      expect(screen.getByText('Not set up yet')).toBeInTheDocument()
+    })
+    expect(container.querySelector('.lucide-lock')).toBeNull()
+    expect(screen.queryByText(/premium|paywall|locked|requires Polish/i)).not.toBeInTheDocument()
   })
 
   it('hides specific language selection when Personal Dictation is loaded', async () => {
@@ -342,30 +546,57 @@ describe('EnhancementsSection', () => {
     })
   })
 
-  it('saves mode changes when AI formatting is enabled', async () => {
+  it('migrates reshaping presets to Clean Dictation when Polish is on', async () => {
     aiSettingsResponse = enabledAISettings
+    enhancementOptionsResponse = { preset: 'Writing' }
     ;(hasApiKey as ReturnType<typeof vi.fn>).mockImplementation(async (providerId: string) =>
       providerId === 'openai',
     )
 
-    const user = userEvent.setup()
     renderWithProviders()
 
     await waitFor(() => {
-      expect(screen.getByRole('button', { name: 'Writing' })).toBeEnabled()
+      expect(invoke).toHaveBeenCalledWith('update_enhancement_options', {
+        options: { preset: 'CleanDictation' },
+      })
+      expect(toast.info).toHaveBeenCalledWith('Reshaping now lives in Advanced -> App Rules.')
     })
+    expect(window.localStorage.getItem('polish_reshape_migration_notified')).toBe('true')
+  })
 
-    await user.click(screen.getByRole('button', { name: 'Writing' }))
+  it('keeps the reshaping migration notice one-time while still migrating', async () => {
+    window.localStorage.setItem('polish_reshape_migration_notified', 'true')
+    aiSettingsResponse = enabledAISettings
+    enhancementOptionsResponse = { preset: 'Notes' }
+    ;(hasApiKey as ReturnType<typeof vi.fn>).mockImplementation(async (providerId: string) =>
+      providerId === 'openai',
+    )
+
+    renderWithProviders()
 
     await waitFor(() => {
       expect(invoke).toHaveBeenCalledWith('update_enhancement_options', {
-        options: { preset: 'Writing' },
+        options: { preset: 'CleanDictation' },
       })
+    })
+    expect(toast.info).not.toHaveBeenCalled()
+  })
+
+  it('does not migrate reshaping presets while Polish is off', async () => {
+    enhancementOptionsResponse = { preset: 'Writing' }
+    renderWithProviders()
+
+    await waitFor(() => {
+      expect(screen.getByText('Static Rules')).toBeInTheDocument()
+    })
+    expect(invoke).not.toHaveBeenCalledWith('update_enhancement_options', {
+      options: { preset: 'CleanDictation' },
     })
   })
 
-  it('rolls back optimistic mode changes when preset persistence fails', async () => {
+  it('surfaces migration persistence failures without looping', async () => {
     aiSettingsResponse = enabledAISettings
+    enhancementOptionsResponse = { preset: 'Writing' }
     ;(hasApiKey as ReturnType<typeof vi.fn>).mockImplementation(async (providerId: string) =>
       providerId === 'openai',
     )
@@ -380,7 +611,7 @@ describe('EnhancementsSection', () => {
         return Promise.resolve(undefined)
       }
       if (cmd === 'get_enhancement_options') {
-        return Promise.resolve({ preset: 'PersonalDictation' })
+        return Promise.resolve({ preset: 'Writing' })
       }
       if (cmd === 'update_enhancement_options') {
         return Promise.reject(new Error('preset save failed'))
@@ -404,20 +635,17 @@ describe('EnhancementsSection', () => {
       return Promise.resolve(undefined)
     })
 
-    const user = userEvent.setup()
     renderWithProviders()
 
-    await user.click(await screen.findByRole('button', { name: 'Writing' }))
-
     await waitFor(() => {
-      expect(toast.error).toHaveBeenCalledWith('preset save failed')
-      expect(
-        screen.getByText(/Just transcription with local cleanup/i),
-      ).toBeInTheDocument()
+      expect(invoke).toHaveBeenCalledWith('update_enhancement_options', {
+        options: { preset: 'CleanDictation' },
+      })
     })
+    expect(toast.info).not.toHaveBeenCalled()
   })
 
-  it('switches to Personal Dictation when AI formatting is turned off', async () => {
+  it('switches to Personal Dictation when Polish is turned off', async () => {
     aiSettingsResponse = { ...enabledAISettings, enabled: true }
     ;(hasApiKey as ReturnType<typeof vi.fn>).mockImplementation(async (providerId: string) =>
       providerId === 'openai',
@@ -473,7 +701,7 @@ describe('EnhancementsSection', () => {
     const user = userEvent.setup()
     renderWithProviders()
 
-    const aiToggle = await screen.findByRole('switch', { name: /ai formatting/i })
+    const aiToggle = await screen.findByRole('switch', { name: /polish/i })
     await waitFor(() => expect(aiToggle).toBeEnabled())
     await user.click(aiToggle)
 
@@ -486,13 +714,11 @@ describe('EnhancementsSection', () => {
           final_text_language: 'same_as_transcript',
         }),
       })
-      expect(toast.success).toHaveBeenCalledWith(
-        'AI formatting disabled. Switched to Personal Dictation.',
-      )
+      expect(toast.success).toHaveBeenCalledWith('Polish off')
     })
   })
 
-  it('switches to Clean Dictation when AI formatting is turned on from Personal Dictation', async () => {
+  it('switches to Clean Dictation when Polish is turned on from Personal Dictation', async () => {
     aiSettingsResponse = { ...enabledAISettings, enabled: false }
     ;(hasApiKey as ReturnType<typeof vi.fn>).mockImplementation(async (providerId: string) =>
       providerId === 'openai',
@@ -500,7 +726,7 @@ describe('EnhancementsSection', () => {
     const user = userEvent.setup()
     renderWithProviders()
 
-    const aiToggle = await screen.findByRole('switch', { name: /ai formatting/i })
+    const aiToggle = await screen.findByRole('switch', { name: /polish/i })
     await waitFor(() => expect(aiToggle).toBeEnabled())
     await user.click(aiToggle)
 
@@ -511,10 +737,11 @@ describe('EnhancementsSection', () => {
     })
   })
 
-  it('saves custom provider setup without enabling AI formatting', async () => {
+  it('saves custom provider setup without enabling Polish', async () => {
     aiSettingsResponse = { ...baseAISettings, provider: '', model: '' }
     const user = userEvent.setup()
     renderWithProviders()
+    await openAdvanced(user)
 
     await user.click(await screen.findByRole('button', { name: 'Configure' }))
     await user.type(await screen.findByLabelText('Model ID'), 'local-model')
@@ -540,13 +767,13 @@ describe('EnhancementsSection', () => {
 
   it('saves final text language changes through save_settings', async () => {
     aiSettingsResponse = enabledAISettings
+    enhancementOptionsResponse = { preset: 'CleanDictation' }
     ;(hasApiKey as ReturnType<typeof vi.fn>).mockImplementation(async (providerId: string) =>
       providerId === 'openai',
     )
     const user = userEvent.setup()
     renderWithProviders()
 
-    await user.click(await screen.findByRole('button', { name: 'Clean Dictation' }))
     await user.click(await screen.findByRole('button', { name: 'Specific language' }))
 
     await waitFor(() => {
@@ -559,29 +786,30 @@ describe('EnhancementsSection', () => {
     })
   })
 
-  it('renders the two labeled zones with their copy', async () => {
+  it('renders the three tiers with their copy', async () => {
     renderWithProviders()
 
     await waitFor(() => {
-      expect(screen.getByText('AI polish (optional)')).toBeInTheDocument()
+      expect(screen.getAllByText('Polish').length).toBeGreaterThan(0)
       expect(
         screen.getByText(
-          'Speech models infer punctuation. Clean Dictation uses AI to correct grammar and punctuation. Needs a provider and is off by default.',
+          'Clean up grammar and punctuation while keeping your meaning.',
         ),
       ).toBeInTheDocument()
-      expect(screen.getByText('Your text rules (always on)')).toBeInTheDocument()
+      expect(screen.getByText('Static Rules')).toBeInTheDocument()
       expect(
         screen.getByText(
-          'Exact, predictable edits. Run on every transcription, with or without AI.',
+          'Work with or without Polish — even better with it. They also sharpen recognition.',
         ),
       ).toBeInTheDocument()
+      expect(screen.getByText('Provider and model setup, plus per-app reshaping.')).toBeInTheDocument()
     })
   })
 
   it('does not render a context_policy control after the app-hint removal', async () => {
     renderWithProviders()
 
-    await waitFor(() => expect(screen.getByText('AI Providers')).toBeInTheDocument())
+    await waitFor(() => expect(screen.getByText('Static Rules')).toBeInTheDocument())
     expect(
       screen.queryByRole('switch', { name: 'Context-aware cleanup' }),
     ).not.toBeInTheDocument()
@@ -735,6 +963,7 @@ describe('EnhancementsSection', () => {
   it('adds an app formatting rule and persists writing settings', async () => {
     const user = userEvent.setup()
     renderWithProviders()
+    await openAdvanced(user)
 
     const appRulesHeading = await screen.findByText('App Rules')
     const appRulesCard = appRulesHeading.parentElement?.parentElement
@@ -1086,11 +1315,12 @@ describe('EnhancementsSection', () => {
     )
     const user = userEvent.setup()
     renderWithProviders()
+    await openAdvanced(user)
 
-    const geminiHeading = await screen.findByText('Google Gemini')
-    const geminiCard = geminiHeading.closest('.p-4')
-    const openAIHeading = await screen.findByText('OpenAI')
-    const openAICard = openAIHeading.closest('.p-4')
+    const geminiHeading = await screen.findByRole('heading', { name: 'Google Gemini' })
+    const geminiCard = geminiHeading.closest('.rounded-xl')
+    const openAIHeading = await screen.findByRole('heading', { name: 'OpenAI' })
+    const openAICard = openAIHeading.closest('.rounded-xl')
     expect(openAICard).toBeTruthy()
     expect(geminiCard).toBeTruthy()
 
@@ -1110,9 +1340,10 @@ describe('EnhancementsSection', () => {
     ;(hasApiKey as ReturnType<typeof vi.fn>).mockResolvedValue(false)
     const user = userEvent.setup()
     renderWithProviders()
+    await openAdvanced(user)
 
-    const openAIHeading = await screen.findByText('OpenAI')
-    const openAICard = openAIHeading.closest('.p-4')
+    const openAIHeading = await screen.findByRole('heading', { name: 'OpenAI' })
+    const openAICard = openAIHeading.closest('.rounded-xl')
     expect(openAICard).toBeTruthy()
 
     await user.click(within(openAICard as HTMLElement).getByRole('button', { name: /add key/i }))
@@ -1136,18 +1367,19 @@ describe('EnhancementsSection', () => {
     )
     const user = userEvent.setup()
     renderWithProviders()
+    await openAdvanced(user)
 
     expect(
       await screen.findByText(
-        'Your previously selected AI model is no longer available. Please choose a model to continue using AI polish.',
+        'Your previously selected AI model is no longer available. Please choose a model to continue using Polish.',
       ),
     ).toBeInTheDocument()
 
-    const openAIHeading = await screen.findByText('OpenAI')
-    const openAICard = openAIHeading.closest('.p-4')
-    expect(openAICard).toBeTruthy()
-
-    await user.click(within(openAICard as HTMLElement).getByRole('button', { name: /gpt-5 mini/i }))
+    const providersPanel = getAdvancedProvidersPanel()
+    const openAICard = within(providersPanel)
+      .getByRole('heading', { name: 'OpenAI' })
+      .closest('div.rounded-xl') as HTMLElement
+    await user.click(within(openAICard).getByRole('button', { name: /gpt-5 mini/i }))
 
     await waitFor(() => {
       expect(invoke).toHaveBeenCalledWith('update_ai_settings', {
@@ -1162,17 +1394,178 @@ describe('EnhancementsSection', () => {
     })
   })
 
-  it('shows formatting setup guidance in the guide dialog', async () => {
+  it('shows Polish setup guidance in the guide dialog', async () => {
     const user = userEvent.setup()
     renderWithProviders()
 
-    await user.click(await screen.findByRole('button', { name: /formatting guide/i }))
+    await user.click(await screen.findByRole('button', { name: /polish guide/i }))
 
     await waitFor(() => {
       const dialog = screen.getByRole('dialog')
-      expect(within(dialog).getByText(/set up one provider, save its API key/i)).toBeInTheDocument()
-      expect(within(dialog).getByText(/Personal Dictation/i)).toBeInTheDocument()
+      expect(within(dialog).getByText(/Save a key and Polish chooses/i)).toBeInTheDocument()
+      expect(within(dialog).getAllByText(/Static Rules/i).length).toBeGreaterThan(0)
       expect(toast.error).not.toHaveBeenCalled()
     })
+  })
+
+  it('shows a sign-in hint and Refresh for an installed-but-unauthed agent CLI', async () => {
+    agentCliProbeResponse = { state: 'not_authenticated', installed: true, authed: false }
+    const user = userEvent.setup()
+    renderWithProviders()
+    await openAdvanced(user)
+    const providersPanel = getAdvancedProvidersPanel()
+    const claudeCard = within(providersPanel)
+      .getByRole('heading', { name: 'Claude Code' })
+      .closest('div.rounded-xl') as HTMLElement
+    expect(await within(claudeCard).findByText(/not signed in/i)).toBeInTheDocument()
+
+    expect(within(claudeCard).queryByText(/Add API key/i)).not.toBeInTheDocument()
+    const refresh = within(claudeCard).getByRole('button', {
+      name: /refresh claude code sign-in/i,
+    })
+    expect(refresh).toBeInTheDocument()
+
+    agentCliProbeResponse = { state: 'ready', installed: true, authed: true }
+    await user.click(refresh)
+    await waitFor(() => {
+      expect(toast.success).toHaveBeenCalledWith('Claude Code: signed in')
+    })
+  })
+  it('uses the ready Claude CLI picker with curated defaults', async () => {
+    agentCliProbeResponse = { state: 'ready', installed: true, authed: true }
+    const user = userEvent.setup()
+    renderWithProviders()
+    await openAdvanced(user)
+    const providersPanel = getAdvancedProvidersPanel()
+    const claudeCard = within(providersPanel)
+      .getByRole('heading', { name: 'Claude Code' })
+      .closest('div.rounded-xl') as HTMLElement
+
+    expect(within(claudeCard).getByRole('button', { name: /haiku/i })).toBeInTheDocument()
+    expect(within(claudeCard).getByRole('button', { name: /sonnet/i })).toBeInTheDocument()
+    expect(within(claudeCard).getByRole('button', { name: /opus/i })).toBeInTheDocument()
+    expect(within(claudeCard).getByText('Recommended')).toBeInTheDocument()
+
+    await user.click(within(claudeCard).getByRole('button', { name: /sonnet/i }))
+    await waitFor(() => {
+      expect(invoke).toHaveBeenCalledWith('update_ai_settings', {
+        enabled: false,
+        provider: 'claude-code',
+        model: 'sonnet',
+      })
+    })
+  })
+
+  it('guided Claude setup enables the recommended Haiku model', async () => {
+    agentCliProbeResponse = { state: 'ready', installed: true, authed: true }
+    const user = userEvent.setup()
+    renderWithProviders()
+
+    await user.click(await screen.findByRole('button', { name: 'Claude Code' }))
+    await waitFor(() => {
+      expect(invoke).toHaveBeenCalledWith('update_ai_settings', {
+        enabled: true,
+        provider: 'claude-code',
+        model: 'haiku',
+      })
+      expect(toast.success).toHaveBeenCalledWith('Polish on')
+    })
+  })
+
+  it('groups pi and oh-my-pi models by source and persists the CLI default as an empty id', async () => {
+    agentCliProbeResponse = { state: 'ready', installed: true, authed: true }
+    const user = userEvent.setup()
+    renderWithProviders()
+    await openAdvanced(user)
+    const providersPanel = getAdvancedProvidersPanel()
+    const piCard = within(providersPanel)
+      .getByRole('heading', { name: 'pi' })
+      .closest('div.rounded-xl') as HTMLElement
+    const ompCard = within(providersPanel)
+      .getByRole('heading', { name: 'oh-my-pi' })
+      .closest('div.rounded-xl') as HTMLElement
+
+    expect(within(piCard).getAllByText('CLI default')).toHaveLength(2)
+    expect(within(piCard).getByText('OpenAI')).toBeInTheDocument()
+    expect(within(piCard).getByText('Anthropic')).toBeInTheDocument()
+    expect(within(ompCard).getAllByText('CLI default')).toHaveLength(2)
+    expect(within(ompCard).getByText('Google')).toBeInTheDocument()
+    expect(within(providersPanel).queryByRole('combobox', { name: /thinking|effort/i })).not.toBeInTheDocument()
+
+    await user.click(within(piCard).getByRole('button', { name: /CLI default/i }))
+    await waitFor(() => {
+      expect(invoke).toHaveBeenCalledWith('update_ai_settings', {
+        enabled: false,
+        provider: 'pi',
+        model: '',
+      })
+    })
+  })
+
+  it('shows discovery errors with Retry without API-key or no-model dead ends', async () => {
+    agentCliProbeResponse = { state: 'ready', installed: true, authed: true }
+    modelDiscovery.errors['claude-code'] = 'Model discovery failed'
+    const user = userEvent.setup()
+    renderWithProviders()
+    await openAdvanced(user)
+    const providersPanel = getAdvancedProvidersPanel()
+    const claudeCard = within(providersPanel)
+      .getByRole('heading', { name: 'Claude Code' })
+      .closest('div.rounded-xl') as HTMLElement
+
+    expect(within(claudeCard).getByText('Model discovery failed')).toBeInTheDocument()
+    expect(within(claudeCard).getByRole('button', { name: 'Retry' })).toBeInTheDocument()
+    expect(within(claudeCard).queryByText(/Add API key/i)).not.toBeInTheDocument()
+    expect(within(claudeCard).queryByText(/No models available/i)).not.toBeInTheDocument()
+
+    await user.click(within(claudeCard).getByRole('button', { name: 'Retry' }))
+    expect(modelDiscovery.fetchModels).toHaveBeenCalledWith('claude-code')
+  })
+  it.each([
+    ['missing', /CLI not found/i],
+    ['unsafe_launcher', /could not be used safely/i],
+    ['incompatible', /incompatible/i],
+  ] as const)('keeps the %s CLI state actionable and refreshable', async (state, copy) => {
+    agentCliProbeResponse = { state, installed: false, authed: false }
+    const user = userEvent.setup()
+    renderWithProviders()
+    await openAdvanced(user)
+    const providersPanel = getAdvancedProvidersPanel()
+    const claudeCard = within(providersPanel)
+      .getByRole('heading', { name: 'Claude Code' })
+      .closest('div.rounded-xl') as HTMLElement
+
+    expect(within(claudeCard).getByText(copy)).toBeInTheDocument()
+    if (state === 'missing') {
+      expect(
+        within(claudeCard).getByText(/Install it in an existing PATH directory, then Refresh/i),
+      ).toBeInTheDocument()
+      expect(
+        within(claudeCard).getByText(
+          /Refresh can detect installs in existing PATH directories; restart only if PATH itself changed/i,
+        ),
+      ).toBeInTheDocument()
+    }
+    expect(
+      within(claudeCard).getByRole('button', { name: /refresh claude code sign-in/i }),
+    ).toBeInTheDocument()
+    expect(within(claudeCard).queryByText(/Add API key/i)).not.toBeInTheDocument()
+    expect(within(claudeCard).queryByText(/No models available/i)).not.toBeInTheDocument()
+  })
+
+  it('shows Signed in and the ready model picker for an authed agent CLI', async () => {
+    agentCliProbeResponse = { state: 'ready', installed: true, authed: true }
+    const user = userEvent.setup()
+    renderWithProviders()
+    await openAdvanced(user)
+    const providersPanel = getAdvancedProvidersPanel()
+    const claudeCard = within(providersPanel)
+      .getByRole('heading', { name: 'Claude Code' })
+      .closest('div.rounded-xl') as HTMLElement
+
+    expect(await within(claudeCard).findByText('Signed in')).toBeInTheDocument()
+    expect(await within(claudeCard).findByRole('button', { name: /haiku/i })).toBeInTheDocument()
+    expect(within(providersPanel).queryByText(/No models available/i)).not.toBeInTheDocument()
+    expect(within(providersPanel).queryByRole('combobox', { name: /thinking|effort/i })).not.toBeInTheDocument()
   })
 })
