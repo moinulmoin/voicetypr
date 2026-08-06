@@ -27,9 +27,8 @@ export type ScreenId =
   | "license"
   | "agent"
   | "advanced"
-  | "help";
-
-export type SidebarActionId = "report-bug";
+  | "help"
+  | "report-problem";
 
 export interface ScreenDefinition {
   id: ScreenId;
@@ -38,12 +37,6 @@ export interface ScreenDefinition {
   description: string;
 }
 
-export interface SidebarActionDefinition {
-  id: SidebarActionId;
-  label: string;
-  icon: LucideIcon;
-  description: string;
-}
 
 export const primaryScreens: ScreenDefinition[] = [
   {
@@ -121,16 +114,14 @@ export const secondaryScreens: ScreenDefinition[] = [
     icon: HelpCircle,
     description: "Troubleshooting, support, and bug reporting.",
   },
-];
-
-export const sidebarActions: SidebarActionDefinition[] = [
   {
-    id: "report-bug",
-    label: "Report Bug",
+    id: "report-problem",
+    label: "Report a problem",
     icon: Bug,
-    description: "Send a bug report with diagnostic logs.",
+    description: "Send an issue with diagnostic logs.",
   },
 ];
+
 
 export const screens = [...primaryScreens, ...secondaryScreens] as const;
 
@@ -168,4 +159,7 @@ export const navGroups: NavGroup[] = [
   },
 ];
 
-export const footerScreens: ScreenDefinition[] = [screenById("help")];
+export const footerScreens: ScreenDefinition[] = [
+  screenById("help"),
+  screenById("report-problem"),
+];

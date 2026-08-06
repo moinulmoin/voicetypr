@@ -46,6 +46,10 @@ impl SilenceDetector {
         self.update_at(rms, Instant::now())
     }
 
+    pub fn speech_detected(&self) -> bool {
+        self.speech_detected
+    }
+
     fn new_at(now: Instant) -> Self {
         Self {
             started_at: now,
@@ -347,5 +351,15 @@ mod tests {
             ),
             None
         );
+    }
+    #[test]
+    fn speech_detected_remains_latched_after_trailing_silence() {
+        let start = t0();
+        let mut detector = SilenceDetector::new_at(start);
+        let voiced = confirm_speech(&mut detector, start + Duration::from_secs(1));
+        assert!(detector.speech_detected());
+
+        detector.update_at(SILENT, voiced + LONG_SILENCE_WARNING_AFTER);
+        assert!(detector.speech_detected());
     }
 }

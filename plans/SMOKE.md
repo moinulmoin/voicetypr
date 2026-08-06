@@ -9,6 +9,85 @@ Run on a real macOS machine via `pnpm tauri:dev` (item 16-S8 needs a Windows
 build). Check each box with date + result; on failure, file the failure
 against the named plan instead of hot-fixing inline.
 
+## Plan 030 — Windows crash dependencies (NEEDS-SMOKE)
+
+Run these on the signed Windows Beta 7 build. Keep Bugsink open for recurrence
+of the `flush_paint_messages` assertion and invalid-monitor-handle error 1461.
+
+- [ ] 030-S1 With the tray menu and pill alternately open and closed, put a
+      Bluetooth device to sleep, wake it, disconnect it, and reconnect it;
+      repeat while connecting/disconnecting a VPN or network adapter → app
+      stays alive, tray actions still work, no matching Bugsink panic.
+- [ ] 030-S2 Hot-plug/unplug a secondary monitor and sleep/wake the displays
+      while showing/hiding the main window and pill → app stays alive and
+      windows remain reachable.
+- [ ] 030-S3 Change the primary display and move the pill/main window between
+      displays with different DPI/scaling → placement updates without panic.
+- [ ] 030-S4 Normal regression: record, transcribe, paste, open tray settings,
+      then quit from the tray → unchanged behavior.
+
+## Plan 033 — tray recovery + upload result accessibility (NEEDS-SMOKE)
+
+Run these on signed `v2.0.5-beta.7`. The local macOS development build already
+proved first-attempt tray construction and ordinary tray-menu availability;
+the failure/recovery path and long-upload geometry still require real runtime
+conditions.
+
+- [ ] 033-S1 macOS cold launch and quit/relaunch → menu-bar icon appears once,
+      dashboard opens, tray actions work, and the launch log contains
+      `TRAY_CREATION | source=startup | attempt=1 | result=success`.
+- [ ] 033-S2 On the affected Mac, reproduce any tray creation failure →
+      dashboard stays visible, warning reports the attempt count, Retry icon
+      either restores one icon or leaves actionable help visible, and a copied
+      bug report includes tray availability/attempts/last error.
+- [ ] 033-S3 Crowded notched menu bar and external display → determine whether
+      an `available` tray is merely hidden by macOS placement; no duplicate
+      icon appears after sleep/wake or relaunch.
+- [ ] 033-S4 Upload a long Parakeet file with enough diarization segments to
+      scroll → the timeline stays inside its panel; Copy, Save, and Transcribe
+      Another File remain mouse- and keyboard-accessible; saved text matches
+      History.
+- [ ] 033-S5 Windows normal launch and autostart → delayed tray recovery does
+      not crash or duplicate the icon; complete Plan 030-S1..S4 on the same
+      signed build.
+
+## Plans 034, 040, 041 — Beta 7 support, diagnostics, and licensing
+
+Run these on published prerelease `v2.0.5-beta.7`, built by release run
+`30105763790`. The signed macOS ARM64, macOS Intel, and Windows artifacts all
+passed their release jobs; the checks below cover runtime behavior that CI
+cannot prove.
+
+- [ ] 034-S1 Submit a Report a problem form successfully → required email and
+      issue fields are enforced, the prepared report previews the real system
+      configuration, the form clears only after success, and the received
+      diagnostics contain no raw full paths, credentials, secrets, or other
+      unredacted sensitive values.
+- [ ] 034-S2 Force report submission to fail → entered fields remain intact,
+      Copy report remains usable, and copied diagnostics are still redacted.
+- [ ] 040-S1 Reproduce the affected Windows/Russian punctuation scenario with
+      AI formatting disabled and then with Clean Dictation enabled → each
+      transcription emits exactly one privacy-safe `AI_FORMATTING_DECISION`
+      outcome: `disabled`, `mode_skipped`, `literal_preserved`, `applied`,
+      `unchanged`, or `fallback`. The record contains no dictated text, prompt,
+      API key, or target-application name.
+- [ ] 040-S2 Make a configured AI provider unavailable during Clean Dictation
+      → raw/deterministic text is preserved, the decision is `fallback`, and
+      the app returns to idle without losing the transcript.
+- [ ] 041-S1 Activate a paid license online, quit, and relaunch → Pro remains
+      active and recording is available without another activation.
+- [ ] 041-S2 After a successful verification, disconnect the network or force
+      timeout/5xx validation failures during three scheduled checks → failures
+      1–2 retain offline grace, failure 3 shows the truthful revalidation
+      warning, Pro and recording remain available throughout, Revalidate stays
+      reachable, and `Trial expired` never appears.
+- [ ] 041-S3 Restore service and click Revalidate → the warning clears and Pro
+      remains active. A definitive invalid/expired/revoked response instead
+      removes the entitlement immediately rather than entering offline grace.
+- [ ] 041-S4 Inspect logs and telemetry from activation, transient failures,
+      revalidation, and definitive rejection → no license key, device
+      identifier, hostname, or raw server response was captured.
+
 ## Plan 004 — cancel during `Starting` (code at `9868fdc` era, NEEDS-SMOKE)
 
 - [ ] 004-S1 Toggle mode: record hotkey, immediately press Escape repeatedly
@@ -322,6 +401,38 @@ capped; near-silent noise unchanged). Residue = real mic capture + real ambient.
 - [ ] NORM-S2 Record steady ambient with NO speech (fan/AC running) → output is
       NOT amplified into loud hiss or spurious words (stays at the 10x cap).
 - [ ] NORM-S3 Normal-volume dictation → unchanged quality.
+
+## 2.0.5 Beta train — Windows issue triage
+
+Current Beta: `2.0.5-beta.7`. Stable remains `2.0.4`. This signed candidate
+adds tray/upload recovery, paid-license resilience, formatting diagnostics,
+and the dedicated problem-report page to the earlier Windows fixes.
+
+- [x] **BETA-UPD-M1** (macOS ARM64): signed `beta.1` selected Beta, discovered
+      `beta.2`, installed it, restarted as `beta.2`, retained Beta, then reported
+      latest-version with no update loop.
+- [ ] **BETA-UPD-W1** (Windows): install/update from the previous signed Beta
+      to `beta.7`, restart, and confirm Beta persists with no update loop.
+- [ ] **BETA-GPU-W1** (Windows hybrid GPU): Auto prefers discrete NVIDIA/AMD;
+      a Vulkan/sidecar failure cannot crash the main app; CPU fallback completes;
+      the failed sidecar model does not remain resident beside the CPU model.
+- [ ] **BETA-HOTKEY-W1** (Windows): Stream Deck/injected input starts and stops
+      recording; the physical shortcut still works after restart.
+- [ ] **BETA-TEXT-W1**: punctuation spacing has no double spaces or spaces before
+      punctuation, while guarded multiline/code-like text remains unchanged.
+- [ ] **BETA-SILENCE-W1**: speech followed by 2–5 seconds of silence does not
+      invent trailing text or truncate the real final words; soft speech and a
+      silence-only control are included.
+- [ ] **BETA-EVIDENCE-W1**: retain representative `SPEECH_EVIDENCE` logs covering
+      capture RMS/peak/duration, prepared-audio metrics, engine/route/outcome,
+      and the shadow classification.
+
+The reported A3 onboarding/hotkey crash blocks Stable only if it reproduces on
+`beta.7`; collect the exact stage, acceleration mode, model, GPU, OS, and logs.
+The reported C2 all-model accuracy issue needs selected-mic plus
+RMS/peak/prepared-audio evidence before attributing it to an engine. Any
+resulting product fix requires a newly cut beta and a rerun of the affected
+checks above.
 
 ## Release rule
 

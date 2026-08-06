@@ -557,7 +557,7 @@ impl Transcriber {
         // Suppress blank outputs to avoid empty transcriptions
         params.set_suppress_blank(true);
 
-        // Don't suppress non-speech tokens - they help with timing and context
+        // Suppress annotation-like tokens while keeping commas and sentence-ending punctuation.
         params.set_suppress_nst(true);
 
         // Adjust speech detection threshold
@@ -598,8 +598,6 @@ impl Transcriber {
             log::warn!("[TRANSCRIPTION_DEBUG] {}", error);
             return Err(error);
         }
-
-        log_audio_metrics("WHISPER_INPUT", 0.0, 0.0, duration_seconds, None);
 
         let inference_start = Instant::now();
         log_start("WHISPER_INFERENCE");
@@ -695,7 +693,8 @@ impl Transcriber {
             });
         }
 
-        let result = text.trim().to_string();
+        let trimmed = text.trim();
+        let result = transcript_text::normalize_transcript_spacing(trimmed).into_owned();
 
         // Log text extraction performance
         let extraction_time = text_extraction_start.elapsed().as_millis() as u64;

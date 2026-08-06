@@ -13,6 +13,7 @@ import {
   FieldContent,
   FieldDescription,
   FieldGroup,
+  FieldLabel,
   FieldLegend,
   FieldSet,
   FieldTitle,
@@ -27,10 +28,11 @@ import { useSettings } from "@/contexts/SettingsContext";
 import { updateService } from "@/services/updateService";
 import { isMacOS, isWindows } from "@/lib/platform";
 import { findActivePrimaryBinding, formatPrimaryHotkeyLabel } from "@/lib/shortcut-display";
-import { PillIndicatorMode, PillIndicatorPosition, TranscriptionAcceleration } from "@/types";
+import { PillIndicatorMode, PillIndicatorPosition, TranscriptionAcceleration, type UpdateChannel } from "@/types";
 import { invoke } from "@tauri-apps/api/core";
 import type { ShortcutBinding, ShortcutSettings } from "@/types/shortcuts";
 import type { AccelerationStatus } from "@/types/acceleration";
+import { isStoreDistribution, type DistributionInfo } from "@/types/distribution";
 import { AlertCircle, Check, Edit2, FolderOpen, HelpCircle, Mic, RefreshCw, Rocket, X } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 import { toast } from "sonner";
@@ -125,6 +127,9 @@ export function GeneralSettings() {
   const [autostartLoading, setAutostartLoading] = useState(false);
   const [showAccessibilityWarning, setShowAccessibilityWarning] = useState(true);
   const [isCheckingUpdate, setIsCheckingUpdate] = useState(false);
+  const [updateDistribution, setUpdateDistribution] =
+    useState<"loading" | "direct" | "store" | "error">("loading");
+  const [isChangingUpdateChannel, setIsChangingUpdateChannel] = useState(false);
   const canAutoInsert = useCanAutoInsert();
   const [nativeBinding, setNativeBinding] = useState<ShortcutBinding | null>(null);
   const [isEditingHotkey, setIsEditingHotkey] = useState(false);
@@ -147,6 +152,17 @@ export function GeneralSettings() {
 
     checkAutostart();
     setShowAccessibilityWarning(isMacOS);
+  }, []);
+
+  useEffect(() => {
+    invoke<DistributionInfo>("get_distribution_info")
+      .then((info) =>
+        setUpdateDistribution(isStoreDistribution(info) ? "store" : "direct"),
+      )
+      .catch((error) => {
+        log.error("Failed to check update distribution:", error);
+        setUpdateDistribution("error");
+      });
   }, []);
 
   const loadAccelerationStatus = useCallback(async () => {
@@ -327,6 +343,34 @@ export function GeneralSettings() {
     }
   };
 
+  const handleUpdateChannelChange = async (value: string) => {
+    if (value !== "stable" && value !== "beta") {
+      toast.error("Invalid update channel");
+      return;
+    }
+
+    setIsChangingUpdateChannel(true);
+    try {
+      await updateSettings({ update_channel: value });
+      const channel: UpdateChannel = value;
+      toast.success(
+        channel === "beta" ? "Beta updates enabled" : "Stable updates enabled",
+        {
+          description:
+            channel === "beta"
+              ? "Checking for the latest beta. Beta builds may be less stable."
+              : "Future checks use stable releases. Switching does not downgrade an installed beta.",
+        },
+      );
+      await handleCheckUpdate();
+    } catch (error) {
+      log.error("Failed to change update channel:", error);
+      toast.error("Failed to change update channel");
+    } finally {
+      setIsChangingUpdateChannel(false);
+    }
+  };
+
   const handleAccelerationChange = async (value: TranscriptionAcceleration) => {
     await updateSettings({ transcription_acceleration: value });
     await loadAccelerationStatus();
@@ -426,35 +470,85 @@ export function GeneralSettings() {
                 </div>
               </Field>
 
-              <Field orientation="responsive" className="items-center gap-4">
-                <FieldContent>
-                  <FieldTitle>Check for updates automatically</FieldTitle>
-                  <FieldDescription>
-                    Check daily and ask before downloading or installing anything.
-                  </FieldDescription>
-                </FieldContent>
-                <div className="flex flex-col items-end gap-2">
-                  <Switch
-                    id="check-updates-automatically"
-                    checked={settings.check_updates_automatically ?? true}
-                    onCheckedChange={async (checked) =>
-                      await updateSettings({
-                        check_updates_automatically: checked,
-                      })
-                    }
-                  />
-                  <Button
-                    type="button"
-                    variant="outline"
-                    size="sm"
-                    onClick={handleCheckUpdate}
-                    disabled={isCheckingUpdate}
-                  >
-                    <RefreshCw className={`h-3.5 w-3.5 ${isCheckingUpdate ? "animate-spin" : ""}`} />
-                    {isCheckingUpdate ? "Checking" : "Check updates"}
-                  </Button>
-                </div>
-              </Field>
+              {updateDistribution === "store" ? (
+                <Field>
+                  <FieldContent>
+                    <FieldTitle>Updates managed by Microsoft Store</FieldTitle>
+                    <FieldDescription>
+                      Update channels and installation are controlled by Microsoft Store.
+                    </FieldDescription>
+                  </FieldContent>
+                </Field>
+              ) : updateDistribution === "direct" ? (
+                <>
+                  <Field orientation="responsive" className="items-center gap-4">
+                    <FieldContent>
+                      <FieldTitle>Update channel</FieldTitle>
+                      <FieldDescription>
+                        Beta gets early builds for testing. Switching to Stable changes future checks and does not downgrade an installed beta.
+                      </FieldDescription>
+                    </FieldContent>
+                    <Select
+                      value={settings.update_channel ?? "stable"}
+                      onValueChange={(value) => void handleUpdateChannelChange(value)}
+                      disabled={isChangingUpdateChannel || isCheckingUpdate}
+                    >
+                      <SelectTrigger className="w-full md:w-[190px]" aria-label="Update channel">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="stable">Stable</SelectItem>
+                        <SelectItem value="beta">Beta</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </Field>
+
+                  <Field orientation="responsive" className="items-center gap-4">
+                    <FieldContent>
+                      <FieldTitle>Check for updates automatically</FieldTitle>
+                      <FieldDescription>
+                        Check the selected channel daily and ask before downloading or installing anything.
+                      </FieldDescription>
+                    </FieldContent>
+                    <div className="flex flex-col items-end gap-2">
+                      <Switch
+                        id="check-updates-automatically"
+                        checked={settings.check_updates_automatically ?? true}
+                        onCheckedChange={async (checked) =>
+                          await updateSettings({
+                            check_updates_automatically: checked,
+                          })
+                        }
+                      />
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        onClick={handleCheckUpdate}
+                        disabled={isCheckingUpdate}
+                      >
+                        <RefreshCw className={`h-3.5 w-3.5 ${isCheckingUpdate ? "animate-spin" : ""}`} />
+                        {isCheckingUpdate ? "Checking" : "Check updates"}
+                      </Button>
+                    </div>
+                  </Field>
+                </>
+              ) : (
+                <Field>
+                  <FieldContent>
+                    <FieldTitle>
+                      {updateDistribution === "loading"
+                        ? "Loading update options"
+                        : "Update options unavailable"}
+                    </FieldTitle>
+                    <FieldDescription>
+                      {updateDistribution === "loading"
+                        ? "Checking how this installation receives updates."
+                        : "Could not verify this installation type. Restart Voicetypr to try again."}
+                    </FieldDescription>
+                  </FieldContent>
+                </Field>
+              )}
             </FieldGroup>
           </div>
 
@@ -680,10 +774,17 @@ export function GeneralSettings() {
                     />
                   </Field>
 
+                </FieldSet>
+
+                <FieldSet className="gap-4 border-t border-border/60 pt-5">
+                  <FieldLegend className="mb-1 text-base font-semibold">Audio feedback</FieldLegend>
+
                   <Field orientation="responsive" className="items-center gap-3">
                     <FieldContent>
-                      <FieldTitle>Sound on Recording</FieldTitle>
-                      <FieldDescription>Play a sound when recording starts</FieldDescription>
+                      <FieldLabel htmlFor="sound-on-recording">Recording started</FieldLabel>
+                      <FieldDescription>
+                        Play a sound when the microphone is ready for speech.
+                      </FieldDescription>
                     </FieldContent>
                     <Switch
                       id="sound-on-recording"
@@ -698,15 +799,37 @@ export function GeneralSettings() {
 
                   <Field orientation="responsive" className="items-center gap-3">
                     <FieldContent>
-                      <FieldTitle>Sound on Recording End</FieldTitle>
-                      <FieldDescription>Play a sound when recording stops</FieldDescription>
+                      <FieldLabel htmlFor="sound-on-transcription-complete">
+                        Transcript ready
+                      </FieldLabel>
+                      <FieldDescription>
+                        Play a sound after transcription and optional AI formatting finish.
+                      </FieldDescription>
                     </FieldContent>
                     <Switch
-                      id="sound-on-recording-end"
-                      checked={settings.play_sound_on_recording_end ?? true}
+                      id="sound-on-transcription-complete"
+                      checked={settings.play_sound_on_transcription_complete ?? true}
                       onCheckedChange={async (checked) =>
                         await updateSettings({
-                          play_sound_on_recording_end: checked,
+                          play_sound_on_transcription_complete: checked,
+                        })
+                      }
+                    />
+                  </Field>
+
+                  <Field orientation="responsive" className="items-center gap-3">
+                    <FieldContent>
+                      <FieldLabel htmlFor="sound-on-paste-success">Paste completed</FieldLabel>
+                      <FieldDescription>
+                        Play a sound after VoiceTypr successfully sends the paste command.
+                      </FieldDescription>
+                    </FieldContent>
+                    <Switch
+                      id="sound-on-paste-success"
+                      checked={settings.play_sound_on_paste_success ?? true}
+                      onCheckedChange={async (checked) =>
+                        await updateSettings({
+                          play_sound_on_paste_success: checked,
                         })
                       }
                     />

@@ -33,7 +33,8 @@ const defaultIpcHandler = (cmd: string) => {
         ai_provider: '',
         ai_enhancement_enabled: false,
         play_sound_on_recording: true,
-        play_sound_on_recording_end: true,
+        play_sound_on_transcription_complete: true,
+        play_sound_on_paste_success: true,
         pill_indicator_mode: 'when_recording',
         pill_indicator_position: 'bottom-center',
         pill_indicator_offset: 10

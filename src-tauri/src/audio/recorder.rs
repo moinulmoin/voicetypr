@@ -1,6 +1,6 @@
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use std::sync::mpsc::{self, SyncSender, TrySendError};
 use std::sync::{Arc, Mutex};
 use std::thread;
@@ -178,10 +178,125 @@ fn chunk_capacity_for(max_frames: usize, channels: usize) -> usize {
     max_frames.saturating_mul(channels).max(CHUNK_CAPACITY_MIN)
 }
 
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct CaptureAudioMetrics {
+    pub sample_count: u64,
+    pub duration_ms: u64,
+    pub rms: f64,
+    pub peak: f32,
+    pub sample_rate: u32,
+    pub channels: u16,
+    pub speech_detected: bool,
+}
+
+#[derive(Debug, Default)]
+struct CaptureMetricsAccumulator {
+    sample_count: AtomicU64,
+    sum_squares_bits: AtomicU64,
+    peak_bits: AtomicU32,
+}
+
+impl CaptureMetricsAccumulator {
+    /// Observe one CPAL callback buffer and return its RMS. This is the callback's
+    /// only sample traversal; the returned RMS feeds the existing level/silence path.
+    fn observe(&self, samples: &[f32]) -> f32 {
+        let mut callback_sum_squares = 0.0f32;
+        let mut aggregate_sum_squares = 0.0f64;
+        let mut peak = 0.0f32;
+        for &sample in samples {
+            callback_sum_squares += sample * sample;
+            let sample_f64 = sample as f64;
+            aggregate_sum_squares += sample_f64 * sample_f64;
+            peak = peak.max(sample.abs());
+        }
+
+        if !samples.is_empty() {
+            self.sample_count
+                .fetch_add(samples.len() as u64, Ordering::Relaxed);
+            atomic_add_f64(&self.sum_squares_bits, aggregate_sum_squares);
+            atomic_max_f32(&self.peak_bits, peak);
+        }
+        (callback_sum_squares / samples.len() as f32).sqrt()
+    }
+
+    fn snapshot(
+        &self,
+        sample_rate: u32,
+        channels: u16,
+        speech_detected: bool,
+    ) -> CaptureAudioMetrics {
+        let sample_count = self.sample_count.load(Ordering::Relaxed);
+        let sum_squares = f64::from_bits(self.sum_squares_bits.load(Ordering::Relaxed));
+        let frames = sample_count / u64::from(channels.max(1));
+        let duration_ms = frames
+            .saturating_mul(1000)
+            .checked_div(u64::from(sample_rate.max(1)))
+            .unwrap_or(0);
+        let rms = if sample_count == 0 {
+            0.0
+        } else {
+            (sum_squares / sample_count as f64).sqrt()
+        };
+
+        CaptureAudioMetrics {
+            sample_count,
+            duration_ms,
+            rms,
+            peak: f32::from_bits(self.peak_bits.load(Ordering::Relaxed)),
+            sample_rate,
+            channels,
+            speech_detected,
+        }
+    }
+}
+
+fn atomic_add_f64(target: &AtomicU64, value: f64) {
+    let mut current = target.load(Ordering::Relaxed);
+    loop {
+        let next = (f64::from_bits(current) + value).to_bits();
+        match target.compare_exchange_weak(current, next, Ordering::Relaxed, Ordering::Relaxed) {
+            Ok(_) => return,
+            Err(observed) => current = observed,
+        }
+    }
+}
+
+fn atomic_max_f32(target: &AtomicU32, value: f32) {
+    let mut current = target.load(Ordering::Relaxed);
+    while value > f32::from_bits(current) {
+        match target.compare_exchange_weak(
+            current,
+            value.to_bits(),
+            Ordering::Relaxed,
+            Ordering::Relaxed,
+        ) {
+            Ok(_) => return,
+            Err(observed) => current = observed,
+        }
+    }
+}
+
+fn finish_capture(
+    last_capture_metrics: &Mutex<Option<CaptureAudioMetrics>>,
+    metrics: CaptureAudioMetrics,
+    writer_result: Result<(), String>,
+    device_error: Option<String>,
+) -> Result<(), String> {
+    if let Ok(mut guard) = last_capture_metrics.lock() {
+        *guard = Some(metrics);
+    }
+    writer_result?;
+    if let Some(error) = device_error {
+        return Err(error);
+    }
+    Ok(())
+}
+
 pub struct AudioRecorder {
     recording_handle: Arc<Mutex<Option<RecordingHandle>>>,
     audio_level_receiver: Arc<Mutex<Option<mpsc::Receiver<f64>>>>,
     silence_event_receiver: Arc<Mutex<Option<mpsc::Receiver<SilenceDetectorEvent>>>>,
+    last_capture_metrics: Arc<Mutex<Option<CaptureAudioMetrics>>>,
 }
 
 impl Drop for AudioRecorder {
@@ -231,6 +346,7 @@ impl AudioRecorder {
             recording_handle: Arc::new(Mutex::new(None)),
             audio_level_receiver: Arc::new(Mutex::new(None)),
             silence_event_receiver: Arc::new(Mutex::new(None)),
+            last_capture_metrics: Arc::new(Mutex::new(None)),
         }
     }
 
@@ -262,10 +378,15 @@ impl AudioRecorder {
         if let Ok(mut guard) = self.silence_event_receiver.lock() {
             guard.take();
         }
+        *self
+            .last_capture_metrics
+            .lock()
+            .map_err(|e| format!("Failed to acquire capture metrics lock: {e}"))? = None;
 
         let output_path = PathBuf::from(output_path);
         let (stop_tx, stop_rx) = mpsc::channel();
         let stop_tx_clone = stop_tx.clone();
+        let last_capture_metrics = self.last_capture_metrics.clone();
 
         // Create audio level channel (f64 for EBU R128 loudness values)
         let (audio_level_tx, audio_level_rx) = mpsc::channel::<f64>();
@@ -317,6 +438,7 @@ impl AudioRecorder {
 
             // Initialize silence detector and level meter
             let silence_detector = Arc::new(Mutex::new(SilenceDetector::new()));
+            let capture_metrics = Arc::new(CaptureMetricsAccumulator::default());
             let level_meter = Arc::new(Mutex::new(
                 AudioLevelMeter::new(
                     config.sample_rate().0,
@@ -469,6 +591,7 @@ impl AudioRecorder {
                 let level_meter_clone = level_meter.clone();
                 let stop_requested_clone = stop_requested.clone();
                 let callback_drained_clone = callback_drained.clone();
+                let capture_metrics_clone = capture_metrics.clone();
 
                 move |f32_samples: &[f32], i16_samples: &[i16]| {
                     // A panic in this real-time path would unwind into CPAL's
@@ -504,9 +627,8 @@ impl AudioRecorder {
                             }
                             return;
                         }
-                        // Calculate RMS for both level meter and silence detection
-                        let sum: f32 = f32_samples.iter().map(|x| x * x).sum();
-                        let rms = (sum / f32_samples.len() as f32).sqrt();
+                        // Reuse one traversal for callback RMS and recording-wide metrics.
+                        let rms = capture_metrics_clone.observe(f32_samples);
 
                         // Process with level meter
                         if let Ok(mut meter) = level_meter_clone.try_lock() {
@@ -701,16 +823,17 @@ impl AudioRecorder {
             // unfinalized-but-alive. See [`WRITER_JOIN_TIMEOUT`] and
             // [`join_writer_bounded`].
             let writer_result = join_writer_bounded(writer_handle, WRITER_JOIN_TIMEOUT);
-
-            writer_result?;
-
-            // Check if any errors occurred during recording after preserving writer integrity
-            // failures as the primary stop error.
-            if let Ok(guard) = error_occurred.lock() {
-                if let Some(error) = &*guard {
-                    return Err(error.clone());
-                }
-            }
+            let speech_detected = silence_detector
+                .lock()
+                .map(|detector| detector.speech_detected())
+                .unwrap_or(false);
+            let metrics = capture_metrics.snapshot(
+                config.sample_rate().0,
+                config.channels(),
+                speech_detected,
+            );
+            let device_error = error_occurred.lock().ok().and_then(|guard| guard.clone());
+            finish_capture(&last_capture_metrics, metrics, writer_result, device_error)?;
 
             // Return appropriate message based on stop reason
             match stop_reason {
@@ -787,6 +910,13 @@ impl AudioRecorder {
         } else {
             Err("Not recording".to_string())
         }
+    }
+
+    pub fn take_last_capture_metrics(&self) -> Option<CaptureAudioMetrics> {
+        self.last_capture_metrics
+            .lock()
+            .ok()
+            .and_then(|mut guard| guard.take())
     }
 
     pub fn wait_for_recording_end(&mut self) -> Result<String, String> {
@@ -1264,5 +1394,86 @@ mod tests {
 
         assert!(!recorder.recording_thread_finished());
         drop(recorder);
+    }
+    #[test]
+    fn capture_metrics_accumulate_rms_peak_and_duration_in_callback_pass() {
+        let metrics = CaptureMetricsAccumulator::default();
+
+        assert!((metrics.observe(&[0.5, -0.5]) - 0.5).abs() < f32::EPSILON);
+        assert!((metrics.observe(&[0.25, -0.25]) - 0.25).abs() < f32::EPSILON);
+
+        let snapshot = metrics.snapshot(2, 1, true);
+        assert_eq!(snapshot.sample_count, 4);
+        assert_eq!(snapshot.duration_ms, 2000);
+        assert!((snapshot.rms - 0.395_284_707_521_047_44).abs() < 1e-12);
+        assert!((snapshot.peak - 0.5).abs() < f32::EPSILON);
+        assert!(snapshot.speech_detected);
+    }
+
+    #[test]
+    fn callback_rms_preserves_previous_f32_calculation_bits() {
+        fn legacy_callback_rms(samples: &[f32]) -> f32 {
+            let sum: f32 = samples.iter().map(|sample| sample * sample).sum();
+            (sum / samples.len() as f32).sqrt()
+        }
+
+        let near_threshold = [
+            crate::audio::silence_detector::VOICE_RMS_THRESHOLD - 0.000_001,
+            crate::audio::silence_detector::VOICE_RMS_THRESHOLD + 0.000_001,
+            -0.004_999,
+            0.005_001,
+        ];
+        let signed_zero = [0.0, -0.0];
+
+        for samples in [&[][..], &near_threshold[..], &signed_zero[..]] {
+            let metrics = CaptureMetricsAccumulator::default();
+            assert_eq!(
+                metrics.observe(samples).to_bits(),
+                legacy_callback_rms(samples).to_bits()
+            );
+        }
+    }
+
+    #[test]
+    fn capture_metrics_survive_writer_and_device_errors() {
+        let expected = CaptureAudioMetrics {
+            sample_count: 16_000,
+            duration_ms: 1000,
+            rms: 0.1,
+            peak: 0.2,
+            sample_rate: 16_000,
+            channels: 1,
+            speech_detected: true,
+        };
+
+        for (writer_result, device_error, expected_error) in [
+            (Err("writer failed".to_string()), None, "writer failed"),
+            (Ok(()), Some("device failed".to_string()), "device failed"),
+        ] {
+            let slot = Mutex::new(None);
+            let error = finish_capture(&slot, expected, writer_result, device_error).unwrap_err();
+            assert_eq!(error, expected_error);
+            assert_eq!(slot.lock().ok().and_then(|guard| *guard), Some(expected));
+        }
+    }
+
+    #[test]
+    fn take_last_capture_metrics_consumes_snapshot() {
+        let recorder = AudioRecorder::new();
+        let expected = CaptureAudioMetrics {
+            sample_count: 16_000,
+            duration_ms: 1000,
+            rms: 0.1,
+            peak: 0.2,
+            sample_rate: 16_000,
+            channels: 1,
+            speech_detected: false,
+        };
+        if let Ok(mut guard) = recorder.last_capture_metrics.lock() {
+            *guard = Some(expected);
+        }
+
+        assert_eq!(recorder.take_last_capture_metrics(), Some(expected));
+        assert_eq!(recorder.take_last_capture_metrics(), None);
     }
 }

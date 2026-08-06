@@ -59,6 +59,7 @@ export type RecordingMode = 'toggle' | 'push_to_talk';
 export type PillIndicatorMode = 'never' | 'always' | 'when_recording';
 export type PillIndicatorPosition = 'top-left' | 'top-center' | 'top-right' | 'bottom-left' | 'bottom-center' | 'bottom-right';
 export type TranscriptionAcceleration = 'auto' | 'gpu' | 'cpu';
+export type UpdateChannel = 'stable' | 'beta';
 
 export interface AppSettings {
   hotkey: string;
@@ -81,7 +82,8 @@ export interface AppSettings {
   keep_transcription_in_clipboard?: boolean;
   // Audio feedback
   play_sound_on_recording?: boolean;
-  play_sound_on_recording_end?: boolean;
+  play_sound_on_transcription_complete?: boolean;
+  play_sound_on_paste_success?: boolean;
   // Pill indicator visibility mode
   pill_indicator_mode?: PillIndicatorMode;
   // Pill indicator screen position
@@ -98,6 +100,8 @@ export interface AppSettings {
   recording_retention_days?: number | null; // null = keep forever
   // Transcription acceleration (Windows only; stored-but-ignored on other platforms)
   transcription_acceleration?: TranscriptionAcceleration;
+  // Direct-install update feed (Store/MSIX ignores this setting)
+  update_channel?: UpdateChannel;
 }
 
 /** Writing-step outcome attached to a history row (mirrors the backend `writing` metadata blob). */
@@ -143,4 +147,6 @@ export interface LicenseStatus {
   license_type?: string;
   license_key?: string;
   expires_at?: string;
+  verification_state?: 'verified' | 'offline_grace' | 'needs_revalidation';
+  verification_expires_at?: string;
 }

@@ -13,10 +13,6 @@ echo "🔨 Building Swift Parakeet Sidecar..."
 BUILD_CONFIG="${1:-release}"
 echo "📦 Build configuration: $BUILD_CONFIG"
 
-# Clean previous builds (but keep dist directory for incremental builds)
-echo "🧹 Cleaning previous builds..."
-rm -rf "$SCRIPT_DIR/.build"
-
 # Build Swift package
 echo "🏗️  Compiling Swift package..."
 cd "$SCRIPT_DIR"

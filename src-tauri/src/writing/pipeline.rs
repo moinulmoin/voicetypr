@@ -55,6 +55,78 @@ pub struct EffectiveConfig {
     pub category_hint: Option<AppCategory>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum AiFormattingOutcome {
+    Disabled,
+    ModeSkipped,
+    LiteralPreserved,
+    Applied,
+    Unchanged,
+    Fallback,
+}
+
+impl AiFormattingOutcome {
+    fn as_log_value(self) -> &'static str {
+        match self {
+            Self::Disabled => "disabled",
+            Self::ModeSkipped => "mode_skipped",
+            Self::LiteralPreserved => "literal_preserved",
+            Self::Applied => "applied",
+            Self::Unchanged => "unchanged",
+            Self::Fallback => "fallback",
+        }
+    }
+}
+
+fn preset_log_value(preset: EnhancementPreset) -> &'static str {
+    match preset {
+        EnhancementPreset::PersonalDictation => "personal_dictation",
+        EnhancementPreset::CleanDictation => "clean_dictation",
+        EnhancementPreset::Writing => "writing",
+        EnhancementPreset::Notes => "notes",
+        EnhancementPreset::Message => "message",
+        EnhancementPreset::Code => "code",
+    }
+}
+
+fn classify_ai_formatting_outcome(
+    ai_enabled: bool,
+    preset: EnhancementPreset,
+    literal_locked: bool,
+    ai_applied: bool,
+    needs_output_language_transform: bool,
+    ai_failed: bool,
+) -> AiFormattingOutcome {
+    if !ai_enabled {
+        AiFormattingOutcome::Disabled
+    } else if preset == EnhancementPreset::PersonalDictation {
+        AiFormattingOutcome::ModeSkipped
+    } else if literal_locked {
+        AiFormattingOutcome::LiteralPreserved
+    } else if ai_failed || (needs_output_language_transform && !ai_applied) {
+        AiFormattingOutcome::Fallback
+    } else if ai_applied {
+        AiFormattingOutcome::Applied
+    } else {
+        AiFormattingOutcome::Unchanged
+    }
+}
+
+fn log_ai_formatting_decision(
+    ai_enabled: bool,
+    preset: EnhancementPreset,
+    attempted: bool,
+    outcome: AiFormattingOutcome,
+) {
+    log::info!(
+        "AI_FORMATTING_DECISION | enabled={}, mode={}, attempted={}, outcome={}",
+        ai_enabled,
+        preset_log_value(preset),
+        attempted,
+        outcome.as_log_value()
+    );
+}
+
 struct PipelineConfigInputs {
     global_preset: EnhancementPreset,
     final_text_language: String,
@@ -484,6 +556,19 @@ pub async fn process_transcription(
         && pipeline_config.preset != EnhancementPreset::PersonalDictation;
 
     if needs_output_language_transform && !can_run_ai_formatting && !library_result.literal_locked {
+        log_ai_formatting_decision(
+            ai_enabled,
+            pipeline_config.preset,
+            false,
+            classify_ai_formatting_outcome(
+                ai_enabled,
+                pipeline_config.preset,
+                library_result.literal_locked,
+                false,
+                needs_output_language_transform,
+                false,
+            ),
+        );
         return Err(WritingError::OutputLanguageRequiresAi);
     }
 
@@ -491,6 +576,19 @@ pub async fn process_transcription(
         && !pipeline_config.ai_effective
         && !library_result.literal_locked
     {
+        log_ai_formatting_decision(
+            ai_enabled,
+            pipeline_config.preset,
+            false,
+            classify_ai_formatting_outcome(
+                ai_enabled,
+                pipeline_config.preset,
+                library_result.literal_locked,
+                false,
+                needs_output_language_transform,
+                false,
+            ),
+        );
         return Err(WritingError::Config(
             "This writing mode requires AI formatting. Enable AI formatting in settings or switch to Personal Dictation.".into(),
         ));
@@ -512,25 +610,37 @@ pub async fn process_transcription(
         }
         library_result.text.clone()
     } else if should_run_ai {
-        let (text, error, duration_ms) = resolve_smart_formatting_outcome(
-            run_smart_formatting(SmartFormattingRequest {
-                app,
-                text: &library_result.text,
-                transcript_language: transcript_language.clone(),
-                output_language: &mut output_language,
-                config: &pipeline_config,
-                settings: &settings,
-                needs_output_language_transform,
-                applied_operations: &mut applied_operations,
-                warnings: &mut warnings,
-            })
-            .await,
+        let smart_formatting = run_smart_formatting(SmartFormattingRequest {
+            app,
+            text: &library_result.text,
+            transcript_language: transcript_language.clone(),
+            output_language: &mut output_language,
+            config: &pipeline_config,
+            settings: &settings,
+            needs_output_language_transform,
+            applied_operations: &mut applied_operations,
+            warnings: &mut warnings,
+        })
+        .await;
+        let (text, error, duration_ms) = match resolve_smart_formatting_outcome(
+            smart_formatting,
             &library_result.text,
             needs_output_language_transform,
             transcript_language.as_deref(),
             &output_language,
             &mut warnings,
-        )?;
+        ) {
+            Ok(outcome) => outcome,
+            Err(error) => {
+                log_ai_formatting_decision(
+                    ai_enabled,
+                    pipeline_config.preset,
+                    true,
+                    AiFormattingOutcome::Fallback,
+                );
+                return Err(error);
+            }
+        };
         ai_error = error;
         ai_polish_ms = duration_ms;
         if let Some(duration_ms) = ai_polish_ms {
@@ -552,10 +662,25 @@ pub async fn process_transcription(
     );
     final_text = guarded_text;
     applied_operations.extend(guard_operations);
+    let ai_applied = should_run_ai && ai_error.is_none() && final_text != library_result.text;
+    let ai_outcome = classify_ai_formatting_outcome(
+        ai_enabled,
+        pipeline_config.preset,
+        library_result.literal_locked,
+        ai_applied,
+        needs_output_language_transform,
+        ai_error.is_some(),
+    );
+    log_ai_formatting_decision(
+        ai_enabled,
+        pipeline_config.preset,
+        should_run_ai,
+        ai_outcome,
+    );
 
     Ok(WritingResult {
         raw_text: transcription.raw_text.clone(),
-        ai_applied: should_run_ai && ai_error.is_none() && final_text != library_result.text,
+        ai_applied,
         final_text,
         output_language,
         mode: pipeline_config.preset,
@@ -691,6 +816,87 @@ mod tests {
 
         assert_eq!(effective.preset, EnhancementPreset::Message);
         assert!(effective.preset.requires_ai_formatting());
+    }
+
+    #[test]
+    fn ai_formatting_outcome_explains_each_decision_path() {
+        assert_eq!(
+            classify_ai_formatting_outcome(
+                false,
+                EnhancementPreset::PersonalDictation,
+                false,
+                false,
+                false,
+                false,
+            ),
+            AiFormattingOutcome::Disabled
+        );
+        assert_eq!(
+            classify_ai_formatting_outcome(
+                true,
+                EnhancementPreset::PersonalDictation,
+                false,
+                false,
+                false,
+                false,
+            ),
+            AiFormattingOutcome::ModeSkipped
+        );
+        assert_eq!(
+            classify_ai_formatting_outcome(
+                true,
+                EnhancementPreset::CleanDictation,
+                true,
+                false,
+                false,
+                false,
+            ),
+            AiFormattingOutcome::LiteralPreserved
+        );
+        assert_eq!(
+            classify_ai_formatting_outcome(
+                true,
+                EnhancementPreset::CleanDictation,
+                false,
+                true,
+                false,
+                false,
+            ),
+            AiFormattingOutcome::Applied
+        );
+        assert_eq!(
+            classify_ai_formatting_outcome(
+                true,
+                EnhancementPreset::CleanDictation,
+                false,
+                false,
+                false,
+                false,
+            ),
+            AiFormattingOutcome::Unchanged
+        );
+        assert_eq!(
+            classify_ai_formatting_outcome(
+                true,
+                EnhancementPreset::CleanDictation,
+                false,
+                false,
+                false,
+                true,
+            ),
+            AiFormattingOutcome::Fallback
+        );
+        assert_eq!(
+            classify_ai_formatting_outcome(
+                true,
+                EnhancementPreset::CleanDictation,
+                false,
+                false,
+                true,
+                false,
+            ),
+            AiFormattingOutcome::Fallback
+        );
     }
 
     #[test]

@@ -4,6 +4,7 @@ use crate::commands::key_normalizer::{
 };
 use crate::commands::remote::{resolve_shareable_model_config, save_remote_settings};
 use crate::commands::shortcuts;
+use crate::commands::updater::UpdateChannel;
 use crate::menu::should_include_remote_connection_in_tray;
 use crate::parakeet::models::AVAILABLE_MODELS;
 use crate::parakeet::ParakeetManager;
@@ -70,8 +71,12 @@ pub struct Settings {
     pub ptt_hotkey: Option<String>,
     pub keep_transcription_in_clipboard: bool,
     // Audio feedback
+    #[serde(default = "default_true")]
     pub play_sound_on_recording: bool,
-    pub play_sound_on_recording_end: bool,
+    #[serde(default = "default_true")]
+    pub play_sound_on_transcription_complete: bool,
+    #[serde(default = "default_true")]
+    pub play_sound_on_paste_success: bool,
     // Pill indicator visibility mode: "never", "always", or "when_recording"
     pub pill_indicator_mode: String,
     // Pill indicator screen position
@@ -91,6 +96,9 @@ pub struct Settings {
     // Transcription hardware acceleration: "auto" | "gpu" | "cpu"
     #[serde(default = "default_transcription_acceleration")]
     pub transcription_acceleration: String,
+    // Direct-install updater channel: "stable" | "beta"
+    #[serde(default = "default_update_channel")]
+    pub update_channel: String,
 }
 
 impl Default for Settings {
@@ -113,8 +121,9 @@ impl Default for Settings {
             use_different_ptt_key: false,         // Default to using same key
             ptt_hotkey: Some("Alt+Space".to_string()), // Default PTT key
             keep_transcription_in_clipboard: false, // Default to restoring clipboard after paste
-            play_sound_on_recording: true,        // Default to playing sound on recording start
-            play_sound_on_recording_end: true,    // Default to playing sound on recording end
+            play_sound_on_recording: true,
+            play_sound_on_transcription_complete: true,
+            play_sound_on_paste_success: true,
             pill_indicator_mode: "when_recording".to_string(), // Default to showing only when recording
             pill_indicator_position: "bottom-center".to_string(), // Default to bottom center of screen
             pill_indicator_offset: DEFAULT_INDICATOR_OFFSET,
@@ -125,12 +134,28 @@ impl Default for Settings {
             save_recordings: false,              // Default to not saving recordings
             recording_retention_days: Some(30),  // Default cleanup period when saving is enabled
             transcription_acceleration: "auto".to_string(),
+            update_channel: default_update_channel(),
         }
     }
 }
 
+fn default_update_channel() -> String {
+    UpdateChannel::Stable.as_str().to_string()
+}
+
 fn default_transcription_acceleration() -> String {
     "auto".to_string()
+}
+
+fn default_true() -> bool {
+    true
+}
+
+pub fn resolve_transcription_complete_sound(
+    stored: Option<bool>,
+    legacy_recording_end: Option<bool>,
+) -> bool {
+    stored.or(legacy_recording_end).unwrap_or(true)
 }
 
 pub fn normalize_stored_transcription_acceleration(value: Option<&str>) -> String {
@@ -378,6 +403,9 @@ pub async fn get_settings(app: AppHandle) -> Result<Settings, String> {
         .and_then(|v| v.as_str().map(|s| s.to_string()));
     let final_text_language =
         normalize_final_text_language(stored_final_text_language.as_deref(), &transcription_task);
+    let stored_update_channel = store
+        .get("update_channel")
+        .and_then(|value| value.as_str().map(str::to_owned));
 
     let settings = Settings {
         hotkey: store
@@ -449,10 +477,18 @@ pub async fn get_settings(app: AppHandle) -> Result<Settings, String> {
             .get("play_sound_on_recording")
             .and_then(|v| v.as_bool())
             .unwrap_or_else(|| Settings::default().play_sound_on_recording),
-        play_sound_on_recording_end: store
-            .get("play_sound_on_recording_end")
+        play_sound_on_transcription_complete: resolve_transcription_complete_sound(
+            store
+                .get("play_sound_on_transcription_complete")
+                .and_then(|v| v.as_bool()),
+            store
+                .get("play_sound_on_recording_end")
+                .and_then(|v| v.as_bool()),
+        ),
+        play_sound_on_paste_success: store
+            .get("play_sound_on_paste_success")
             .and_then(|v| v.as_bool())
-            .unwrap_or_else(|| Settings::default().play_sound_on_recording_end),
+            .unwrap_or_else(|| Settings::default().play_sound_on_paste_success),
         // Migration: check for new pill_indicator_mode first, then fall back to old show_pill_indicator
         pill_indicator_mode: resolve_pill_indicator_mode(
             store
@@ -494,6 +530,9 @@ pub async fn get_settings(app: AppHandle) -> Result<Settings, String> {
                 .and_then(|v| v.as_str().map(|s| s.to_string()))
                 .as_deref(),
         ),
+        update_channel: UpdateChannel::from_stored(stored_update_channel.as_deref())
+            .as_str()
+            .to_string(),
     };
     let normalized_speech_language = normalize_speech_language_for_model(
         &settings.current_model_engine,
@@ -586,6 +625,7 @@ pub async fn save_settings(app: AppHandle, settings: Settings) -> Result<(), Str
     );
     let normalized_transcription_acceleration =
         normalize_stored_transcription_acceleration(Some(&settings.transcription_acceleration));
+    let normalized_update_channel = UpdateChannel::from_stored(Some(&settings.update_channel));
 
     let normalized_hotkey = normalize_shortcut_keys(&settings.hotkey);
     if !normalized_hotkey.is_empty() {
@@ -682,9 +722,14 @@ pub async fn save_settings(app: AppHandle, settings: Settings) -> Result<(), Str
         json!(settings.play_sound_on_recording),
     );
     store.set(
-        "play_sound_on_recording_end",
-        json!(settings.play_sound_on_recording_end),
+        "play_sound_on_transcription_complete",
+        json!(settings.play_sound_on_transcription_complete),
     );
+    store.set(
+        "play_sound_on_paste_success",
+        json!(settings.play_sound_on_paste_success),
+    );
+    store.delete("play_sound_on_recording_end");
     store.set("pill_indicator_mode", json!(settings.pill_indicator_mode));
     store.set(
         "pill_indicator_position",
@@ -708,6 +753,7 @@ pub async fn save_settings(app: AppHandle, settings: Settings) -> Result<(), Str
         "transcription_acceleration",
         json!(&normalized_transcription_acceleration),
     );
+    store.set("update_channel", json!(normalized_update_channel.as_str()));
 
     // Network sharing settings
     if let Some(port) = settings.sharing_port {
@@ -1510,7 +1556,11 @@ pub async fn test_transcription_acceleration(
         let mode =
             normalize_stored_transcription_acceleration(Some(&settings.transcription_acceleration));
         let client = app.state::<crate::whisper::gpu_sidecar::GpuSidecarClient>();
-        client.probe(&app, &model_path, &mode).await?;
+        // Unload the failed sidecar (mirror transcription/warm-preload) so its model doesn't stay resident.
+        if let Err(error) = client.probe(&app, &model_path, &mode).await {
+            client.abort_active_process().await;
+            return Err(error);
+        }
         Ok(client.status().await)
     }
 }

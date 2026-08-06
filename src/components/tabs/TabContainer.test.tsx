@@ -49,6 +49,10 @@ vi.mock('./HelpTab', () => ({
   HelpTab: () => <div data-testid="help-tab">Help</div>
 }));
 
+vi.mock('../sections/ReportProblemSection', () => ({
+  ReportProblemSection: () => <div data-testid="report-problem-tab">Report problem</div>
+}));
+
 describe('TabContainer', () => {
   it('renders correct tab based on activeSection', () => {
     const { rerender } = render(<TabContainer activeSection="overview" />);
@@ -75,6 +79,9 @@ describe('TabContainer', () => {
     
     rerender(<TabContainer activeSection="help" />);
     expect(screen.getByTestId('help-tab')).toBeInTheDocument();
+
+    rerender(<TabContainer activeSection="report-problem" />);
+    expect(screen.getByTestId('report-problem-tab')).toBeInTheDocument();
   });
 
   it('renders overview tab for unknown sections', () => {

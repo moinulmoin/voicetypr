@@ -1,10 +1,9 @@
-import { check, type Update } from '@tauri-apps/plugin-updater';
 import { relaunch } from '@tauri-apps/plugin-process';
 import { ask } from '@tauri-apps/plugin-dialog';
 import { sendNotification, isPermissionGranted, requestPermission } from '@tauri-apps/plugin-notification';
 import { invoke } from '@tauri-apps/api/core';
 import { toast } from 'sonner';
-import type { AppSettings } from '@/types';
+import type { AppSettings, UpdateChannel } from '@/types';
 import { createLogger } from "@/lib/logger";
 import {
   isStoreDistribution,
@@ -16,6 +15,12 @@ const log = createLogger("update");
 const UPDATE_CHECK_INTERVAL = 24 * 60 * 60 * 1000; // 24 hours in milliseconds
 const LAST_UPDATE_CHECK_KEY = 'last_update_check';
 const JUST_UPDATED_KEY = 'just_updated_version';
+
+export interface AppUpdateInfo {
+  version: string;
+  body: string;
+  channel: UpdateChannel;
+}
 
 export class UpdateService {
   private static instance: UpdateService;
@@ -234,12 +239,12 @@ export class UpdateService {
       }
 
       log.debug('Checking for updates in background...');
-      const update = await check();
+      const update = await invoke<AppUpdateInfo | null>('check_for_app_update');
       
       // Update last check time
       localStorage.setItem(LAST_UPDATE_CHECK_KEY, Date.now().toString());
       
-      if (update?.available) {
+      if (update) {
         await this.handleUpdateAvailable(update, true);
       }
     } catch (error) {
@@ -268,12 +273,12 @@ export class UpdateService {
 
       toast.info('Checking for updates...');
       
-      const update = await check();
+      const update = await invoke<AppUpdateInfo | null>('check_for_app_update');
       
       // Update last check time
       localStorage.setItem(LAST_UPDATE_CHECK_KEY, Date.now().toString());
       
-      if (update?.available) {
+      if (update) {
         await this.handleUpdateAvailable(update, false);
       } else {
         toast.success("You're on the latest version!");
@@ -289,7 +294,7 @@ export class UpdateService {
   /**
    * Handle when an update is available
    */
-  private async handleUpdateAvailable(update: Update, isBackgroundCheck: boolean): Promise<void> {
+  private async handleUpdateAvailable(update: AppUpdateInfo, isBackgroundCheck: boolean): Promise<void> {
     if (isBackgroundCheck) {
       toast.info(`Update ${update.version} is available. Open Settings to install it.`);
       await this.sendSystemNotification(
@@ -305,7 +310,7 @@ export class UpdateService {
   /**
    * Show update dialog and handle user response
    */
-  private async showUpdateDialog(update: Update): Promise<void> {
+  private async showUpdateDialog(update: AppUpdateInfo): Promise<void> {
     const yes = await ask(
       `Update ${update.version} is available!\n\nRelease notes:\n${update.body}\n\nDo you want to download and install it now?`,
       {
@@ -320,7 +325,9 @@ export class UpdateService {
       toast.info('Downloading update...');
       
       try {
-        await update.downloadAndInstall();
+        await invoke('install_app_update', {
+          expectedVersion: update.version,
+        });
         // Notify if relaunch will be deferred due to active session
         if (this.isSessionActive) {
           await this.sendSystemNotification('Update Ready', 'Voicetypr will restart when recording ends');
