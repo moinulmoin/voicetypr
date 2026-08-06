@@ -30,7 +30,13 @@ import {
 } from "@/types/ai";
 import type { WritingSettings } from "@/types/writing";
 import { defaultWritingSettings, mergeWritingSettings } from "@/types/writing";
-import type { AiProvider, AIProviderConfig, AIProviderModel, AgentCliProbe } from "@/types/providers";
+import type {
+  AiProvider,
+  AIProviderConfig,
+  AIProviderModel,
+  AgentCliProbe,
+  AgentCliProbeState,
+} from "@/types/providers";
 import { toProviderConfig } from "@/types/providers";
 import { useAllProviderModels } from "@/hooks/useProviderModels";
 import { hasApiKey, removeApiKey, saveApiKey, getApiKey } from "@/utils/keyring";
@@ -72,7 +78,9 @@ const formatModelCost = (model: AIProviderModel) => {
 };
 
 const modelMatchesQuery = (model: AIProviderModel, query: string) =>
-  model.id.toLowerCase().includes(query) || model.name.toLowerCase().includes(query);
+  model.id.toLowerCase().includes(query) ||
+  model.name.toLowerCase().includes(query) ||
+  Boolean(model.sourceProvider?.toLowerCase().includes(query));
 
 const POLISH_RESHAPE_MIGRATION_NOTICE_KEY = "polish_reshape_migration_notified";
 const RESHAPING_PRESETS = new Set<EnhancementPreset>([
@@ -96,8 +104,40 @@ const GUIDED_PROVIDER_LABELS: Record<(typeof GUIDED_PROVIDER_IDS)[number], strin
 /// Availability is probed via `probe_agent_cli`, not `hasApiKey`.
 const AGENT_CLI_PROVIDER_IDS = ["claude-code", "pi", "omp"] as const;
 
+const CLAUDE_CODE_MODELS: AIProviderModel[] = [
+  { id: "haiku", name: "Haiku", recommended: true, sourceProvider: null, cliDefault: false },
+  { id: "sonnet", name: "Sonnet", recommended: false, sourceProvider: null, cliDefault: false },
+  { id: "opus", name: "Opus", recommended: false, sourceProvider: null, cliDefault: false },
+];
+
+const CLI_DEFAULT_MODEL: AIProviderModel = {
+  id: "",
+  name: "CLI default",
+  recommended: true,
+  cliDefault: true,
+};
+
 const isAgentCliProvider = (providerId: string): boolean =>
   (AGENT_CLI_PROVIDER_IDS as readonly string[]).includes(providerId);
+
+const getAgentCliProbeState = (probe?: AgentCliProbe): AgentCliProbeState => {
+  if (probe?.state) {
+    return probe.state;
+  }
+  if (probe?.installed && probe?.authed) {
+    return "ready";
+  }
+  if (probe?.installed) {
+    return "not_authenticated";
+  }
+  return "missing";
+};
+
+const isAgentCliReady = (probe?: AgentCliProbe): boolean =>
+  getAgentCliProbeState(probe) === "ready";
+
+const isDefaultAgentCliModel = (model: AIProviderModel) =>
+  Boolean(model.cliDefault) || model.id === "";
 
 const isGuidedProviderId = (
   providerId: string,
@@ -219,9 +259,8 @@ export function EnhancementsSection() {
 
       await Promise.all(
         allProviders.map(async (providerId) => {
-          // Agent-CLI providers (Claude Code) are subscription-authenticated
-          // local CLIs — availability comes from probe_agent_cli (binary
-          // installed + authed), NOT hasApiKey. They have no API key to cache.
+          // Agent-CLI providers are subscription-authenticated local CLIs.
+          // Availability comes from probe_agent_cli, NOT hasApiKey.
           if (isAgentCliProvider(providerId)) {
             try {
               const probe = await invoke<AgentCliProbe>(
@@ -229,10 +268,15 @@ export function EnhancementsSection() {
                 { provider: providerId },
               );
               agentCliStatusMap[providerId] = probe;
-              keyStatus[providerId] = Boolean(probe.installed && probe.authed);
+              keyStatus[providerId] = isAgentCliReady(probe);
             } catch (error) {
               log.error(`Failed to probe ${providerId} CLI:`, error);
-              agentCliStatusMap[providerId] = { installed: false, authed: false, detail: "" };
+              agentCliStatusMap[providerId] = {
+                state: "incompatible",
+                installed: false,
+                authed: false,
+                detail: "",
+              };
               keyStatus[providerId] = false;
             }
             return;
@@ -291,8 +335,11 @@ export function EnhancementsSection() {
       }
       setAiModelNeedsReselection(Boolean(loadedAISettingsResponse.aiModelNeedsReselection));
       setAISettings(loadedAISettings);
-
-      if (readiness?.ai_ready && loadedAISettings.provider) {
+      if (
+        readiness?.ai_ready &&
+        loadedAISettings.provider &&
+        !isAgentCliProvider(loadedAISettings.provider)
+      ) {
         setProviderApiKeys((prev) => ({
           ...prev,
           [loadedAISettings.provider]: true,
@@ -300,7 +347,15 @@ export function EnhancementsSection() {
       }
 
       listedProviders
-        .filter((provider) => !provider.isCustom && !isAgentCliProvider(provider.id))
+        .filter((provider) => {
+          if (provider.isCustom) {
+            return false;
+          }
+          if (!isAgentCliProvider(provider.id)) {
+            return true;
+          }
+          return isAgentCliReady(agentCliStatusMap[provider.id]);
+        })
         .forEach((provider) => {
           fetchModels(provider.id);
         });
@@ -322,31 +377,54 @@ export function EnhancementsSection() {
       const probe = await invoke<AgentCliProbe>("probe_agent_cli", {
         provider: provider.id,
       });
+      const state = getAgentCliProbeState(probe);
       setAgentCliStatus((prev) => ({ ...prev, [provider.id]: probe }));
       setProviderApiKeys((prev) => ({
         ...prev,
-        [provider.id]: Boolean(probe.installed && probe.authed),
+        [provider.id]: state === "ready",
       }));
-      if (probe.installed && probe.authed) {
+
+      if (state === "ready") {
+        await fetchModels(provider.id);
         toast.success(`${provider.name}: signed in`);
-      } else if (probe.installed) {
-        toast.info(`${provider.name}: still not signed in`);
       } else {
-        toast.info(`${provider.name}: CLI not installed`);
+        if (state === "not_authenticated") {
+          toast.info(`${provider.name}: sign in, then Refresh.`);
+        } else if (state === "missing") {
+          toast.info(
+            `${provider.name}: install it in an existing PATH directory, then Refresh. Restart only if PATH itself changed.`,
+          );
+        } else if (state === "unsafe_launcher") {
+          toast.info(
+            `${provider.name}: the launcher could not be used safely. Install a compatible launcher in an existing PATH directory, then Refresh.`,
+          );
+        } else {
+          toast.info(
+            `${provider.name}: this CLI is incompatible. Install a compatible version in an existing PATH directory, then Refresh.`,
+          );
+        }
       }
     } catch (error) {
       log.error(`Failed to probe ${provider.name} CLI:`, error);
+      clearModels(provider.id);
       setAgentCliStatus((prev) => ({
         ...prev,
-        [provider.id]: { installed: false, authed: false, detail: "" },
+        [provider.id]: {
+          state: "incompatible",
+          installed: false,
+          authed: false,
+          detail: "",
+        },
       }));
       setProviderApiKeys((prev) => ({ ...prev, [provider.id]: false }));
-      toast.error(`Could not check ${provider.name} sign-in.`);
+      toast.info(
+        `${provider.name}: unable to use this CLI. Install a compatible version in an existing PATH directory, then Refresh.`,
+      );
     } finally {
       agentCliProbingRef.current.delete(provider.id);
       setAgentCliProbing((prev) => ({ ...prev, [provider.id]: false }));
     }
-  }, []);
+  }, [clearModels, fetchModels]);
 
   useEffect(() => {
     if (!settingsLoaded) {
@@ -454,11 +532,6 @@ export function EnhancementsSection() {
       },
     );
 
-    const unlistenFormattingError = listen<string>("formatting-error", async (event) => {
-      const msg = event.payload || "Polish failed";
-      toast.error(typeof msg === "string" ? msg : "Polish failed");
-    });
-
     const unlistenAiEnabledChanged = listen<boolean>("ai-enabled-changed", (event) => {
       setAISettings((prev) => ({ ...prev, enabled: event.payload }));
     });
@@ -468,7 +541,6 @@ export function EnhancementsSection() {
         unlistenReady,
         unlistenApiKey,
         unlistenApiKeyRemoved,
-        unlistenFormattingError,
         unlistenAiEnabledChanged,
       ]).then((fns) => {
         fns.forEach((fn) => fn());
@@ -538,13 +610,32 @@ export function EnhancementsSection() {
     }
   };
 
+  const getDisplayModels = useCallback(
+    (providerId: string): AIProviderModel[] => {
+      const models = getModels(providerId);
+      if (isAgentCliReady(agentCliStatus[providerId]) && models.length === 0) {
+        if (providerId === "claude-code") {
+          return CLAUDE_CODE_MODELS;
+        }
+        if (providerId === "pi" || providerId === "omp") {
+          return [CLI_DEFAULT_MODEL];
+        }
+      }
+      return models;
+    },
+    [agentCliStatus, getModels],
+  );
+
   const resolveRecommendedModel = async (providerId: string) => {
-    const cachedModels = getModels(providerId);
+    const cachedModels = getDisplayModels(providerId);
     let models = cachedModels;
 
     if (!cachedModels.some((model) => model.recommended)) {
       const fetchedModels = await fetchModels(providerId);
-      models = fetchedModels?.length > 0 ? fetchedModels : getModels(providerId);
+      models = fetchedModels?.length > 0 ? fetchedModels : getDisplayModels(providerId);
+    }
+    if (providerId === "pi" || providerId === "omp") {
+      return models.find((model) => model.cliDefault) ?? CLI_DEFAULT_MODEL;
     }
 
     return models.find((model) => model.recommended) ?? null;
@@ -561,18 +652,26 @@ export function EnhancementsSection() {
       model: modelId,
     });
 
-    setAISettings((prev) => ({
-      ...prev,
-      enabled: true,
-      provider: providerId,
-      model: modelId,
-      hasApiKey: true,
-      modelsByProvider: {
+    setAISettings((prev) => {
+      const nextModelsByProvider = {
         ...prev.modelsByProvider,
         ...modelsByProvider,
-        [providerId]: modelId,
-      },
-    }));
+      };
+      if (modelId) {
+        nextModelsByProvider[providerId] = modelId;
+      } else {
+        delete nextModelsByProvider[providerId];
+      }
+
+      return {
+        ...prev,
+        enabled: true,
+        provider: providerId,
+        model: modelId,
+        hasApiKey: true,
+        modelsByProvider: nextModelsByProvider,
+      };
+    });
     setProviderApiKeys((prev) => ({ ...prev, [providerId]: true }));
     setAiModelNeedsReselection(false);
 
@@ -585,15 +684,6 @@ export function EnhancementsSection() {
     providerId: string,
     modelsByProvider: Record<string, string>,
   ) => {
-    // Agent-CLI providers (Claude Code) carry no catalog model — the CLI picks
-    // its own — so skip recommended-model resolution and enable directly with
-    // an empty model (the backend accepts this for agent_cli runtimes).
-    if (isAgentCliProvider(providerId)) {
-      await enablePolishForProviderModel(providerId, "", modelsByProvider);
-      toast.success("Polish on");
-      return true;
-    }
-
     const recommendedModel = await resolveRecommendedModel(providerId);
     if (!recommendedModel) {
       setAdvancedOpen(true);
@@ -676,17 +766,23 @@ export function EnhancementsSection() {
 
     if (!providerApiKeys[providerId]) {
       if (isAgentCliProvider(providerId)) {
-        // CLI providers have NO API key — never open the key modal. When not
-        // ready, guide the user to install / sign in to their CLI (the card
-        // badge + Refresh button handle re-checking).
         const probe = agentCliStatus[providerId];
+        const state = getAgentCliProbeState(probe);
         const label =
           (GUIDED_PROVIDER_LABELS as Record<string, string>)[providerId] ?? providerId;
-        toast.info(
-          probe?.installed
-            ? `Sign in to ${label} (run it in your terminal), then Refresh.`
-            : `Install ${label} first, then Refresh.`,
-        );
+        const refreshNote =
+          "Refresh can detect installs in existing PATH directories; restart only if PATH itself changed.";
+        let message: string;
+        if (state === "not_authenticated") {
+          message = `Sign in to ${label} in your terminal, then Refresh. ${refreshNote}`;
+        } else if (state === "missing") {
+          message = `Install ${label} in an existing PATH directory, then Refresh. ${refreshNote}`;
+        } else if (state === "unsafe_launcher") {
+          message = `${label} could not be used safely. Install a compatible launcher in an existing PATH directory, then Refresh.`;
+        } else {
+          message = `${label} is incompatible. Install a compatible version in an existing PATH directory, then Refresh.`;
+        }
+        toast.info(message);
         setGuidedSetupProvider(null);
         return;
       }
@@ -792,17 +888,23 @@ export function EnhancementsSection() {
         model: modelId,
       });
 
-      setAISettings((prev) => ({
-        ...prev,
-        enabled: shouldEnable,
-        provider: providerId,
-        model: modelId,
-        hasApiKey: hasKey,
-        modelsByProvider: {
-          ...prev.modelsByProvider,
-          [providerId]: modelId,
-        },
-      }));
+      setAISettings((prev) => {
+        const nextModelsByProvider = { ...prev.modelsByProvider };
+        if (modelId) {
+          nextModelsByProvider[providerId] = modelId;
+        } else {
+          delete nextModelsByProvider[providerId];
+        }
+
+        return {
+          ...prev,
+          enabled: shouldEnable,
+          provider: providerId,
+          model: modelId,
+          hasApiKey: hasKey,
+          modelsByProvider: nextModelsByProvider,
+        };
+      });
       setAiModelNeedsReselection(false);
       if (shouldEnable) {
         await loadEnhancementOptions(true);
@@ -835,8 +937,10 @@ export function EnhancementsSection() {
 
   const activeModelName = isUsingCustomProvider
     ? customModelName
-    : getModels(aiSettings.provider).find((model) => model.id === aiSettings.model)?.name ||
-      humanizeModelId(aiSettings.model);
+    : !aiSettings.model && isAgentCliProvider(aiSettings.provider)
+      ? "CLI default"
+      : getDisplayModels(aiSettings.provider).find((model) => model.id === aiSettings.model)?.name ||
+        humanizeModelId(aiSettings.model);
   const activeProviderName =
     providers.find((provider) => provider.id === aiSettings.provider)?.name ||
     aiSettings.provider;
@@ -858,12 +962,12 @@ export function EnhancementsSection() {
       const providerMatches = provider.name.toLowerCase().includes(providerQuery);
       const customModelMatches =
         provider.isCustom && customModelName.toLowerCase().includes(providerQuery);
-      const modelsMatch = getModels(provider.id).some((model) =>
+      const modelsMatch = getDisplayModels(provider.id).some((model) =>
         modelMatchesQuery(model, providerQuery),
       );
       return providerMatches || customModelMatches || modelsMatch;
     });
-  }, [customModelName, getModels, providerQuery, providers]);
+  }, [customModelName, getDisplayModels, providerQuery, providers]);
 
   const hasLoadingProviders = providers.some((provider) => isModelsLoading(provider.id));
   const showGuidedSetup = !aiSettings.enabled && !hasSelectedModel;
@@ -1024,7 +1128,12 @@ export function EnhancementsSection() {
         )}
 
         {filteredProviders.map((provider) => {
-          const hasKey = providerApiKeys[provider.id] || false;
+          const agentCli = isAgentCliProvider(provider.id);
+          const agentCliState = agentCli
+            ? getAgentCliProbeState(agentCliStatus[provider.id])
+            : null;
+          const agentCliReady = agentCliState === "ready";
+          const hasKey = agentCli ? agentCliReady : providerApiKeys[provider.id] || false;
           const isCustomActive = Boolean(
             provider.isCustom &&
               aiSettings.provider === "custom" &&
@@ -1036,9 +1145,13 @@ export function EnhancementsSection() {
             : Boolean(aiSettings.provider === provider.id && aiSettings.enabled);
           const selectedModel = provider.isCustom
             ? aiSettings.modelsByProvider.custom || customModelName || null
-            : aiSettings.modelsByProvider[provider.id] ||
-              (aiSettings.provider === provider.id ? aiSettings.model : null);
-          const models = getModels(provider.id);
+            : Object.prototype.hasOwnProperty.call(aiSettings.modelsByProvider, provider.id)
+              ? aiSettings.modelsByProvider[provider.id]
+              : aiSettings.provider === provider.id
+                ? aiSettings.model
+                : null;
+          const fetchedModels = getModels(provider.id);
+          const models = getDisplayModels(provider.id);
           const providerMatches = provider.name.toLowerCase().includes(providerQuery);
           const displayModels =
             providerQuery && !providerMatches
@@ -1047,14 +1160,50 @@ export function EnhancementsSection() {
           const recommendedModels = displayModels.filter((model) => model.recommended);
           const allModels = displayModels.filter((model) => !model.recommended);
           const selectedModelData = models.find((model) => model.id === selectedModel);
-          const showModelPicker = !provider.isCustom && (hasKey || Boolean(providerQuery));
-          const modelGroups = ([
-            ["Recommended", recommendedModels],
-            ["All", allModels],
-          ] satisfies Array<[string, AIProviderModel[]]>).filter(
-            ([, groupModels]) => groupModels.length > 0,
-          );
+          const showModelPicker =
+            !provider.isCustom &&
+            (agentCli ? agentCliReady : hasKey || Boolean(providerQuery));
+          const sourceGroups = new Map<string, AIProviderModel[]>();
+          displayModels
+            .filter((model) => !isDefaultAgentCliModel(model))
+            .forEach((model) => {
+              const label = model.sourceProvider?.trim() || "Discovered";
+              const group = sourceGroups.get(label) || [];
+              group.push(model);
+              sourceGroups.set(label, group);
+            });
+          const unfilteredAgentCliGroups: Array<[string, AIProviderModel[]]> = [
+            ["CLI default", displayModels.filter(isDefaultAgentCliModel)],
+            ...Array.from(sourceGroups.entries()),
+          ];
+          const agentCliGroups: Array<[string, AIProviderModel[]]> =
+            unfilteredAgentCliGroups.filter(([, groupModels]) => groupModels.length > 0);
+          const modelGroups: Array<[string, AIProviderModel[]]> =
+            provider.id === "claude-code"
+              ? ([
+                  ["Recommended", recommendedModels],
+                  ["All", allModels],
+                ] satisfies Array<[string, AIProviderModel[]]>).filter(
+                  ([, groupModels]) => groupModels.length > 0,
+                )
+              : agentCli
+                ? agentCliGroups
+                : ([
+                    ["Recommended", recommendedModels],
+                    ["All", allModels],
+                  ] satisfies Array<[string, AIProviderModel[]]>).filter(
+                    ([, groupModels]) => groupModels.length > 0,
+                  );
 
+          const agentCliStatusCopy =
+            agentCliState === "not_authenticated"
+              ? agentCliStatus[provider.id]?.detail?.trim() ||
+                "Installed — not signed in. Sign in in your terminal, then Refresh."
+              : agentCliState === "missing"
+                ? "CLI not found. Install it in an existing PATH directory, then Refresh. Refresh can detect installs in existing PATH directories; restart only if PATH itself changed."
+                : agentCliState === "unsafe_launcher"
+                  ? "Launcher could not be used safely. Install a compatible launcher in an existing PATH directory, then Refresh. Restart only if PATH itself changed."
+                  : "CLI is incompatible. Install a compatible version in an existing PATH directory, then Refresh. Restart only if PATH itself changed.";
           return (
             <div
               key={provider.id}
@@ -1087,17 +1236,15 @@ export function EnhancementsSection() {
                     )}
                   </div>
 
-                  {provider.isCustom && hasKey && customModelName && (
-                    <p className="text-sm text-muted-foreground">
-                      Model: <span className="text-foreground">{customModelName}</span>
-                    </p>
-                  )}
-                  {!hasKey && (
+                  {!hasKey && !agentCli && (
                     <p className="text-sm text-muted-foreground">
                       {provider.isCustom ? "Configure endpoint to enable" : "Add API key to enable"}
                     </p>
                   )}
-                  {showModelPicker && selectedModel && (
+                  {agentCli && !agentCliReady && (
+                    <p className="text-sm text-muted-foreground">{agentCliStatusCopy}</p>
+                  )}
+                  {showModelPicker && selectedModel !== null && (
                     <p className="text-sm text-muted-foreground">
                       Selected model:{" "}
                       <span className="text-foreground">
@@ -1108,18 +1255,39 @@ export function EnhancementsSection() {
                 </div>
 
                 <div className="flex items-center gap-2">
-                  {hasKey ? (
+                  {agentCli ? (
+                    agentCliReady ? (
+                      <span className="text-xs text-muted-foreground">Signed in</span>
+                    ) : (
+                      <Button
+                        onClick={() => handleRefreshAgentCli(provider)}
+                        variant="ghost"
+                        size="sm"
+                        className="text-muted-foreground"
+                        disabled={agentCliProbing[provider.id]}
+                        aria-label={`Refresh ${provider.name} sign-in`}
+                        title={`Refresh ${provider.name} sign-in`}
+                      >
+                        <RefreshCw
+                          className={`h-3.5 w-3.5 ${
+                            agentCliProbing[provider.id] ? "animate-spin" : ""
+                          }`}
+                        />
+                      </Button>
+                    )
+                  ) : hasKey ? (
                     <>
                       {provider.isCustom && (
                         <Button
                           onClick={() => handleSetupApiKey(provider.id)}
                           variant="ghost"
                           size="sm"
+                          aria-label={`Configure ${provider.name}`}
                         >
                           <Settings2 className="h-3.5 w-3.5" />
                         </Button>
                       )}
-                      {!provider.isCustom && !isAgentCliProvider(provider.id) && (
+                      {!provider.isCustom && (
                         <Button
                           onClick={() => fetchModels(provider.id)}
                           variant="ghost"
@@ -1127,6 +1295,7 @@ export function EnhancementsSection() {
                           className="text-muted-foreground"
                           disabled={isModelsLoading(provider.id)}
                           title={`Refresh ${provider.name} models`}
+                          aria-label={`Refresh ${provider.name} models`}
                         >
                           <RefreshCw
                             className={`h-3.5 w-3.5 ${
@@ -1135,103 +1304,58 @@ export function EnhancementsSection() {
                           />
                         </Button>
                       )}
-                      {!isAgentCliProvider(provider.id) && (
-                        <Button
-                          onClick={async () => {
-                            const message = provider.isCustom
-                              ? `Remove configuration for ${provider.name}?`
-                              : `Remove API key for ${provider.name}?`;
-                            const confirmed = await ask(message, {
-                              title: provider.isCustom
-                                ? "Remove Configuration"
-                                : "Remove API Key",
-                              kind: "warning",
-                            });
-                            if (confirmed) {
-                              handleRemoveApiKey(provider.id);
-                            }
-                          }}
-                          variant="ghost"
-                          size="sm"
-                          className="text-muted-foreground hover:text-destructive"
-                        >
-                          <Trash2 className="h-3.5 w-3.5" />
-                        </Button>
-                      )}
-                      {isAgentCliProvider(provider.id) && (
-                        // Installed AND signed in (probe.authed). Availability
-                        // gating already treats this provider as ready.
-                        <span className="text-xs text-muted-foreground">Signed in</span>
-                      )}
+                      <Button
+                        onClick={async () => {
+                          const message = provider.isCustom
+                            ? `Remove configuration for ${provider.name}?`
+                            : `Remove API key for ${provider.name}?`;
+                          const confirmed = await ask(message, {
+                            title: provider.isCustom ? "Remove Configuration" : "Remove API Key",
+                            kind: "warning",
+                          });
+                          if (confirmed) {
+                            handleRemoveApiKey(provider.id);
+                          }
+                        }}
+                        variant="ghost"
+                        size="sm"
+                        className="text-muted-foreground hover:text-destructive"
+                        aria-label={`Remove ${provider.name} configuration`}
+                      >
+                        <Trash2 className="h-3.5 w-3.5" />
+                      </Button>
                     </>
                   ) : (
                     <>
-                      {isAgentCliProvider(provider.id) ? (
-                        agentCliStatus[provider.id]?.installed ? (
-                          // Installed but not signed in: show the CLI's OWN
-                          // auth-status message when it printed one (its exact
-                          // login guidance), else fall back to a static hint.
-                          // Refresh re-probes after the user authenticates.
+                      {!provider.isCustom && provider.apiKeyUrl && (
+                        <Button
+                          onClick={() => window.open(provider.apiKeyUrl, "_blank")}
+                          variant="ghost"
+                          size="sm"
+                          className="text-muted-foreground"
+                          title={`Get ${provider.name} API Key`}
+                          aria-label={`Get ${provider.name} API Key`}
+                        >
+                          <ExternalLink className="h-3.5 w-3.5" />
+                        </Button>
+                      )}
+                      <Button
+                        onClick={() => handleSetupApiKey(provider.id)}
+                        variant="outline"
+                        size="sm"
+                      >
+                        {provider.isCustom ? (
                           <>
-                            <span className="text-xs text-muted-foreground">
-                              {agentCliStatus[provider.id]?.detail?.trim() ||
-                                "Installed — not signed in. Run `claude` in your terminal to sign in."}
-                            </span>
-                            <Button
-                              onClick={() => handleRefreshAgentCli(provider)}
-                              variant="ghost"
-                              size="sm"
-                              className="text-muted-foreground"
-                              disabled={agentCliProbing[provider.id]}
-                              title={`Re-check ${provider.name} sign-in`}
-                            >
-                              <RefreshCw
-                                className={`h-3.5 w-3.5 ${
-                                  agentCliProbing[provider.id] ? "animate-spin" : ""
-                                }`}
-                              />
-                            </Button>
+                            <Settings2 className="mr-1.5 h-3.5 w-3.5" />
+                            Configure
                           </>
                         ) : (
-                          // Not installed — show the install hint.
-                          Boolean(provider.installHint) && (
-                            <span className="text-xs text-muted-foreground">
-                              {provider.installHint}
-                            </span>
-                          )
-                        )
-                      ) : (
-                        <>
-                          {!provider.isCustom && provider.apiKeyUrl && (
-                            <Button
-                              onClick={() => window.open(provider.apiKeyUrl, "_blank")}
-                              variant="ghost"
-                              size="sm"
-                              className="text-muted-foreground"
-                              title={`Get ${provider.name} API Key`}
-                            >
-                              <ExternalLink className="h-3.5 w-3.5" />
-                            </Button>
-                          )}
-                          <Button
-                            onClick={() => handleSetupApiKey(provider.id)}
-                            variant="outline"
-                            size="sm"
-                          >
-                            {provider.isCustom ? (
-                              <>
-                                <Settings2 className="mr-1.5 h-3.5 w-3.5" />
-                                Configure
-                              </>
-                            ) : (
-                              <>
-                                <Key className="mr-1.5 h-3.5 w-3.5" />
-                                Add Key
-                              </>
-                            )}
-                          </Button>
-                        </>
-                      )}
+                          <>
+                            <Key className="mr-1.5 h-3.5 w-3.5" />
+                            Add Key
+                          </>
+                        )}
+                      </Button>
                     </>
                   )}
                 </div>
@@ -1239,7 +1363,7 @@ export function EnhancementsSection() {
 
               {showModelPicker && (
                 <div className="mt-3 space-y-3 border-t border-border/50 pt-3">
-                  {isModelsLoading(provider.id) && models.length === 0 && (
+                  {isModelsLoading(provider.id) && fetchedModels.length === 0 && (
                     <div className="flex items-center gap-2 text-sm text-muted-foreground">
                       <Loader2 className="h-4 w-4 animate-spin" />
                       Loading models...
@@ -1258,7 +1382,8 @@ export function EnhancementsSection() {
                       </Button>
                     </div>
                   )}
-                  {!isModelsLoading(provider.id) &&
+                  {!agentCli &&
+                    !isModelsLoading(provider.id) &&
                     !getError(provider.id) &&
                     modelGroups.length === 0 && (
                       <p className="text-sm text-muted-foreground">No models available</p>

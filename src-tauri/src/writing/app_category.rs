@@ -4,13 +4,7 @@ use crate::writing::ContextHint;
 
 /// Curated Chat substrings.
 const CHAT: &[&str] = &[
-    "slack",
-    "discord",
-    "telegram",
-    "whatsapp",
-    "messages",
-    "signal",
-    "teams",
+    "slack", "discord", "telegram", "whatsapp", "messages", "signal", "teams",
 ];
 
 /// Curated Email substrings.
@@ -263,10 +257,7 @@ mod tests {
     #[test]
     fn classify_maps_windows_process_path_stem() {
         let code_path = "C:\\Users\\dev\\AppData\\Local\\Programs\\Microsoft VS Code\\Code.exe";
-        assert_eq!(
-            classify(&hint(None, Some(code_path))),
-            AppCategory::Code
-        );
+        assert_eq!(classify(&hint(None, Some(code_path))), AppCategory::Code);
         assert_eq!(classify(&hint(None, Some("Slack.exe"))), AppCategory::Chat);
         assert_eq!(
             classify(&hint(None, Some("WhatsApp.exe"))),
@@ -277,17 +268,17 @@ mod tests {
     #[test]
     fn classify_falls_back_to_process_path_when_app_name_unknown() {
         assert_eq!(
-            classify(&hint(Some("SomeUnknownApp"), Some("/applications/xcode.app"))),
+            classify(&hint(
+                Some("SomeUnknownApp"),
+                Some("/applications/xcode.app")
+            )),
             AppCategory::Code
         );
     }
 
     #[test]
     fn classify_returns_other_for_unknown() {
-        assert_eq!(
-            classify(&hint(Some("AcmeEdit"), None)),
-            AppCategory::Other
-        );
+        assert_eq!(classify(&hint(Some("AcmeEdit"), None)), AppCategory::Other);
         assert_eq!(classify(&hint(Some(""), None)), AppCategory::Other);
     }
 
@@ -295,10 +286,7 @@ mod tests {
     fn classify_returns_browser_for_browsers() {
         assert_eq!(classify(&hint(Some("Safari"), None)), AppCategory::Browser);
         assert_eq!(classify(&hint(Some("Chrome"), None)), AppCategory::Browser);
-        assert_eq!(
-            classify(&hint(Some("Firefox"), None)),
-            AppCategory::Browser
-        );
+        assert_eq!(classify(&hint(Some("Firefox"), None)), AppCategory::Browser);
     }
 
     #[test]
@@ -356,5 +344,4 @@ mod tests {
         assert_eq!(classify(&hint(Some("X"), None)), AppCategory::Social);
         assert_eq!(classify(&hint(Some("Slack"), None)), AppCategory::Chat);
     }
-
 }

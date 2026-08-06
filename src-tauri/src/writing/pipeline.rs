@@ -14,12 +14,11 @@ use crate::transcription::TranscriptionResult;
 use crate::whisper::languages::validate_language;
 
 use super::{
-    apply_final_restoration_guard, apply_library_rules, apply_voice_command_stage,
-    category_label, category_prompt_hint, classify, compile_context_for_target,
-    load_writing_settings, sanitize_transcript, AppCategory, AppFormattingRule,
-    AppliedWritingOperation, ContextHint, ProviderContextTarget, WritingError,
-    WritingOperationKind, WritingProfile, WritingResult, WritingSettings, WritingStageTimings,
-    WritingWarning,
+    apply_final_restoration_guard, apply_library_rules, apply_voice_command_stage, category_label,
+    category_prompt_hint, classify, compile_context_for_target, load_writing_settings,
+    sanitize_transcript, AppCategory, AppFormattingRule, AppliedWritingOperation, ContextHint,
+    ProviderContextTarget, WritingError, WritingOperationKind, WritingProfile, WritingResult,
+    WritingSettings, WritingStageTimings, WritingWarning,
 };
 
 fn enabled_app_rules(settings: &WritingSettings) -> impl Iterator<Item = &AppFormattingRule> {
@@ -97,8 +96,7 @@ pub fn resolve_pipeline_config(
     } else {
         active_app.map(classify)
     };
-    let app_preset = matched_rule
-        .filter(|preset| ai_effective || !preset.requires_ai_formatting());
+    let app_preset = matched_rule.filter(|preset| ai_effective || !preset.requires_ai_formatting());
     let mut preset = app_preset.unwrap_or(global_preset);
 
     if !ai_effective && preset.requires_ai_formatting() {
@@ -212,7 +210,10 @@ pub(crate) fn normalize_language_scope(value: Option<&str>) -> Option<String> {
     })
 }
 
-fn resolve_output_language(profile: &WritingProfile, transcription: &TranscriptionResult) -> String {
+fn resolve_output_language(
+    profile: &WritingProfile,
+    transcription: &TranscriptionResult,
+) -> String {
     if profile.final_text_language == FINAL_TEXT_LANGUAGE_SAME_AS_TRANSCRIPT {
         transcription
             .transcript_language
@@ -318,18 +319,15 @@ async fn run_smart_formatting(
     // EffectiveConfig.category_hint is None when an explicit per-app rule
     // matched (user rule wins); Browser/Other carry no nudge, so we skip the
     // sentence entirely instead of injecting a context-only preamble.
-    let app_category_hint: Option<String> = request
-        .config
-        .category_hint
-        .and_then(|cat| {
-            category_prompt_hint(cat).map(|hint| {
-                format!(
-                    "You are dictating into a {} context. {}",
-                    category_label(cat),
-                    hint
-                )
-            })
-        });
+    let app_category_hint: Option<String> = request.config.category_hint.and_then(|cat| {
+        category_prompt_hint(cat).map(|hint| {
+            format!(
+                "You are dictating into a {} context. {}",
+                category_label(cat),
+                hint
+            )
+        })
+    });
     match crate::commands::ai::polish_text_typed(
         &request.app,
         request.text,
@@ -678,7 +676,10 @@ mod tests {
             }],
             ..WritingSettings::default()
         };
-        let active_app = ContextHint { app_name: Some("Slack Desktop".to_string()), ..Default::default() };
+        let active_app = ContextHint {
+            app_name: Some("Slack Desktop".to_string()),
+            ..Default::default()
+        };
         let global_preset = EnhancementPreset::PersonalDictation;
         let effective = resolve_pipeline_config(
             &settings,
@@ -784,7 +785,10 @@ mod tests {
             ],
             ..WritingSettings::default()
         };
-        let active_app = ContextHint { app_name: Some("Slack Desktop".to_string()), ..Default::default() };
+        let active_app = ContextHint {
+            app_name: Some("Slack Desktop".to_string()),
+            ..Default::default()
+        };
 
         assert_eq!(
             resolve_pipeline_config(
@@ -820,7 +824,10 @@ mod tests {
             }],
             ..WritingSettings::default()
         };
-        let active_app = ContextHint { app_name: Some("Cursor IDE".to_string()), ..Default::default() };
+        let active_app = ContextHint {
+            app_name: Some("Cursor IDE".to_string()),
+            ..Default::default()
+        };
 
         assert_eq!(
             resolve_pipeline_config(
@@ -852,7 +859,10 @@ mod tests {
             ],
             ..WritingSettings::default()
         };
-        let active_app = ContextHint { app_name: Some("Slack Desktop".to_string()), ..Default::default() };
+        let active_app = ContextHint {
+            app_name: Some("Slack Desktop".to_string()),
+            ..Default::default()
+        };
 
         assert_eq!(
             resolve_pipeline_config(
@@ -877,7 +887,10 @@ mod tests {
             }],
             ..WritingSettings::default()
         };
-        let active_app = ContextHint { app_name: Some("Slack Desktop".to_string()), ..Default::default() };
+        let active_app = ContextHint {
+            app_name: Some("Slack Desktop".to_string()),
+            ..Default::default()
+        };
 
         assert_eq!(
             resolve_pipeline_config(
@@ -902,7 +915,10 @@ mod tests {
             }],
             ..WritingSettings::default()
         };
-        let active_app = ContextHint { app_name: Some("Apple Notes".to_string()), ..Default::default() };
+        let active_app = ContextHint {
+            app_name: Some("Apple Notes".to_string()),
+            ..Default::default()
+        };
 
         assert_eq!(
             resolve_pipeline_config(
@@ -927,7 +943,10 @@ mod tests {
             }],
             ..WritingSettings::default()
         };
-        let active_app = ContextHint { app_name: Some("Slack Desktop".to_string()), ..Default::default() };
+        let active_app = ContextHint {
+            app_name: Some("Slack Desktop".to_string()),
+            ..Default::default()
+        };
 
         assert_eq!(
             resolve_pipeline_config(
@@ -999,8 +1018,7 @@ mod tests {
         );
         assert_eq!(effective.preset, EnhancementPreset::Message);
         assert_eq!(
-            effective.category_hint,
-            None,
+            effective.category_hint, None,
             "explicit rule must suppress category hint"
         );
     }
@@ -1039,8 +1057,7 @@ mod tests {
             "AI-requiring rule preset falls back to global when AI unavailable"
         );
         assert_eq!(
-            effective.category_hint,
-            None,
+            effective.category_hint, None,
             "explicit rule must suppress category hint even when AI unavailable"
         );
     }

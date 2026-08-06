@@ -5,7 +5,7 @@ mod settings;
 mod vocabulary;
 
 #[allow(unused_imports)]
-pub use app_category::{AppCategory, category_label, category_prompt_hint, classify};
+pub use app_category::{category_label, category_prompt_hint, classify, AppCategory};
 #[allow(unused_imports)]
 pub use pipeline::{
     effective_personal_dictation_mode, effective_pipeline_config, process_transcription,

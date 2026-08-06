@@ -19,6 +19,14 @@ vi.mock('@tauri-apps/api/event', () => ({
   listen: vi.fn().mockResolvedValue(() => {}),
 }))
 
+const readinessState = vi.hoisted(() => ({
+  value: null as { ai_ready: boolean } | null,
+}))
+
+vi.mock('@/contexts/ReadinessContext', () => ({
+  useReadinessState: () => readinessState.value,
+}))
+
 vi.mock('sonner', () => ({
   toast: {
     error: vi.fn(),
@@ -41,6 +49,8 @@ const providerModels = vi.hoisted(
     recommended: boolean
     reasoning?: boolean
     contextWindow?: number | null
+    sourceProvider?: string | null
+    cliDefault?: boolean
     costInput?: number | null
     costOutput?: number | null
   }>> => ({
@@ -59,16 +69,53 @@ const providerModels = vi.hoisted(
     ],
     anthropic: [{ id: 'claude-sonnet-4', name: 'Claude Sonnet 4', recommended: true }],
     groq: [{ id: 'llama-3.3-70b-versatile', name: 'Llama 3.3 70B Versatile', recommended: true }],
+    'claude-code': [
+      { id: 'haiku', name: 'Haiku', recommended: true },
+      { id: 'sonnet', name: 'Sonnet', recommended: false },
+      { id: 'opus', name: 'Opus', recommended: false },
+    ],
+    pi: [
+      { id: '', name: 'CLI default', recommended: true, cliDefault: true },
+      {
+        id: 'openai/gpt-5-mini',
+        name: 'GPT-5 Mini',
+        recommended: false,
+        sourceProvider: 'OpenAI',
+      },
+      {
+        id: 'anthropic/claude-sonnet-4',
+        name: 'Claude Sonnet 4',
+        recommended: false,
+        sourceProvider: 'Anthropic',
+      },
+    ],
+    omp: [
+      { id: '', name: 'CLI default', recommended: true, cliDefault: true },
+      {
+        id: 'google/gemini-2.5-flash',
+        name: 'Gemini 2.5 Flash',
+        recommended: false,
+        sourceProvider: 'Google',
+      },
+    ],
   }),
 )
+const modelDiscovery = vi.hoisted(() => ({
+  loading: {} as Record<string, boolean>,
+  errors: {} as Record<string, string | null>,
+  fetchModels: vi.fn((providerId: string) => Promise.resolve(providerModels[providerId] || [])),
+}))
 
 vi.mock('@/hooks/useProviderModels', () => ({
   useAllProviderModels: () => ({
-    fetchModels: vi.fn(),
+    fetchModels: (providerId: string) => modelDiscovery.fetchModels(providerId),
     getModels: (providerId: string) => providerModels[providerId] || [],
-    isLoading: () => false,
-    getError: () => null,
-    clearModels: vi.fn(),
+    isLoading: (providerId: string) => modelDiscovery.loading[providerId] || false,
+    getError: (providerId: string) => modelDiscovery.errors[providerId] || null,
+    clearModels: (providerId: string) => {
+      delete modelDiscovery.errors[providerId]
+      delete modelDiscovery.loading[providerId]
+    },
   }),
 }))
 
@@ -80,6 +127,7 @@ const baseAISettings = {
   modelsByProvider: {},
   aiModelNeedsReselection: false,
 }
+let aiSettingsResponse: typeof baseAISettings = baseAISettings
 
 const enabledAISettings = {
   enabled: true,
@@ -99,12 +147,18 @@ const providerListResponse = [
   { id: 'custom', name: 'Custom (OpenAI-compatible)', status: 'production', supportsBaseUrl: true },
   { id: 'groq', name: 'Groq', status: 'experimental', supportsReasoning: false },
   { id: 'claude-code', name: 'Claude Code', status: 'production', supportsReasoning: false },
+  { id: 'pi', name: 'pi', status: 'production', supportsReasoning: false },
+  { id: 'omp', name: 'oh-my-pi', status: 'production', supportsReasoning: false },
 ]
 
 let rejectWritingSettingsUpdate = false
-let aiSettingsResponse = baseAISettings
+let agentCliProbeResponse: {
+  state?: 'ready' | 'not_authenticated' | 'missing' | 'unsafe_launcher' | 'incompatible'
+  installed: boolean
+  authed: boolean
+  detail?: string
+} = { state: 'missing', installed: false, authed: false }
 let enhancementOptionsResponse = { preset: 'PersonalDictation' }
-let agentCliProbeResponse: { installed: boolean; authed: boolean } = { installed: false, authed: false }
 
 const baseAppSettings = {
   hotkey: 'CommandOrControl+Shift+Space',
@@ -138,11 +192,14 @@ function getAdvancedProvidersPanel() {
 describe('EnhancementsSection', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    readinessState.value = null
+    modelDiscovery.loading = {}
+    modelDiscovery.errors = {}
     window.localStorage.clear()
     rejectWritingSettingsUpdate = false
     aiSettingsResponse = baseAISettings
     enhancementOptionsResponse = { preset: 'PersonalDictation' }
-    agentCliProbeResponse = { installed: false, authed: false }
+    agentCliProbeResponse = { state: 'missing', installed: false, authed: false }
     ;(hasApiKey as ReturnType<typeof vi.fn>).mockResolvedValue(false)
     ;(invoke as ReturnType<typeof vi.fn>).mockImplementation((cmd: string, args?: Record<string, unknown>) => {
       if (cmd === 'list_ai_providers') {
@@ -366,6 +423,54 @@ describe('EnhancementsSection', () => {
         options: { preset: 'CleanDictation' },
       })
       expect(toast.success).toHaveBeenCalledWith('Polish on')
+    })
+  })
+
+  it('keeps a loaded key-based provider connected when backend AI readiness is ready', async () => {
+    readinessState.value = { ai_ready: true }
+    aiSettingsResponse = {
+      ...enabledAISettings,
+      provider: 'anthropic',
+      model: 'claude-sonnet-4',
+      modelsByProvider: { anthropic: 'claude-sonnet-4' },
+    }
+    vi.mocked(hasApiKey).mockResolvedValue(false)
+
+    renderWithProviders()
+
+    await waitFor(() => {
+      const polishSwitch = screen.getByRole('switch', { name: 'Polish' })
+      expect(polishSwitch).toBeChecked()
+      expect(polishSwitch).not.toBeDisabled()
+      expect(
+        screen.getAllByText((_, element) =>
+          element?.textContent === 'Using Anthropic · Claude Sonnet 4 · Active · Change',
+        ).length,
+      ).toBeGreaterThan(0)
+    })
+  })
+
+  it('does not promote a non-ready agent CLI from backend AI readiness', async () => {
+    readinessState.value = { ai_ready: true }
+    aiSettingsResponse = {
+      ...enabledAISettings,
+      provider: 'claude-code',
+      model: 'haiku',
+      modelsByProvider: { 'claude-code': 'haiku' },
+    }
+    agentCliProbeResponse = {
+      state: 'not_authenticated',
+      installed: true,
+      authed: false,
+    }
+    vi.mocked(hasApiKey).mockResolvedValue(false)
+
+    renderWithProviders()
+
+    await waitFor(() => {
+      const polishSwitch = screen.getByRole('switch', { name: 'Polish' })
+      expect(polishSwitch).toBeDisabled()
+      expect(screen.queryByText(/Using Claude Code/)).not.toBeInTheDocument()
     })
   })
 
@@ -1270,11 +1375,11 @@ describe('EnhancementsSection', () => {
       ),
     ).toBeInTheDocument()
 
-    const openAIHeading = await screen.findByRole('heading', { name: 'OpenAI' })
-    const openAICard = openAIHeading.closest('.rounded-xl')
-    expect(openAICard).toBeTruthy()
-
-    await user.click(within(openAICard as HTMLElement).getByRole('button', { name: /gpt-5 mini/i }))
+    const providersPanel = getAdvancedProvidersPanel()
+    const openAICard = within(providersPanel)
+      .getByRole('heading', { name: 'OpenAI' })
+      .closest('div.rounded-xl') as HTMLElement
+    await user.click(within(openAICard).getByRole('button', { name: /gpt-5 mini/i }))
 
     await waitFor(() => {
       expect(invoke).toHaveBeenCalledWith('update_ai_settings', {
@@ -1302,46 +1407,165 @@ describe('EnhancementsSection', () => {
       expect(toast.error).not.toHaveBeenCalled()
     })
   })
+
   it('shows a sign-in hint and Refresh for an installed-but-unauthed agent CLI', async () => {
-    agentCliProbeResponse = { installed: true, authed: false }
+    agentCliProbeResponse = { state: 'not_authenticated', installed: true, authed: false }
     const user = userEvent.setup()
     renderWithProviders()
     await openAdvanced(user)
     const providersPanel = getAdvancedProvidersPanel()
+    const claudeCard = within(providersPanel)
+      .getByRole('heading', { name: 'Claude Code' })
+      .closest('div.rounded-xl') as HTMLElement
+    expect(await within(claudeCard).findByText(/not signed in/i)).toBeInTheDocument()
 
-    // Distinct sign-in hint (NOT the install hint) for state 2.
-    expect(
-      await within(providersPanel).findByText(/not signed in/i),
-    ).toBeInTheDocument()
-    expect(
-      within(providersPanel).queryByText(/Install the Claude Code CLI/i),
-    ).not.toBeInTheDocument()
-
-    // Refresh button re-probes and toasts once signed in.
-    const refresh = within(providersPanel).getByRole('button', {
-      name: /re-check claude code sign-in/i,
+    expect(within(claudeCard).queryByText(/Add API key/i)).not.toBeInTheDocument()
+    const refresh = within(claudeCard).getByRole('button', {
+      name: /refresh claude code sign-in/i,
     })
     expect(refresh).toBeInTheDocument()
 
-    agentCliProbeResponse = { installed: true, authed: true }
+    agentCliProbeResponse = { state: 'ready', installed: true, authed: true }
     await user.click(refresh)
     await waitFor(() => {
       expect(toast.success).toHaveBeenCalledWith('Claude Code: signed in')
     })
   })
-
-  it('shows "Signed in" for an authed agent CLI provider', async () => {
-    agentCliProbeResponse = { installed: true, authed: true }
+  it('uses the ready Claude CLI picker with curated defaults', async () => {
+    agentCliProbeResponse = { state: 'ready', installed: true, authed: true }
     const user = userEvent.setup()
     renderWithProviders()
     await openAdvanced(user)
     const providersPanel = getAdvancedProvidersPanel()
+    const claudeCard = within(providersPanel)
+      .getByRole('heading', { name: 'Claude Code' })
+      .closest('div.rounded-xl') as HTMLElement
 
+    expect(within(claudeCard).getByRole('button', { name: /haiku/i })).toBeInTheDocument()
+    expect(within(claudeCard).getByRole('button', { name: /sonnet/i })).toBeInTheDocument()
+    expect(within(claudeCard).getByRole('button', { name: /opus/i })).toBeInTheDocument()
+    expect(within(claudeCard).getByText('Recommended')).toBeInTheDocument()
+
+    await user.click(within(claudeCard).getByRole('button', { name: /sonnet/i }))
+    await waitFor(() => {
+      expect(invoke).toHaveBeenCalledWith('update_ai_settings', {
+        enabled: false,
+        provider: 'claude-code',
+        model: 'sonnet',
+      })
+    })
+  })
+
+  it('guided Claude setup enables the recommended Haiku model', async () => {
+    agentCliProbeResponse = { state: 'ready', installed: true, authed: true }
+    const user = userEvent.setup()
+    renderWithProviders()
+
+    await user.click(await screen.findByRole('button', { name: 'Claude Code' }))
+    await waitFor(() => {
+      expect(invoke).toHaveBeenCalledWith('update_ai_settings', {
+        enabled: true,
+        provider: 'claude-code',
+        model: 'haiku',
+      })
+      expect(toast.success).toHaveBeenCalledWith('Polish on')
+    })
+  })
+
+  it('groups pi and oh-my-pi models by source and persists the CLI default as an empty id', async () => {
+    agentCliProbeResponse = { state: 'ready', installed: true, authed: true }
+    const user = userEvent.setup()
+    renderWithProviders()
+    await openAdvanced(user)
+    const providersPanel = getAdvancedProvidersPanel()
+    const piCard = within(providersPanel)
+      .getByRole('heading', { name: 'pi' })
+      .closest('div.rounded-xl') as HTMLElement
+    const ompCard = within(providersPanel)
+      .getByRole('heading', { name: 'oh-my-pi' })
+      .closest('div.rounded-xl') as HTMLElement
+
+    expect(within(piCard).getAllByText('CLI default')).toHaveLength(2)
+    expect(within(piCard).getByText('OpenAI')).toBeInTheDocument()
+    expect(within(piCard).getByText('Anthropic')).toBeInTheDocument()
+    expect(within(ompCard).getAllByText('CLI default')).toHaveLength(2)
+    expect(within(ompCard).getByText('Google')).toBeInTheDocument()
+    expect(within(providersPanel).queryByRole('combobox', { name: /thinking|effort/i })).not.toBeInTheDocument()
+
+    await user.click(within(piCard).getByRole('button', { name: /CLI default/i }))
+    await waitFor(() => {
+      expect(invoke).toHaveBeenCalledWith('update_ai_settings', {
+        enabled: false,
+        provider: 'pi',
+        model: '',
+      })
+    })
+  })
+
+  it('shows discovery errors with Retry without API-key or no-model dead ends', async () => {
+    agentCliProbeResponse = { state: 'ready', installed: true, authed: true }
+    modelDiscovery.errors['claude-code'] = 'Model discovery failed'
+    const user = userEvent.setup()
+    renderWithProviders()
+    await openAdvanced(user)
+    const providersPanel = getAdvancedProvidersPanel()
+    const claudeCard = within(providersPanel)
+      .getByRole('heading', { name: 'Claude Code' })
+      .closest('div.rounded-xl') as HTMLElement
+
+    expect(within(claudeCard).getByText('Model discovery failed')).toBeInTheDocument()
+    expect(within(claudeCard).getByRole('button', { name: 'Retry' })).toBeInTheDocument()
+    expect(within(claudeCard).queryByText(/Add API key/i)).not.toBeInTheDocument()
+    expect(within(claudeCard).queryByText(/No models available/i)).not.toBeInTheDocument()
+
+    await user.click(within(claudeCard).getByRole('button', { name: 'Retry' }))
+    expect(modelDiscovery.fetchModels).toHaveBeenCalledWith('claude-code')
+  })
+  it.each([
+    ['missing', /CLI not found/i],
+    ['unsafe_launcher', /could not be used safely/i],
+    ['incompatible', /incompatible/i],
+  ] as const)('keeps the %s CLI state actionable and refreshable', async (state, copy) => {
+    agentCliProbeResponse = { state, installed: false, authed: false }
+    const user = userEvent.setup()
+    renderWithProviders()
+    await openAdvanced(user)
+    const providersPanel = getAdvancedProvidersPanel()
+    const claudeCard = within(providersPanel)
+      .getByRole('heading', { name: 'Claude Code' })
+      .closest('div.rounded-xl') as HTMLElement
+
+    expect(within(claudeCard).getByText(copy)).toBeInTheDocument()
+    if (state === 'missing') {
+      expect(
+        within(claudeCard).getByText(/Install it in an existing PATH directory, then Refresh/i),
+      ).toBeInTheDocument()
+      expect(
+        within(claudeCard).getByText(
+          /Refresh can detect installs in existing PATH directories; restart only if PATH itself changed/i,
+        ),
+      ).toBeInTheDocument()
+    }
     expect(
-      await within(providersPanel).findByText('Signed in'),
+      within(claudeCard).getByRole('button', { name: /refresh claude code sign-in/i }),
     ).toBeInTheDocument()
-    expect(
-      within(providersPanel).queryByText(/not signed in/i),
-    ).not.toBeInTheDocument()
+    expect(within(claudeCard).queryByText(/Add API key/i)).not.toBeInTheDocument()
+    expect(within(claudeCard).queryByText(/No models available/i)).not.toBeInTheDocument()
+  })
+
+  it('shows Signed in and the ready model picker for an authed agent CLI', async () => {
+    agentCliProbeResponse = { state: 'ready', installed: true, authed: true }
+    const user = userEvent.setup()
+    renderWithProviders()
+    await openAdvanced(user)
+    const providersPanel = getAdvancedProvidersPanel()
+    const claudeCard = within(providersPanel)
+      .getByRole('heading', { name: 'Claude Code' })
+      .closest('div.rounded-xl') as HTMLElement
+
+    expect(await within(claudeCard).findByText('Signed in')).toBeInTheDocument()
+    expect(await within(claudeCard).findByRole('button', { name: /haiku/i })).toBeInTheDocument()
+    expect(within(providersPanel).queryByText(/No models available/i)).not.toBeInTheDocument()
+    expect(within(providersPanel).queryByRole('combobox', { name: /thinking|effort/i })).not.toBeInTheDocument()
   })
 })

@@ -182,8 +182,13 @@ mod behavior_tests {
     #[test]
     fn translation_prompt_adds_explicit_instruction_when_languages_differ() {
         let opts = options(EnhancementPreset::CleanDictation);
-        let prompt =
-            build_enhancement_prompt_for_transcript_language(None, &opts, Some("es"), Some("en"), None);
+        let prompt = build_enhancement_prompt_for_transcript_language(
+            None,
+            &opts,
+            Some("es"),
+            Some("en"),
+            None,
+        );
         assert!(prompt.contains("written Spanish"));
         assert!(
             prompt.contains("The dictation may be in another language; translate it into Spanish.")
@@ -193,8 +198,13 @@ mod behavior_tests {
     #[test]
     fn same_language_prompt_does_not_add_translation_instruction() {
         let opts = options(EnhancementPreset::CleanDictation);
-        let prompt =
-            build_enhancement_prompt_for_transcript_language(None, &opts, Some("en"), Some("en"), None);
+        let prompt = build_enhancement_prompt_for_transcript_language(
+            None,
+            &opts,
+            Some("en"),
+            Some("en"),
+            None,
+        );
         assert!(!prompt.contains("translate it into"));
     }
 
@@ -203,7 +213,12 @@ mod behavior_tests {
         let opts = options(EnhancementPreset::CleanDictation);
         let hint = "You are dictating into a Chat context. Keep it casual.";
         let prompt = build_enhancement_prompt_for_transcript_language(
-            None, &opts, Some("en"), Some("en"), Some(hint));
+            None,
+            &opts,
+            Some("en"),
+            Some("en"),
+            Some(hint),
+        );
         assert!(prompt.contains(hint), "category hint must appear in prompt");
         assert!(prompt.contains("dictating into a Chat context"));
     }
@@ -212,7 +227,12 @@ mod behavior_tests {
     fn app_category_hint_absent_when_none() {
         let opts = options(EnhancementPreset::CleanDictation);
         let prompt = build_enhancement_prompt_for_transcript_language(
-            None, &opts, Some("en"), Some("en"), None);
+            None,
+            &opts,
+            Some("en"),
+            Some("en"),
+            None,
+        );
         assert!(!prompt.contains("dictating into a"));
         assert!(!prompt.contains("Context:"));
     }
@@ -223,12 +243,20 @@ mod behavior_tests {
         let hint = "You are dictating into a Chat context. Keep it casual.";
         let terms = "Tauri, Zustand";
         let prompt = build_enhancement_prompt_for_transcript_language(
-            Some(terms), &opts, Some("en"), Some("en"), Some(hint));
+            Some(terms),
+            &opts,
+            Some("en"),
+            Some("en"),
+            Some(hint),
+        );
         let hint_pos = prompt.find("dictating into a Chat context");
         let terms_pos = prompt.find("Known terms");
         assert!(hint_pos.is_some(), "hint must be present");
         assert!(terms_pos.is_some(), "Known terms must be present");
-        assert!(hint_pos < terms_pos, "category hint must precede Known terms block");
+        assert!(
+            hint_pos < terms_pos,
+            "category hint must precede Known terms block"
+        );
     }
 
     // De-dup proof: built prompt does NOT contain the transcript text.

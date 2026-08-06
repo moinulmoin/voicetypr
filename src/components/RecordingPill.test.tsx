@@ -104,6 +104,26 @@ describe('RecordingPill', () => {
     expect(screen.getByTestId('audio-bars')).toHaveAttribute('data-state', 'transcribing');
     expect(screen.getByRole('status')).toHaveTextContent('Transcribing...');
   });
+  it('clears Polishing and returns to the transcribing state when enhancing fails', () => {
+    mockSettings.pill_indicator_mode = 'always';
+    mockRecording.state = 'transcribing';
+    render(<RecordingPill />);
+
+    act(() => {
+      emitMockEvent('enhancing-started', undefined);
+    });
+    expect(screen.getByTestId('audio-bars')).toHaveAttribute('data-state', 'formatting');
+    expect(screen.getByRole('status')).toHaveTextContent('Polishing...');
+
+    act(() => {
+      emitMockEvent('enhancing-failed', undefined);
+    });
+    // A failed enhancement must clear the formatting flag so the pill falls
+    // back to the controller-derived prior state (transcribing), not stay
+    // stuck showing Polishing.
+    expect(screen.getByTestId('audio-bars')).toHaveAttribute('data-state', 'transcribing');
+    expect(screen.getByRole('status')).toHaveTextContent('Transcribing...');
+  });
 
   it('passes through audio levels while listening', () => {
     mockRecording.state = 'recording';

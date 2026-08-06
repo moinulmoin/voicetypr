@@ -93,8 +93,14 @@ impl AiExecutor {
 
             match result {
                 Ok(output_text) => {
-                    let cleaned = sanitize_ai_output(&output_text, request.input_text.len());
-                    let validated = match validate_ai_output(&cleaned, &request.input_text) {
+                    let (cleaned, truncated) =
+                        sanitize_ai_output(&output_text, request.input_text.len());
+                    let validation = if truncated {
+                        Err(AiProviderError::BadResponse)
+                    } else {
+                        validate_ai_output(&cleaned, &request.input_text)
+                    };
+                    let validated = match validation {
                         Ok(output) => output,
                         Err(error) if attempt == 0 => {
                             attempt += 1;
@@ -311,7 +317,7 @@ fn has_anomalous_cleanup_length(output: &str, input: &str) -> bool {
 /// `\n`) and the bidirectional-formatting controls (Unicode `Cf`) used in
 /// Trojan-Source-style injection, then enforces a length ceiling relative to
 /// the input so a runaway model cannot dump unbounded text at the cursor.
-fn sanitize_ai_output(output: &str, input_byte_len: usize) -> String {
+fn sanitize_ai_output(output: &str, input_byte_len: usize) -> (String, bool) {
     // 4x covers normal cleanup/translation; the floor keeps short inputs (whose
     // cleaned form can be several times larger) from being clipped.
     let cap = input_byte_len
@@ -322,20 +328,28 @@ fn sanitize_ai_output(output: &str, input_byte_len: usize) -> String {
     let mut chars = output.chars().peekable();
     let mut truncated = false;
     while let Some(ch) = chars.next() {
-        if sanitized.len() + ch.len_utf8() > cap {
-            truncated = true;
-            break;
-        }
         if ch == '\r' {
+            if sanitized.len() + '\n'.len_utf8() > cap {
+                truncated = true;
+                break;
+            }
             if chars.peek() == Some(&'\n') {
                 chars.next();
             }
             sanitized.push('\n');
         } else if ch == '\n' || ch == '\t' {
+            if sanitized.len() + ch.len_utf8() > cap {
+                truncated = true;
+                break;
+            }
             sanitized.push(ch);
         } else if ch.is_control() || is_bidi_override(ch) {
             // Drop Cc control and Cf bidi-format characters.
         } else {
+            if sanitized.len() + ch.len_utf8() > cap {
+                truncated = true;
+                break;
+            }
             sanitized.push(ch);
         }
     }
@@ -344,7 +358,7 @@ fn sanitize_ai_output(output: &str, input_byte_len: usize) -> String {
             "AI cleanup output exceeded the {cap}-byte length ceiling; truncated before insertion"
         );
     }
-    sanitized
+    (sanitized, truncated)
 }
 
 /// Bidirectional-formatting controls (Unicode category `Cf`) with no legitimate
@@ -411,5 +425,104 @@ mod tests {
     fn validate_keeps_identity_output_unchanged() {
         let output = "Already clean.";
         assert_eq!(validate_ai_output(output, output).unwrap(), output);
+    }
+
+    #[test]
+    fn sanitize_drops_control_characters_but_keeps_newline_and_tab() {
+        // Cc controls (NUL, SOH, BEL, US) are stripped; \n and \t survive because
+        // they are matched before the is_control() branch. A large input keeps
+        // the length cap from clipping this short fixture.
+        let input = "x".repeat(8192);
+        let dirty = "hello\0\x01world\x07bell\ttab\nnewline\x1funit";
+        let (cleaned, truncated) = sanitize_ai_output(dirty, input.len());
+        assert!(!truncated);
+        assert_eq!(cleaned, "helloworldbell\ttab\nnewlineunit");
+    }
+
+    #[test]
+    fn sanitize_strips_bidi_override_characters() {
+        let input = "x".repeat(8192);
+        // U+202E (RLO) embedded in prose — the classic Trojan-Source override —
+        // is removed.
+        let (cleaned, truncated) = sanitize_ai_output("ab\u{202E}cd", input.len());
+        assert!(!truncated);
+        assert_eq!(cleaned, "abcd");
+        // The full Cf override set is stripped to nothing.
+        let battery = "\u{061C}\u{200E}\u{200F}\u{202A}\u{202B}\u{202C}\u{202D}\u{202E}\u{2066}\u{2067}\u{2068}\u{2069}";
+        let (cleaned, truncated) = sanitize_ai_output(battery, input.len());
+        assert!(!truncated);
+        assert_eq!(cleaned, "");
+        // Boundary: zero-width joiner (U+200D) is load-bearing for scripts/emoji
+        // and is intentionally NOT a bidi override — it must be preserved.
+        let (cleaned, truncated) = sanitize_ai_output("a\u{200D}b", input.len());
+        assert!(!truncated);
+        assert_eq!(cleaned, "a\u{200D}b");
+    }
+
+    #[test]
+    fn sanitize_collapses_crlf_and_lone_cr_to_newline() {
+        let input = "x".repeat(8192);
+        // CRLF collapses to a single newline (the \n is consumed with the \r).
+        let (cleaned, truncated) = sanitize_ai_output("line1\r\nline2", input.len());
+        assert!(!truncated);
+        assert_eq!(cleaned, "line1\nline2");
+        // A lone CR becomes a newline.
+        let (cleaned, truncated) = sanitize_ai_output("line1\rline2", input.len());
+        assert!(!truncated);
+        assert_eq!(cleaned, "line1\nline2");
+        // A plain newline passes through verbatim.
+        let (cleaned, truncated) = sanitize_ai_output("line1\nline2", input.len());
+        assert!(!truncated);
+        assert_eq!(cleaned, "line1\nline2");
+    }
+
+    #[test]
+    fn sanitize_reports_truncation_for_short_input_over_floor() {
+        let input_len = 1;
+        let cap = 4096;
+        let overflow = "X".repeat(cap + 1);
+        let (cleaned, truncated) = sanitize_ai_output(&overflow, input_len);
+        assert!(truncated);
+        assert_eq!(cleaned.len(), cap);
+        assert_eq!(cleaned, &overflow[..cap]);
+    }
+
+    #[test]
+    fn sanitize_reports_truncation_for_much_larger_output() {
+        let input_len = 8192;
+        let cap = input_len * 4;
+        let overflow = "X".repeat(cap * 4);
+        let (cleaned, truncated) = sanitize_ai_output(&overflow, input_len);
+        assert!(truncated);
+        assert_eq!(cleaned.len(), cap);
+        assert_eq!(cleaned, &overflow[..cap]);
+    }
+
+    #[test]
+    fn sanitize_preserves_utf8_boundary_at_multibyte_cap() {
+        let input_len = 1024;
+        let cap = 4096;
+        let prefix = "a".repeat(cap - 1);
+        let overflow = format!("{prefix}éafter");
+        let (cleaned, truncated) = sanitize_ai_output(&overflow, input_len);
+        assert!(truncated);
+        assert_eq!(cleaned.len(), cap - 1);
+        assert_eq!(cleaned, prefix);
+        assert!(cleaned.is_char_boundary(cleaned.len()));
+    }
+
+    #[test]
+    fn sanitize_enforces_length_cap_relative_to_input() {
+        // cap = input_byte_len * 4, floored at AI_OUTPUT_MIN_TOKEN_CAP * 4
+        // (1024 * 4 = 4096). A large input makes the 4x ceiling dominate so the
+        // cap is predictable; a single-byte overflow char truncates exactly to
+        // it with a whole-char prefix (no multi-byte split).
+        let input_len = 8192;
+        let cap = input_len * 4; // 32768 > 4096 floor
+        let overflow = "X".repeat(cap * 4);
+        let (cleaned, truncated) = sanitize_ai_output(&overflow, input_len);
+        assert!(truncated);
+        assert_eq!(cleaned.len(), cap);
+        assert_eq!(cleaned, &overflow[..cap]);
     }
 }

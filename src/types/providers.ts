@@ -11,8 +11,28 @@ export interface AIProviderModel {
   recommended: boolean;
   reasoning?: boolean;
   contextWindow?: number | null;
+  sourceProvider?: string | null;
+  cliDefault?: boolean;
   costInput?: number | null;
   costOutput?: number | null;
+}
+
+export type AgentCliProbeState =
+  | "ready"
+  | "not_authenticated"
+  | "missing"
+  | "unsafe_launcher"
+  | "incompatible";
+
+export interface AgentCliProbe {
+  /** Explicit probe state; omitted only for compatibility with older payloads. */
+  state?: AgentCliProbeState;
+  installed: boolean;
+  authed: boolean;
+  /** The CLI's own auth-status message (its login guidance), shown on the
+   * sign-in badge when installed-but-not-authed. Empty when nothing useful was
+   * captured (fall back to the static hint). Mirrors the backend field. */
+  detail: string;
 }
 
 // Mirrors Rust `crate::ai::contract::AiProvider`.
@@ -41,17 +61,6 @@ export interface AIProviderConfig extends AiProvider {
   isCustom: boolean;
 }
 
-/** Result of probing an agent-CLI provider (e.g. Claude Code): whether the
- * local binary is installed and whether the user is signed in to it. Mirrors
- * the `probe_agent_cli` Tauri command payload. */
-export interface AgentCliProbe {
-  installed: boolean;
-  authed: boolean;
-  /** The CLI's own auth-status message (its login guidance), shown on the
-   * sign-in badge when installed-but-not-authed. Empty when nothing useful was
-   * captured (fall back to the static hint). Mirrors the backend field. */
-  detail: string;
-}
 
 const PROVIDER_UI_METADATA: Record<
   string,
@@ -91,15 +100,11 @@ const PROVIDER_UI_METADATA: Record<
     installHint: "Install the Claude Code CLI, then run `claude` to sign in.",
   },
   pi: {
-    // pi is a local multi-provider CLI authenticated to its provider, not via
-    // an API key here. Copy is placeholder pending founder sign-off.
     color: "text-pink-600",
     apiKeyUrl: "",
     installHint: "Install pi and sign in to a provider.",
   },
   omp: {
-    // oh-my-pi (omp) is a local multi-provider CLI authenticated to its
-    // provider, not via an API key here. Copy is placeholder pending sign-off.
     color: "text-cyan-600",
     apiKeyUrl: "",
     installHint: "Install oh-my-pi (omp) and sign in.",

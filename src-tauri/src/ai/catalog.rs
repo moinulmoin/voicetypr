@@ -350,8 +350,7 @@ mod tests {
             assert_eq!(runtime_kind(id), Some("agent_cli"), "{id} runtime");
             assert!(!is_native_provider(id), "{id} not native");
             assert_eq!(adapter_name(id), None, "{id} no adapter");
-            let provider =
-                provider(id).unwrap_or_else(|| panic!("{id} must be in the catalog"));
+            let provider = provider(id).unwrap_or_else(|| panic!("{id} must be in the catalog"));
             assert!(!provider.requires_api_key, "{id} no api key");
             assert!(!provider.supports_base_url, "{id} no base url");
             assert!(provider.models.is_empty(), "{id} empty models");

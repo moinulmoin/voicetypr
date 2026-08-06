@@ -1,3 +1,14 @@
+## Unreleased
+
+### Features
+
+* **ai:** harden Claude Code, pi, and oh-my-pi subscription-based Polish with isolated, deadline-bounded processes; add curated/discovered model selection in Advanced settings
+
+### Bug Fixes
+
+* **ai:** reject truncated or nonzero-exit CLI output, preserve raw dictation on every CLI failure, kill entire CLI process groups on timeout or cancellation, and safely resolve native executables without running Windows script shims
+
+
 ## [2.0.4](https://github.com/moinulmoin/voicetypr/compare/v2.0.3...v2.0.4) (2026-07-01)
 
 ### Features

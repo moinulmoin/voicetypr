@@ -2,10 +2,9 @@ use crate::commands::key_normalizer::is_typing_safe_single_key;
 use crate::commands::shortcuts::{
     decode_shortcut_settings_value, hold_shortcut_transition, is_single_key_shortcut,
     next_ai_enabled, normalized_custom_shortcut_conflict, pressed_shortcut_should_run,
-    should_normalize_preset_to_clean_on_enable,
-    validate_shortcut_settings, CustomHoldTransition, ExistingShortcutStrings, ModifierKind,
-    ModifierSpec, ShortcutAction, ShortcutBinding, ShortcutSettings, ShortcutTrigger, SideKind,
-    TriggerKind, MAX_SINGLE_KEY_BINDINGS,
+    should_normalize_preset_to_clean_on_enable, validate_shortcut_settings, CustomHoldTransition,
+    ExistingShortcutStrings, ModifierKind, ModifierSpec, ShortcutAction, ShortcutBinding,
+    ShortcutSettings, ShortcutTrigger, SideKind, TriggerKind, MAX_SINGLE_KEY_BINDINGS,
 };
 use keytrigger::KeyPhase;
 use std::collections::HashSet;

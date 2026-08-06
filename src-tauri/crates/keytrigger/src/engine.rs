@@ -14,7 +14,9 @@ use parking_lot::Mutex;
 
 use crate::backend::platform_source;
 use crate::matcher::Matcher;
-use crate::types::{EngineError, KeySpec, ModSet, NamedKey, RawKeyEvent, Trigger, TriggerEvent, TriggerId};
+use crate::types::{
+    EngineError, KeySpec, ModSet, NamedKey, RawKeyEvent, Trigger, TriggerEvent, TriggerId,
+};
 
 /// Messages flowing to the dispatcher thread. Raw events and control messages
 /// share one channel so they are processed in order.
@@ -594,10 +596,7 @@ mod tests {
         // Only the non-modifier single survives into the set.
         assert_eq!(set.singles, vec![KeySpec::Named(NamedKey::F8)]);
         // The filtered modifier is not consumed even with zero mods held.
-        assert!(!set.consumes(
-            KeySpec::Named(NamedKey::ControlLeft),
-            ModSet::empty()
-        ));
+        assert!(!set.consumes(KeySpec::Named(NamedKey::ControlLeft), ModSet::empty()));
         // The non-modifier single is consumed as before.
         assert!(set.consumes(KeySpec::Named(NamedKey::F8), ModSet::empty()));
     }

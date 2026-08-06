@@ -1,6 +1,6 @@
 use reqwest::{header::HeaderMap, StatusCode};
-use std::time::Duration;
 use std::borrow::Cow;
+use std::time::Duration;
 
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum AiProviderError {

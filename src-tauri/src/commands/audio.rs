@@ -3964,7 +3964,9 @@ pub async fn start_recording(
                 let guard = remote.lock().await;
                 guard.get_active_connection().is_some()
             };
-            if !remote_active && crate::secure_store::secure_has(&app, provider.key_name()).unwrap_or(false) {
+            if !remote_active
+                && crate::secure_store::secure_has(&app, provider.key_name()).unwrap_or(false)
+            {
                 provider.warm_up().await;
             }
         });

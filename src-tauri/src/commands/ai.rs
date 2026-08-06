@@ -223,9 +223,18 @@ fn remember_provider_model(
     provider: &str,
     model: &str,
 ) {
-    if !provider.is_empty() && !model.is_empty() {
+    if provider.is_empty() {
+        return;
+    }
+
+    if model.is_empty() {
+        models_by_provider.remove(provider);
+    } else {
         models_by_provider.insert(provider.to_string(), model.to_string());
     }
+}
+fn selection_clears_model_reselection(provider: &str, model: &str) -> bool {
+    !model.is_empty() || catalog::runtime_kind(provider) == Some("agent_cli")
 }
 
 async fn run_openai_chat_probe(
@@ -775,7 +784,7 @@ pub async fn update_ai_settings(
             store.set("ai_provider", json!(provider));
             store.set("ai_model", json!(model));
             store.set("ai_models_by_provider", json!(models_by_provider));
-            if !model.is_empty() {
+            if selection_clears_model_reselection(&provider, &model) {
                 store.set("ai_model_needs_reselection", json!(false));
             }
             if !enabled {
@@ -967,7 +976,8 @@ fn url_origin(raw: &str) -> Option<String> {
 pub(crate) fn ai_provider_origin(app: &tauri::AppHandle, provider_id: &str) -> Option<String> {
     if provider_id == PROVIDER_CUSTOM {
         // Mirror executor_for_provider: custom falls back to DEFAULT_OPENAI_BASE_URL when unset.
-        let base = custom_base_url_from_settings(app).unwrap_or_else(|| DEFAULT_OPENAI_BASE_URL.to_string());
+        let base = custom_base_url_from_settings(app)
+            .unwrap_or_else(|| DEFAULT_OPENAI_BASE_URL.to_string());
         return url_origin(&base);
     }
     native_origin(provider_id).map(str::to_string)
@@ -1277,6 +1287,10 @@ pub struct ProviderModel {
     pub reasoning: bool,
     #[serde(rename = "contextWindow")]
     pub context_window: Option<u64>,
+    #[serde(rename = "sourceProvider")]
+    pub source_provider: Option<String>,
+    #[serde(rename = "cliDefault")]
+    pub cli_default: bool,
     #[serde(rename = "costInput")]
     pub cost_input: Option<f64>,
     #[serde(rename = "costOutput")]
@@ -1292,10 +1306,28 @@ fn provider_models(provider: &str) -> Vec<ProviderModel> {
             recommended: model.recommended,
             reasoning: model.reasoning,
             context_window: model.context,
+            source_provider: None,
+            cli_default: false,
             cost_input: model.cost_input,
             cost_output: model.cost_output,
         })
         .collect()
+}
+
+fn provider_model_from_agent_cli(model: crate::ai::agent_cli::AgentCliModel) -> ProviderModel {
+    ProviderModel {
+        id: model.id,
+        name: model.name,
+        recommended: model.recommended,
+        reasoning: model.reasoning,
+        context_window: model.context_window,
+        source_provider: model.source_provider,
+        cli_default: model.cli_default,
+        // Agent-CLI model discovery does not provide token pricing, and
+        // subscription CLIs must never be presented as having token costs.
+        cost_input: None,
+        cost_output: None,
+    }
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -1329,10 +1361,20 @@ pub async fn list_provider_models(
 ) -> Result<Vec<ProviderModel>, String> {
     validate_provider_name(&provider)?;
 
-    if provider == PROVIDER_CUSTOM || catalog::runtime_kind(&provider) == Some("agent_cli") {
-        // custom + agent-CLI providers expose no listable models (the CLI or the
-        // user selects the model) — an empty list is correct, NOT an error.
+    if provider == PROVIDER_CUSTOM {
+        // The custom provider has no catalog models; its model is whatever the
+        // user configured for the endpoint.
         return Ok(Vec::new());
+    }
+
+    if catalog::runtime_kind(&provider) == Some("agent_cli") {
+        let models = crate::ai::agent_cli::list_models(&provider)
+            .await
+            .map_err(|error| user_facing_message(&error.error).into_owned())?;
+        return Ok(models
+            .into_iter()
+            .map(provider_model_from_agent_cli)
+            .collect());
     }
 
     let models = provider_models(&provider);
@@ -1380,7 +1422,10 @@ mod tests {
         assert!(selection_meets_model_requirement("claude-code", ""));
         assert!(selection_meets_model_requirement("claude-code", "anything"));
         assert!(!selection_meets_model_requirement("gemini", ""));
-        assert!(selection_meets_model_requirement("gemini", "gemini-2.5-flash"));
+        assert!(selection_meets_model_requirement(
+            "gemini",
+            "gemini-2.5-flash"
+        ));
         assert!(!selection_meets_model_requirement("openai", ""));
         assert!(selection_meets_model_requirement("openai", "gpt-5-nano"));
         assert!(!selection_meets_model_requirement("unknown-provider", ""));
@@ -1389,8 +1434,14 @@ mod tests {
     #[test]
     fn native_origin_maps_known_providers() {
         assert_eq!(native_origin("openai"), Some("https://api.openai.com"));
-        assert_eq!(native_origin("anthropic"), Some("https://api.anthropic.com"));
-        assert_eq!(native_origin("gemini"), Some("https://generativelanguage.googleapis.com"));
+        assert_eq!(
+            native_origin("anthropic"),
+            Some("https://api.anthropic.com")
+        );
+        assert_eq!(
+            native_origin("gemini"),
+            Some("https://generativelanguage.googleapis.com")
+        );
         assert_eq!(native_origin("custom"), None);
     }
 
@@ -1432,6 +1483,79 @@ mod tests {
 
         assert!(provider_models("custom").is_empty());
         assert!(provider_models("unknown").is_empty());
+    }
+
+    #[test]
+    fn agent_cli_model_mapping_preserves_default_metadata_without_cost_claims() {
+        let mapped = provider_model_from_agent_cli(crate::ai::agent_cli::AgentCliModel {
+            id: String::new(),
+            name: "CLI default".to_string(),
+            recommended: true,
+            reasoning: false,
+            context_window: None,
+            source_provider: None,
+            cli_default: true,
+        });
+
+        assert_eq!(mapped.id, "");
+        assert!(mapped.recommended);
+        assert!(mapped.cli_default);
+        assert_eq!(mapped.source_provider, None);
+        assert_eq!(mapped.cost_input, None);
+        assert_eq!(mapped.cost_output, None);
+
+        let discovered = provider_model_from_agent_cli(crate::ai::agent_cli::AgentCliModel {
+            id: "anthropic/claude-sonnet".to_string(),
+            name: "Claude Sonnet".to_string(),
+            recommended: false,
+            reasoning: true,
+            context_window: Some(200_000),
+            source_provider: Some("anthropic".to_string()),
+            cli_default: false,
+        });
+        assert_eq!(discovered.context_window, Some(200_000));
+        assert_eq!(discovered.source_provider.as_deref(), Some("anthropic"));
+        assert!(discovered.reasoning);
+        assert!(!discovered.cli_default);
+
+        let serialized = serde_json::to_value(&mapped).expect("ProviderModel serializes");
+        assert_eq!(serialized["id"], "");
+        assert_eq!(serialized["cliDefault"], true);
+        assert!(serialized["sourceProvider"].is_null());
+        assert!(serialized["costInput"].is_null());
+        assert!(serialized["costOutput"].is_null());
+
+        let discovered_serialized =
+            serde_json::to_value(&discovered).expect("ProviderModel serializes");
+        assert_eq!(discovered_serialized["contextWindow"], 200_000);
+        assert_eq!(discovered_serialized["sourceProvider"], "anthropic");
+        assert_eq!(discovered_serialized["cliDefault"], false);
+    }
+
+    #[test]
+    fn remember_provider_model_removes_empty_cli_default_selection() {
+        let mut models = HashMap::from([
+            ("claude-code".to_string(), "sonnet".to_string()),
+            ("openai".to_string(), "gpt-5-nano".to_string()),
+        ]);
+
+        remember_provider_model(&mut models, "claude-code", "");
+        assert!(!models.contains_key("claude-code"));
+        assert_eq!(models.get("openai"), Some(&"gpt-5-nano".to_string()));
+
+        // An empty provider is a deselection/no-op and must not clear another
+        // provider's remembered model.
+        remember_provider_model(&mut models, "", "");
+        assert_eq!(models.len(), 1);
+        assert_eq!(models.get("openai"), Some(&"gpt-5-nano".to_string()));
+    }
+
+    #[test]
+    fn valid_cli_default_selection_clears_model_reselection() {
+        assert!(selection_clears_model_reselection("pi", ""));
+        assert!(selection_clears_model_reselection("omp", ""));
+        assert!(selection_clears_model_reselection("openai", "gpt-5-mini"));
+        assert!(!selection_clears_model_reselection("openai", ""));
     }
 
     #[test]

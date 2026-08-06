@@ -517,9 +517,7 @@ mod tests {
 
         assert_eq!(stale_id.as_deref(), Some("onboarding-primary-hold"));
         assert!(
-            !bindings
-                .iter()
-                .any(|b| b.id == "onboarding-primary-hold"),
+            !bindings.iter().any(|b| b.id == "onboarding-primary-hold"),
             "stale bare primary must not be installed"
         );
 
@@ -582,16 +580,13 @@ mod tests {
     #[test]
     fn empty_hotkey_with_bare_primary_synthesizes_no_combo() {
         let bare = modifier_hold_binding("onboarding-primary-hold");
-        let (bindings, stale_id) = plan_engine_bindings(
-            &[bare],
-            "",
-            RecordingMode::Toggle,
-            false,
-            None,
-            false,
-        );
+        let (bindings, stale_id) =
+            plan_engine_bindings(&[bare], "", RecordingMode::Toggle, false, None, false);
 
-        assert!(stale_id.is_none(), "empty hotkey must not trigger migration");
+        assert!(
+            stale_id.is_none(),
+            "empty hotkey must not trigger migration"
+        );
         assert!(
             bindings
                 .iter()

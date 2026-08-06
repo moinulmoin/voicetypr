@@ -4,7 +4,7 @@ mod tests {
     use super::super::error::AiProviderError;
     use super::super::executor::{AiExecutor, OpenAiCompatibleConfig};
     use super::super::genai_runtime::AiKeyResolver;
-use super::super::providers::{PROVIDER_CLAUDE_CODE, PROVIDER_CUSTOM, PROVIDER_OPENROUTER};
+    use super::super::providers::{PROVIDER_CLAUDE_CODE, PROVIDER_CUSTOM, PROVIDER_OPENROUTER};
     use reqwest::header::AUTHORIZATION;
     use serde_json::json;
     use std::collections::HashMap;
@@ -418,6 +418,127 @@ use super::super::providers::{PROVIDER_CLAUDE_CODE, PROVIDER_CUSTOM, PROVIDER_OP
         assert_eq!(result.output_text, "polished");
         assert_eq!(server.received_requests().await.unwrap().len(), 2);
         assert!(started.elapsed() < Duration::from_millis(300));
+    }
+
+    #[tokio::test]
+    async fn ai_runtime_retries_once_on_refusal_content_then_succeeds() {
+        // Distinct from the HTTP-error retry path (should_retry): a 200-OK
+        // response whose content is a refusal fails validate_ai_output
+        // (BadResponse), triggering EXACTLY one retry. First call refuses,
+        // second call returns clean text — the executor must recover and have
+        // hit the server exactly twice.
+        let case = ProviderCase {
+            id: PROVIDER_CUSTOM,
+            model: "custom-model",
+        };
+        let server = MockServer::start().await;
+        mount_sequence(
+            &server,
+            case.id,
+            vec![
+                ok_response(case.id, "I'm sorry, I can't help with that."),
+                ok_response(case.id, "Polished transcript here."),
+            ],
+        )
+        .await;
+        let executor = executor_for(case, &server, true, false);
+
+        let result = executor
+            .polish(request(case, 1_000), CancellationToken::new())
+            .await
+            .unwrap();
+
+        assert_eq!(result.output_text, "Polished transcript here.");
+        // Exactly one retry → two total requests, no more, no fewer.
+        assert_eq!(server.received_requests().await.unwrap().len(), 2);
+    }
+
+    #[tokio::test]
+    async fn ai_runtime_gives_up_after_one_retry_when_content_stays_malformed() {
+        // The validate-on-content retry fires ONCE: a persistently malformed
+        // response surfaces BadResponse after the single retry, never an
+        // infinite loop. Complements the success-recovery case to pin the retry
+        // ceiling at exactly one.
+        let case = ProviderCase {
+            id: PROVIDER_CUSTOM,
+            model: "custom-model",
+        };
+        let server = MockServer::start().await;
+        mount_sequence(
+            &server,
+            case.id,
+            vec![
+                ok_response(case.id, "I'm sorry, I can't do that."),
+                ok_response(case.id, "I cannot help with this request."),
+            ],
+        )
+        .await;
+        let executor = executor_for(case, &server, true, false);
+
+        let error = executor
+            .polish(request(case, 1_000), CancellationToken::new())
+            .await
+            .unwrap_err();
+
+        assert_eq!(error, AiProviderError::BadResponse);
+        // One attempt + one retry, then it stops: exactly two requests.
+        assert_eq!(server.received_requests().await.unwrap().len(), 2);
+    }
+
+    #[tokio::test]
+    async fn ai_runtime_retries_once_on_truncated_content_then_succeeds() {
+        let case = ProviderCase {
+            id: PROVIDER_CUSTOM,
+            model: "custom-model",
+        };
+        let server = MockServer::start().await;
+        let truncated = "x".repeat(4097);
+        mount_sequence(
+            &server,
+            case.id,
+            vec![
+                ok_response(case.id, &truncated),
+                ok_response(case.id, "Polished transcript here."),
+            ],
+        )
+        .await;
+        let executor = executor_for(case, &server, true, false);
+
+        let result = executor
+            .polish(request(case, 1_000), CancellationToken::new())
+            .await
+            .unwrap();
+
+        assert_eq!(result.output_text, "Polished transcript here.");
+        assert_eq!(server.received_requests().await.unwrap().len(), 2);
+    }
+
+    #[tokio::test]
+    async fn ai_runtime_gives_up_after_one_retry_when_content_stays_truncated() {
+        let case = ProviderCase {
+            id: PROVIDER_CUSTOM,
+            model: "custom-model",
+        };
+        let server = MockServer::start().await;
+        let truncated = "x".repeat(4097);
+        mount_sequence(
+            &server,
+            case.id,
+            vec![
+                ok_response(case.id, &truncated),
+                ok_response(case.id, &truncated),
+            ],
+        )
+        .await;
+        let executor = executor_for(case, &server, true, false);
+
+        let error = executor
+            .polish(request(case, 1_000), CancellationToken::new())
+            .await
+            .unwrap_err();
+
+        assert_eq!(error, AiProviderError::BadResponse);
+        assert_eq!(server.received_requests().await.unwrap().len(), 2);
     }
 
     #[tokio::test]

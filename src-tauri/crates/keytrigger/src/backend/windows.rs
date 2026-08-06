@@ -32,9 +32,9 @@ use windows::Win32::UI::WindowsAndMessaging::{
     WH_KEYBOARD_LL, WM_KEYDOWN, WM_QUIT, WM_SYSKEYDOWN,
 };
 
+use super::vk::should_consume_keydown;
 use crate::engine::{ConsumeSet, KeyEventSource, Msg, ReadySignal};
 use crate::types::{KeySpec, ModSet, Modifier, NamedKey, RawKeyEvent, Side};
-use super::vk::should_consume_keydown;
 
 struct HookState {
     tx: Sender<Msg>,

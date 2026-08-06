@@ -307,9 +307,11 @@ pub fn should_normalize_preset_to_clean_on_enable(stored_preset: Option<&str>) -
 
 fn stored_global_preset_needs_clean_normalization(app: &AppHandle) -> Result<bool, String> {
     let store = app.store("settings").map_err(|e| e.to_string())?;
-    let raw = store
-        .get("enhancement_options")
-        .and_then(|value| value.get("preset").and_then(|p| p.as_str().map(String::from)));
+    let raw = store.get("enhancement_options").and_then(|value| {
+        value
+            .get("preset")
+            .and_then(|p| p.as_str().map(String::from))
+    });
     Ok(should_normalize_preset_to_clean_on_enable(raw.as_deref()))
 }
 

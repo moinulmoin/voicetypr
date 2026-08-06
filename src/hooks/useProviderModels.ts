@@ -5,6 +5,36 @@ import { createLogger } from "@/lib/logger";
 
 const log = createLogger("providers");
 
+type ProviderModelWire = AIProviderModel & {
+  context_window?: number | null;
+  source_provider?: string | null;
+  cli_default?: boolean;
+};
+
+const normalizeProviderModels = (models: ProviderModelWire[]): AIProviderModel[] =>
+  models.map((model) => {
+    const hasSnakeCaseMetadata =
+      Object.prototype.hasOwnProperty.call(model, "context_window") ||
+      Object.prototype.hasOwnProperty.call(model, "source_provider") ||
+      Object.prototype.hasOwnProperty.call(model, "cli_default");
+    if (!hasSnakeCaseMetadata) {
+      return model;
+    }
+
+    const {
+      context_window: contextWindowSnake,
+      source_provider: sourceProviderSnake,
+      cli_default: cliDefaultSnake,
+      ...rest
+    } = model;
+    return {
+      ...rest,
+      contextWindow: model.contextWindow ?? contextWindowSnake ?? null,
+      sourceProvider: model.sourceProvider ?? sourceProviderSnake ?? null,
+      cliDefault: model.cliDefault ?? cliDefaultSnake ?? false,
+    };
+  });
+
 interface UseProviderModelsReturn {
   models: AIProviderModel[];
   loading: boolean;
@@ -40,9 +70,11 @@ export function useProviderModels(providerId: string): UseProviderModelsReturn {
 
     const request = (async () => {
       try {
-        const fetchedModels = await invoke<AIProviderModel[]>("list_provider_models", {
-          provider: providerId,
-        });
+        const fetchedModels = normalizeProviderModels(
+          await invoke<ProviderModelWire[]>("list_provider_models", {
+            provider: providerId,
+          }),
+        );
         setModels(fetchedModels);
         return fetchedModels;
       } catch (err) {
@@ -101,9 +133,11 @@ export function useAllProviderModels() {
 
     const request = (async () => {
       try {
-        const fetchedModels = await invoke<AIProviderModel[]>("list_provider_models", {
-          provider: providerId,
-        });
+        const fetchedModels = normalizeProviderModels(
+          await invoke<ProviderModelWire[]>("list_provider_models", {
+            provider: providerId,
+          }),
+        );
         setModelsMap(prev => ({ ...prev, [providerId]: fetchedModels }));
         return fetchedModels;
       } catch (err) {

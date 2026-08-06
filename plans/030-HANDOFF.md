@@ -78,39 +78,47 @@ Known env quirks:
 Claude Code, pi, oh-my-pi (omp) as NO-API-KEY polish providers: spawn the user's already-installed, already-logged-in CLI headless one-shot; their subscription pays; we configure nothing.
 
 Key file: `src-tauri/src/ai/agent_cli.rs`. Architecture:
-- `AgentCliSpec` table: `InputMode` (Stdin for claude/pi | PositionalArg for omp), `OutputParser` (ClaudeJson | PiJsonl), `AuthMode` (RealAuthStatus for claude | Optimistic for pi/omp).
-- `cold_spawn_and_collect` uses `tokio::process::Command` (NOT tauri-plugin-shell — trusted Rust code isn't subject to shell ACL scope). Empty temp cwd. `kill_on_drop(true)`, 9s deadline → raw-transcript fallback.
-- **Login-shell PATH resolver** (cached `OnceLock`, `$SHELL -ilc` env dump with timeout+fallback) — Finder-launched macOS apps get a stripped PATH; without this, no CLI is ever found.
-- Dictated text passed via stdin (claude/pi) or discrete `Command::arg` (omp) — injection-safe by construction.
-- **Nonzero exit still parses stdout** — a not-logged-in CLI exits nonzero WITH its own useful message; we surface that message verbatim to the user (founder's UX idea: the CLI teaches the user the fix, e.g. "Not logged in · run /login"). Toast path: `AiProviderError::AgentCli(String)` → `emit_enhancing_failed` payload `{category:"cli_error", message}` → `AppContainer.tsx` listener (gated to cli_error so cloud failures stay silent).
+- `AgentCliSpec` owns each provider's input/output/auth modes, mandatory isolation flags, default-model policy, and fixed low/off reasoning policy.
+- `run_isolated_command` and the model-list helpers use a unique `TempDir`, no shell, dedicated Unix process groups / Windows Job Objects, concurrent bounded stdout/stderr drains, `kill_on_drop(true)`, and one deadline covering stdin, group exit, drain, group kill, and reap. A drop guard also group-kills and schedules reaping when an outer executor cancellation drops the command future. Polish has a 9s budget; model listing has a 3s budget.
+- **Login-shell PATH resolver** (cached `OnceLock`, `$SHELL -ilc` env dump with timeout+fallback) lets a Finder-launched macOS app find user CLIs. Every PATH candidate is searched; unsafe script launchers are skipped so a later native executable can win. Windows accepts `.exe` only.
+- Dictated text is stdin for Claude/pi or one discrete positional argument for omp. Model ids and prompts are separate `Command::arg` values; no dictated text enters a shell command string.
+- Nonzero exits, write/read failures, malformed JSON, timeouts, and capped output are errors. Bounded, control-free CLI guidance may reach the toast, but apparent assistant text from a failed process can never be accepted. The raw transcript remains the fallback.
 
-**EMPIRICAL FINDINGS (hard-won, do not re-litigate without re-testing on a real logged-in machine):**
-- Claude Code command (verified authed, ~2.7s): `claude -p --setting-sources "" --tools "" --strict-mcp-config --no-chrome --model haiku --system-prompt <PROMPT> --output-format json`, stdin input, empty cwd.
-- `--bare` BREAKS subscription auth (returns "Not logged in"). `--setting-sources ""` is the correct isolation flag (skips CLAUDE.md/plugins/hooks, keeps Keychain creds).
-- pi/omp `--mode json` = JSONL event stream; polished text = last assistant `message.content[].text`. pi reads stdin (~6.7s); omp does NOT read stdin in json mode → positional arg (~3.7s).
-- Warm-persistent sessions were DROPPED: cold spawn is model-call-dominated; warm saves only ~0.5s. Not worth the complexity.
-- MSIX gating was DROPPED: full-trust MSIX (which VoiceTypr uses) CAN spawn external CLIs — VoiceTypr's own MSIX spawns ffmpeg/whisper sidecars. Ships on all channels.
-- Model default = `haiku` (cheapest).
-- **Lesson: external-CLI integrations MUST be smoke-tested on a real logged-in setup.** Static review + compile + unit tests missed `--bare` breaking auth. If you change any spawn flag, re-verify live.
+**Current invocation contracts:**
+- Claude Code: `claude --safe-mode -p --tools "" --strict-mcp-config --no-chrome --model <selected-or-haiku> [--effort low] --system-prompt <PROMPT> --output-format json`. Older compatible versions fall back to the empirically proven `--setting-sources ""` isolation when `--safe-mode` is absent.
+- pi: `pi -p --no-tools --no-session --no-extensions --no-skills --no-prompt-templates --no-context-files --thinking off [--model <provider/id>] --mode json --system-prompt <PROMPT>`, with dictation on stdin.
+- omp: `omp -p --no-tools --no-lsp --no-session --no-extensions --no-skills --no-rules --no-title --thinking off [--model <selector>] --mode json --system-prompt <PROMPT> <dictation>`.
+
+**EMPIRICAL FINDINGS (hard-won; re-test changes on a real logged-in machine):**
+- `--bare` broke Claude subscription auth. On 2026-08-04, `claude --safe-mode auth status` preserved authentication, but a real polish call returned the account's current `403 subscription disabled` response; successful subscription-backed polish still needs founder smoke.
+- pi's RPC `get_available_models` and `omp models --json --no-extensions` returned nonempty model catalogs without a completion request. Their final model selectors are passed through unchanged.
+- pi/omp `--mode json` is JSONL; polished text is the last assistant message. omp requires dictation as a positional argument.
+- Warm sessions remain out of scope: cold spawn is model-call-dominated and avoids lifecycle complexity.
+- Full-trust MSIX can spawn external CLIs, but physical Windows smoke remains merge-blocking because CI is compile-only.
 
 ### Frontend for 4C
-- `src/types/providers.ts`: `AgentCliProbe`, `installHint`, UI metadata for the three CLIs.
-- `EnhancementsSection.tsx`: `AGENT_CLI_PROVIDER_IDS` / `isAgentCliProvider`, `agentCliStatus` probe state, `handleRefreshAgentCli`, 3-state badge (not installed / installed-not-signed-in / ready). Guided setup must NEVER open the API-key modal for a CLI provider (regression-tested).
-- Backend exemptions in `commands/ai.rs`: agent_cli providers need no key and no model list (`list_provider_models` → Ok(empty); `has_ai_model_and_key` → true; per-runtime timeout 9s CLI / 30s HTTP; `probe_agent_cli` command).
+- `AgentCliProbe.state` distinguishes missing, unsafe launcher, incompatible CLI, not authenticated, and ready without exposing executable paths.
+- Guided setup keeps the recommended/default model. Advanced reuses the existing searchable model picker: Claude gets curated Haiku/Sonnet/Opus; pi/omp get an explicit CLI-default choice plus models grouped by source provider.
+- `list_provider_models` routes agent CLIs through curated or no-completion discovery. Selecting an empty pi/omp CLI default removes the remembered model and clears any persisted model-reselection warning.
+- Refresh remains available for every non-ready probe state. It detects installs added to existing PATH directories; restart is only needed when PATH itself changed.
 
 ## 6. Bugs found by review (all fixed, all regression-tested)
 
-The dual-review loop (GLM implements → Codex reviews → orchestrator gates) caught real bugs; keep the loop:
-1. Nonzero CLI exit early-returned BadResponse and swallowed the CLI's own error message → parse stdout regardless of exit.
-2. `list_provider_models` errored on model-less CLI providers → Ok(empty) + frontend skips fetch.
-3. Guided setup opened the API-key modal for a not-ready CLI provider → `isAgentCliProvider` guard + toast guidance (`b82f869`).
+The review loops caught and regression-tested:
+1. Nonzero CLI exits could previously look successful or lose the CLI's useful guidance. They now always fail while preserving a bounded sanitized detail.
+2. Output was truncated before validation, allowing a 4097-byte response to masquerade as a valid 4096-byte result. Truncation is now observable, retried once, then rejected.
+3. PATH resolution stopped at the first unsafe Windows shim. It now searches all candidates and accepts only native `.exe` launchers on Windows.
+4. CLI subprocesses had independent waits that could exceed the advertised timeout. One deadline now covers write, wait, drains, termination, and reap.
+5. Guided setup could open the API-key modal for a CLI provider; CLI readiness is now probe-controlled.
+6. Selecting pi/omp's empty CLI default could revive an old remembered model or leave a migrated reselection warning persisted. Both states are now cleared.
+7. An outer executor deadline could drop the CLI future before its internal cleanup ran. Every spawned group/job is now guarded so cancellation synchronously kills the group and schedules reaping; a regression proves a descendant cannot survive a dropped future.
 
 ## 7. What remains (in priority order)
 
-1. **Founder smoke test** — QA list (founder has it): baseline polish, Claude Code dictation, CLI-error UX (logout → raw transcript + CLI's toast → Refresh), app-context in Slack vs Mail vs terminal, Polish OFF sanity, tray toggle, settings migration, pi/omp once each. Items 1–5 gate the merge.
-2. **Copy pass** — user-facing strings are functional placeholders: `installHint`s in `src/types/providers.ts`, sign-in toasts in `EnhancementsSection.tsx` (~line 687), "Which AI should I pick?" dialog (~line 966). FOUNDER MUST APPROVE all copy (and: never the word "Whisper").
-3. **Merge to main** — after 1+2. Founder decides.
-4. Optional post-merge: haiku/sonnet/opus model picker under Advanced (claude supports `--model`); OpenRouter $/M cost display in the picker; browser tab-URL context (opt-in, Apple Events per browser, domain→category mapping; needs permission-prompt onboarding + privacy framing — deserves its own small plan).
+1. **Founder macOS smoke** — successful default and non-default polish for Claude/pi/omp, shell-metacharacter dictation, logout/error fallback and toast, cancellation/timeout with no child left, and Advanced picker interaction. Automated model-list smoke passed for pi and omp; the local Claude account currently returns `403 subscription disabled`, and the automated native-window run rendered blank, so neither substitutes for this smoke.
+2. **Physical Windows smoke** — native `.exe` resolution, rejection of script-only installs, later-safe PATH candidate selection, install-then-Refresh behavior, literal shell metacharacters, no console flash, and no child after timeout.
+3. **Merge to main** — only after the founder macOS and physical Windows smoke. Founder decides. The agent-CLI install, sign-in, Refresh/restart, and provider-choice copy was founder-approved on 2026-08-04.
+4. Optional post-merge: OpenRouter $/M cost display and opt-in browser URL context.
 
 ## 8. Founder context (how to work with him)
 

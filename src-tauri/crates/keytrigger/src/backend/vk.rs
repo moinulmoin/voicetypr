@@ -53,11 +53,7 @@ pub(crate) fn should_consume_keydown(
     mods: ModSet,
     consume: &ConsumeSet,
 ) -> bool {
-    down
-        && !is_repeat
-        && !is_modifier_vk(vk)
-        && side.is_none()
-        && consume.consumes(key, mods)
+    down && !is_repeat && !is_modifier_vk(vk) && side.is_none() && consume.consumes(key, mods)
 }
 
 #[cfg(test)]

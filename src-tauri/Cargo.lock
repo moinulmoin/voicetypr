@@ -1212,6 +1212,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "command-group"
+version = "5.0.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a68fa787550392a9d58f44c21a3022cfb3ea3e2458b7f85d3b399d0ceeccf409"
+dependencies = [
+ "async-trait",
+ "nix 0.27.1",
+ "tokio",
+ "winapi",
+]
+
+[[package]]
 name = "compression-codecs"
 version = "0.4.38"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -8778,6 +8790,7 @@ dependencies = [
  "chrono",
  "clap",
  "clipboard-rs",
+ "command-group",
  "core-graphics 0.24.0",
  "cpal 0.16.0",
  "dirs 5.0.1",
@@ -8793,6 +8806,7 @@ dependencies = [
  "keyboard-types",
  "keytrigger",
  "lazy_static",
+ "libc",
  "local-ip-address",
  "log",
  "media-remote",
@@ -8837,6 +8851,7 @@ dependencies = [
  "tokio-util",
  "uuid",
  "warp",
+ "which",
  "whisper-rs",
  "windows 0.62.2",
  "winreg 0.52.0",
