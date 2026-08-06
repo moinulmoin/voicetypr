@@ -15,6 +15,7 @@
 * **uploads:** constrain long speaker timelines so Copy and Save remain reachable
 * **licensing:** preserve paid access through temporary verification outages, retry validation three times, repair stale device activation automatically, and show a revalidation warning instead of `Trial expired`.
 * **support:** replace the cramped problem-report modal with a dedicated page that collects a reply email, previews attached system configuration, gathers diagnostics automatically, and keeps copy/support-email fallbacks
+* **updater:** default direct-install prerelease builds to the Beta update channel when no channel preference has been saved
 
 ## [2.0.4](https://github.com/moinulmoin/voicetypr/compare/v2.0.3...v2.0.4) (2026-07-01)
 

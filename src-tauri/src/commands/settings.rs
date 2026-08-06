@@ -140,7 +140,7 @@ impl Default for Settings {
 }
 
 fn default_update_channel() -> String {
-    UpdateChannel::Stable.as_str().to_string()
+    UpdateChannel::from_stored(None).as_str().to_string()
 }
 
 fn default_transcription_acceleration() -> String {

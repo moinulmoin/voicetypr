@@ -24,6 +24,7 @@ mod parakeet;
 pub mod provider_capabilities;
 mod recognition;
 mod recording;
+mod release_channel;
 mod remote;
 mod secure_store;
 mod simple_cache;

@@ -47,6 +47,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, LazyLock};
 use std::time::{Duration, SystemTime};
 
+use crate::release_channel::RELEASE_CHANNEL;
 use regex::Regex;
 use sentry::protocol::{
     DebugImage, DebugMeta, Event, Exception, Frame, Level, Log, LogAttribute, LogLevel, Map,
@@ -68,29 +69,6 @@ const SENTRY_DSN: Option<&str> =
 /// Environment tag attached to every event/transaction. Always `production` for
 /// release builds (debug builds never send — no DSN).
 const ENVIRONMENT: &str = "production";
-
-/// Returns true when the semver version string contains a prerelease suffix
-/// (e.g. `"2.0.4-beta"` → true, `"2.0.4"` → false). Const-evaluated so the
-/// result is computed at compile time.
-const fn is_prerelease(version: &str) -> bool {
-    let bytes = version.as_bytes();
-    let mut i = 0;
-    while i < bytes.len() {
-        if bytes[i] == b'-' {
-            return true;
-        }
-        i += 1;
-    }
-    false
-}
-
-/// Release channel tag: derived at compile time from the crate version — `beta`
-/// when the version is a prerelease (contains `-`), `stable` otherwise.
-pub const RELEASE_CHANNEL: &str = if is_prerelease(env!("CARGO_PKG_VERSION")) {
-    "beta"
-} else {
-    "stable"
-};
 
 /// Trace sample rate: 1% of transactions are sampled and sent to GlitchTip.
 const TRACES_SAMPLE_RATE: f32 = 0.01;
@@ -1117,26 +1095,6 @@ mod tests {
             }
             _ => panic!("expected Symbolic image"),
         }
-    }
-
-    // --- Release channel derivation test --------------------------------------
-
-    #[test]
-    fn release_channel_derived_from_version() {
-        assert!(is_prerelease("2.0.4-beta"), "prerelease with dash");
-        assert!(is_prerelease("3.0.0-rc.1"), "rc prerelease");
-        assert!(!is_prerelease("2.0.4"), "stable release");
-        assert!(!is_prerelease("2.1.0"), "stable release");
-        // The actual crate version — currently "2.0.4" (no dash) → stable.
-        // When bumped to e.g. "2.1.0-beta", the const switches to "beta".
-        assert_eq!(
-            RELEASE_CHANNEL,
-            if is_prerelease(env!("CARGO_PKG_VERSION")) {
-                "beta"
-            } else {
-                "stable"
-            }
-        );
     }
 
     // --- Operational log API tests -------------------------------------------

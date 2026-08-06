@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { GeneralSettings } from '../GeneralSettings';
 
@@ -318,5 +318,18 @@ describe('GeneralSettings update distribution controls', () => {
 
     expect(await screen.findByText('Update channel')).toBeInTheDocument();
     expect(screen.getByTestId('select-item-beta')).toBeInTheDocument();
+  });
+
+  it('shows Beta when the installed build defaults to the beta channel', async () => {
+    mockSettings = { ...baseSettings, update_channel: 'beta' };
+
+    render(<GeneralSettings />);
+
+    const channelField = (await screen.findByText('Update channel')).closest('[data-slot="field"]');
+    expect(channelField).not.toBeNull();
+    expect(within(channelField as HTMLElement).getByTestId('select')).toHaveAttribute(
+      'data-value',
+      'beta',
+    );
   });
 });

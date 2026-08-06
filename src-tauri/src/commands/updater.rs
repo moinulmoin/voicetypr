@@ -3,7 +3,7 @@ use tauri::{AppHandle, Url};
 use tauri_plugin_store::StoreExt;
 use tauri_plugin_updater::{Updater, UpdaterExt};
 
-use crate::commands::distribution;
+use crate::{commands::distribution, release_channel};
 
 pub const STABLE_UPDATE_ENDPOINT: &str =
     "https://github.com/moinulmoin/voicetypr/releases/latest/download/latest.json";
@@ -19,11 +19,21 @@ pub enum UpdateChannel {
 }
 
 impl UpdateChannel {
-    pub fn from_stored(value: Option<&str>) -> Self {
+    fn from_stored_with_default(value: Option<&str>, default: Self) -> Self {
         match value {
             Some("beta") => Self::Beta,
-            _ => Self::Stable,
+            Some(_) => Self::Stable,
+            None => default,
         }
+    }
+
+    pub fn from_stored(value: Option<&str>) -> Self {
+        let build_default = if release_channel::IS_PRERELEASE_BUILD {
+            Self::Beta
+        } else {
+            Self::Stable
+        };
+        Self::from_stored_with_default(value, build_default)
     }
 
     pub const fn as_str(self) -> &'static str {
@@ -123,25 +133,31 @@ mod tests {
     use super::{UpdateChannel, BETA_UPDATE_ENDPOINT, STABLE_UPDATE_ENDPOINT};
 
     #[test]
-    fn stored_channel_defaults_to_stable() {
-        assert_eq!(UpdateChannel::from_stored(None), UpdateChannel::Stable);
+    fn missing_channel_uses_installed_build_channel() {
         assert_eq!(
-            UpdateChannel::from_stored(Some("stable")),
+            UpdateChannel::from_stored_with_default(None, UpdateChannel::Stable),
             UpdateChannel::Stable
         );
         assert_eq!(
-            UpdateChannel::from_stored(Some("unexpected")),
-            UpdateChannel::Stable
+            UpdateChannel::from_stored_with_default(None, UpdateChannel::Beta),
+            UpdateChannel::Beta
         );
     }
 
     #[test]
-    fn beta_channel_requires_exact_beta_value() {
+    fn stored_channel_overrides_installed_build_channel() {
         assert_eq!(
-            UpdateChannel::from_stored(Some("beta")),
+            UpdateChannel::from_stored_with_default(Some("stable"), UpdateChannel::Beta),
+            UpdateChannel::Stable
+        );
+        assert_eq!(
+            UpdateChannel::from_stored_with_default(Some("beta"), UpdateChannel::Stable),
             UpdateChannel::Beta
         );
-        assert_eq!(UpdateChannel::Beta.as_str(), "beta");
+        assert_eq!(
+            UpdateChannel::from_stored_with_default(Some("unexpected"), UpdateChannel::Beta),
+            UpdateChannel::Stable
+        );
     }
 
     #[test]
