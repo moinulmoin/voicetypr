@@ -58,7 +58,12 @@ export function SettingsProvider({ children }: { children: ReactNode }) {
     setSettings(nextSettings);
 
     try {
-      await invoke('save_settings', { settings: nextSettings });
+      await invoke('save_settings', {
+        settings: nextSettings,
+        ...(Object.prototype.hasOwnProperty.call(updates, 'update_channel')
+          ? { updateChannelExplicit: true }
+          : {}),
+      });
     } catch (err) {
       // Roll back only the keys this call touched, preserving any concurrent
       // updates applied since (to other keys). This is the surgical revert the

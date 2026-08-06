@@ -435,6 +435,7 @@ Observed on 2026-08-04:
 - No physical Windows host was available. A macOS cross-check reached native dependency compilation but could not compile `ring` without Windows SDK headers; Windows runtime behavior remains unverified.
 - Independent backend and frontend adversarial re-reviews found no remaining merge-blocking code findings.
 - Founder approved the final agent-CLI install, sign-in, Refresh/restart, and provider-choice copy.
+- After reconciling current `main` on 2026-08-06, `pnpm quality-gate` passed again: TypeScript, ESLint, 55 frontend files (605 passed, 1 skipped), 1,349 Rust tests (13 ignored), and clippy with warnings denied. Fresh backend/frontend adversarial review found and closed two integration regressions: recording cancellation now owns and aborts in-flight CLI Polish, and legacy implicit Stable update-channel values no longer override a prerelease build's Beta default.
 
 ## Acceptance criteria
 

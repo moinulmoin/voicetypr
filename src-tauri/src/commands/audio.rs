@@ -5610,7 +5610,7 @@ pub async fn stop_recording(
                 let recording_file_for_task = recording_file.clone();
                 let telemetry_transaction_for_process = telemetry_transaction.take();
 
-                tokio::spawn(async move {
+                (async move {
                     let telemetry_transaction =
                         TransactionFinishGuard::new(telemetry_transaction_for_process);
                     let formatting_started = Instant::now();
@@ -6027,7 +6027,8 @@ pub async fn stop_recording(
 
                     // 6. Transition to idle state
                     update_recording_state(&app_for_process, RecordingState::Idle, None);
-                });
+                })
+                .await;
             }
             Err(failure) => {
                 match &failure {

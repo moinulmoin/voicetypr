@@ -11,6 +11,7 @@ pub const BETA_UPDATE_ENDPOINT: &str =
     "https://github.com/moinulmoin/voicetypr/releases/download/beta/latest.json";
 
 static UPDATE_OPERATION: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+pub const UPDATE_CHANNEL_EXPLICIT_KEY: &str = "update_channel_explicit";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum UpdateChannel {
@@ -26,14 +27,39 @@ impl UpdateChannel {
             None => default,
         }
     }
-
-    pub fn from_stored(value: Option<&str>) -> Self {
-        let build_default = if release_channel::IS_PRERELEASE_BUILD {
+    fn installed_build_default() -> Self {
+        if release_channel::IS_PRERELEASE_BUILD {
             Self::Beta
         } else {
             Self::Stable
-        };
-        Self::from_stored_with_default(value, build_default)
+        }
+    }
+
+    fn from_preference_with_default(
+        value: Option<&str>,
+        explicitly_selected: bool,
+        default: Self,
+    ) -> Self {
+        // Before explicit-choice metadata existed, every generic settings save
+        // wrote "stable", so an unmarked Stable value is not authoritative.
+        // An unmarked Beta value could only come from an actual user choice.
+        if explicitly_selected || value == Some("beta") {
+            Self::from_stored_with_default(value, default)
+        } else {
+            default
+        }
+    }
+
+    pub fn from_stored(value: Option<&str>) -> Self {
+        Self::from_stored_with_default(value, Self::installed_build_default())
+    }
+
+    pub fn from_preference(value: Option<&str>, explicitly_selected: bool) -> Self {
+        Self::from_preference_with_default(
+            value,
+            explicitly_selected,
+            Self::installed_build_default(),
+        )
     }
 
     pub const fn as_str(self) -> &'static str {
@@ -63,7 +89,14 @@ fn selected_channel(app: &AppHandle) -> Result<UpdateChannel, String> {
     let stored = store
         .get("update_channel")
         .and_then(|value| value.as_str().map(str::to_owned));
-    Ok(UpdateChannel::from_stored(stored.as_deref()))
+    let explicitly_selected = store
+        .get(UPDATE_CHANNEL_EXPLICIT_KEY)
+        .and_then(|value| value.as_bool())
+        .unwrap_or(false);
+    Ok(UpdateChannel::from_preference(
+        stored.as_deref(),
+        explicitly_selected,
+    ))
 }
 
 fn updater_for_channel(app: &AppHandle, channel: UpdateChannel) -> Result<Updater, String> {
@@ -130,7 +163,9 @@ pub async fn install_app_update(app: AppHandle, expected_version: String) -> Res
 
 #[cfg(test)]
 mod tests {
-    use super::{UpdateChannel, BETA_UPDATE_ENDPOINT, STABLE_UPDATE_ENDPOINT};
+    use super::{
+        UpdateChannel, BETA_UPDATE_ENDPOINT, STABLE_UPDATE_ENDPOINT, UPDATE_CHANNEL_EXPLICIT_KEY,
+    };
 
     #[test]
     fn missing_channel_uses_installed_build_channel() {
@@ -158,6 +193,27 @@ mod tests {
             UpdateChannel::from_stored_with_default(Some("unexpected"), UpdateChannel::Beta),
             UpdateChannel::Stable
         );
+    }
+
+    #[test]
+    fn legacy_implicit_stable_uses_installed_build_channel() {
+        assert_eq!(
+            UpdateChannel::from_preference_with_default(Some("stable"), false, UpdateChannel::Beta,),
+            UpdateChannel::Beta
+        );
+    }
+
+    #[test]
+    fn legacy_beta_and_marked_stable_remain_explicit() {
+        assert_eq!(
+            UpdateChannel::from_preference_with_default(Some("beta"), false, UpdateChannel::Stable,),
+            UpdateChannel::Beta
+        );
+        assert_eq!(
+            UpdateChannel::from_preference_with_default(Some("stable"), true, UpdateChannel::Beta,),
+            UpdateChannel::Stable
+        );
+        assert_eq!(UPDATE_CHANNEL_EXPLICIT_KEY, "update_channel_explicit");
     }
 
     #[test]

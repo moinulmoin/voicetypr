@@ -1154,7 +1154,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
                             match crate::commands::settings::get_settings(app_handle.clone()).await {
                                 Ok(mut s) => {
                                     s.recording_mode = mode.to_string();
-                                    match crate::commands::settings::save_settings(app_handle.clone(), s).await {
+                                    match crate::commands::settings::save_settings(app_handle.clone(), s, None).await {
                                         Err(e) => {
                                             log::error!("Failed to save recording mode from tray: {}", e);
                                             let _ = app_handle.emit("tray-action-error", &format!("Failed to change recording mode: {}", e));
