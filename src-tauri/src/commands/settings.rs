@@ -59,6 +59,9 @@ pub struct Settings {
     pub transcription_task: String,
     pub final_text_language: String,
     pub theme: String,
+    // Settings disclosure mode: "recommended" or "advanced"
+    #[serde(default = "default_settings_mode")]
+    pub settings_mode: String,
     pub transcription_cleanup_days: Option<u32>,
     pub pill_position: Option<(f64, f64)>,
     pub launch_at_startup: bool,
@@ -79,6 +82,9 @@ pub struct Settings {
     pub play_sound_on_paste_success: bool,
     // Pill indicator visibility mode: "never", "always", or "when_recording"
     pub pill_indicator_mode: String,
+    // Pill indicator detail level: "compact" or "full"
+    #[serde(default = "default_pill_indicator_style")]
+    pub pill_indicator_style: String,
     // Pill indicator screen position
     pub pill_indicator_position: String,
     // Pill indicator offset from screen edge in pixels (10-50)
@@ -111,6 +117,7 @@ impl Default for Settings {
             transcription_task: TRANSCRIPTION_TASK_TRANSCRIBE.to_string(),
             final_text_language: FINAL_TEXT_LANGUAGE_SAME_AS_TRANSCRIPT.to_string(),
             theme: "system".to_string(),
+            settings_mode: default_settings_mode(),
             transcription_cleanup_days: None, // None means keep forever
             pill_position: None,              // No saved position initially
             launch_at_startup: false,         // Default to not launching at startup
@@ -125,6 +132,7 @@ impl Default for Settings {
             play_sound_on_transcription_complete: true,
             play_sound_on_paste_success: true,
             pill_indicator_mode: "when_recording".to_string(), // Default to showing only when recording
+            pill_indicator_style: default_pill_indicator_style(),
             pill_indicator_position: "bottom-center".to_string(), // Default to bottom center of screen
             pill_indicator_offset: DEFAULT_INDICATOR_OFFSET,
             pause_media_during_recording: false, // Default to off; user opts in
@@ -136,6 +144,28 @@ impl Default for Settings {
             transcription_acceleration: "auto".to_string(),
             update_channel: default_update_channel(),
         }
+    }
+}
+
+fn default_pill_indicator_style() -> String {
+    "compact".to_string()
+}
+
+fn default_settings_mode() -> String {
+    "recommended".to_string()
+}
+
+fn normalize_settings_mode(value: Option<&str>) -> String {
+    match value {
+        Some("advanced") => "advanced".to_string(),
+        _ => default_settings_mode(),
+    }
+}
+
+fn resolve_pill_indicator_style(stored: Option<String>) -> String {
+    match stored.as_deref() {
+        Some("compact" | "full") => stored.unwrap_or_default(),
+        _ => default_pill_indicator_style(),
     }
 }
 
@@ -444,6 +474,12 @@ pub async fn get_settings(app: AppHandle) -> Result<Settings, String> {
             .get("theme")
             .and_then(|v| v.as_str().map(|s| s.to_string()))
             .unwrap_or_else(|| Settings::default().theme),
+        settings_mode: normalize_settings_mode(
+            store
+                .get("settings_mode")
+                .and_then(|v| v.as_str().map(str::to_owned))
+                .as_deref(),
+        ),
         transcription_cleanup_days: store
             .get("transcription_cleanup_days")
             .and_then(|v| v.as_u64().map(|n| n as u32)),
@@ -513,6 +549,11 @@ pub async fn get_settings(app: AppHandle) -> Result<Settings, String> {
                 .and_then(|v| v.as_str().map(|s| s.to_string())),
             store.get("show_pill_indicator").and_then(|v| v.as_bool()),
             Settings::default().pill_indicator_mode,
+        ),
+        pill_indicator_style: resolve_pill_indicator_style(
+            store
+                .get("pill_indicator_style")
+                .and_then(|v| v.as_str().map(str::to_owned)),
         ),
         pill_indicator_position: store
             .get("pill_indicator_position")
@@ -724,6 +765,10 @@ pub async fn save_settings(
 
     store.set("theme", json!(settings.theme));
     store.set(
+        "settings_mode",
+        json!(normalize_settings_mode(Some(&settings.settings_mode))),
+    );
+    store.set(
         "transcription_cleanup_days",
         json!(settings.transcription_cleanup_days),
     );
@@ -762,6 +807,12 @@ pub async fn save_settings(
     );
     store.delete("play_sound_on_recording_end");
     store.set("pill_indicator_mode", json!(settings.pill_indicator_mode));
+    store.set(
+        "pill_indicator_style",
+        json!(resolve_pill_indicator_style(Some(
+            settings.pill_indicator_style.clone()
+        ))),
+    );
     store.set(
         "pill_indicator_position",
         json!(settings.pill_indicator_position),
@@ -1613,7 +1664,7 @@ pub async fn test_transcription_acceleration(
 #[cfg(test)]
 mod tests {
     use super::{
-        get_autostart_status, recording_retention_days_from_legacy_count,
+        get_autostart_status, normalize_settings_mode, recording_retention_days_from_legacy_count,
         recording_retention_days_to_value, resolve_pill_indicator_mode, set_autostart,
         update_channel_to_persist,
     };
@@ -1650,6 +1701,14 @@ mod tests {
         let resolved = resolve_pill_indicator_mode(None, None, "when_recording".to_string());
 
         assert_eq!(resolved, "when_recording");
+    }
+
+    #[test]
+    fn settings_mode_accepts_advanced_and_falls_back_to_recommended() {
+        assert_eq!(normalize_settings_mode(Some("advanced")), "advanced");
+        assert_eq!(normalize_settings_mode(Some("recommended")), "recommended");
+        assert_eq!(normalize_settings_mode(Some("invalid")), "recommended");
+        assert_eq!(normalize_settings_mode(None), "recommended");
     }
 
     /// Verify the autostart command functions exist and compile.

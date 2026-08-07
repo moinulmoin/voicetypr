@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, type CSSProperties } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { CircleAlert } from "lucide-react";
 import { toast } from "sonner";
@@ -12,8 +12,14 @@ import {
   AlertTitle,
 } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
-import { SidebarInset, SidebarProvider } from "@/components/ui/sidebar";
+import {
+  SidebarInset,
+  SidebarProvider,
+  SidebarTrigger,
+} from "@/components/ui/sidebar";
+import { Switch } from "@/components/ui/switch";
 import { Spinner } from "@/components/ui/spinner";
+import { useSettings } from "@/contexts/SettingsContext";
 import { createLogger } from "@/lib/logger";
 import {
   getTrayStatus,
@@ -31,6 +37,9 @@ interface AppShellProps {
 export function AppShell({ activeSection, onSectionChange }: AppShellProps) {
   const [trayStatus, setTrayStatus] = useState<TrayStatus | null>(null);
   const [isRetryingTray, setIsRetryingTray] = useState(false);
+  const [isModeUpdating, setIsModeUpdating] = useState(false);
+  const { settings, updateSettings } = useSettings();
+  const settingsMode = settings?.settings_mode ?? "recommended";
 
   useEffect(() => {
     let isMounted = true;
@@ -78,13 +87,56 @@ export function AppShell({ activeSection, onSectionChange }: AppShellProps) {
     }
   };
 
+  const handleModeChange = async (value: "recommended" | "advanced") => {
+    if (isModeUpdating) return;
+
+    setIsModeUpdating(true);
+    try {
+      await updateSettings({ settings_mode: value });
+      if (
+        value === "recommended" &&
+        (activeSection === "network" ||
+          activeSection === "agent" ||
+          activeSection === "advanced")
+      ) {
+        onSectionChange("general");
+      }
+    } catch {
+      toast.error("Could not change interface mode");
+    } finally {
+      setIsModeUpdating(false);
+    }
+  };
+
   const trayUnavailable =
     trayStatus !== null && !trayStatus.available && trayStatus.attempts > 0;
 
   return (
-    <SidebarProvider>
+    <SidebarProvider style={{ "--sidebar-width": "14rem" } as CSSProperties}>
+      <header
+        data-tauri-drag-region
+        className="fixed inset-x-0 top-0 z-50 flex h-9 items-center border-b border-border/60 bg-background/95 px-3 backdrop-blur-sm"
+      >
+        <SidebarTrigger
+          className="ml-8 size-7 text-muted-foreground"
+          title="Toggle sidebar"
+        />
+        <label className="ml-auto flex cursor-pointer items-center gap-2 text-xs font-medium text-muted-foreground">
+          <span className="text-right">Power user</span>
+          <Switch
+            size="sm"
+            checked={settingsMode === "advanced"}
+            onCheckedChange={(checked) =>
+              void handleModeChange(checked ? "advanced" : "recommended")
+            }
+            aria-label="Power user mode"
+            title="Show Network sharing, Agent & CLI, and diagnostics"
+            disabled={!settings || isModeUpdating}
+          />
+        </label>
+      </header>
       <Sidebar activeSection={activeSection} onSectionChange={onSectionChange} />
-      <SidebarInset>
+      <SidebarInset className="pt-9">
         {trayUnavailable ? (
           <Alert variant="destructive" className="mx-4 mt-4">
             <CircleAlert />

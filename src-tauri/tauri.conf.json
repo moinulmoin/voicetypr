@@ -12,11 +12,14 @@
     "windows": [
       {
         "title": "Voicetypr",
+        "hiddenTitle": true,
+        "titleBarStyle": "Overlay",
+        "trafficLightPosition": { "x": 12, "y": 11 },
         "label": "main",
         "width": 1100,
-        "height": 950,
+        "height": 860,
         "minWidth": 1040,
-        "minHeight": 880,
+        "minHeight": 760,
         "resizable": true,
         "center": true,
         "visible": false,

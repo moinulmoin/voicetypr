@@ -4,7 +4,6 @@ import {
   Clock,
   Cpu,
   FileAudio,
-  HelpCircle,
   Home,
   Keyboard,
   Key,
@@ -27,7 +26,6 @@ export type ScreenId =
   | "license"
   | "agent"
   | "advanced"
-  | "help"
   | "report-problem";
 
 export interface ScreenDefinition {
@@ -59,9 +57,9 @@ export const primaryScreens: ScreenDefinition[] = [
   },
   {
     id: "models",
-    label: "Transcription",
+    label: "Models",
     icon: Cpu,
-    description: "Local models, cloud transcription, and remote Voicetypr servers.",
+    description: "Local models, cloud providers, and remote Voicetypr servers.",
   },
   {
     id: "network",
@@ -89,9 +87,9 @@ export const primaryScreens: ScreenDefinition[] = [
   },
   {
     id: "license",
-    label: "Licensing",
+    label: "Account",
     icon: Key,
-    description: "Trial and license activation.",
+    description: "Trial status, license activation, and account access.",
   },
   {
     id: "agent",
@@ -109,12 +107,6 @@ export const secondaryScreens: ScreenDefinition[] = [
     description: "Power-user and diagnostics settings.",
   },
   {
-    id: "help",
-    label: "Help",
-    icon: HelpCircle,
-    description: "Troubleshooting, support, and bug reporting.",
-  },
-  {
     id: "report-problem",
     label: "Report a problem",
     icon: Bug,
@@ -128,38 +120,42 @@ export const screens = [...primaryScreens, ...secondaryScreens] as const;
 export const isScreenId = (value: string): value is ScreenId =>
   screens.some((screen) => screen.id === value);
 
-export interface NavGroup {
-  label: string;
-  screens: ScreenDefinition[];
-}
-
 const screenById = (id: ScreenId): ScreenDefinition =>
   screens.find((screen) => screen.id === id) as ScreenDefinition;
 
-// Grouped sidebar layout (Claude dashboard design): Workspace / Configure / Account.
-export const navGroups: NavGroup[] = [
-  {
-    label: "Workspace",
-    screens: [screenById("overview"), screenById("recordings"), screenById("audio")],
-  },
-  {
-    label: "Configure",
-    screens: [
-      screenById("general"),
-      screenById("shortcuts"),
-      screenById("models"),
-      screenById("network"),
-      screenById("formatting"),
-      screenById("agent"),
-    ],
-  },
-  {
-    label: "Account",
-    screens: [screenById("license"), screenById("advanced")],
-  },
+const everydayScreens = [
+  screenById("overview"),
+  screenById("recordings"),
+  screenById("audio"),
+  screenById("general"),
+  screenById("shortcuts"),
+  screenById("models"),
+  screenById("formatting"),
 ];
 
-export const footerScreens: ScreenDefinition[] = [
-  screenById("help"),
+const powerUserScreens = [
+  screenById("network"),
+  screenById("agent"),
+];
+
+const accountScreen = screenById("license");
+
+export const reportProblemNavScreens: ScreenDefinition[] = [
   screenById("report-problem"),
+];
+
+export const powerUserUtilityNavScreens: ScreenDefinition[] = [
+  screenById("advanced"),
+  screenById("report-problem"),
+];
+
+export const recommendedNavScreens: ScreenDefinition[] = [
+  ...everydayScreens,
+  accountScreen,
+];
+
+export const advancedNavScreens: ScreenDefinition[] = [
+  ...everydayScreens,
+  ...powerUserScreens,
+  accountScreen,
 ];

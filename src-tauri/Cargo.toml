@@ -91,6 +91,7 @@ tauri-nspanel = { git = "https://github.com/ahkohd/tauri-nspanel", branch = "v2"
 tauri-plugin-macos-permissions = "2"
 core-graphics = "0.24"
 media-remote = "0.3"
+objc2-app-kit = { version = "0.3.2", default-features = false, features = ["std", "NSButton", "NSControl", "NSView", "NSWindow"] }
 
 [target.'cfg(all(target_os = "windows", target_arch = "x86_64"))'.dependencies]
 whisper-rs = { version = "0.16.0" }
@@ -128,6 +129,14 @@ tauri-plugin-store = "2"
 tauri-plugin-autostart = "2"
 tauri-plugin-os = "2"
 tauri-plugin-single-instance = "2"
+[profile.dev]
+# Keep development transcriptions responsive without paying full release-build
+# compile times. Audio preparation is CPU-heavy and otherwise runs unoptimized.
+opt-level = 1
+
+[profile.dev.package."*"]
+opt-level = 3
+
 [profile.release]
 # Client-side crash symbolication for GlitchTip (server-side symbolication via
 # uploaded PDB/dSYM/debug files): line tables give function + file:line resolved

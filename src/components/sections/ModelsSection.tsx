@@ -656,18 +656,18 @@ export function ModelsSection({
       <SettingsHeader
         title={
           <span className="inline-flex items-center gap-2">
-            Transcription
+            Models
             <Dialog>
               <DialogTrigger asChild>
-                <Button type="button" variant="ghost" size="icon-sm" aria-label="Transcription sources guide" className="size-7 rounded-full text-muted-foreground">
+                <Button type="button" variant="ghost" size="icon-sm" aria-label="Models guide" className="size-7 rounded-full text-muted-foreground">
                   <HelpCircle className="h-4 w-4" />
                 </Button>
               </DialogTrigger>
               <DialogContent className="sm:max-w-lg">
                 <DialogHeader>
-                  <DialogTitle>Transcription sources guide</DialogTitle>
+                  <DialogTitle>Models guide</DialogTitle>
                   <DialogDescription>
-                    Pick where speech recognition runs before recording or uploading files.
+                    Choose where speech recognition runs before recording or uploading files.
                   </DialogDescription>
                 </DialogHeader>
                 <div className="space-y-3 text-sm leading-6 text-muted-foreground">
@@ -679,7 +679,7 @@ export function ModelsSection({
             </Dialog>
           </span>
         }
-        description="Choose where your speech is transcribed — local models, cloud providers, and remote Voicetypr servers."
+        description="Choose a local model, cloud provider, or remote Voicetypr server."
       />
 
       <SettingsCard icon={Globe} title="Spoken language">

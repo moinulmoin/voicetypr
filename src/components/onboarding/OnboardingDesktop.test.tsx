@@ -85,6 +85,7 @@ vi.mock("@tauri-apps/api/event", () => ({
     eventListeners.set(event, handlers);
     return Promise.resolve(() => handlers.delete(handler));
   }),
+  emit: vi.fn().mockResolvedValue(undefined),
 }));
 
 vi.mock("@tauri-apps/plugin-shell", () => ({
@@ -94,11 +95,12 @@ vi.mock("@tauri-apps/plugin-shell", () => ({
 const platformMock = vi.hoisted(() => ({ isMacOS: true, isWindows: false, isLinux: false }));
 vi.mock("@/lib/platform", () => platformMock);
 
-const renderOnboarding = () =>
+const renderOnboarding = (licensed = false) =>
   render(
     <OnboardingDesktop
       onComplete={onCompleteMock}
       modelManagement={modelManagement as never}
+      licensed={licensed}
     />,
   );
 
@@ -130,6 +132,8 @@ beforeEach(() => {
       requires_setup: false,
     },
   };
+  modelManagement.loadModels.mockReset();
+  modelManagement.loadModels.mockResolvedValue(undefined);
   modelManagement.modelOrder = ["base.en"];
   updateSettingsMock.mockImplementation((updates: Partial<typeof settingsState>) => {
     Object.assign(settingsState, updates);
@@ -158,7 +162,6 @@ describe("OnboardingDesktop", () => {
     renderOnboarding();
 
     await user.click(screen.getByRole("button", { name: /start setup/i }));
-    await user.click(screen.getByText("Use this device"));
     await user.click(screen.getByRole("button", { name: /continue/i }));
     await user.click(screen.getByRole("button", { name: /continue/i }));
     await user.click(screen.getByRole("button", { name: /continue/i }));
@@ -181,12 +184,26 @@ describe("OnboardingDesktop", () => {
     expect(onCompleteMock).toHaveBeenCalledWith(undefined);
   });
 
+  it("finishes directly without an upgrade screen for licensed users", async () => {
+    const user = userEvent.setup();
+    renderOnboarding(true);
+
+    await user.click(screen.getByRole("button", { name: /start setup/i }));
+    await user.click(screen.getByRole("button", { name: /continue/i }));
+    await user.click(screen.getByRole("button", { name: /continue/i }));
+    await user.click(screen.getByRole("button", { name: /continue/i }));
+    await user.click(screen.getByRole("button", { name: /save hotkey/i }));
+    await user.click(await screen.findByRole("button", { name: /continue/i }));
+
+    expect(screen.queryByText(/upgrade to pro/i)).not.toBeInTheDocument();
+    expect(onCompleteMock).toHaveBeenCalledWith(undefined);
+  });
+
   it("routes to the License tab when the user already has a license", async () => {
     const user = userEvent.setup();
     renderOnboarding();
 
     await user.click(screen.getByRole("button", { name: /start setup/i }));
-    await user.click(screen.getByText("Use this device"));
     await user.click(screen.getByRole("button", { name: /continue/i }));
     await user.click(screen.getByRole("button", { name: /continue/i }));
     await user.click(screen.getByRole("button", { name: /continue/i }));
@@ -241,7 +258,6 @@ describe("OnboardingDesktop", () => {
     renderOnboarding();
 
     await user.click(screen.getByRole("button", { name: /start setup/i }));
-    await user.click(screen.getByText("Use this device"));
     await user.click(screen.getByRole("button", { name: /continue/i }));
     await user.click(screen.getByRole("button", { name: /continue/i }));
     await user.click(screen.getByRole("button", { name: /continue/i }));
@@ -260,20 +276,84 @@ describe("OnboardingDesktop", () => {
     });
   });
 
-  it("requires an explicit source choice even when a local model is already saved", async () => {
+  it("restores an existing bare-modifier hotkey when onboarding is rerun", async () => {
+    const user = userEvent.setup();
+    settingsState.hotkey = "";
+    const existingHold = {
+      id: "onboarding-primary-hold",
+      action: "hold_to_record",
+      shortcut: "",
+      trigger: "hold",
+      enabled: true,
+      allow_risky_combo: false,
+      trigger_kind: "modifier_hold",
+      modifier: { modifier: "alt", side: "right" },
+    };
+    invokeMock.mockImplementation((command: string) => {
+      switch (command) {
+        case "discover_remote_servers":
+        case "list_remote_servers":
+          return Promise.resolve([]);
+        case "get_active_remote_server":
+          return Promise.resolve(null);
+        case "get_shortcut_settings":
+          return Promise.resolve({ bindings: [existingHold] });
+        case "set_active_remote_server":
+        case "set_global_shortcut":
+        case "update_shortcut_settings":
+          return Promise.resolve(true);
+        default:
+          return Promise.resolve(null);
+      }
+    });
+
+    renderOnboarding();
+    await user.click(screen.getByRole("button", { name: /start setup/i }));
+    await user.click(screen.getByRole("button", { name: /continue/i }));
+    await user.click(screen.getByRole("button", { name: /continue/i }));
+    await user.click(screen.getByRole("button", { name: /continue/i }));
+    await user.click(screen.getByRole("button", { name: /save hotkey/i }));
+
+    await waitFor(() => {
+      expect(invokeMock).toHaveBeenCalledWith("update_shortcut_settings", {
+        settings: { bindings: [existingHold] },
+      });
+    });
+    expect(invokeMock).not.toHaveBeenCalledWith("set_global_shortcut", {
+      shortcut: "Alt+Space",
+    });
+  });
+
+  it("keeps the selected local model when onboarding is rerun", async () => {
+    const user = userEvent.setup();
+
+    renderOnboarding();
+    await user.click(screen.getByRole("button", { name: /start setup/i }));
+    await user.click(screen.getByRole("button", { name: /continue/i }));
+    await user.click(screen.getByRole("button", { name: /continue/i }));
+    expect(await screen.findByRole("heading", { name: /choose a local model/i })).toBeInTheDocument();
+    expect(screen.getByText("Active")).toBeInTheDocument();
+    expect(settingsState.current_model).toBe("base.en");
+    expect(updateSettingsMock).not.toHaveBeenCalledWith(
+      expect.objectContaining({ current_model: expect.any(String) }),
+    );
+  });
+
+  it("shows local, cloud, and remote as explicit source choices", async () => {
     const user = userEvent.setup();
     renderOnboarding();
 
     await user.click(screen.getByRole("button", { name: /start setup/i }));
 
-    const continueButton = screen.getByRole("button", { name: /continue/i });
-    expect(continueButton).toBeDisabled();
+    expect(screen.getByRole("heading", { name: /choose where transcription runs/i }))
+      .toBeInTheDocument();
+    expect(screen.getByRole("radio", { name: /use a local model/i })).toBeChecked();
+    expect(screen.getByRole("radio", { name: /use a cloud provider/i })).toBeInTheDocument();
+    expect(screen.getByRole("radio", { name: /use another voicetypr/i })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /continue/i })).toBeEnabled();
     expect(updateSettingsMock).not.toHaveBeenCalledWith(expect.objectContaining({
       current_model: "base.en",
     }));
-
-    await user.click(screen.getByText("Use this device"));
-    expect(continueButton).toBeEnabled();
   });
 
   it("guides users to select a downloaded local model before continuing", async () => {
@@ -282,11 +362,10 @@ describe("OnboardingDesktop", () => {
     renderOnboarding();
 
     await user.click(screen.getByRole("button", { name: /start setup/i }));
-    await user.click(screen.getByText("Use this device"));
     await user.click(screen.getByRole("button", { name: /continue/i }));
     await user.click(screen.getByRole("button", { name: /continue/i }));
 
-    expect(screen.getByText(/select a downloaded model/i)).toBeInTheDocument();
+    expect(screen.getByText(/^Select a downloaded model$/)).toBeInTheDocument();
     expect(screen.getByText(/onboarding needs one selected/i)).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /continue/i })).toBeDisabled();
   });
@@ -297,14 +376,14 @@ describe("OnboardingDesktop", () => {
     renderOnboarding();
 
     await user.click(screen.getByRole("button", { name: /start setup/i }));
-    await user.click(screen.getByText("Use another Voicetypr"));
+    await user.click(screen.getByRole("radio", { name: /use another Voicetypr/i }));
     await user.click(screen.getByRole("button", { name: /continue/i }));
     await user.click(screen.getByRole("button", { name: /continue/i }));
 
-    await user.click(await screen.findByRole("button", { name: /set up this device instead/i }));
+    await user.click(await screen.findByRole("button", { name: /choose local instead/i }));
 
-    expect(screen.getByText("Prepare this device")).toBeInTheDocument();
-    expect(screen.getByText(/select a downloaded model/i)).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: /choose a local model/i })).toBeInTheDocument();
+    expect(screen.getByText(/^Select a downloaded model$/)).toBeInTheDocument();
   });
 
   it("allows an online remote Voicetypr source without a local model", async () => {
@@ -352,7 +431,7 @@ describe("OnboardingDesktop", () => {
     renderOnboarding();
 
     await user.click(screen.getByRole("button", { name: /start setup/i }));
-    await user.click(screen.getByText("Use another Voicetypr"));
+    await user.click(screen.getByRole("radio", { name: /use another Voicetypr/i }));
     await user.click(screen.getByRole("button", { name: /continue/i }));
     await user.click(screen.getByRole("button", { name: /continue/i }));
 
@@ -367,6 +446,56 @@ describe("OnboardingDesktop", () => {
     expect(screen.getByRole("button", { name: /continue/i })).toBeEnabled();
   });
 
+  it("connects a cloud provider during onboarding", async () => {
+    const user = userEvent.setup();
+    settingsState.current_model = "";
+    settingsState.current_model_engine = "whisper";
+    modelManagement.models = {
+      soniox: {
+        name: "soniox",
+        display_name: "Soniox",
+        size: 0,
+        url: "",
+        sha256: "",
+        downloaded: false,
+        speed_score: 9,
+        accuracy_score: 9,
+        recommended: false,
+        engine: "soniox",
+        kind: "cloud",
+        requires_setup: true,
+      },
+    };
+    modelManagement.modelOrder = ["soniox"];
+    modelManagement.loadModels.mockImplementation(async () => {
+      modelManagement.models.soniox.downloaded = true;
+      modelManagement.models.soniox.requires_setup = false;
+    });
+
+    renderOnboarding();
+    await user.click(screen.getByRole("button", { name: /start setup/i }));
+    await user.click(screen.getByRole("radio", { name: /use a cloud provider/i }));
+    await user.click(screen.getByRole("button", { name: /continue/i }));
+    await user.click(screen.getByRole("button", { name: /continue/i }));
+
+    expect(screen.getByRole("heading", { name: /connect a cloud provider/i })).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: /add api key/i }));
+    await user.type(screen.getByPlaceholderText("Enter your Soniox API key"), "test-cloud-key");
+    await user.click(screen.getByRole("button", { name: /save api key/i }));
+
+    await waitFor(() => {
+      expect(invokeMock).toHaveBeenCalledWith("validate_stt_key", {
+        provider: "soniox",
+        apiKey: "test-cloud-key",
+      });
+      expect(updateSettingsMock).toHaveBeenCalledWith({
+        current_model: "soniox",
+        current_model_engine: "soniox",
+      });
+    });
+    expect(screen.getByRole("button", { name: /continue/i })).toBeEnabled();
+  });
+
   it("Windows GPU toggle ON→OFF persists 'cpu' (default state: acceleration undefined → switch ON)", async () => {
     platformMock.isMacOS = false;
     platformMock.isWindows = true;
@@ -375,7 +504,6 @@ describe("OnboardingDesktop", () => {
     renderOnboarding();
 
     await user.click(screen.getByRole("button", { name: /start setup/i }));
-    await user.click(screen.getByText("Use this device"));
     await user.click(screen.getByRole("button", { name: /continue/i }));
 
     const gpuSwitch = screen.getByRole("switch", { name: /use gpu acceleration/i });
@@ -394,7 +522,6 @@ describe("OnboardingDesktop", () => {
     renderOnboarding();
 
     await user.click(screen.getByRole("button", { name: /start setup/i }));
-    await user.click(screen.getByText("Use this device"));
     await user.click(screen.getByRole("button", { name: /continue/i }));
 
     const gpuSwitch = screen.getByRole("switch", { name: /use gpu acceleration/i });
@@ -411,7 +538,6 @@ describe("OnboardingDesktop", () => {
 
     // Navigate through macOS flow to readiness (welcome→source→permissions→readiness)
     await user.click(screen.getByRole("button", { name: /start setup/i }));
-    await user.click(screen.getByText("Use this device"));
     await user.click(screen.getByRole("button", { name: /continue/i })); // source→permissions
     await user.click(screen.getByRole("button", { name: /continue/i })); // permissions→readiness
 
@@ -424,7 +550,6 @@ describe("OnboardingDesktop", () => {
 
     // Navigate to hotkey step (macOS: welcome→source→permissions→readiness→hotkey)
     await user.click(screen.getByRole("button", { name: /start setup/i }));
-    await user.click(screen.getByText("Use this device"));
     await user.click(screen.getByRole("button", { name: /continue/i }));
     await user.click(screen.getByRole("button", { name: /continue/i }));
     await user.click(screen.getByRole("button", { name: /continue/i }));
@@ -472,7 +597,6 @@ describe("OnboardingDesktop", () => {
 
     // Navigate to hotkey step
     await user.click(screen.getByRole("button", { name: /start setup/i }));
-    await user.click(screen.getByText("Use this device"));
     await user.click(screen.getByRole("button", { name: /continue/i }));
     await user.click(screen.getByRole("button", { name: /continue/i }));
     await user.click(screen.getByRole("button", { name: /continue/i }));
@@ -522,7 +646,6 @@ describe("OnboardingDesktop", () => {
 
     // Navigate to the success step (welcome→source→permissions→readiness→hotkey).
     await user.click(screen.getByRole("button", { name: /start setup/i }));
-    await user.click(screen.getByText("Use this device"));
     await user.click(screen.getByRole("button", { name: /continue/i }));
     await user.click(screen.getByRole("button", { name: /continue/i }));
     await user.click(screen.getByRole("button", { name: /continue/i }));
@@ -549,7 +672,6 @@ describe("OnboardingDesktop", () => {
     renderOnboarding();
 
     await user.click(screen.getByRole("button", { name: /start setup/i }));
-    await user.click(screen.getByText("Use this device"));
     await user.click(screen.getByRole("button", { name: /continue/i }));
     await user.click(screen.getByRole("button", { name: /continue/i }));
     await user.click(screen.getByRole("button", { name: /continue/i }));

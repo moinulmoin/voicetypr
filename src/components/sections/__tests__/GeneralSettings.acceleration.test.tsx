@@ -5,6 +5,7 @@ import { GeneralSettings } from '../GeneralSettings';
 const mockUpdateSettings = vi.fn().mockResolvedValue(undefined);
 
 const baseSettings = {
+  settings_mode: 'advanced',
   recording_mode: 'toggle',
   hotkey: 'CommandOrControl+Shift+Space',
   keep_transcription_in_clipboard: false,

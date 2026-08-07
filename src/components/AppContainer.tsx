@@ -12,6 +12,7 @@ import { UpdateAnnouncementDialog } from "./UpdateAnnouncementDialog";
 import { PrivacyConsentDialog } from "./PrivacyConsentDialog";
 import { useReadiness } from "@/contexts/ReadinessContext";
 import { useSettings } from "@/contexts/SettingsContext";
+import { useLicense } from "@/contexts/LicenseContext";
 import { useEventCoordinator } from "@/hooks/useEventCoordinator";
 import { useInAppRecordingHotkey } from "@/hooks/useInAppRecordingHotkey";
 import { useModelManagementContext } from "@/contexts/ModelManagementContext";
@@ -42,6 +43,7 @@ export function AppContainer() {
   const { settings, refreshSettings } = useSettings();
   const { checkAccessibilityPermission, checkMicrophonePermission } = useReadiness();
   const modelAvailability = useModelAvailabilityContext();
+  const { status: licenseStatus } = useLicense();
 
   // Use the model management context for onboarding
   const modelManagement = useModelManagementContext();
@@ -337,6 +339,7 @@ export function AppContainer() {
     return (
       <AppErrorBoundary>
         <OnboardingDesktop
+          licensed={licenseStatus?.status === "licensed"}
           onCompletionError={clearOnboardingCompletionMarker}
           onComplete={(target) => {
             markOnboardingCompletionPersisted();

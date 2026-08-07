@@ -1,3 +1,4 @@
+import { ApiKeyModal } from "@/components/ApiKeyModal";
 import { HotkeyInput, type BareModifierSpec } from "@/components/HotkeyInput";
 import { ModelCard } from "@/components/ModelCard";
 import type { SavedConnection } from "@/components/RemoteServerCard";
@@ -17,6 +18,7 @@ import {
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Spinner } from "@/components/ui/spinner";
 import { Switch } from "@/components/ui/switch";
+import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { useSettings } from "@/contexts/SettingsContext";
 import { useAccessibilityPermission } from "@/hooks/useAccessibilityPermission";
 import { useMicrophonePermission } from "@/hooks/useMicrophonePermission";
@@ -24,11 +26,17 @@ import type { useModelManagement } from "@/hooks/useModelManagement";
 import { formatHotkey } from "@/lib/hotkey-utils";
 import { isMacOS, isWindows } from "@/lib/platform";
 import { getModelDisplayName } from "@/lib/model-display";
+import {
+  getCloudProviderByModel,
+  isCloudEngine,
+} from "@/lib/cloudProviders";
+import { findActivePrimaryBinding } from "@/lib/shortcut-display";
 import { cn } from "@/lib/utils";
 import { ValidationPresets } from "@/lib/keyboard-normalizer";
 import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-shell";
 import {
+  Cloud,
   CheckCircle2,
   ChevronLeft,
   ChevronRight,
@@ -51,6 +59,7 @@ import {
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import type { ModifierKind, ModifierSide, ShortcutBinding, ShortcutSettings } from "@/types/shortcuts";
+import { isCloudModel, isLocalModel, type ModelInfo } from "@/types";
 import { createLogger } from "@/lib/logger";
 
 const log = createLogger("onboarding");
@@ -61,6 +70,7 @@ interface OnboardingDesktopProps {
   onCompletionStart?: () => void;
   onCompletionError?: () => void;
   onComplete: (target?: "license") => void;
+  licensed?: boolean;
   modelManagement: ReturnType<typeof useModelManagement>;
 }
 
@@ -73,7 +83,7 @@ type Step =
   | "success"
   | "upgrade";
 
-type SourceType = "local" | "remote";
+type SourceType = "local" | "cloud" | "remote";
 type PermissionStatus = "checking" | "granted" | "denied" | "error";
 
 interface PermissionState {
@@ -90,34 +100,30 @@ interface DiscoveredRemoteServer {
   machine_id: string;
 }
 
-const SOURCE_OPTIONS: Array<{
-  id: SourceType;
-  title: string;
-  description: string;
-  icon: typeof Laptop;
-  bullets: string[];
-}> = [
-  {
-    id: "local",
-    title: "Use this device",
-    description: "Download a local model and transcribe on this device.",
-    icon: Laptop,
-    bullets: ["Raw audio stays here", "Works offline after setup", "Best default for one device"],
+const READINESS_COPY: Record<SourceType, { title: string; description: string }> = {
+  local: {
+    title: "Choose a local model",
+    description: "Select a downloaded model, or download one now.",
   },
-  {
-    id: "remote",
-    title: "Use another Voicetypr",
-    description: "Connect to a stronger device or workstation running Voicetypr on your network.",
-    icon: Network,
-    bullets: ["Skip local model download", "Use a faster machine", "Great for weak laptops"],
+  cloud: {
+    title: "Connect a cloud provider",
+    description: "Add an API key, then select that provider for transcription.",
   },
-];
+  remote: {
+    title: "Connect a remote Voicetypr",
+    description: "Choose an online Voicetypr server on your network.",
+  },
+};
 
 const isRemoteServerOnline = (server?: SavedConnection | null) =>
   server?.status === "Online";
 
-const sourceLabel = (sourceType: SourceType, confirmed: boolean) =>
-  confirmed ? (sourceType === "local" ? "This device" : "Remote Voicetypr") : "Choose source";
+const sourceLabel = (sourceType: SourceType) =>
+  sourceType === "local"
+    ? "Local setup"
+    : sourceType === "cloud"
+      ? "Cloud setup"
+      : "Remote setup";
 
 const ONBOARDING_HOTKEY_VALIDATION = ValidationPresets.custom({
   minKeys: 1,
@@ -141,6 +147,7 @@ export const OnboardingDesktop = function OnboardingDesktop({
   onCompletionStart,
   onCompletionError,
   onComplete,
+  licensed = false,
   modelManagement,
 }: OnboardingDesktopProps) {
   const { settings, updateSettings } = useSettings();
@@ -157,6 +164,7 @@ export const OnboardingDesktop = function OnboardingDesktop({
 
   const {
     models,
+    loadModels,
     modelOrder,
     downloadProgress,
     verifyingModels,
@@ -172,12 +180,10 @@ export const OnboardingDesktop = function OnboardingDesktop({
   // Both independent privacy choices are opt-out and default to checked.
   const [telemetryOptIn, setTelemetryOptIn] = useState(true);
   const [analyticsOptIn, setAnalyticsOptIn] = useState(true);
-  const [sourceType, setSourceType] = useState<SourceType>("local");
-  const [sourceConfirmed, setSourceConfirmed] = useState(false);
-  const sourceConfirmedRef = useRef(false);
-  const [hotkey, setHotkey] = useState(
-    settings?.hotkey || "Alt+Space",
+  const [sourceType, setSourceType] = useState<SourceType>(() =>
+    isCloudEngine(settings?.current_model_engine ?? "") ? "cloud" : "local",
   );
+  const [hotkey, setHotkey] = useState(settings?.hotkey || "");
   const [isEditingHotkey, setIsEditingHotkey] = useState(false);
   const [capturedBareModifier, setCapturedBareModifier] = useState<BareModifierSpec | null>(null);
   const [isRequestingPermission, setIsRequestingPermission] = useState<
@@ -196,10 +202,10 @@ export const OnboardingDesktop = function OnboardingDesktop({
   const [selectedDiscoveredServer, setSelectedDiscoveredServer] = useState<DiscoveredRemoteServer | null>(null);
   const [isSavingCompletion, setIsSavingCompletion] = useState(false);
   const [holdToTalk, setHoldToTalk] = useState(false);
+  const [cloudModelSetup, setCloudModelSetup] = useState<string | null>(null);
+  const [isSavingCloudKey, setIsSavingCloudKey] = useState(false);
+  const hotkeyHydrated = useRef(false);
 
-  useEffect(() => {
-    sourceConfirmedRef.current = sourceConfirmed;
-  }, [sourceConfirmed]);
 
   const permissions = {
     microphone: {
@@ -246,6 +252,17 @@ export const OnboardingDesktop = function OnboardingDesktop({
   const currentIndex = steps.indexOf(currentStep);
   const selectedModelName = settings?.current_model || null;
   const selectedModel = selectedModelName ? models[selectedModelName] : null;
+  const localModelNames = useMemo(
+    () => modelOrder.filter((name) => models[name] && isLocalModel(models[name])),
+    [modelOrder, models],
+  );
+  const cloudModelNames = useMemo(
+    () => modelOrder.filter((name) => models[name] && isCloudModel(models[name])),
+    [modelOrder, models],
+  );
+  const activeCloudProvider = cloudModelSetup
+    ? getCloudProviderByModel(cloudModelSetup)
+    : undefined;
   const activeRemoteServer = useMemo(
     () => remoteServers.find((server) => server.id === activeRemoteServerId) ?? null,
     [activeRemoteServerId, remoteServers],
@@ -263,10 +280,24 @@ export const OnboardingDesktop = function OnboardingDesktop({
     },
     [deleteModel, settings, updateSettings],
   );
-  const localReady = Boolean(selectedModelName && isModelReady(selectedModelName));
-  const hasDownloadedLocalModel = modelOrder.some((name) => isModelReady(name));
-  const remoteReady = isRemoteServerOnline(activeRemoteServer);
-  const sourceReady = sourceType === "local" ? localReady : remoteReady;
+  const localReady = Boolean(
+    sourceType === "local" &&
+      selectedModelName &&
+      selectedModel &&
+      isLocalModel(selectedModel) &&
+      isModelReady(selectedModelName),
+  );
+  const cloudReady = Boolean(
+    sourceType === "cloud" &&
+      selectedModelName &&
+      selectedModel &&
+      isCloudModel(selectedModel) &&
+      isModelReady(selectedModelName),
+  );
+  const hasDownloadedLocalModel = localModelNames.some((name) => isModelReady(name));
+  const remoteReady = sourceType === "remote" && isRemoteServerOnline(activeRemoteServer);
+  const sourceReady =
+    sourceType === "local" ? localReady : sourceType === "cloud" ? cloudReady : remoteReady;
 
   const loadRemoteServers = useCallback(async () => {
     setIsLoadingRemoteServers(true);
@@ -309,13 +340,6 @@ export const OnboardingDesktop = function OnboardingDesktop({
       );
 
       setRemoteServers(refreshedServers);
-      if (
-        !sourceConfirmedRef.current &&
-        activeServer &&
-        refreshedServers.some((server) => server.id === activeServer)
-      ) {
-        setSourceType("remote");
-      }
     } catch (error) {
       log.error("[OnboardingDesktop] Failed to load remote servers:", error);
     } finally {
@@ -339,18 +363,67 @@ export const OnboardingDesktop = function OnboardingDesktop({
   }, [currentStep]);
 
   useEffect(() => {
-    if (currentStep !== "source" && currentStep !== "readiness") return;
+    if (currentStep !== "readiness" || sourceType !== "remote") return;
     void loadRemoteServers();
-  }, [currentStep, loadRemoteServers]);
+  }, [currentStep, sourceType, loadRemoteServers]);
+
+  useEffect(() => {
+    let cancelled = false;
+    void invoke<string | null>("get_active_remote_server")
+      .then((serverId) => {
+        if (!cancelled && serverId) {
+          setActiveRemoteServerId(serverId);
+          setSourceType("remote");
+        }
+      })
+      .catch((error) => {
+        log.error("[OnboardingDesktop] Failed to restore active remote server:", error);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!settings || hotkeyHydrated.current) return;
+    if (settings.hotkey) {
+      setHotkey(settings.hotkey);
+      setCapturedBareModifier(null);
+      hotkeyHydrated.current = true;
+      return;
+    }
+
+    let cancelled = false;
+    void invoke<ShortcutSettings>("get_shortcut_settings")
+      .then((shortcutSettings) => {
+        if (cancelled) return;
+        const primary = findActivePrimaryBinding(shortcutSettings.bindings);
+        if (primary?.modifier) {
+          setCapturedBareModifier(primary.modifier);
+          setHotkey("");
+          setHoldToTalk(primary.action === "hold_to_record");
+        } else {
+          setHotkey("Alt+Space");
+        }
+        hotkeyHydrated.current = true;
+      })
+      .catch((error) => {
+        if (cancelled) return;
+        log.error("[OnboardingDesktop] Failed to restore configured hotkey:", error);
+        setHotkey("Alt+Space");
+        hotkeyHydrated.current = true;
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [settings]);
 
   const checkPermissions = async () => {
     await Promise.all([checkMicPermission(), checkAccessPermission()]);
   };
 
   const confirmSource = (nextSourceType: SourceType) => {
-    sourceConfirmedRef.current = true;
     setSourceType(nextSourceType);
-    setSourceConfirmed(true);
   };
 
   const checkSinglePermission = async (type: "microphone" | "accessibility") => {
@@ -394,16 +467,40 @@ export const OnboardingDesktop = function OnboardingDesktop({
     }
   };
 
-  const selectLocalModel = async (modelName: string) => {
-    const info = models[modelName];
+  const selectModel = async (modelName: string, source: "local" | "cloud") => {
+    const info: ModelInfo | undefined = models[modelName];
+    if (!info) {
+      toast.error("That model is not available");
+      return;
+    }
     await invoke("set_active_remote_server", { serverId: null });
     setActiveRemoteServerId(null);
-    setSourceType("local");
+    setSourceType(source);
     await updateSettings({
       current_model: modelName,
-      current_model_engine: info?.engine ?? "whisper",
-      speech_language: "en",
+      current_model_engine: info.engine ?? "whisper",
     });
+  };
+
+  const selectLocalModel = (modelName: string) => selectModel(modelName, "local");
+
+  const selectCloudModel = (modelName: string) => selectModel(modelName, "cloud");
+
+  const handleCloudKeySubmit = async (apiKey: string) => {
+    if (!activeCloudProvider) return;
+    setIsSavingCloudKey(true);
+    try {
+      await activeCloudProvider.addKey(apiKey);
+      await loadModels();
+      await selectCloudModel(activeCloudProvider.modelName);
+      setCloudModelSetup(null);
+      toast.success(`${activeCloudProvider.providerName} connected`);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      toast.error(`Failed to connect ${activeCloudProvider.providerName}: ${message}`);
+    } finally {
+      setIsSavingCloudKey(false);
+    }
   };
 
   const switchToLocalReadiness = () => {
@@ -605,7 +702,7 @@ export const OnboardingDesktop = function OnboardingDesktop({
       }
 
       if (currentStep === "readiness") {
-        if (sourceType === "local") {
+        if (sourceType !== "remote") {
           await invoke("set_active_remote_server", { serverId: null });
           setActiveRemoteServerId(null);
         }
@@ -634,7 +731,7 @@ export const OnboardingDesktop = function OnboardingDesktop({
   const canProceed = () => {
     switch (currentStep) {
       case "source":
-        return sourceConfirmed;
+        return true;
       case "permissions":
         if (!isMacOS) return true;
         return (
@@ -656,7 +753,7 @@ export const OnboardingDesktop = function OnboardingDesktop({
         <div className="mx-auto flex w-full max-w-5xl items-center justify-between gap-4 px-8 py-6">
           <div>
             <p className="text-sm font-semibold tracking-tight">Voicetypr Setup</p>
-            <p className="text-xs text-muted-foreground">{sourceLabel(sourceType, sourceConfirmed)}</p>
+            <p className="text-xs text-muted-foreground">{sourceLabel(sourceType)}</p>
           </div>
           <StepDots currentIndex={currentIndex} total={steps.length} />
         </div>
@@ -664,61 +761,34 @@ export const OnboardingDesktop = function OnboardingDesktop({
 
       <main className="mx-auto flex min-h-[calc(100vh-76px)] w-full max-w-5xl items-center justify-center px-8 pb-10">
         {currentStep === "welcome" && (
-          <section className="grid w-full gap-8 lg:grid-cols-[1.1fr_0.9fr] lg:items-center">
+          <section className="mx-auto flex w-full max-w-3xl flex-col items-center gap-8 text-center">
             <div className="flex flex-col gap-6">
               <div className="flex flex-col gap-4">
                 <h1 className="max-w-3xl text-5xl font-semibold tracking-[-0.045em] text-balance sm:text-6xl">
                   Welcome to Voicetypr
                 </h1>
-                <p className="max-w-2xl text-base leading-7 text-muted-foreground">
-                  Choose where transcription runs, set your hotkey, then start voice typing anywhere.
+                <p className="mx-auto max-w-2xl text-base leading-7 text-muted-foreground">
+                  Choose where transcription runs, confirm system access, and keep or change your
+                  current recording hotkey.
                 </p>
                 <p className="text-sm text-muted-foreground">
                   By continuing, you agree to our Terms and Privacy Policy.
                 </p>
               </div>
-              <div className="flex flex-wrap gap-3">
+              <div className="flex justify-center">
                 <Button size="lg" onClick={handleNext}>
                   Start setup
                   <ChevronRight />
                 </Button>
               </div>
             </div>
-
-            <Card className="rounded-2xl border border-border bg-card shadow-sm">
-              <CardHeader>
-                <CardTitle className="flex items-center gap-2.5 text-lg">
-                  <span className="flex size-8 items-center justify-center rounded-lg bg-sage-bg text-sage">
-                    <Sparkles className="size-4" />
-                  </span>
-                  Setup takes three quick steps
-                </CardTitle>
-                <CardDescription>
-                  Prepare a transcription source, choose a shortcut, and you are ready to use Voicetypr.
-                </CardDescription>
-              </CardHeader>
-              <CardContent className="flex flex-col gap-2.5">
-                {[
-                  ["1", "Pick local or remote transcription"],
-                  ["2", "Prepare the selected source"],
-                  ["3", "Save your recording hotkey"],
-                ].map(([number, text]) => (
-                  <div key={number} className="flex items-center gap-3 rounded-xl border border-border/60 bg-muted/40 px-3 py-2.5">
-                    <span className="flex size-7 items-center justify-center rounded-full bg-sage-bg text-sm font-semibold text-sage">
-                      {number}
-                    </span>
-                    <span className="text-sm text-muted-foreground">{text}</span>
-                  </div>
-                ))}
-              </CardContent>
-            </Card>
           </section>
         )}
 
         {currentStep === "source" && (
           <OnboardingPanel
-            title="Where should transcription run?"
-            description="Choose local transcription on this device or remote transcription from another Voicetypr device."
+            title="Choose where transcription runs"
+            description="You can change this later from Models. Onboarding prepares the source you choose now."
             footer={
               <StepFooter
                 onBack={handleBack}
@@ -728,60 +798,59 @@ export const OnboardingDesktop = function OnboardingDesktop({
               />
             }
           >
-            <div role="radiogroup" aria-label="Transcription source" className="grid gap-4 md:grid-cols-2">
-              {SOURCE_OPTIONS.map((option) => {
-                const Icon = option.icon;
-                const selected = sourceConfirmed && sourceType === option.id;
-                return (
-                  <Card
-                    key={option.id}
-                    role="radio"
-                    aria-checked={selected}
-                    tabIndex={0}
-                    className={cn(
-                      "cursor-pointer rounded-2xl border border-border bg-card shadow-sm transition-colors hover:border-sage/40 hover:bg-muted/30",
-                      selected && "border-sage/50 bg-sage-bg/40 ring-1 ring-sage/30 hover:bg-sage-bg/40",
-                    )}
-                    onClick={() => {
-                      confirmSource(option.id);
-                    }}
-                    onKeyDown={(event) => {
-                      if (event.key === "Enter" || event.key === " ") {
-                        event.preventDefault();
-                        confirmSource(option.id);
-                      }
-                    }}
-                  >
-                    <CardHeader>
-                      <CardAction>
-                        {selected ? (
-                          <CircleCheck className="size-5 text-sage" />
-                        ) : null}
-                      </CardAction>
-                      <div
-                        className={cn(
-                          "mb-2 flex size-11 items-center justify-center rounded-xl bg-sage-bg text-sage",
-                        )}
-                      >
-                        <Icon className="size-5" />
-                      </div>
-                      <CardTitle className="text-xl">{option.title}</CardTitle>
-                      <CardDescription>{option.description}</CardDescription>
-                    </CardHeader>
-                    <CardContent>
-                      <div className="flex flex-col gap-2">
-                        {option.bullets.map((bullet) => (
-                          <div key={bullet} className="flex items-center gap-2 text-sm text-muted-foreground">
-                            <CheckCircle2 className="size-4 text-sage" />
-                            {bullet}
-                          </div>
-                        ))}
-                      </div>
-                    </CardContent>
-                  </Card>
-                );
-              })}
-            </div>
+            <ToggleGroup
+              type="single"
+              variant="outline"
+              spacing={3}
+              value={sourceType}
+              onValueChange={(value) => {
+                if (value === "local" || value === "cloud" || value === "remote") {
+                  confirmSource(value);
+                }
+              }}
+              aria-label="Transcription source"
+              className="mx-auto grid h-auto w-full max-w-3xl grid-cols-1 bg-transparent md:grid-cols-3"
+            >
+              <ToggleGroupItem
+                value="local"
+                aria-label="Use a local model"
+                className="h-full min-h-44 flex-col items-start justify-start gap-3 whitespace-normal rounded-2xl p-5 text-left data-[state=on]:border-sage/60 data-[state=on]:bg-sage-bg/50 data-[state=on]:text-foreground"
+              >
+                <span className="flex size-10 items-center justify-center rounded-xl bg-sage-bg text-sage">
+                  <Laptop className="size-5" />
+                </span>
+                <span className="text-base font-semibold">Local</span>
+                <span className="text-sm leading-6 text-muted-foreground">
+                  Download a model and transcribe on this device. Works offline.
+                </span>
+              </ToggleGroupItem>
+              <ToggleGroupItem
+                value="cloud"
+                aria-label="Use a cloud provider"
+                className="h-full min-h-44 flex-col items-start justify-start gap-3 whitespace-normal rounded-2xl p-5 text-left data-[state=on]:border-sage/60 data-[state=on]:bg-sage-bg/50 data-[state=on]:text-foreground"
+              >
+                <span className="flex size-10 items-center justify-center rounded-xl bg-sage-bg text-sage">
+                  <Cloud className="size-5" />
+                </span>
+                <span className="text-base font-semibold">Cloud</span>
+                <span className="text-sm leading-6 text-muted-foreground">
+                  Connect a provider with an API key. Audio is sent to that provider.
+                </span>
+              </ToggleGroupItem>
+              <ToggleGroupItem
+                value="remote"
+                aria-label="Use another Voicetypr"
+                className="h-full min-h-44 flex-col items-start justify-start gap-3 whitespace-normal rounded-2xl p-5 text-left data-[state=on]:border-sage/60 data-[state=on]:bg-sage-bg/50 data-[state=on]:text-foreground"
+              >
+                <span className="flex size-10 items-center justify-center rounded-xl bg-sage-bg text-sage">
+                  <Network className="size-5" />
+                </span>
+                <span className="text-base font-semibold">Remote Voicetypr</span>
+                <span className="text-sm leading-6 text-muted-foreground">
+                  Use a model running in Voicetypr on another device on your network.
+                </span>
+              </ToggleGroupItem>
+            </ToggleGroup>
           </OnboardingPanel>
         )}
 
@@ -867,12 +936,8 @@ export const OnboardingDesktop = function OnboardingDesktop({
 
         {currentStep === "readiness" && (
           <OnboardingPanel
-            title={sourceType === "local" ? "Prepare this device" : "Connect a remote Voicetypr"}
-            description={
-              sourceType === "local"
-                ? "Pick a downloaded local model, or download one now. The button unlocks as soon as the model is usable."
-                : "Choose an online Voicetypr server. Password-protected servers must pass the connection test before onboarding continues."
-            }
+            title={READINESS_COPY[sourceType].title}
+            description={READINESS_COPY[sourceType].description}
             footer={
               <StepFooter
                 onBack={handleBack}
@@ -888,7 +953,7 @@ export const OnboardingDesktop = function OnboardingDesktop({
                 <Card className="rounded-2xl border border-border bg-card py-0 shadow-sm">
                   <ScrollArea className="h-[320px]">
                     <div className="flex flex-col gap-3 p-4">
-                      {modelOrder.map((name: string) => {
+                      {localModelNames.map((name: string) => {
                         const model = models[name];
                         if (!model) return null;
                         const progressValue = downloadProgress[name];
@@ -910,11 +975,11 @@ export const OnboardingDesktop = function OnboardingDesktop({
                           />
                         );
                       })}
-                      {isLoading && modelOrder.length === 0 ? (
+                      {isLoading && localModelNames.length === 0 ? (
                         <LoadingState label="Loading local models" />
                       ) : null}
-                      {!isLoading && modelOrder.length === 0 ? (
-                        <EmptyState title="No local models available" description="Remote Voicetypr is still available if you have another machine ready." />
+                      {!isLoading && localModelNames.length === 0 ? (
+                        <EmptyState title="No local models available" description="Choose Cloud or Remote Voicetypr to continue without a local model." />
                       ) : null}
                       {hasDownloadedLocalModel && !localReady ? (
                         <Alert>
@@ -942,7 +1007,91 @@ export const OnboardingDesktop = function OnboardingDesktop({
                   </div>
                 )}
               </div>
-            ) : (
+            ) : null}
+
+            {sourceType === "cloud" ? (
+              <div className="flex flex-col gap-4">
+                <Card className="rounded-2xl border border-border bg-card py-0 shadow-sm">
+                  <ScrollArea className="h-[320px]">
+                    <div className="flex flex-col gap-3 p-4">
+                      {cloudModelNames.map((name) => {
+                        const model = models[name];
+                        const provider = getCloudProviderByModel(name);
+                        if (!model || !provider) return null;
+                        const ready = isModelReady(name);
+                        const selected = settings?.current_model === name;
+                        return (
+                          <Card
+                            key={name}
+                            size="sm"
+                            className={cn(
+                              "rounded-xl border border-border bg-muted/30",
+                              selected && "border-sage/50 bg-sage-bg/40 ring-1 ring-sage/30",
+                            )}
+                          >
+                            <CardHeader>
+                              <CardAction>
+                                <Badge variant={ready ? "secondary" : "outline"}>
+                                  {ready ? "Connected" : "API key required"}
+                                </Badge>
+                              </CardAction>
+                              <div className="flex items-start gap-3">
+                                <div className="flex size-10 items-center justify-center rounded-xl bg-sage-bg text-sage">
+                                  <Cloud className="size-5" />
+                                </div>
+                                <div>
+                                  <CardTitle>{provider.displayName}</CardTitle>
+                                  <CardDescription>{provider.description}</CardDescription>
+                                </div>
+                              </div>
+                            </CardHeader>
+                            <CardFooter className="justify-end">
+                              <Button
+                                size="sm"
+                                variant={selected ? "default" : "outline"}
+                                onClick={() => {
+                                  if (ready) {
+                                    void selectCloudModel(name);
+                                  } else {
+                                    setCloudModelSetup(name);
+                                  }
+                                }}
+                              >
+                                {selected ? "Selected" : ready ? "Use provider" : "Add API key"}
+                              </Button>
+                            </CardFooter>
+                          </Card>
+                        );
+                      })}
+                      {isLoading && cloudModelNames.length === 0 ? (
+                        <LoadingState label="Loading cloud providers" />
+                      ) : null}
+                      {!isLoading && cloudModelNames.length === 0 ? (
+                        <EmptyState
+                          title="No cloud providers available"
+                          description="Choose Local or Remote Voicetypr to continue."
+                        />
+                      ) : null}
+                    </div>
+                  </ScrollArea>
+                </Card>
+                {activeCloudProvider ? (
+                  <ApiKeyModal
+                    isOpen
+                    onClose={() => {
+                      if (!isSavingCloudKey) setCloudModelSetup(null);
+                    }}
+                    onSubmit={(apiKey) => void handleCloudKeySubmit(apiKey)}
+                    providerName={activeCloudProvider.providerName}
+                    isLoading={isSavingCloudKey}
+                    description={`Enter your ${activeCloudProvider.providerName} API key. It is stored securely in the system keychain.`}
+                    docsUrl={activeCloudProvider.docsUrl}
+                  />
+                ) : null}
+              </div>
+            ) : null}
+
+            {sourceType === "remote" ? (
               <div className="flex flex-col gap-4">
                 <div className="flex items-center justify-between gap-4">
                   <div>
@@ -978,7 +1127,7 @@ export const OnboardingDesktop = function OnboardingDesktop({
                             description="Add a Voicetypr server, or set up this device with a local model instead."
                           />
                           <Button variant="outline" onClick={switchToLocalReadiness}>
-                            Set up this device instead
+                            Choose local instead
                           </Button>
                         </div>
                       ) : null}
@@ -1081,7 +1230,7 @@ export const OnboardingDesktop = function OnboardingDesktop({
                   }
                 />
               </div>
-            )}
+            ) : null}
           </OnboardingPanel>
         )}
 
@@ -1218,9 +1367,20 @@ export const OnboardingDesktop = function OnboardingDesktop({
               </label>
             </div>
 
-            <Button size="lg" onClick={() => setCurrentStep("upgrade")}>
+            <Button
+              size="lg"
+              disabled={licensed && isSavingCompletion}
+              onClick={() => {
+                if (licensed) {
+                  void completeOnboarding();
+                } else {
+                  setCurrentStep("upgrade");
+                }
+              }}
+            >
+              {licensed && isSavingCompletion ? <Spinner /> : null}
               Continue
-              <ChevronRight />
+              {!licensed ? <ChevronRight /> : null}
             </Button>
           </section>
         )}

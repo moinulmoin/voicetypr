@@ -8,6 +8,10 @@ import { AppShell } from "./AppShell";
 const getTrayStatusMock = vi.fn<() => Promise<TrayStatus>>();
 const retryTrayCreationMock = vi.fn<() => Promise<TrayStatus>>();
 let trayStatusListener: ((event: { payload: TrayStatus }) => void) | undefined;
+const updateSettingsMock = vi.fn();
+const settingsState = {
+  settings_mode: "recommended" as "recommended" | "advanced",
+};
 
 vi.mock("@/lib/tray", () => ({
   getTrayStatus: () => getTrayStatusMock(),
@@ -28,6 +32,13 @@ vi.mock("sonner", () => ({
   },
 }));
 
+vi.mock("@/contexts/SettingsContext", () => ({
+  useSettings: () => ({
+    settings: settingsState,
+    updateSettings: updateSettingsMock,
+  }),
+}));
+
 vi.mock("@/components/Sidebar", () => ({
   Sidebar: () => <aside>Sidebar</aside>,
 }));
@@ -39,12 +50,15 @@ vi.mock("@/components/tabs/TabContainer", () => ({
 vi.mock("@/components/ui/sidebar", () => ({
   SidebarProvider: ({ children }: { children: ReactNode }) => <>{children}</>,
   SidebarInset: ({ children }: { children: ReactNode }) => <section>{children}</section>,
+  SidebarTrigger: () => <button type="button">Toggle Sidebar</button>,
 }));
 
 describe("AppShell tray recovery", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     trayStatusListener = undefined;
+    settingsState.settings_mode = "recommended";
+    updateSettingsMock.mockResolvedValue(undefined);
   });
 
   it("keeps recovery help visible until a manual retry restores the tray", async () => {
@@ -92,5 +106,63 @@ describe("AppShell tray recovery", () => {
     });
 
     expect(screen.queryByText("Menu-bar icon unavailable")).not.toBeInTheDocument();
+  });
+
+  it("uses a compact draggable title bar with one mode switch and no duplicate branding", async () => {
+    const user = userEvent.setup();
+    getTrayStatusMock.mockResolvedValue({
+      available: true,
+      attempts: 0,
+      lastError: null,
+    });
+
+    render(<AppShell activeSection="overview" onSectionChange={vi.fn()} />);
+
+    const titleBar = screen.getByRole("banner");
+    const modeSwitch = screen.getByRole("switch", { name: "Power user mode" });
+    expect(titleBar).toHaveAttribute("data-tauri-drag-region");
+    expect(titleBar).toHaveClass("h-9");
+    expect(screen.queryByText("Voicetypr")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Toggle Sidebar" })).toBeInTheDocument();
+    expect(screen.getByText("Power user")).toBeInTheDocument();
+    expect(screen.queryByText("Default")).not.toBeInTheDocument();
+    expect(modeSwitch).not.toBeChecked();
+
+    await user.click(modeSwitch);
+
+    expect(updateSettingsMock).toHaveBeenCalledWith({ settings_mode: "advanced" });
+  });
+
+  it("returns a hidden power-user screen to Settings when Default is selected", async () => {
+    const user = userEvent.setup();
+    const onSectionChange = vi.fn();
+    let resolveModeUpdate: (() => void) | undefined;
+    updateSettingsMock.mockImplementationOnce(
+      () =>
+        new Promise<void>((resolve) => {
+          resolveModeUpdate = resolve;
+        }),
+    );
+    settingsState.settings_mode = "advanced";
+    getTrayStatusMock.mockResolvedValue({
+      available: true,
+      attempts: 0,
+      lastError: null,
+    });
+
+    render(<AppShell activeSection="network" onSectionChange={onSectionChange} />);
+    const modeSwitch = screen.getByRole("switch", { name: "Power user mode" });
+    await user.click(modeSwitch);
+
+    expect(modeSwitch).toBeDisabled();
+    await user.click(modeSwitch);
+    expect(updateSettingsMock).toHaveBeenCalledOnce();
+
+    act(() => resolveModeUpdate?.());
+    await waitFor(() => {
+      expect(updateSettingsMock).toHaveBeenCalledWith({ settings_mode: "recommended" });
+      expect(onSectionChange).toHaveBeenCalledWith("general");
+      expect(modeSwitch).not.toBeDisabled();
+    });
   });
 });

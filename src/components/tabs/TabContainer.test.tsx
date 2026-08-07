@@ -45,9 +45,6 @@ vi.mock('./AccountTab', () => ({
 }));
 
 
-vi.mock('./HelpTab', () => ({
-  HelpTab: () => <div data-testid="help-tab">Help</div>
-}));
 
 vi.mock('../sections/ReportProblemSection', () => ({
   ReportProblemSection: () => <div data-testid="report-problem-tab">Report problem</div>
@@ -76,9 +73,6 @@ describe('TabContainer', () => {
     rerender(<TabContainer activeSection="license" />);
     expect(screen.getByTestId('account-tab')).toBeInTheDocument();
     
-    
-    rerender(<TabContainer activeSection="help" />);
-    expect(screen.getByTestId('help-tab')).toBeInTheDocument();
 
     rerender(<TabContainer activeSection="report-problem" />);
     expect(screen.getByTestId('report-problem-tab')).toBeInTheDocument();

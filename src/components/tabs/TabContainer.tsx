@@ -2,7 +2,6 @@
 import { AccountTab } from "./AccountTab";
 import { AdvancedTab } from "./AdvancedTab";
 import { EnhancementsTab } from "./EnhancementsTab";
-import { HelpTab } from "./HelpTab";
 import { ModelsTab } from "./ModelsTab";
 import { OverviewTab } from "./OverviewTab";
 import { RecordingsTab } from "./RecordingsTab";
@@ -55,8 +54,6 @@ export function TabContainer({ activeSection }: TabContainerProps) {
       case "license":
         return <AccountTab />;
 
-      case "help":
-        return <HelpTab />;
 
       case "report-problem":
         return <ReportProblemSection />;

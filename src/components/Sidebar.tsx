@@ -1,7 +1,9 @@
 import { Brandmark } from "@/components/Brandmark";
 import {
-  navGroups,
-  footerScreens,
+  advancedNavScreens,
+  powerUserUtilityNavScreens,
+  recommendedNavScreens,
+  reportProblemNavScreens,
   type ScreenDefinition,
   type ScreenId,
 } from "@/components/navigation";
@@ -12,7 +14,6 @@ import {
   SidebarFooter,
   SidebarGroup,
   SidebarGroupContent,
-  SidebarGroupLabel,
   SidebarHeader,
   SidebarMenu,
   SidebarMenuButton,
@@ -20,6 +21,7 @@ import {
   Sidebar as SidebarPrimitive,
 } from "@/components/ui/sidebar";
 import { useLicense } from "@/contexts/LicenseContext";
+import { useSettings } from "@/contexts/SettingsContext";
 import type { LicenseStatus } from "@/types";
 import { cn } from "@/lib/utils";
 import { RefreshCw } from "lucide-react";
@@ -82,8 +84,17 @@ function getLicenseBadge(status: LicenseStatus | null, daysLeft: number) {
 }
 export function Sidebar({ activeSection, onSectionChange }: SidebarProps) {
   const { status, isLoading } = useLicense();
+  const { settings } = useSettings();
   const [appVersion, setAppVersion] = useState("—");
   const licenseBadge = getLicenseBadge(status, status?.trial_days_left ?? -1);
+  const visibleScreens =
+    settings?.settings_mode === "advanced"
+      ? advancedNavScreens
+      : recommendedNavScreens;
+  const utilityScreens =
+    settings?.settings_mode === "advanced"
+      ? powerUserUtilityNavScreens
+      : reportProblemNavScreens;
 
   useEffect(() => {
     const loadVersion = async () => {
@@ -96,23 +107,26 @@ export function Sidebar({ activeSection, onSectionChange }: SidebarProps) {
     void loadVersion();
   }, []);
 
+
   return (
     <>
-      <SidebarPrimitive collapsible="none" className="border-sidebar-border/80 bg-sidebar/95 backdrop-blur-sm">
-        <SidebarHeader className="px-4 pb-2 pt-4">
+      <SidebarPrimitive collapsible="icon" className="border-sidebar-border/80 bg-sidebar/95 pt-9 backdrop-blur-sm">
+        <SidebarHeader className="gap-2 px-4 pb-2 pt-4 group-data-[collapsible=icon]:px-2">
           <button
             type="button"
             onClick={() => onSectionChange("overview")}
-            className="flex w-full items-center justify-between gap-3 rounded-lg border border-sidebar-border/60 bg-background/60 px-3 py-2 text-left transition-colors hover:bg-sidebar-accent"
+            aria-label="Overview"
+            title="Overview"
+            className="flex w-full items-center justify-between gap-3 rounded-lg px-3 py-2 text-left transition-colors hover:bg-sidebar-accent group-data-[collapsible=icon]:justify-center group-data-[collapsible=icon]:px-2"
           >
             <div className="flex min-w-0 items-center gap-2.5">
               <Brandmark className="size-6 shrink-0 text-sage" />
-              <span className="truncate text-sm font-semibold tracking-tight">Voicetypr</span>
+              <span className="truncate text-sm font-semibold tracking-tight group-data-[collapsible=icon]:hidden">Voicetypr</span>
             </div>
             {!isLoading && status ? (
               <span
                 className={cn(
-                  "shrink-0 rounded-full border px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.12em]",
+                  "shrink-0 rounded-full border px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.12em] group-data-[collapsible=icon]:hidden",
                   licenseBadge.className,
                 )}
               >
@@ -122,27 +136,22 @@ export function Sidebar({ activeSection, onSectionChange }: SidebarProps) {
           </button>
         </SidebarHeader>
 
-        <SidebarContent className="flex flex-col px-2">
-          {navGroups.map((group) => (
-            <SidebarNavGroup
-              key={group.label}
-              label={group.label}
-              items={group.screens}
-              activeSection={activeSection}
-              onSectionChange={onSectionChange}
-            />
-          ))}
-          <div className="mt-auto space-y-0 pb-2">
-            <SidebarNavGroup
-              label={null}
-              items={footerScreens}
+        <SidebarContent className="px-2">
+          <SidebarNavMenu
+            items={visibleScreens}
+            activeSection={activeSection}
+            onSectionChange={onSectionChange}
+          />
+          <div className="mt-auto pb-2">
+            <SidebarNavMenu
+              items={utilityScreens}
               activeSection={activeSection}
               onSectionChange={onSectionChange}
             />
           </div>
         </SidebarContent>
 
-        <SidebarFooter className="border-t border-sidebar-border/70 px-3 py-2">
+        <SidebarFooter className="border-t border-sidebar-border/70 px-3 py-2 group-data-[collapsible=icon]:px-2">
           <SidebarFooterStatus appVersion={appVersion} />
         </SidebarFooter>
       </SidebarPrimitive>
@@ -151,26 +160,19 @@ export function Sidebar({ activeSection, onSectionChange }: SidebarProps) {
   );
 }
 
-function SidebarNavGroup({
-  label,
+function SidebarNavMenu({
   items,
   activeSection,
   onSectionChange,
 }: {
-  label: string | null;
   items: ScreenDefinition[];
   activeSection: ScreenId;
   onSectionChange: (section: ScreenId) => void;
 }) {
   return (
-    <SidebarGroup>
-      {label ? (
-        <SidebarGroupLabel className="px-3 text-[11px] uppercase tracking-[0.16em] text-muted-foreground">
-          {label}
-        </SidebarGroupLabel>
-      ) : null}
+    <SidebarGroup className="py-2">
       <SidebarGroupContent>
-        <SidebarMenu>
+        <SidebarMenu className="group-data-[collapsible=icon]:items-center">
           {items.map((item) => (
             <SidebarNavItem
               key={item.id}
@@ -234,8 +236,8 @@ function SidebarFooterStatus({
   };
 
   return (
-    <div className="flex items-center justify-between gap-2">
-      <span className="text-xs text-muted-foreground">v{appVersion}</span>
+    <div className="flex items-center justify-between gap-2 group-data-[collapsible=icon]:justify-center">
+      <span className="text-xs text-muted-foreground group-data-[collapsible=icon]:hidden">v{appVersion}</span>
       <Button
         type="button"
         variant="ghost"
