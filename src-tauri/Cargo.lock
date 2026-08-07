@@ -8462,6 +8462,7 @@ dependencies = [
  "log",
  "media-remote",
  "mockall",
+ "objc2-app-kit",
  "once_cell",
  "parking_lot",
  "pbkdf2",

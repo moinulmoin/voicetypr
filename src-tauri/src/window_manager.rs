@@ -5,6 +5,8 @@ use crate::utils::logger::*;
 use std::sync::{Arc, Mutex};
 use tauri::{AppHandle, Emitter, Manager, WebviewUrl, WebviewWindow, WebviewWindowBuilder};
 
+pub(crate) const PILL_WIDTH: f64 = 240.0;
+pub(crate) const PILL_HEIGHT: f64 = 48.0;
 #[derive(Debug, Clone)]
 pub struct WindowManager {
     app_handle: AppHandle,
@@ -18,8 +20,8 @@ fn calculate_pill_position(
     screen_height: f64,
     edge_offset: f64,
 ) -> (f64, f64) {
-    let pill_width = 80.0;
-    let pill_height = 40.0;
+    let pill_width = PILL_WIDTH;
+    let pill_height = PILL_HEIGHT;
 
     // Horizontal position: left, center, or right
     let x = if position.ends_with("-left") {
@@ -253,7 +255,7 @@ impl WindowManager {
         .transparent(true)
         .shadow(false) // Disabled to fix Windows transparency issue
         .skip_taskbar(true)
-        .inner_size(80.0, 40.0)
+        .inner_size(PILL_WIDTH, PILL_HEIGHT)
         .position(position_x, position_y)
         .visible(true) // Start visible
         .focused(false); // Don't steal focus
@@ -268,6 +270,9 @@ impl WindowManager {
         let pill_builder = pill_builder;
 
         let pill_window = pill_builder.build().map_err(|e| e.to_string())?;
+        if let Err(error) = pill_window.set_ignore_cursor_events(true) {
+            log::warn!("Failed to make pill window click-through: {}", error);
+        }
 
         // Convert to NSPanel on macOS
         #[cfg(target_os = "macos")]
@@ -689,7 +694,7 @@ impl WindowManager {
         if let Some(toast) = self.app_handle.get_webview_window("toast") {
             let toast_width = 400.0;
             let toast_height = 80.0;
-            let pill_width = 80.0;
+            let pill_width = PILL_WIDTH;
             let gap = 8.0;
             let toast_x = pill_x + (pill_width - toast_width) / 2.0;
             let toast_y = pill_y - toast_height - gap;
@@ -732,7 +737,7 @@ impl WindowManager {
             let toast_x = pill_x + (pill_width - toast_width) / 2.0;
             // If pill is at top, put toast below; otherwise put toast above
             let toast_y = if position == "top" {
-                pill_y + 40.0 + gap // Below pill
+                pill_y + PILL_HEIGHT + gap // Below pill
             } else {
                 pill_y - toast_height - gap // Above pill
             };
@@ -750,9 +755,9 @@ impl WindowManager {
 mod tests {
     use super::calculate_pill_position;
 
-    // Screen: 1920x1080, pill: 80x40, edge_offset: 10
-    // x_left = 10, x_center = 920, x_right = 1830
-    // y_top = 10, y_bottom = 1030
+    // Screen: 1920x1080, pill: 240x48, edge_offset: 10
+    // x_left = 10, x_center = 840, x_right = 1670
+    // y_top = 10, y_bottom = 1022
 
     #[test]
     fn calculate_pill_position_top_left() {
@@ -764,14 +769,14 @@ mod tests {
     #[test]
     fn calculate_pill_position_top_center() {
         let (x, y) = calculate_pill_position("top-center", 1920.0, 1080.0, 10.0);
-        assert_eq!(x, 920.0);
+        assert_eq!(x, 840.0);
         assert_eq!(y, 10.0);
     }
 
     #[test]
     fn calculate_pill_position_top_right() {
         let (x, y) = calculate_pill_position("top-right", 1920.0, 1080.0, 10.0);
-        assert_eq!(x, 1830.0);
+        assert_eq!(x, 1670.0);
         assert_eq!(y, 10.0);
     }
 
@@ -779,28 +784,28 @@ mod tests {
     fn calculate_pill_position_bottom_left() {
         let (x, y) = calculate_pill_position("bottom-left", 1920.0, 1080.0, 10.0);
         assert_eq!(x, 10.0);
-        assert_eq!(y, 1030.0);
+        assert_eq!(y, 1022.0);
     }
 
     #[test]
     fn calculate_pill_position_bottom_center() {
         let (x, y) = calculate_pill_position("bottom-center", 1920.0, 1080.0, 10.0);
-        assert_eq!(x, 920.0);
-        assert_eq!(y, 1030.0);
+        assert_eq!(x, 840.0);
+        assert_eq!(y, 1022.0);
     }
 
     #[test]
     fn calculate_pill_position_bottom_right() {
         let (x, y) = calculate_pill_position("bottom-right", 1920.0, 1080.0, 10.0);
-        assert_eq!(x, 1830.0);
-        assert_eq!(y, 1030.0);
+        assert_eq!(x, 1670.0);
+        assert_eq!(y, 1022.0);
     }
 
     #[test]
     fn calculate_pill_position_defaults_to_bottom_center() {
         let (x, y) = calculate_pill_position("unknown", 1920.0, 1080.0, 10.0);
-        assert_eq!(x, 920.0);
-        assert_eq!(y, 1030.0);
+        assert_eq!(x, 840.0);
+        assert_eq!(y, 1022.0);
     }
 
     #[test]
@@ -808,6 +813,6 @@ mod tests {
         // Test with 50px offset
         let (x, y) = calculate_pill_position("bottom-left", 1920.0, 1080.0, 50.0);
         assert_eq!(x, 50.0);
-        assert_eq!(y, 990.0); // 1080 - 40 - 50
+        assert_eq!(y, 982.0); // 1080 - 48 - 50
     }
 }

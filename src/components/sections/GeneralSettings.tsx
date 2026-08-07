@@ -28,7 +28,7 @@ import { useSettings } from "@/contexts/SettingsContext";
 import { updateService } from "@/services/updateService";
 import { isMacOS, isWindows } from "@/lib/platform";
 import { findActivePrimaryBinding, formatPrimaryHotkeyLabel } from "@/lib/shortcut-display";
-import { PillIndicatorMode, PillIndicatorPosition, TranscriptionAcceleration, type UpdateChannel } from "@/types";
+import { PillIndicatorMode, PillIndicatorPosition, PillIndicatorStyle, TranscriptionAcceleration, type UpdateChannel } from "@/types";
 import { invoke } from "@tauri-apps/api/core";
 import type { ShortcutBinding, ShortcutSettings } from "@/types/shortcuts";
 import type { AccelerationStatus } from "@/types/acceleration";
@@ -203,6 +203,8 @@ export function GeneralSettings() {
   }, [settings?.hotkey]);
 
   if (!settings) return null;
+  const settingsMode = settings.settings_mode ?? "recommended";
+  const isAdvanced = settingsMode === "advanced";
 
   const startEditing = () => {
     setPendingHotkey(settings.hotkey || "");
@@ -719,6 +721,7 @@ export function GeneralSettings() {
                 <FieldSet className="gap-4 border-t border-border/60 pt-5">
                   <FieldLegend className="mb-1 text-base font-semibold">Transcript handling</FieldLegend>
 
+                  {isAdvanced && (
                   <Field orientation="responsive" className="items-center gap-3">
                     <FieldContent>
                       <FieldTitle>Keep Transcript in Clipboard</FieldTitle>
@@ -736,6 +739,7 @@ export function GeneralSettings() {
                       }
                     />
                   </Field>
+                  )}
 
                   <Field orientation="responsive" className="items-center gap-3">
                     <FieldContent>
@@ -756,6 +760,7 @@ export function GeneralSettings() {
                   </Field>
 
 
+                  {isAdvanced && (
                   <Field orientation="responsive" className="items-center gap-3">
                     <FieldContent>
                       <FieldTitle>Pause media during recording</FieldTitle>
@@ -773,9 +778,11 @@ export function GeneralSettings() {
                       }
                     />
                   </Field>
+                  )}
 
                 </FieldSet>
 
+                {isAdvanced && (
                 <FieldSet className="gap-4 border-t border-border/60 pt-5">
                   <FieldLegend className="mb-1 text-base font-semibold">Audio feedback</FieldLegend>
 
@@ -835,8 +842,9 @@ export function GeneralSettings() {
                     />
                   </Field>
                 </FieldSet>
+                )}
 
-                {isWindows && (
+                {isAdvanced && isWindows && (
                 <FieldSet className="gap-4 border-t border-border/60 pt-5">
                   <FieldLegend className="mb-1 text-base font-semibold">Transcription performance</FieldLegend>
 
@@ -934,7 +942,34 @@ export function GeneralSettings() {
                     </Select>
                   </Field>
 
-                  {settings.pill_indicator_mode !== "never" && (
+                  {isAdvanced && settings.pill_indicator_mode !== "never" && (
+                    <Field orientation="responsive" className="items-center gap-3">
+                      <FieldContent>
+                        <FieldTitle>Indicator detail</FieldTitle>
+                        <FieldDescription>
+                          Compact shows only the animation. Full adds status text and a timer.
+                        </FieldDescription>
+                      </FieldContent>
+                      <Select
+                        value={settings.pill_indicator_style ?? "compact"}
+                        onValueChange={async (value: PillIndicatorStyle) => {
+                          await updateSettings({
+                            pill_indicator_style: value,
+                          });
+                        }}
+                      >
+                        <SelectTrigger className="w-full md:w-[190px]">
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="compact">Compact</SelectItem>
+                          <SelectItem value="full">Full</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </Field>
+                  )}
+
+                  {isAdvanced && settings.pill_indicator_mode !== "never" && (
                     <>
                       <Field orientation="responsive" className="items-center gap-3">
                         <FieldContent>
@@ -997,6 +1032,7 @@ export function GeneralSettings() {
                   )}
                 </FieldSet>
 
+                {isAdvanced && (
                 <FieldSet className="gap-4 border-t border-border/60 pt-5">
                   <FieldLegend className="mb-1 text-base font-semibold">Storage & cleanup</FieldLegend>
 
@@ -1104,6 +1140,7 @@ export function GeneralSettings() {
                     </div>
                   </Field>
                 </FieldSet>
+                )}
 
                 <div className="flex items-center gap-2 rounded-lg border border-primary/15 bg-primary/5 p-3">
                   <Kbd>ESC</Kbd>

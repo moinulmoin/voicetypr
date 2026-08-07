@@ -5,6 +5,7 @@ import { invoke } from '@tauri-apps/api/core';
 
 const mockUpdateSettings = vi.fn().mockResolvedValue(undefined);
 const baseSettings = {
+  settings_mode: 'advanced',
   recording_mode: 'toggle',
   hotkey: 'CommandOrControl+Shift+Space',
   keep_transcription_in_clipboard: false,
@@ -12,6 +13,7 @@ const baseSettings = {
   play_sound_on_transcription_complete: true,
   play_sound_on_paste_success: true,
   pill_indicator_mode: 'when_recording',
+  pill_indicator_style: 'compact',
   pill_indicator_position: 'bottom-center',
   pill_indicator_offset: 10
 };
@@ -97,7 +99,7 @@ vi.mock('@/components/ui/select', () => ({
     <div
       data-testid="select"
       data-value={value}
-      onClick={() => onValueChange?.('top-center')}
+      onClick={() => onValueChange?.(value === 'compact' ? 'full' : 'top-center')}
     >
       {children}
     </div>
@@ -185,6 +187,27 @@ describe('GeneralSettings recording indicator', () => {
       expect(screen.getByTestId('select-item-never')).toBeInTheDocument();
       expect(screen.getByTestId('select-item-always')).toBeInTheDocument();
       expect(screen.getByTestId('select-item-when_recording')).toBeInTheDocument();
+    });
+  });
+
+  it('offers compact and full indicator detail', async () => {
+    render(<GeneralSettings />);
+
+    await waitFor(() => {
+      expect(screen.getByText('Indicator detail')).toBeInTheDocument();
+      expect(screen.getByTestId('select-item-compact')).toBeInTheDocument();
+      expect(screen.getByTestId('select-item-full')).toBeInTheDocument();
+    });
+
+    const styleSelect = screen
+      .getAllByTestId('select')
+      .find((select) => select.getAttribute('data-value') === 'compact');
+    expect(styleSelect).toBeDefined();
+    fireEvent.click(styleSelect!);
+    await waitFor(() => {
+      expect(mockUpdateSettings).toHaveBeenCalledWith({
+        pill_indicator_style: 'full'
+      });
     });
   });
 
@@ -726,6 +749,7 @@ describe('GeneralSettings null handling', () => {
 
   it('handles undefined sound settings with enabled defaults', async () => {
     const settingsWithoutSound = {
+      settings_mode: 'advanced',
       recording_mode: 'toggle',
       hotkey: 'CommandOrControl+Shift+Space',
       keep_transcription_in_clipboard: false,

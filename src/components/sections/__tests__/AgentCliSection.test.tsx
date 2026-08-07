@@ -1,4 +1,4 @@
-import { render, screen, waitFor, fireEvent, act } from '@testing-library/react';
+import { render, screen, waitFor, fireEvent } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { AgentCliSection } from '../AgentCliSection';
 
@@ -17,106 +17,101 @@ vi.mock('sonner', () => ({
 }));
 
 describe('AgentCliSection', () => {
+  const healthyStatus = {
+    installed: true,
+    manageable: true,
+    path: '/usr/local/bin/voicetypr',
+    app_version: '2.0.5',
+    command_version: '2.0.5',
+    compatible: true,
+    detail: null,
+  };
+
   beforeEach(() => {
     vi.clearAllMocks();
     mockInvoke.mockReset();
   });
 
-  it('renders Install command when status is not installed but manageable', async () => {
-    mockInvoke.mockResolvedValue({
+  it('installs a missing managed command', async () => {
+    const missingStatus = {
+      ...healthyStatus,
       installed: false,
-      manageable: true,
       path: null,
-    });
+      command_version: null,
+      compatible: false,
+    };
+    mockInvoke
+      .mockResolvedValueOnce(missingStatus)
+      .mockResolvedValueOnce(healthyStatus);
 
     render(<AgentCliSection />);
 
-    await waitFor(() => {
-      expect(mockInvoke).toHaveBeenCalledWith('cli_tool_status');
-    });
-
-    await waitFor(() => {
-      expect(
-        screen.getByRole('button', { name: /install command/i }),
-      ).toBeInTheDocument();
-    });
-
-    // Recipe is always shown.
-    expect(screen.getByText(/voicetypr transcribe/)).toBeInTheDocument();
-    expect(screen.getByText(/voicetypr --help/)).toBeInTheDocument();
-  });
-
-  it('calls install_cli_tool on click and reflects the installed/remove state', async () => {
-    mockInvoke.mockImplementation((command: string) => {
-      if (command === 'cli_tool_status') {
-        return Promise.resolve({
-          installed: false,
-          manageable: true,
-          path: null,
-        });
-      }
-      if (command === 'install_cli_tool') {
-        return Promise.resolve({
-          installed: true,
-          manageable: true,
-          path: '/usr/local/bin/voicetypr',
-        });
-      }
-      return Promise.resolve({
-        installed: false,
-        manageable: true,
-        path: null,
-      });
-    });
-
-    render(<AgentCliSection />);
-
-    await waitFor(() => {
-      expect(mockInvoke).toHaveBeenCalledWith('cli_tool_status');
-    });
-
-    const installBtn = await screen.findByRole('button', {
-      name: /install command/i,
-    });
-
-    await act(async () => {
-      fireEvent.click(installBtn);
-    });
+    const installButton = await screen.findByRole('button', { name: /install command/i });
+    fireEvent.click(installButton);
 
     await waitFor(() => {
       expect(mockInvoke).toHaveBeenCalledWith('install_cli_tool');
     });
-
-    // After install resolves with installed:true, the remove state is shown.
-    await waitFor(() => {
-      expect(
-        screen.getByRole('button', { name: /remove command/i }),
-      ).toBeInTheDocument();
-    });
-    expect(
-      screen.queryByRole('button', { name: /install command/i }),
-    ).not.toBeInTheDocument();
+    expect(await screen.findByText('Ready and compatible')).toBeInTheDocument();
+    expect(screen.getByText('Command v2.0.5')).toBeInTheDocument();
   });
 
-  it('shows the recipe but no install button when not manageable', async () => {
+  it('repairs an installed command that targets another app version', async () => {
+    mockInvoke
+      .mockResolvedValueOnce({
+        ...healthyStatus,
+        command_version: null,
+        compatible: false,
+        detail: 'The command points to a different Voicetypr installation.',
+      })
+      .mockResolvedValueOnce(healthyStatus);
+
+    render(<AgentCliSection />);
+
+    fireEvent.click(await screen.findByRole('button', { name: /update command/i }));
+
+    await waitFor(() => {
+      expect(mockInvoke).toHaveBeenCalledWith('repair_cli_tool');
+    });
+    expect(await screen.findByText('Ready and compatible')).toBeInTheDocument();
+  });
+
+  it('offers repair and removal for a healthy installed command', async () => {
+    mockInvoke
+      .mockResolvedValueOnce(healthyStatus)
+      .mockResolvedValueOnce({
+        ...healthyStatus,
+        installed: false,
+        path: null,
+        command_version: null,
+        compatible: false,
+      });
+
+    render(<AgentCliSection />);
+
+    expect(await screen.findByRole('button', { name: /repair command/i })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: /remove command/i }));
+
+    await waitFor(() => {
+      expect(mockInvoke).toHaveBeenCalledWith('uninstall_cli_tool');
+    });
+    expect(await screen.findByText('Command not installed')).toBeInTheDocument();
+  });
+
+  it('shows an unmanaged conflict without destructive actions', async () => {
     mockInvoke.mockResolvedValue({
-      installed: false,
+      ...healthyStatus,
       manageable: false,
-      path: null,
+      command_version: null,
+      compatible: false,
+      detail: 'Another command already uses this path. Voicetypr will not overwrite it.',
     });
 
     render(<AgentCliSection />);
 
-    await waitFor(() => {
-      expect(mockInvoke).toHaveBeenCalledWith('cli_tool_status');
-    });
-
-    await waitFor(() => {
-      expect(
-        screen.queryByRole('button', { name: /install command/i }),
-      ).not.toBeInTheDocument();
-    });
-
+    expect(await screen.findByText(/another command already uses this path/i)).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /install command/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /remove command/i })).not.toBeInTheDocument();
     expect(screen.getByText(/voicetypr transcribe/)).toBeInTheDocument();
     expect(screen.getByText(/voicetypr --help/)).toBeInTheDocument();
   });

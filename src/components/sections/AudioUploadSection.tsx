@@ -311,7 +311,7 @@ export function AudioUploadSection() {
                 <DialogHeader>
                   <DialogTitle>Upload guide</DialogTitle>
                   <DialogDescription>
-                    Upload uses your currently selected transcription source. Change it in Transcription if you want a different model or remote device first.
+                    Upload uses your currently selected transcription source. Change it in Models if you want a different model or remote device first.
                   </DialogDescription>
                 </DialogHeader>
                 <div className="space-y-3 text-sm leading-6 text-muted-foreground">

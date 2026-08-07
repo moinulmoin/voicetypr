@@ -8,6 +8,7 @@ const { audioBarsMock, mockRecording, mockSettings } = vi.hoisted(() => ({
   mockRecording: { state: 'idle' },
   mockSettings: {
     pill_indicator_mode: 'when_recording',
+    pill_indicator_style: 'compact',
     pill_indicator_offset: 10,
   } as Record<string, unknown>,
 }));
@@ -38,6 +39,7 @@ describe('RecordingPill', () => {
     audioBarsMock.mockClear();
     mockRecording.state = 'idle';
     mockSettings.pill_indicator_mode = 'when_recording';
+    mockSettings.pill_indicator_style = 'compact';
   });
 
   it('hides the pill when mode is never', () => {
@@ -53,12 +55,43 @@ describe('RecordingPill', () => {
     expect(screen.queryByTestId('audio-bars')).not.toBeInTheDocument();
   });
 
-  it('shows the pill when recording and mode is when_recording', () => {
+  it('keeps the compact pill icon-only while recording', () => {
     mockSettings.pill_indicator_mode = 'when_recording';
     mockRecording.state = 'recording';
     render(<RecordingPill />);
     expect(screen.getByTestId('audio-bars')).toHaveAttribute('data-state', 'listening');
+    expect(screen.queryByText('Listening')).not.toBeInTheDocument();
+    expect(screen.queryByText('0:00')).not.toBeInTheDocument();
+  });
+
+
+  it('adds an elapsed timer only in the full listening style', () => {
+    mockSettings.pill_indicator_style = 'full';
+    mockRecording.state = 'recording';
+    render(<RecordingPill />);
+
     expect(screen.getByText('Listening')).toBeInTheDocument();
+    expect(screen.getByText('0:00')).toBeInTheDocument();
+  });
+
+  it('resets the elapsed timer between recording sessions', () => {
+    vi.useFakeTimers();
+    mockSettings.pill_indicator_style = 'full';
+    mockRecording.state = 'recording';
+
+    const { rerender } = render(<RecordingPill />);
+    act(() => {
+      vi.advanceTimersByTime(12_000);
+    });
+    expect(screen.getByText('0:12')).toBeInTheDocument();
+
+    mockRecording.state = 'transcribing';
+    rerender(<RecordingPill />);
+    mockRecording.state = 'recording';
+    rerender(<RecordingPill />);
+
+    expect(screen.getByText('0:00')).toBeInTheDocument();
+    vi.useRealTimers();
   });
 
   it('shows the pill when idle and mode is always', () => {
@@ -69,8 +102,9 @@ describe('RecordingPill', () => {
     expect(screen.queryByRole('status')).not.toBeInTheDocument();
   });
 
-  it('maps transcribing and stopping backend states to transcribing bars', () => {
+  it('shows status text for non-listening states only in the full style', () => {
     mockSettings.pill_indicator_mode = 'always';
+    mockSettings.pill_indicator_style = 'full';
     mockRecording.state = 'transcribing';
     const { rerender } = render(<RecordingPill />);
     expect(screen.getByTestId('audio-bars')).toHaveAttribute('data-state', 'transcribing');
@@ -84,6 +118,7 @@ describe('RecordingPill', () => {
 
   it('gives formatting feedback precedence over recording and transcribing states', () => {
     mockSettings.pill_indicator_mode = 'always';
+    mockSettings.pill_indicator_style = 'full';
     mockRecording.state = 'recording';
     const { rerender } = render(<RecordingPill />);
 
@@ -106,6 +141,7 @@ describe('RecordingPill', () => {
   });
   it('clears Polishing and returns to the transcribing state when enhancing fails', () => {
     mockSettings.pill_indicator_mode = 'always';
+    mockSettings.pill_indicator_style = 'full';
     mockRecording.state = 'transcribing';
     render(<RecordingPill />);
 

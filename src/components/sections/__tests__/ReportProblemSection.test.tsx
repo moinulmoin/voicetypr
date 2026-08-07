@@ -118,6 +118,16 @@ describe('ReportProblemSection', () => {
     expect(screen.getByText(/latest redacted app log/i)).toBeInTheDocument();
   });
 
+  it('includes the former Help quick fixes before the report form', async () => {
+    const user = userEvent.setup();
+    render(<ReportProblemSection />);
+
+    expect(screen.getByText('Try a quick fix first')).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: /shortcut not responding/i }));
+
+    expect(screen.getByText(/grant Accessibility permission/i)).toBeInTheDocument();
+  });
+
   it('rejects an invalid contact email', async () => {
     const user = userEvent.setup();
     render(<ReportProblemSection />);
