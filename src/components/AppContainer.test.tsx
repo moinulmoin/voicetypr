@@ -83,6 +83,7 @@ vi.mock('@/hooks/useRecording', () => ({
 vi.mock('@/contexts/LicenseContext', () => ({
   useLicense: () => ({
     status: { status: "none" },
+    isLoading: false,
   }),
 }));
 

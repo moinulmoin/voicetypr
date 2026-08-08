@@ -1,11 +1,12 @@
 import { AudioBars } from "@/components/AudioBars";
 import type { PillState } from "@/components/pill/usePillController";
-import type { PillIndicatorStyle } from "@/types";
+import type { PillIndicatorPosition, PillIndicatorStyle } from "@/types";
 import type { PropsWithChildren } from "react";
 
 interface PillShellProps extends PropsWithChildren {
   isActive: boolean;
   style: PillIndicatorStyle;
+  position: PillIndicatorPosition;
 }
 
 interface PillStatusProps {
@@ -28,9 +29,19 @@ function formatElapsed(seconds: number): string {
   return `${minutes}:${remainder.toString().padStart(2, "0")}`;
 }
 
-export function PillShell({ children, isActive, style }: PillShellProps) {
+export function PillShell({ children, isActive, position, style }: PillShellProps) {
+  const horizontalAlignment = position.endsWith("-left")
+    ? "justify-start"
+    : position.endsWith("-right")
+      ? "justify-end"
+      : "justify-center";
+  const verticalAlignment = position.startsWith("top-") ? "items-start" : "items-end";
+
   return (
-    <div className="pointer-events-none fixed inset-0 z-50 flex items-center justify-center">
+    <div
+      className={`pointer-events-none fixed inset-0 z-50 flex ${horizontalAlignment} ${verticalAlignment}`}
+      data-pill-position={position}
+    >
       <div
         className={`flex select-none items-center justify-center rounded-full border border-white/10 bg-[#14171c] text-neutral-100 shadow-[0_8px_24px_rgba(0,0,0,0.28)] transition-[padding] duration-150 ease-out ${
           isActive ? "px-3 py-1.5" : "px-2.5 py-1.5"

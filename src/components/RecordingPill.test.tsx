@@ -9,6 +9,7 @@ const { audioBarsMock, mockRecording, mockSettings } = vi.hoisted(() => ({
   mockSettings: {
     pill_indicator_mode: 'when_recording',
     pill_indicator_style: 'compact',
+    pill_indicator_position: 'bottom-center',
     pill_indicator_offset: 10,
   } as Record<string, unknown>,
 }));
@@ -40,6 +41,7 @@ describe('RecordingPill', () => {
     mockRecording.state = 'idle';
     mockSettings.pill_indicator_mode = 'when_recording';
     mockSettings.pill_indicator_style = 'compact';
+    mockSettings.pill_indicator_position = 'bottom-center';
   });
 
   it('hides the pill when mode is never', () => {
@@ -64,6 +66,15 @@ describe('RecordingPill', () => {
     expect(screen.queryByText('0:00')).not.toBeInTheDocument();
   });
 
+  it('aligns visible content to the configured window edge', () => {
+    mockSettings.pill_indicator_mode = 'always';
+    mockSettings.pill_indicator_position = 'top-left';
+    render(<RecordingPill />);
+
+    expect(
+      document.querySelector('[data-pill-position="top-left"]')
+    ).toHaveClass('items-start', 'justify-start');
+  });
 
   it('adds an elapsed timer only in the full listening style', () => {
     mockSettings.pill_indicator_style = 'full';

@@ -71,6 +71,7 @@ interface OnboardingDesktopProps {
   onCompletionError?: () => void;
   onComplete: (target?: "license") => void;
   licensed?: boolean;
+  licenseLoading?: boolean;
   modelManagement: ReturnType<typeof useModelManagement>;
 }
 
@@ -148,6 +149,7 @@ export const OnboardingDesktop = function OnboardingDesktop({
   onCompletionError,
   onComplete,
   licensed = false,
+  licenseLoading = false,
   modelManagement,
 }: OnboardingDesktopProps) {
   const { settings, updateSettings } = useSettings();
@@ -1369,7 +1371,7 @@ export const OnboardingDesktop = function OnboardingDesktop({
 
             <Button
               size="lg"
-              disabled={licensed && isSavingCompletion}
+              disabled={licenseLoading || (licensed && isSavingCompletion)}
               onClick={() => {
                 if (licensed) {
                   void completeOnboarding();
@@ -1378,9 +1380,9 @@ export const OnboardingDesktop = function OnboardingDesktop({
                 }
               }}
             >
-              {licensed && isSavingCompletion ? <Spinner /> : null}
-              Continue
-              {!licensed ? <ChevronRight /> : null}
+              {licenseLoading || (licensed && isSavingCompletion) ? <Spinner /> : null}
+              {licenseLoading ? "Checking license..." : "Continue"}
+              {!licenseLoading && !licensed ? <ChevronRight /> : null}
             </Button>
           </section>
         )}

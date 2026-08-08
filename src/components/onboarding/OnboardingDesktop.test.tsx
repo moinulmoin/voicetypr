@@ -95,9 +95,10 @@ vi.mock("@tauri-apps/plugin-shell", () => ({
 const platformMock = vi.hoisted(() => ({ isMacOS: true, isWindows: false, isLinux: false }));
 vi.mock("@/lib/platform", () => platformMock);
 
-const renderOnboarding = (licensed = false) =>
+const renderOnboarding = (licensed = false, licenseLoading = false) =>
   render(
     <OnboardingDesktop
+      licenseLoading={licenseLoading}
       onComplete={onCompleteMock}
       modelManagement={modelManagement as never}
       licensed={licensed}
@@ -197,6 +198,22 @@ describe("OnboardingDesktop", () => {
 
     expect(screen.queryByText(/upgrade to pro/i)).not.toBeInTheDocument();
     expect(onCompleteMock).toHaveBeenCalledWith(undefined);
+  });
+
+  it("waits for license status before choosing the completion route", async () => {
+    const user = userEvent.setup();
+    renderOnboarding(false, true);
+
+    await user.click(screen.getByRole("button", { name: /start setup/i }));
+    await user.click(screen.getByRole("button", { name: /continue/i }));
+    await user.click(screen.getByRole("button", { name: /continue/i }));
+    await user.click(screen.getByRole("button", { name: /continue/i }));
+    await user.click(screen.getByRole("button", { name: /save hotkey/i }));
+
+    expect(
+      await screen.findByRole("button", { name: /checking license/i }),
+    ).toBeDisabled();
+    expect(screen.queryByText(/upgrade to pro/i)).not.toBeInTheDocument();
   });
 
   it("routes to the License tab when the user already has a license", async () => {

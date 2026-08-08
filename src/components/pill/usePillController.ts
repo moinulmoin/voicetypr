@@ -1,6 +1,10 @@
 import { useSetting } from "@/contexts/SettingsContext";
 import { useRecording } from "@/hooks/useRecording";
-import type { PillIndicatorMode, PillIndicatorStyle } from "@/types";
+import type {
+  PillIndicatorMode,
+  PillIndicatorPosition,
+  PillIndicatorStyle,
+} from "@/types";
 import { listen } from "@tauri-apps/api/event";
 import { useEffect, useMemo, useState } from "react";
 
@@ -18,6 +22,7 @@ export interface PillControllerState {
   isVisible: boolean;
   pillState: PillState;
   pillStyle: PillIndicatorStyle;
+  pillPosition: PillIndicatorPosition;
   elapsedSeconds: number;
 }
 
@@ -27,6 +32,8 @@ export function usePillController(): PillControllerState {
     useSetting("pill_indicator_mode") ?? "when_recording";
   const pillStyle: PillIndicatorStyle =
     useSetting("pill_indicator_style") ?? "compact";
+  const pillPosition: PillIndicatorPosition =
+    useSetting("pill_indicator_position") ?? "bottom-center";
   const [audioLevel, setAudioLevel] = useState(0);
   const [isFormatting, setIsFormatting] = useState(false);
   const [elapsedSeconds, setElapsedSeconds] = useState(0);
@@ -116,6 +123,7 @@ export function usePillController(): PillControllerState {
     audioLevel: isListening ? audioLevel : 0,
     isActive,
     isVisible,
+    pillPosition,
     pillState,
     pillStyle,
     elapsedSeconds: isListening ? elapsedSeconds : 0,

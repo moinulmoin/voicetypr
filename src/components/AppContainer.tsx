@@ -43,7 +43,7 @@ export function AppContainer() {
   const { settings, refreshSettings } = useSettings();
   const { checkAccessibilityPermission, checkMicrophonePermission } = useReadiness();
   const modelAvailability = useModelAvailabilityContext();
-  const { status: licenseStatus } = useLicense();
+  const { isLoading: licenseLoading, status: licenseStatus } = useLicense();
 
   // Use the model management context for onboarding
   const modelManagement = useModelManagementContext();
@@ -340,6 +340,7 @@ export function AppContainer() {
       <AppErrorBoundary>
         <OnboardingDesktop
           licensed={licenseStatus?.status === "licensed"}
+          licenseLoading={licenseLoading}
           onCompletionError={clearOnboardingCompletionMarker}
           onComplete={(target) => {
             markOnboardingCompletionPersisted();
