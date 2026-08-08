@@ -67,6 +67,34 @@ fn show_main_window(app: &tauri::AppHandle) {
     }
 }
 
+#[cfg(target_os = "macos")]
+fn hide_unused_main_window_controls(app: &tauri::AppHandle) {
+    use objc2_app_kit::{NSWindow, NSWindowButton};
+
+    let Some(window) = app.get_webview_window("main") else {
+        log::warn!("Main window is unavailable; could not hide unused title-bar controls");
+        return;
+    };
+    let Ok(ns_window_ptr) = window.ns_window() else {
+        log::warn!("Could not access the native main window title bar");
+        return;
+    };
+
+    // The app intentionally does not support minimizing or zooming. Hiding these
+    // disabled controls leaves the close button and title-bar tools without dead UI.
+    unsafe {
+        let ns_window = &*ns_window_ptr.cast::<NSWindow>();
+        for kind in [
+            NSWindowButton::MiniaturizeButton,
+            NSWindowButton::ZoomButton,
+        ] {
+            if let Some(button) = ns_window.standardWindowButton(kind) {
+                button.setHidden(true);
+            }
+        }
+    }
+}
+
 /// Hide the main window and the macOS Dock icon — back to the menubar/tray.
 fn hide_main_window(app: &tauri::AppHandle) -> bool {
     // If the system tray failed to create (e.g. the Windows shell notification
@@ -240,7 +268,7 @@ use commands::{
         update_writing_settings, validate_ai_api_key,
     },
     audio::*,
-    cli_tool::{cli_tool_status, install_cli_tool, uninstall_cli_tool},
+    cli_tool::{cli_tool_status, install_cli_tool, repair_cli_tool, uninstall_cli_tool},
     clipboard::{copy_image_to_clipboard, save_image_to_file},
     debug::{debug_transcription_flow, test_transcription_event},
     device::get_device_id,
@@ -677,6 +705,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
 
                 app.set_activation_policy(tauri::ActivationPolicy::Accessory);
                 log::info!("🍎 Set macOS activation policy to Accessory");
+                hide_unused_main_window_controls(app.handle());
 
             }
 
@@ -1270,9 +1299,14 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             // Preload current model if set (graceful degradation)
             // Use Tauri's async runtime which is available after setup
             if let Ok(store) = app.store("settings") {
+                let current_model_engine = store
+                    .get("current_model_engine")
+                    .and_then(|v| v.as_str().map(str::to_owned))
+                    .unwrap_or_else(|| "whisper".to_string());
                 if let Some(current_model) = store.get("current_model")
                     .and_then(|v| v.as_str().map(|s| s.to_string()))
                     .filter(|s| !s.is_empty())
+                    .filter(|_| current_model_engine == "whisper")
                 {
                     let app_handle = app.app_handle().clone();
                     // Use tauri::async_runtime instead of tokio directly
@@ -1318,8 +1352,13 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
                             log::warn!("Model '{}' not found in models directory, skipping preload", current_model);
                         }
                     });
+                } else if current_model_engine == "whisper" {
+                    log::info!("No Whisper model configured for preloading");
                 } else {
-                    log::info!("No model configured for preloading");
+                    log::debug!(
+                        "Skipping startup Whisper preload for '{}' engine",
+                        current_model_engine
+                    );
                 }
             }
 
@@ -1338,8 +1377,8 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
                     .flatten()
                     .unwrap_or((1440.0, 900.0));
 
-                    let pill_width = 80.0;  // Sized for 3-dot pill (active state with padding)
-                    let pill_height = 40.0;
+                    let pill_width = crate::window_manager::PILL_WIDTH;
+                    let pill_height = crate::window_manager::PILL_HEIGHT;
                     let bottom_offset = 10.0;  // Distance from bottom of screen
 
                     let x = (screen_width - pill_width) / 2.0;
@@ -1350,8 +1389,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
                 // macOS: create pill window and convert to NSPanel
                 #[cfg(target_os = "macos")]
                 {
-                    // Create the pill window - sized for 3 dots
-                    // Properties aligned with window_manager.rs for consistency
+                    // Properties aligned with window_manager.rs for consistency.
                     let pill_builder = WebviewWindowBuilder::new(app, "pill", WebviewUrl::App("pill".into()))
                         .title("Recording")
                         .resizable(false)
@@ -1364,7 +1402,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
                         .skip_taskbar(true)
                         .transparent(true)
                         .shadow(false)  // Prevent window shadow on macOS
-                        .inner_size(80.0, 40.0)  // Sized for 3-dot pill (active state with padding)
+                        .inner_size(crate::window_manager::PILL_WIDTH, crate::window_manager::PILL_HEIGHT)
                         .position(pos_x, pos_y)
                         .visible(true)  // Always visible (controlled by show_pill_indicator setting)
                         .focused(false);  // Don't steal focus
@@ -1377,6 +1415,9 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
                     let pill_builder = pill_builder;
 
                     let pill_window = pill_builder.build()?;
+                    if let Err(error) = pill_window.set_ignore_cursor_events(true) {
+                        log::warn!("Failed to make pill window click-through: {}", error);
+                    }
 
                     // Convert to NSPanel to prevent focus stealing
                     use tauri_nspanel::WebviewWindowExt;
@@ -1395,7 +1436,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
                 // Create toast window for feedback messages (positioned above pill) - all platforms
                 let toast_width = 400.0;
                 let toast_height = 80.0;
-                let pill_width = 80.0;
+                let pill_width = crate::window_manager::PILL_WIDTH;
                 let gap = 8.0; // Gap between pill and toast
 
                 // Center toast above pill
@@ -1605,6 +1646,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             get_system_specs,
             // CLI launcher (voicetypr on PATH)
             install_cli_tool,
+            repair_cli_tool,
             uninstall_cli_tool,
             cli_tool_status,
             // Independent privacy controls: GlitchTip diagnostics and PostHog

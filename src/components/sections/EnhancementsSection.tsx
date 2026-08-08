@@ -47,7 +47,7 @@ import { humanizeModelId } from "@/lib/model-display";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { ask } from "@tauri-apps/plugin-dialog";
-import { useEffect, useMemo, useState, useCallback, useRef } from "react";
+import { Fragment, useEffect, useMemo, useState, useCallback, useRef } from "react";
 import { toast } from "sonner";
 import { Check, ExternalLink, HelpCircle, Key, Loader2, RefreshCw, Search, Settings2, Star, Trash2 } from "lucide-react";
 import { createLogger } from "@/lib/logger";
@@ -954,19 +954,22 @@ export function EnhancementsSection() {
   );
   const providerQuery = providerSearch.trim().toLowerCase();
   const filteredProviders = useMemo(() => {
-    if (!providerQuery) {
-      return providers;
-    }
+    const matches = providerQuery
+      ? providers.filter((provider) => {
+          const providerMatches = provider.name.toLowerCase().includes(providerQuery);
+          const customModelMatches =
+            provider.isCustom && customModelName.toLowerCase().includes(providerQuery);
+          const modelsMatch = getDisplayModels(provider.id).some((model) =>
+            modelMatchesQuery(model, providerQuery),
+          );
+          return providerMatches || customModelMatches || modelsMatch;
+        })
+      : providers;
 
-    return providers.filter((provider) => {
-      const providerMatches = provider.name.toLowerCase().includes(providerQuery);
-      const customModelMatches =
-        provider.isCustom && customModelName.toLowerCase().includes(providerQuery);
-      const modelsMatch = getDisplayModels(provider.id).some((model) =>
-        modelMatchesQuery(model, providerQuery),
-      );
-      return providerMatches || customModelMatches || modelsMatch;
-    });
+    return [...matches].sort(
+      (left, right) =>
+        Number(isAgentCliProvider(left.id)) - Number(isAgentCliProvider(right.id)),
+    );
   }, [customModelName, getDisplayModels, providerQuery, providers]);
 
   const hasLoadingProviders = providers.some((provider) => isModelsLoading(provider.id));
@@ -1000,9 +1003,9 @@ export function EnhancementsSection() {
           {aiSettings.enabled && (
             <>
               {" · "}
-              <span className="rounded-full bg-sage-bg px-2 py-0.5 text-[11px] text-sage">
+              <Badge variant="secondary" className="text-sage">
                 Active
-              </span>
+              </Badge>
             </>
           )}
           {" · "}
@@ -1127,8 +1130,11 @@ export function EnhancementsSection() {
           </div>
         )}
 
-        {filteredProviders.map((provider) => {
+        {filteredProviders.map((provider, providerIndex) => {
           const agentCli = isAgentCliProvider(provider.id);
+          const startsProviderGroup =
+            providerIndex === 0 ||
+            isAgentCliProvider(filteredProviders[providerIndex - 1].id) !== agentCli;
           const agentCliState = agentCli
             ? getAgentCliProbeState(agentCliStatus[provider.id])
             : null;
@@ -1205,12 +1211,19 @@ export function EnhancementsSection() {
                   ? "Launcher could not be used safely. Install a compatible launcher in an existing PATH directory, then Refresh. Restart only if PATH itself changed."
                   : "CLI is incompatible. Install a compatible version in an existing PATH directory, then Refresh. Restart only if PATH itself changed.";
           return (
-            <div
-              key={provider.id}
-              className={`rounded-xl border border-border/60 bg-background p-4 transition-all ${
-                isActive ? "border-sage/50 bg-sage-bg/40" : ""
-              }`}
-            >
+            <Fragment key={provider.id}>
+              {startsProviderGroup && (
+                <div className="pt-2 first:pt-0">
+                  <p className="text-xs font-semibold uppercase tracking-[0.12em] text-muted-foreground">
+                    {agentCli ? "Agent Polish providers" : "Cloud providers"}
+                  </p>
+                </div>
+              )}
+              <div
+                className={`rounded-xl border border-border/60 bg-background p-4 transition-all ${
+                  isActive ? "border-sage/50 bg-sage-bg/40" : ""
+                }`}
+              >
               <div className="flex items-start justify-between gap-4">
                 <div className="min-w-0 flex-1">
                   <div className="mb-1 flex flex-wrap items-center gap-2">
@@ -1230,9 +1243,9 @@ export function EnhancementsSection() {
                       <Badge variant="secondary">Reasoning</Badge>
                     )}
                     {isActive && (
-                      <span className="rounded-full bg-sage-bg px-2 py-0.5 text-xs text-sage">
+                      <Badge variant="secondary" className="text-sage">
                         Active
-                      </span>
+                      </Badge>
                     )}
                   </div>
 
@@ -1416,9 +1429,6 @@ export function EnhancementsSection() {
                                 )}
                                 <span className="min-w-0">
                                   <span className="block truncate font-medium">{model.name}</span>
-                                  <span className="block truncate text-xs text-muted-foreground">
-                                    {model.id}
-                                  </span>
                                 </span>
                               </span>
                               <span className="ml-2 flex shrink-0 items-center gap-1">
@@ -1444,7 +1454,8 @@ export function EnhancementsSection() {
                   ))}
                 </div>
               )}
-            </div>
+              </div>
+            </Fragment>
           );
         })}
       </FieldGroup>

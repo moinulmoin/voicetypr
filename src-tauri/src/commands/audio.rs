@@ -5172,6 +5172,7 @@ pub async fn stop_recording(
             audio_path
         }
         _ => {
+            let normalization_started = std::time::Instant::now();
             // Normalize captured audio to Whisper contract (WAV PCM s16, mono, 16k):
             // try in-process first (off the async runtime), fall back to ffmpeg sidecar.
             let parent_dir = audio_path
@@ -5221,6 +5222,10 @@ pub async fn stop_recording(
                     }
                 }
             };
+            log::info!(
+                "transcription_stage_timing stage=audio_preparation duration_ms={}",
+                normalization_started.elapsed().as_millis()
+            );
             speech_evidence_attempt.set_prepared(prepared_metrics);
 
             // Remove raw capture after successful normalization

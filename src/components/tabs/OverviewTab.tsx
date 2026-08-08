@@ -191,7 +191,6 @@ export function OverviewTab() {
       }
     }
 
-    const productivityScore = Math.min(100, Math.round((weekCount / 7) * 20));
 
     return {
       todayCount,
@@ -202,7 +201,6 @@ export function OverviewTab() {
       timeSavedHours,
       timeSavedRemMinutes: timeSavedMinutes % 60,
       timeSavedMinutes,
-      productivityScore,
       totalTranscriptions: totalCount,
       currentStreak,
       longestStreak,
@@ -398,7 +396,6 @@ export function OverviewTab() {
                 stats.timeSavedHours > 0
                   ? `${stats.timeSavedHours}h ${stats.timeSavedRemMinutes}m`
                   : `${stats.timeSavedMinutes}m`,
-              productivityScore: stats.productivityScore,
               currentStreak: stats.currentStreak,
               longestStreak: stats.longestStreak,
             }}

@@ -127,16 +127,16 @@ export function AccountSection() {
       <SettingsHeader
         title={
           <span className="flex items-center gap-2">
-            Licensing
+            Account
             <Dialog>
               <DialogTrigger asChild>
-                <Button type="button" variant="ghost" size="icon-sm" aria-label="Licensing guide" className="size-7 rounded-full text-muted-foreground">
+                <Button type="button" variant="ghost" size="icon-sm" aria-label="License guide" className="size-7 rounded-full text-muted-foreground">
                   <HelpCircle className="h-4 w-4" />
                 </Button>
               </DialogTrigger>
               <DialogContent className="sm:max-w-lg">
                 <DialogHeader>
-                  <DialogTitle>Licensing guide</DialogTitle>
+                  <DialogTitle>License guide</DialogTitle>
                   <DialogDescription>
                     Manage your trial and activate or remove a Pro license.
                   </DialogDescription>
@@ -150,7 +150,7 @@ export function AccountSection() {
             </Dialog>
           </span>
         }
-        description="Your trial and license activation."
+        description="Trial status, license activation, and account access."
         actions={
           status && status.status === 'licensed' ? (
             <div className="flex items-center gap-2 rounded-lg bg-green-500/10 px-3 py-1.5">

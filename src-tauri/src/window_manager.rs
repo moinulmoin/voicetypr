@@ -5,6 +5,11 @@ use crate::utils::logger::*;
 use std::sync::{Arc, Mutex};
 use tauri::{AppHandle, Emitter, Manager, WebviewUrl, WebviewWindow, WebviewWindowBuilder};
 
+pub(crate) const PILL_WIDTH: f64 = 240.0;
+pub(crate) const PILL_HEIGHT: f64 = 48.0;
+const TOAST_WIDTH: f64 = 400.0;
+const TOAST_HEIGHT: f64 = 80.0;
+const FLOATING_WINDOW_GAP: f64 = 8.0;
 #[derive(Debug, Clone)]
 pub struct WindowManager {
     app_handle: AppHandle,
@@ -18,8 +23,8 @@ fn calculate_pill_position(
     screen_height: f64,
     edge_offset: f64,
 ) -> (f64, f64) {
-    let pill_width = 80.0;
-    let pill_height = 40.0;
+    let pill_width = PILL_WIDTH;
+    let pill_height = PILL_HEIGHT;
 
     // Horizontal position: left, center, or right
     let x = if position.ends_with("-left") {
@@ -37,6 +42,17 @@ fn calculate_pill_position(
     } else {
         // bottom (default)
         screen_height - pill_height - edge_offset
+    };
+
+    (x, y)
+}
+
+fn calculate_toast_position(position: &str, pill_x: f64, pill_y: f64) -> (f64, f64) {
+    let x = pill_x + (PILL_WIDTH - TOAST_WIDTH) / 2.0;
+    let y = if position.starts_with("top-") {
+        pill_y + PILL_HEIGHT + FLOATING_WINDOW_GAP
+    } else {
+        pill_y - TOAST_HEIGHT - FLOATING_WINDOW_GAP
     };
 
     (x, y)
@@ -253,7 +269,7 @@ impl WindowManager {
         .transparent(true)
         .shadow(false) // Disabled to fix Windows transparency issue
         .skip_taskbar(true)
-        .inner_size(80.0, 40.0)
+        .inner_size(PILL_WIDTH, PILL_HEIGHT)
         .position(position_x, position_y)
         .visible(true) // Start visible
         .focused(false); // Don't steal focus
@@ -268,6 +284,9 @@ impl WindowManager {
         let pill_builder = pill_builder;
 
         let pill_window = pill_builder.build().map_err(|e| e.to_string())?;
+        if let Err(error) = pill_window.set_ignore_cursor_events(true) {
+            log::warn!("Failed to make pill window click-through: {}", error);
+        }
 
         // Convert to NSPanel on macOS
         #[cfg(target_os = "macos")]
@@ -663,18 +682,18 @@ impl WindowManager {
         (1920.0, 1080.0)
     }
 
-    /// Calculate center position for pill window using current settings
     fn calculate_center_position(&self) -> (f64, f64) {
         let position = self.get_pill_position_setting();
         self.calculate_position_for(&position)
     }
 
-    /// Reposition pill and toast windows to current monitor center-bottom.
+    /// Reposition pill and toast windows using the current placement setting.
     /// Called when monitor configuration changes (display connect/disconnect, resolution change).
     pub fn reposition_floating_windows(&self) {
         use tauri::LogicalPosition;
 
-        let (pill_x, pill_y) = self.calculate_center_position();
+        let position = self.get_pill_position_setting();
+        let (pill_x, pill_y) = self.calculate_position_for(&position);
 
         // Reposition pill window
         if let Some(pill) = self.get_pill_window() {
@@ -685,14 +704,9 @@ impl WindowManager {
             }
         }
 
-        // Reposition toast window (above pill)
+        // Keep the toast centered on the pill window and on-screen vertically.
         if let Some(toast) = self.app_handle.get_webview_window("toast") {
-            let toast_width = 400.0;
-            let toast_height = 80.0;
-            let pill_width = 80.0;
-            let gap = 8.0;
-            let toast_x = pill_x + (pill_width - toast_width) / 2.0;
-            let toast_y = pill_y - toast_height - gap;
+            let (toast_x, toast_y) = calculate_toast_position(&position, pill_x, pill_y);
 
             if let Err(e) = toast.set_position(LogicalPosition::new(toast_x, toast_y)) {
                 log::warn!("Failed to reposition toast window: {}", e);
@@ -723,19 +737,9 @@ impl WindowManager {
             }
         }
 
-        // Reposition toast window (above or below pill depending on position)
+        // Keep the toast centered on the pill window and on-screen vertically.
         if let Some(toast) = self.app_handle.get_webview_window("toast") {
-            let toast_width = 400.0;
-            let toast_height = 80.0;
-            let pill_width = 80.0;
-            let gap = 8.0;
-            let toast_x = pill_x + (pill_width - toast_width) / 2.0;
-            // If pill is at top, put toast below; otherwise put toast above
-            let toast_y = if position == "top" {
-                pill_y + 40.0 + gap // Below pill
-            } else {
-                pill_y - toast_height - gap // Above pill
-            };
+            let (toast_x, toast_y) = calculate_toast_position(position, pill_x, pill_y);
 
             if let Err(e) = toast.set_position(LogicalPosition::new(toast_x, toast_y)) {
                 log::warn!("Failed to reposition toast window: {}", e);
@@ -748,11 +752,11 @@ impl WindowManager {
 
 #[cfg(test)]
 mod tests {
-    use super::calculate_pill_position;
+    use super::{calculate_pill_position, calculate_toast_position};
 
-    // Screen: 1920x1080, pill: 80x40, edge_offset: 10
-    // x_left = 10, x_center = 920, x_right = 1830
-    // y_top = 10, y_bottom = 1030
+    // Screen: 1920x1080, pill: 240x48, edge_offset: 10
+    // x_left = 10, x_center = 840, x_right = 1670
+    // y_top = 10, y_bottom = 1022
 
     #[test]
     fn calculate_pill_position_top_left() {
@@ -764,14 +768,14 @@ mod tests {
     #[test]
     fn calculate_pill_position_top_center() {
         let (x, y) = calculate_pill_position("top-center", 1920.0, 1080.0, 10.0);
-        assert_eq!(x, 920.0);
+        assert_eq!(x, 840.0);
         assert_eq!(y, 10.0);
     }
 
     #[test]
     fn calculate_pill_position_top_right() {
         let (x, y) = calculate_pill_position("top-right", 1920.0, 1080.0, 10.0);
-        assert_eq!(x, 1830.0);
+        assert_eq!(x, 1670.0);
         assert_eq!(y, 10.0);
     }
 
@@ -779,28 +783,28 @@ mod tests {
     fn calculate_pill_position_bottom_left() {
         let (x, y) = calculate_pill_position("bottom-left", 1920.0, 1080.0, 10.0);
         assert_eq!(x, 10.0);
-        assert_eq!(y, 1030.0);
+        assert_eq!(y, 1022.0);
     }
 
     #[test]
     fn calculate_pill_position_bottom_center() {
         let (x, y) = calculate_pill_position("bottom-center", 1920.0, 1080.0, 10.0);
-        assert_eq!(x, 920.0);
-        assert_eq!(y, 1030.0);
+        assert_eq!(x, 840.0);
+        assert_eq!(y, 1022.0);
     }
 
     #[test]
     fn calculate_pill_position_bottom_right() {
         let (x, y) = calculate_pill_position("bottom-right", 1920.0, 1080.0, 10.0);
-        assert_eq!(x, 1830.0);
-        assert_eq!(y, 1030.0);
+        assert_eq!(x, 1670.0);
+        assert_eq!(y, 1022.0);
     }
 
     #[test]
     fn calculate_pill_position_defaults_to_bottom_center() {
         let (x, y) = calculate_pill_position("unknown", 1920.0, 1080.0, 10.0);
-        assert_eq!(x, 920.0);
-        assert_eq!(y, 1030.0);
+        assert_eq!(x, 840.0);
+        assert_eq!(y, 1022.0);
     }
 
     #[test]
@@ -808,6 +812,22 @@ mod tests {
         // Test with 50px offset
         let (x, y) = calculate_pill_position("bottom-left", 1920.0, 1080.0, 50.0);
         assert_eq!(x, 50.0);
-        assert_eq!(y, 990.0); // 1080 - 40 - 50
+        assert_eq!(y, 982.0); // 1080 - 48 - 50
+    }
+
+    #[test]
+    fn toast_is_centered_and_below_top_pill() {
+        assert_eq!(
+            calculate_toast_position("top-left", 10.0, 10.0),
+            (-70.0, 66.0)
+        );
+    }
+
+    #[test]
+    fn toast_is_centered_and_above_bottom_pill() {
+        assert_eq!(
+            calculate_toast_position("bottom-right", 1670.0, 1022.0),
+            (1590.0, 934.0)
+        );
     }
 }

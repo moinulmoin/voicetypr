@@ -1,6 +1,10 @@
 import { useSetting } from "@/contexts/SettingsContext";
 import { useRecording } from "@/hooks/useRecording";
-import type { PillIndicatorMode } from "@/types";
+import type {
+  PillIndicatorMode,
+  PillIndicatorPosition,
+  PillIndicatorStyle,
+} from "@/types";
 import { listen } from "@tauri-apps/api/event";
 import { useEffect, useMemo, useState } from "react";
 
@@ -17,14 +21,22 @@ export interface PillControllerState {
   isActive: boolean;
   isVisible: boolean;
   pillState: PillState;
+  pillStyle: PillIndicatorStyle;
+  pillPosition: PillIndicatorPosition;
+  elapsedSeconds: number;
 }
 
 export function usePillController(): PillControllerState {
   const recording = useRecording();
   const pillIndicatorMode: PillIndicatorMode =
     useSetting("pill_indicator_mode") ?? "when_recording";
+  const pillStyle: PillIndicatorStyle =
+    useSetting("pill_indicator_style") ?? "compact";
+  const pillPosition: PillIndicatorPosition =
+    useSetting("pill_indicator_position") ?? "bottom-center";
   const [audioLevel, setAudioLevel] = useState(0);
   const [isFormatting, setIsFormatting] = useState(false);
+  const [elapsedSeconds, setElapsedSeconds] = useState(0);
 
   const pillState = useMemo<PillState>(() => {
     if (isFormatting) return "formatting";
@@ -61,6 +73,24 @@ export function usePillController(): PillControllerState {
       setAudioLevel(0);
     };
   }, [isListening]);
+  useEffect(() => {
+    if (!isListening) {
+      return;
+    }
+
+    const startedAt = Date.now();
+    const updateElapsed = () => {
+      setElapsedSeconds(Math.floor((Date.now() - startedAt) / 1_000));
+    };
+    const initialTimer = window.setTimeout(updateElapsed, 0);
+    const intervalTimer = window.setInterval(updateElapsed, 1_000);
+    return () => {
+      window.clearTimeout(initialTimer);
+      window.clearInterval(intervalTimer);
+      setElapsedSeconds(0);
+    };
+  }, [isListening]);
+
 
   useEffect(() => {
     let isMounted = true;
@@ -93,6 +123,9 @@ export function usePillController(): PillControllerState {
     audioLevel: isListening ? audioLevel : 0,
     isActive,
     isVisible,
+    pillPosition,
     pillState,
+    pillStyle,
+    elapsedSeconds: isListening ? elapsedSeconds : 0,
   };
 }

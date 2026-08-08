@@ -25,6 +25,14 @@ pub struct CliToolStatus {
     pub manageable: bool,
     /// Where the command lives / how to invoke it, when known.
     pub path: Option<String>,
+    /// Version of the running app that owns the managed command.
+    pub app_version: String,
+    /// Version exposed by the command when its launcher is known to target this app.
+    pub command_version: Option<String>,
+    /// The installed command is managed by Voicetypr and targets this app installation.
+    pub compatible: bool,
+    /// Actionable health detail when the command is stale, foreign, or unsupported.
+    pub detail: Option<String>,
 }
 
 #[tauri::command]
@@ -43,6 +51,10 @@ pub fn cli_tool_status() -> Result<CliToolStatus, String> {
             installed: false,
             manageable: false,
             path: None,
+            app_version: env!("CARGO_PKG_VERSION").to_string(),
+            command_version: None,
+            compatible: false,
+            detail: Some("Command installation is not managed on this platform.".to_string()),
         })
     }
 }
@@ -67,6 +79,10 @@ pub async fn install_cli_tool() -> Result<CliToolStatus, String> {
     {
         Err("Installing the voicetypr command is not supported on this platform.".to_string())
     }
+}
+#[tauri::command]
+pub async fn repair_cli_tool() -> Result<CliToolStatus, String> {
+    install_cli_tool().await
 }
 
 #[tauri::command]
@@ -129,11 +145,39 @@ mod macos {
     }
 
     pub fn status() -> CliToolStatus {
-        let installed = Path::new(MACOS_SHIM_PATH).exists();
+        let current_exe = current_exe_path().ok();
+        status_for(Path::new(MACOS_SHIM_PATH), current_exe.as_deref())
+    }
+
+    fn status_for(path: &Path, current_exe: Option<&str>) -> CliToolStatus {
+        let ownership = classify(path);
+        let installed = !matches!(ownership, Ownership::Absent);
+        let manageable = !matches!(ownership, Ownership::Foreign);
+        let compatible = matches!(ownership, Ownership::Managed)
+            && current_exe.is_some_and(|exe| {
+                std::fs::read_to_string(path).is_ok_and(|shim| shim == build_shim(exe))
+            });
+        let detail = match ownership {
+            Ownership::Absent => None,
+            Ownership::Foreign => Some(
+                "Another command already uses this path. Voicetypr will not overwrite it."
+                    .to_string(),
+            ),
+            Ownership::Managed if !compatible => Some(
+                "The command points to a different Voicetypr installation. Repair it to use this app."
+                    .to_string(),
+            ),
+            Ownership::Managed => None,
+        };
+
         CliToolStatus {
             installed,
-            manageable: true,
-            path: installed.then(|| MACOS_SHIM_PATH.to_string()),
+            manageable,
+            path: installed.then(|| path.to_string_lossy().into_owned()),
+            app_version: env!("CARGO_PKG_VERSION").to_string(),
+            command_version: compatible.then(|| env!("CARGO_PKG_VERSION").to_string()),
+            compatible,
+            detail,
         }
     }
 
@@ -144,12 +188,7 @@ mod macos {
             Ownership::Foreign => return Err(foreign_error()),
             Ownership::Managed | Ownership::Absent => {}
         }
-        let exe =
-            std::env::current_exe().map_err(|e| format!("Cannot resolve app executable: {e}"))?;
-        let exe = std::fs::canonicalize(&exe).unwrap_or(exe);
-        let exe_str = exe
-            .to_str()
-            .ok_or("App executable path is not valid UTF-8")?;
+        let exe_str = current_exe_path()?;
 
         // App Translocation gives a quarantined app a random, read-only path that vanishes;
         // a shim pointing there would break. Tell the user to install to /Applications first.
@@ -160,7 +199,7 @@ mod macos {
             );
         }
 
-        let shim = build_shim(exe_str);
+        let shim = build_shim(&exe_str);
 
         // Stage the shim in a securely-created unique temp file (tempfile uses O_EXCL + a
         // random name, mode 0600), so a local attacker can't pre-create or swap it before the
@@ -248,6 +287,14 @@ mod macos {
             comment = shim_comment_line(),
             exe = sh_double_quote_escape(exe),
         )
+    }
+    fn current_exe_path() -> Result<String, String> {
+        let exe =
+            std::env::current_exe().map_err(|e| format!("Cannot resolve app executable: {e}"))?;
+        let exe = std::fs::canonicalize(&exe).unwrap_or(exe);
+        exe.to_str()
+            .map(str::to_string)
+            .ok_or_else(|| "App executable path is not valid UTF-8".to_string())
     }
 
     /// Classify an arbitrary path by the same rules as the real shim path. Kept
@@ -422,6 +469,47 @@ mod macos {
         }
 
         #[test]
+        fn reports_current_stale_and_foreign_command_health() {
+            let dir = tempfile::tempdir().unwrap();
+            let command = dir.path().join("voicetypr");
+            let current_exe = "/Applications/Voicetypr.app/Contents/MacOS/voicetypr";
+
+            std::fs::write(&command, build_shim(current_exe)).unwrap();
+            let current = status_for(&command, Some(current_exe));
+            assert!(current.installed);
+            assert!(current.manageable);
+            assert!(current.compatible);
+            assert_eq!(
+                current.command_version.as_deref(),
+                Some(env!("CARGO_PKG_VERSION"))
+            );
+            assert!(current.detail.is_none());
+
+            let stale = status_for(
+                &command,
+                Some("/Applications/Other Voicetypr.app/Contents/MacOS/voicetypr"),
+            );
+            assert!(stale.installed);
+            assert!(stale.manageable);
+            assert!(!stale.compatible);
+            assert!(stale.command_version.is_none());
+            assert!(stale
+                .detail
+                .as_deref()
+                .is_some_and(|detail| detail.contains("Repair")));
+
+            std::fs::write(&command, "#!/bin/sh\necho foreign\n").unwrap();
+            let foreign = status_for(&command, Some(current_exe));
+            assert!(foreign.installed);
+            assert!(!foreign.manageable);
+            assert!(!foreign.compatible);
+            assert!(foreign
+                .detail
+                .as_deref()
+                .is_some_and(|detail| detail.contains("not overwrite")));
+        }
+
+        #[test]
         fn build_shim_carries_the_marker() {
             let shim = build_shim("/some/exe");
             assert!(shim.starts_with("#!/bin/sh\n"));
@@ -440,10 +528,15 @@ mod windows_path {
     use winreg::{RegKey, RegValue};
 
     pub fn status() -> CliToolStatus {
+        let installed = check_installed().unwrap_or(false);
         CliToolStatus {
-            installed: check_installed().unwrap_or(false),
+            installed,
             manageable: true,
             path: Some("voicetypr".to_string()),
+            app_version: env!("CARGO_PKG_VERSION").to_string(),
+            command_version: installed.then(|| env!("CARGO_PKG_VERSION").to_string()),
+            compatible: installed,
+            detail: None,
         }
     }
 

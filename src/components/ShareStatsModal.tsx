@@ -2,6 +2,7 @@ import { Button } from "@/components/ui/button";
 import {
   Dialog,
   DialogContent,
+  DialogDescription,
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
@@ -23,7 +24,6 @@ interface ShareStatsModalProps {
     totalWords: number;
     avgLength: number;
     timeSavedDisplay: string;
-    productivityScore: number;
     currentStreak: number;
     longestStreak: number;
   };
@@ -60,118 +60,128 @@ export function ShareStatsModal({ open, onOpenChange, stats }: ShareStatsModalPr
     const ctx = canvas.getContext("2d");
     if (!ctx) return;
 
-    // Set canvas size - high resolution for social media sharing
     canvas.width = 2400;
     canvas.height = 1600;
-
-    // Optimize for text quality
     ctx.imageSmoothingEnabled = true;
-    ctx.imageSmoothingQuality = 'high';
+    ctx.imageSmoothingQuality = "high";
 
-    // Create clean gradient background
-    const gradient = ctx.createLinearGradient(0, 0, canvas.width, canvas.height);
-    gradient.addColorStop(0, "#0f0f0f");
-    gradient.addColorStop(1, "#1a1a1a");
-
-    ctx.fillStyle = gradient;
+    const background = ctx.createLinearGradient(0, 0, canvas.width, canvas.height);
+    background.addColorStop(0, "#f8f8f3");
+    background.addColorStop(1, "#e9efe6");
+    ctx.fillStyle = background;
     ctx.fillRect(0, 0, canvas.width, canvas.height);
 
-    // Title at the top - scaled up
-    ctx.font = "bold 96px -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif";
-    ctx.fillStyle = "#ffffff";
-    ctx.textAlign = "center";
-    ctx.fillText("My Voicetypr Stats", canvas.width / 2, 200);
+    ctx.fillStyle = "rgba(101, 122, 98, 0.08)";
+    ctx.beginPath();
+    ctx.arc(2210, 100, 420, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.beginPath();
+    ctx.arc(80, 1540, 300, 0, Math.PI * 2);
+    ctx.fill();
 
-    // Best streak above the grid (if there's a longest streak)
-    if (stats.longestStreak > 0) {
-      ctx.font = "bold 72px -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif";
-      ctx.fillStyle = "#ffffff";
-      ctx.textAlign = "center";
-      ctx.fillText(`🔥 Best Streak: ${stats.longestStreak} Days`, canvas.width / 2, 360);
-    }
+    const fontFamily = "-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif";
+    ctx.textAlign = "left";
 
-    // 2x2 Grid of cards - scaled up
-    const cardWidth = 760;
-    const cardHeight = 360;
-    const cardGap = 80;
-    const gridStartX = (canvas.width - (cardWidth * 2 + cardGap)) / 2;
-    const gridStartY = stats.longestStreak > 0 ? 480 : 360;
+    ctx.fillStyle = "#657a62";
+    ctx.beginPath();
+    ctx.roundRect(150, 120, 58, 58, 16);
+    ctx.fill();
+    ctx.fillStyle = "#f8f8f3";
+    [0, 1, 2].forEach((index) => {
+      ctx.beginPath();
+      ctx.arc(171 + index * 8, 149, 3, 0, Math.PI * 2);
+      ctx.fill();
+    });
 
-    // Card data - simplified
+    ctx.font = `600 36px ${fontFamily}`;
+    ctx.fillStyle = "#52604f";
+    ctx.fillText("VOICETYPR", 232, 161);
+
+    ctx.font = `600 88px ${fontFamily}`;
+    ctx.fillStyle = "#20251f";
+    ctx.fillText("Your voice, in numbers", 150, 342);
+
+    ctx.font = `36px ${fontFamily}`;
+    ctx.fillStyle = "#6b7468";
+    ctx.fillText("A snapshot of your dictation momentum", 150, 412);
+
     const cards = [
       {
-        label: "Transcriptions",
-        value: stats.totalTranscriptions.toString(),
-        subtitle: "total"
+        label: "TRANSCRIPTIONS",
+        value: stats.totalTranscriptions.toLocaleString(),
+        detail: `+${stats.todayCount.toLocaleString()} today`,
       },
       {
-        label: "Words Captured",
+        label: "WORDS CAPTURED",
         value: stats.totalWords.toLocaleString(),
-        subtitle: `${stats.avgLength} avg`
+        detail: `${stats.avgLength.toLocaleString()} words per take`,
       },
       {
-        label: "Time Saved",
+        label: "TIME SAVED",
         value: stats.timeSavedDisplay,
-        subtitle: "from typing"
+        detail: "vs. typing at 40 wpm",
       },
-      {
-        label: "Productivity",
-        value: `${stats.productivityScore}%`,
-        subtitle: "this week"
-      }
     ];
 
-    // Draw cards in 2x2 grid
-    cards.forEach((card, index) => {
-      const row = Math.floor(index / 2);
-      const col = index % 2;
-      const x = gridStartX + col * (cardWidth + cardGap);
-      const y = gridStartY + row * (cardHeight + cardGap);
+    const cardWidth = 660;
+    const cardHeight = 430;
+    const cardGap = 60;
+    const cardY = 520;
 
-      // Simple card background
-      ctx.fillStyle = "rgba(255, 255, 255, 0.05)";
-      ctx.strokeStyle = "rgba(255, 255, 255, 0.1)";
-      ctx.lineWidth = 2;
+    cards.forEach((card, index) => {
+      const x = 150 + index * (cardWidth + cardGap);
+      ctx.fillStyle = "rgba(255, 255, 255, 0.88)";
+      ctx.strokeStyle = "rgba(82, 96, 79, 0.14)";
+      ctx.lineWidth = 3;
       ctx.beginPath();
-      ctx.roundRect(x, y, cardWidth, cardHeight, 32);
+      ctx.roundRect(x, cardY, cardWidth, cardHeight, 36);
       ctx.fill();
       ctx.stroke();
 
-      // Card label - scaled up
-      ctx.font = "48px -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif";
-      ctx.fillStyle = "rgba(255, 255, 255, 0.5)";
-      ctx.textAlign = "center";
-      ctx.fillText(card.label, x + cardWidth/2, y + 90);
+      ctx.font = `600 28px ${fontFamily}`;
+      ctx.fillStyle = "#657a62";
+      ctx.fillText(card.label, x + 52, cardY + 88);
 
-      // Card value - MUCH BIGGER
-      ctx.font = "bold 112px -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif";
-      ctx.fillStyle = "#ffffff";
-      ctx.fillText(card.value, x + cardWidth/2, y + 220);
+      ctx.font = `600 92px ${fontFamily}`;
+      ctx.fillStyle = "#20251f";
+      ctx.fillText(card.value, x + 52, cardY + 230);
 
-      // Card subtitle - scaled up
-      ctx.font = "40px -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif";
-      ctx.fillStyle = "rgba(255, 255, 255, 0.4)";
-      ctx.fillText(card.subtitle, x + cardWidth/2, y + 290);
+      ctx.font = `32px ${fontFamily}`;
+      ctx.fillStyle = "#6b7468";
+      ctx.fillText(card.detail, x + 52, cardY + 330);
     });
 
-    // // Current Streak at the bottom - scaled up
-    // if (stats.currentStreak > 0) {
-    //   ctx.font = "bold 80px -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif";
-    //   ctx.fillStyle = "#ffffff";
-    //   ctx.textAlign = "center";
-    //   const streakY = gridStartY + 2 * (cardHeight + cardGap) + 120;
-    //   ctx.fillText(`🔥 ${stats.currentStreak} Day Streak`, canvas.width / 2, streakY);
-    // }
+    ctx.fillStyle = "#52674f";
+    ctx.beginPath();
+    ctx.roundRect(150, 1050, 2100, 330, 44);
+    ctx.fill();
 
-    // Website at the bottom - scaled up
-    ctx.font = "56px -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif";
-    ctx.fillStyle = "rgba(255, 255, 255, 0.6)";
-    ctx.textAlign = "center";
-    ctx.fillText("voicetypr.com", canvas.width / 2, canvas.height - 80);
+    ctx.font = `600 60px ${fontFamily}`;
+    ctx.fillStyle = "#f7f8f4";
+    ctx.fillText(
+      stats.currentStreak > 1
+        ? `${stats.currentStreak}-day dictation streak`
+        : "Built one thought at a time",
+      220,
+      1170,
+    );
 
-    // Convert canvas to data URL
-    const dataUrl = canvas.toDataURL("image/png");
-    setImageDataUrl(dataUrl);
+    ctx.font = `34px ${fontFamily}`;
+    ctx.fillStyle = "rgba(247, 248, 244, 0.74)";
+    const longestStreak =
+      stats.longestStreak > 0 ? `${stats.longestStreak} day best streak` : "Start your streak today";
+    ctx.fillText(
+      `${stats.totalTranscriptions.toLocaleString()} transcriptions  ·  ${longestStreak}`,
+      220,
+      1252,
+    );
+
+    ctx.textAlign = "right";
+    ctx.font = `500 34px ${fontFamily}`;
+    ctx.fillStyle = "rgba(247, 248, 244, 0.74)";
+    ctx.fillText("voicetypr.com", 2180, 1328);
+
+    setImageDataUrl(canvas.toDataURL("image/png"));
   };
 
   const copyImageToClipboard = async () => {
@@ -233,16 +243,19 @@ export function ShareStatsModal({ open, onOpenChange, stats }: ShareStatsModalPr
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-4xl">
+      <DialogContent className="sm:max-w-4xl">
         <DialogHeader>
-          <DialogTitle>Share Your Stats</DialogTitle>
+          <DialogTitle>Share your stats</DialogTitle>
+          <DialogDescription>
+            Copy or save a private snapshot of your dictation progress.
+          </DialogDescription>
         </DialogHeader>
 
         <div className="space-y-4">
           {/* Canvas Preview */}
-          <div className="relative rounded-lg overflow-hidden bg-black/5 border border-border/50 min-h-[300px]">
+          <div className="relative min-h-[300px] overflow-hidden rounded-2xl border border-border bg-muted/30">
             {isLoading && (
-              <div className="absolute inset-0 flex items-center justify-center bg-background/50 backdrop-blur-sm z-10">
+              <div className="absolute inset-0 z-10 flex items-center justify-center bg-background/70 backdrop-blur-sm">
                 <div className="flex flex-col items-center gap-2">
                   <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
                   <span className="text-sm text-muted-foreground">Generating stats image...</span>
@@ -251,19 +264,18 @@ export function ShareStatsModal({ open, onOpenChange, stats }: ShareStatsModalPr
             )}
             <canvas
               ref={canvasRef}
-              className="w-full h-auto"
-              style={{ maxHeight: "400px", objectFit: "contain" }}
+              className="h-auto w-full"
+              style={{ maxHeight: "420px", objectFit: "contain" }}
             />
           </div>
 
-          {/* Actions - centered */}
-          <div className="flex justify-center gap-2">
+          <div className="flex justify-end gap-2">
             <Button
               onClick={copyImageToClipboard}
               disabled={isCopying || !imageDataUrl}
               className={cn(
-                "gap-2 min-w-[120px]",
-                copied && "bg-green-600 hover:bg-green-600"
+                "min-w-32 gap-2",
+                copied && "bg-sage text-sage-foreground hover:bg-sage/90",
               )}
             >
               {isCopying ? (

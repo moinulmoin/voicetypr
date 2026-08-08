@@ -1,12 +1,15 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "Voicetypr",
-  "version": "2.0.0",
+  "version": "2.0.5",
   "identifier": "com.ideaplexa.voicetypr.dev",
   "app": {
     "windows": [
       {
         "title": "Voicetypr",
+        "hiddenTitle": true,
+        "titleBarStyle": "Overlay",
+        "trafficLightPosition": { "x": 12, "y": 11 },
         "label": "main",
         "width": 1120,
         "height": 760,

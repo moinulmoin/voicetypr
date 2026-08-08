@@ -57,9 +57,11 @@ export const isLocalModel = (model: ModelInfo): model is LocalModelInfo =>
 
 export type RecordingMode = 'toggle' | 'push_to_talk';
 export type PillIndicatorMode = 'never' | 'always' | 'when_recording';
+export type PillIndicatorStyle = 'compact' | 'full';
 export type PillIndicatorPosition = 'top-left' | 'top-center' | 'top-right' | 'bottom-left' | 'bottom-center' | 'bottom-right';
 export type TranscriptionAcceleration = 'auto' | 'gpu' | 'cpu';
 export type UpdateChannel = 'stable' | 'beta';
+export type SettingsMode = 'recommended' | 'advanced';
 
 export interface AppSettings {
   hotkey: string;
@@ -68,6 +70,7 @@ export interface AppSettings {
   transcription_task?: 'transcribe' | 'translate_to_english';
   final_text_language?: string;
   theme: string;
+  settings_mode?: SettingsMode;
   transcription_cleanup_days?: number | null;
   launch_at_startup?: boolean;
   onboarding_completed?: boolean;
@@ -86,6 +89,8 @@ export interface AppSettings {
   play_sound_on_paste_success?: boolean;
   // Pill indicator visibility mode
   pill_indicator_mode?: PillIndicatorMode;
+  // Pill indicator detail level
+  pill_indicator_style?: PillIndicatorStyle;
   // Pill indicator screen position
   pill_indicator_position?: PillIndicatorPosition;
   // Pill indicator offset from screen edge in pixels (10-50)

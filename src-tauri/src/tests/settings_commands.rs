@@ -23,6 +23,7 @@ mod tests {
             FINAL_TEXT_LANGUAGE_SAME_AS_TRANSCRIPT
         );
         assert_eq!(settings.theme, "system");
+        assert_eq!(settings.settings_mode, "recommended");
         assert_eq!(settings.transcription_cleanup_days, None);
         assert!(!settings.launch_at_startup);
         assert!(!settings.onboarding_completed);
@@ -42,6 +43,7 @@ mod tests {
             transcription_task: TRANSCRIPTION_TASK_TRANSCRIBE.to_string(),
             final_text_language: FINAL_TEXT_LANGUAGE_SAME_AS_TRANSCRIPT.to_string(),
             theme: "dark".to_string(),
+            settings_mode: "advanced".to_string(),
             transcription_cleanup_days: Some(7),
             pill_position: Some((100.0, 200.0)),
             launch_at_startup: false,
@@ -56,6 +58,7 @@ mod tests {
             play_sound_on_transcription_complete: true,
             play_sound_on_paste_success: true,
             pill_indicator_mode: "when_recording".to_string(),
+            pill_indicator_style: "full".to_string(),
             pill_indicator_position: "bottom-center".to_string(),
             pill_indicator_offset: 10,
             pause_media_during_recording: true,
@@ -76,6 +79,7 @@ mod tests {
         assert!(json.contains("\"transcription_task\":\"transcribe\""));
         assert!(json.contains("\"final_text_language\":\"same_as_transcript\""));
         assert!(json.contains("\"theme\":\"dark\""));
+        assert!(json.contains("\"settings_mode\":\"advanced\""));
         assert!(json.contains("\"transcription_cleanup_days\":7"));
         assert!(json.contains("\"auto_paste_transcription\":true"));
 
@@ -90,6 +94,7 @@ mod tests {
             settings.final_text_language
         );
         assert_eq!(deserialized.theme, settings.theme);
+        assert_eq!(deserialized.settings_mode, settings.settings_mode);
         assert_eq!(
             deserialized.transcription_cleanup_days,
             settings.transcription_cleanup_days
@@ -126,6 +131,7 @@ mod tests {
             transcription_task: TRANSCRIPTION_TASK_TRANSLATE_TO_ENGLISH.to_string(),
             final_text_language: "en".to_string(),
             theme: "light".to_string(),
+            settings_mode: "recommended".to_string(),
             transcription_cleanup_days: Some(30),
             pill_position: None,
             launch_at_startup: true,
@@ -140,6 +146,7 @@ mod tests {
             play_sound_on_transcription_complete: false,
             play_sound_on_paste_success: false,
             pill_indicator_mode: "never".to_string(),
+            pill_indicator_style: "compact".to_string(),
             pill_indicator_position: "top-center".to_string(),
             pill_indicator_offset: 25,
             pause_media_during_recording: true,
@@ -856,6 +863,7 @@ mod tests {
             transcription_task: TRANSCRIPTION_TASK_TRANSLATE_TO_ENGLISH.to_string(),
             final_text_language: "en".to_string(),
             theme: "dark".to_string(),
+            settings_mode: "advanced".to_string(),
             transcription_cleanup_days: Some(14),
             pill_position: Some((500.0, 200.0)),
             launch_at_startup: true,
@@ -870,6 +878,7 @@ mod tests {
             play_sound_on_transcription_complete: false,
             play_sound_on_paste_success: false,
             pill_indicator_mode: "always".to_string(),
+            pill_indicator_style: "compact".to_string(),
             pill_indicator_position: "top-left".to_string(),
             pill_indicator_offset: 42,
             pause_media_during_recording: false,
