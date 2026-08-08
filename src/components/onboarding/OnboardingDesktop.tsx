@@ -207,6 +207,7 @@ export const OnboardingDesktop = function OnboardingDesktop({
   const [cloudModelSetup, setCloudModelSetup] = useState<string | null>(null);
   const [isSavingCloudKey, setIsSavingCloudKey] = useState(false);
   const hotkeyHydrated = useRef(false);
+  const sourceChosenByUser = useRef(false);
 
 
   const permissions = {
@@ -375,7 +376,9 @@ export const OnboardingDesktop = function OnboardingDesktop({
       .then((serverId) => {
         if (!cancelled && serverId) {
           setActiveRemoteServerId(serverId);
-          setSourceType("remote");
+          if (!sourceChosenByUser.current) {
+            setSourceType("remote");
+          }
         }
       })
       .catch((error) => {
@@ -425,6 +428,7 @@ export const OnboardingDesktop = function OnboardingDesktop({
   };
 
   const confirmSource = (nextSourceType: SourceType) => {
+    sourceChosenByUser.current = true;
     setSourceType(nextSourceType);
   };
 

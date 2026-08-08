@@ -38,6 +38,7 @@ import { useSettings } from '@/contexts/SettingsContext';
 import { useModelManagementContext } from '@/contexts/ModelManagementContext';
 import { getModelDisplayName } from '@/lib/model-display';
 import { createLogger } from '@/lib/logger';
+import { isMacOS } from '@/lib/platform';
 
 const log = createLogger('report-problem');
 const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -47,7 +48,7 @@ interface QuickFix {
   title: string;
   icon: LucideIcon;
   issue: string;
-  solution: string;
+  solution: () => string;
 }
 
 const QUICK_FIXES: QuickFix[] = [
@@ -56,31 +57,37 @@ const QUICK_FIXES: QuickFix[] = [
     title: 'Recording not working',
     icon: Mic,
     issue: 'Voice recording does not start from the shortcut.',
-    solution:
-      'Open Power user mode and check microphone permission in Advanced. Also confirm a recording device is selected in Settings.',
+    solution: () =>
+      isMacOS
+        ? 'Open Power user mode and check microphone permission in Advanced. Also confirm a recording device is selected in Settings.'
+        : 'In Windows Settings, allow desktop apps to use the microphone. Also confirm a recording device is selected in Settings.',
   },
   {
     id: 'hotkey',
     title: 'Shortcut not responding',
     icon: Keyboard,
     issue: 'The global shortcut does not trigger recording.',
-    solution:
-      'Open Power user mode, then Advanced, and grant Accessibility permission so the global shortcut can work.',
+    solution: () =>
+      isMacOS
+        ? 'Open Power user mode, then Advanced, and grant Accessibility permission so the global shortcut can work.'
+        : 'Open Power user mode, then Shortcuts, and choose another shortcut if the current one is reserved by another app.',
   },
   {
     id: 'insertion',
     title: 'Text not inserting',
     icon: Type,
     issue: 'The transcript does not appear at the cursor.',
-    solution:
-      'Place the cursor in an editable text field. In Power user mode, check Accessibility permission under Advanced.',
+    solution: () =>
+      isMacOS
+        ? 'Place the cursor in an editable text field. In Power user mode, check Accessibility permission under Advanced.'
+        : 'Place the cursor in an editable text field, then confirm Auto-paste after transcription is enabled in Settings.',
   },
   {
     id: 'download',
     title: 'Model download stuck',
     icon: Download,
     issue: 'A local model download is not progressing.',
-    solution:
+    solution: () =>
       'Open Models, cancel the current download, and try again. Check your internet connection before retrying.',
   },
 ];
@@ -270,7 +277,7 @@ export function ReportProblemSection() {
                       </div>
                       <div>
                         <p className="text-xs font-medium text-muted-foreground">Solution</p>
-                        <p className="mt-1 text-sm">{fix.solution}</p>
+                        <p className="mt-1 text-sm">{fix.solution()}</p>
                       </div>
                     </div>
                   </CollapsibleContent>

@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { OnboardingDesktop } from "./OnboardingDesktop";
@@ -371,6 +371,33 @@ describe("OnboardingDesktop", () => {
     expect(updateSettingsMock).not.toHaveBeenCalledWith(expect.objectContaining({
       current_model: "base.en",
     }));
+  });
+
+  it("does not overwrite an explicit source choice when remote restore resolves late", async () => {
+    const user = userEvent.setup();
+    let resolveActiveRemote!: (serverId: string | null) => void;
+    const activeRemote = new Promise<string | null>((resolve) => {
+      resolveActiveRemote = resolve;
+    });
+    invokeMock.mockImplementation((command: string) => {
+      if (command === "get_active_remote_server") return activeRemote;
+      if (command === "discover_remote_servers" || command === "list_remote_servers") {
+        return Promise.resolve([]);
+      }
+      return Promise.resolve(null);
+    });
+
+    renderOnboarding();
+    await user.click(screen.getByRole("button", { name: /start setup/i }));
+    await user.click(screen.getByRole("radio", { name: /use a cloud provider/i }));
+
+    await act(async () => {
+      resolveActiveRemote("remote-1");
+      await activeRemote;
+    });
+
+    expect(screen.getByRole("radio", { name: /use a cloud provider/i })).toBeChecked();
+    expect(screen.getByRole("radio", { name: /use another voicetypr/i })).not.toBeChecked();
   });
 
   it("guides users to select a downloaded local model before continuing", async () => {

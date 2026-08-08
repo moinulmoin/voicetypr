@@ -6,6 +6,10 @@ import { ReportProblemSection } from '../ReportProblemSection';
 import { buildReportBody, gatherManualReportData, getSystemSpecs, submitManualReport } from '@/utils/crashReport';
 import { toast } from 'sonner';
 
+const platformMock = vi.hoisted(() => ({ isMacOS: false }));
+
+vi.mock('@/lib/platform', () => platformMock);
+
 vi.mock('sonner', () => ({
   toast: {
     success: vi.fn(),
@@ -77,6 +81,7 @@ async function fillRequiredReportFields(
 describe('ReportProblemSection', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    platformMock.isMacOS = false;
     vi.mocked(gatherManualReportData).mockResolvedValue(reportData);
     vi.mocked(getSystemSpecs).mockResolvedValue(windowsSpecs);
     vi.mocked(buildReportBody).mockReturnValue('REPORT BODY with The app broke');
@@ -118,11 +123,22 @@ describe('ReportProblemSection', () => {
     expect(screen.getByText(/latest redacted app log/i)).toBeInTheDocument();
   });
 
-  it('includes the former Help quick fixes before the report form', async () => {
+  it('shows Windows-specific quick fixes before the report form', async () => {
     const user = userEvent.setup();
     render(<ReportProblemSection />);
 
     expect(screen.getByText('Try a quick fix first')).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: /shortcut not responding/i }));
+
+    expect(screen.getByText(/choose another shortcut/i)).toBeInTheDocument();
+    expect(screen.queryByText(/grant Accessibility permission/i)).not.toBeInTheDocument();
+  });
+
+  it('shows macOS permission guidance only on macOS', async () => {
+    platformMock.isMacOS = true;
+    const user = userEvent.setup();
+    render(<ReportProblemSection />);
+
     await user.click(screen.getByRole('button', { name: /shortcut not responding/i }));
 
     expect(screen.getByText(/grant Accessibility permission/i)).toBeInTheDocument();
