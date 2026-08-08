@@ -479,6 +479,7 @@ export const OnboardingDesktop = function OnboardingDesktop({
       toast.error("That model is not available");
       return;
     }
+    sourceChosenByUser.current = true;
     await invoke("set_active_remote_server", { serverId: null });
     setActiveRemoteServerId(null);
     setSourceType(source);

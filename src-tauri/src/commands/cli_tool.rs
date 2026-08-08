@@ -524,41 +524,44 @@ mod macos {
 #[cfg(target_os = "windows")]
 mod windows_path {
     use super::CliToolStatus;
+    use std::path::Path;
     use winreg::enums::{RegType, HKEY_CURRENT_USER, KEY_READ, KEY_WRITE};
     use winreg::{RegKey, RegValue};
 
     pub fn status() -> CliToolStatus {
-        let installed = check_installed().unwrap_or(false);
+        let (installed, compatible) = inspect_path().unwrap_or_default();
         CliToolStatus {
             installed,
             manageable: true,
             path: Some("voicetypr".to_string()),
             app_version: env!("CARGO_PKG_VERSION").to_string(),
-            command_version: installed.then(|| env!("CARGO_PKG_VERSION").to_string()),
-            compatible: installed,
-            detail: None,
+            command_version: compatible.then(|| env!("CARGO_PKG_VERSION").to_string()),
+            compatible,
+            detail: (installed && !compatible).then(|| {
+                "Another voicetypr command appears earlier on your user PATH. Repair this installation to give it priority.".to_string()
+            }),
         }
     }
 
-    fn check_installed() -> Option<bool> {
+    fn inspect_path() -> Option<(bool, bool)> {
         let dir = install_dir().ok()?;
         let env = open_env(false).ok()?;
         let (current, _) = read_path(&env).ok()??;
-        Some(path_contains_dir(&current, &dir))
+        let installed = path_contains_dir(&current, &dir);
+        let compatible = installed
+            && resolved_command_dir(&current, &dir)
+                .is_some_and(|entry| entry_matches_dir(entry, &dir));
+        Some((installed, compatible))
     }
 
     pub fn install() -> Result<(), String> {
         let dir = install_dir()?;
         let env = open_env(true)?;
         let (current, vtype) = read_path(&env)?.unwrap_or((String::new(), RegType::REG_EXPAND_SZ));
-        if path_contains_dir(&current, &dir) {
+        let new = prioritize_dir(&current, &dir);
+        if new == current {
             return Ok(());
         }
-        let new = if current.is_empty() {
-            dir
-        } else {
-            format!("{};{}", current.trim_end_matches(';'), dir)
-        };
         env.set_raw_value("Path", &encode_reg_sz(&new, vtype))
             .map_err(|e| format!("Cannot update PATH: {e}"))?;
         broadcast_env_change();
@@ -649,11 +652,74 @@ mod windows_path {
         path.split(';').any(|entry| entry_matches_dir(entry, dir))
     }
 
-    /// Case-insensitive, trailing-slash-insensitive comparison of a single PATH entry.
+    fn prioritize_dir(path: &str, dir: &str) -> String {
+        let kept = path
+            .split(';')
+            .filter(|entry| !entry_matches_dir(entry, dir))
+            .collect::<Vec<_>>()
+            .join(";");
+        if kept.is_empty() {
+            dir.to_string()
+        } else {
+            format!("{dir};{kept}")
+        }
+    }
+
+    fn resolved_command_dir<'a>(path: &'a str, install_dir: &str) -> Option<&'a str> {
+        path.split(';').find(|entry| {
+            entry_matches_dir(entry, install_dir)
+                || Path::new(normalize_entry(entry))
+                    .join("voicetypr.exe")
+                    .is_file()
+        })
+    }
+
+    fn normalize_entry(entry: &str) -> &str {
+        entry
+            .trim()
+            .trim_matches('"')
+            .trim_end_matches(|c| c == '\\' || c == '/')
+    }
+
+    /// Case-insensitive, quote- and trailing-slash-insensitive comparison of a PATH entry.
     fn entry_matches_dir(entry: &str, dir: &str) -> bool {
-        let normalize = |s: &str| s.trim().trim_end_matches('\\').to_string();
-        let entry = normalize(entry);
-        !entry.is_empty() && entry.eq_ignore_ascii_case(&normalize(dir))
+        let entry = normalize_entry(entry);
+        !entry.is_empty() && entry.eq_ignore_ascii_case(normalize_entry(dir))
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        #[test]
+        fn repair_prioritizes_current_app_over_shadowing_command() {
+            let root = tempfile::tempdir().unwrap();
+            let foreign = root.path().join("foreign");
+            let current = root.path().join("current");
+            std::fs::create_dir_all(&foreign).unwrap();
+            std::fs::create_dir_all(&current).unwrap();
+            std::fs::write(foreign.join("voicetypr.exe"), b"foreign").unwrap();
+            std::fs::write(current.join("voicetypr.exe"), b"current").unwrap();
+
+            let foreign = foreign.to_string_lossy();
+            let current = current.to_string_lossy();
+            let shadowed = format!("{foreign};{current}");
+            assert!(resolved_command_dir(&shadowed, &current)
+                .is_some_and(|entry| entry_matches_dir(entry, &foreign)));
+
+            let repaired = prioritize_dir(&shadowed, &current);
+            assert!(resolved_command_dir(&repaired, &current)
+                .is_some_and(|entry| entry_matches_dir(entry, &current)));
+            assert_eq!(repaired, format!("{current};{foreign}"));
+        }
+
+        #[test]
+        fn prioritizing_an_already_first_directory_is_a_noop() {
+            let current = r"C:\Program Files\Voicetypr";
+            let other = r"C:\Tools";
+            let path = format!("{current};{other}");
+            assert_eq!(prioritize_dir(&path, current), path);
+        }
     }
 
     fn broadcast_env_change() {

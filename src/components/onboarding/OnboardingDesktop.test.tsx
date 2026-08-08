@@ -400,6 +400,39 @@ describe("OnboardingDesktop", () => {
     expect(screen.getByRole("radio", { name: /use another voicetypr/i })).not.toBeChecked();
   });
 
+  it("does not overwrite a selected model when remote restore resolves late", async () => {
+    const user = userEvent.setup();
+    settingsState.current_model = "";
+    let resolveActiveRemote!: (serverId: string | null) => void;
+    const activeRemote = new Promise<string | null>((resolve) => {
+      resolveActiveRemote = resolve;
+    });
+    invokeMock.mockImplementation((command: string) => {
+      if (command === "get_active_remote_server") return activeRemote;
+      if (command === "discover_remote_servers" || command === "list_remote_servers") {
+        return Promise.resolve([]);
+      }
+      return Promise.resolve(null);
+    });
+
+    renderOnboarding();
+    await user.click(screen.getByRole("button", { name: /start setup/i }));
+    await user.click(screen.getByRole("button", { name: /continue/i }));
+    await user.click(screen.getByRole("button", { name: /continue/i }));
+    await user.click(await screen.findByText("Base English"));
+
+    await act(async () => {
+      resolveActiveRemote("remote-1");
+      await activeRemote;
+    });
+
+    expect(screen.getByRole("heading", { name: /choose a local model/i })).toBeInTheDocument();
+    expect(updateSettingsMock).toHaveBeenCalledWith({
+      current_model: "base.en",
+      current_model_engine: "whisper",
+    });
+  });
+
   it("guides users to select a downloaded local model before continuing", async () => {
     const user = userEvent.setup();
     settingsState.current_model = "";
