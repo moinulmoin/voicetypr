@@ -1145,14 +1145,36 @@ fn executor_for_provider(
     ))
 }
 
+#[derive(Debug)]
+pub(crate) struct AiPolishAttemptError {
+    pub error: AiProviderError,
+    pub provider_id: String,
+    pub model_id: String,
+}
+
+impl AiPolishAttemptError {
+    fn unattributed(error: AiProviderError) -> Self {
+        Self {
+            error,
+            provider_id: String::new(),
+            model_id: String::new(),
+        }
+    }
+}
+
 async fn polish_text_with_prompt_result_typed(
     app: &tauri::AppHandle,
     text: &str,
     model: String,
     provider: String,
     prompt: String,
-) -> Result<crate::ai::contract::AiPolishResult, AiProviderError> {
-    let (executor, runtime_provider) = executor_for_provider(app, &provider)?;
+) -> Result<crate::ai::contract::AiPolishResult, AiPolishAttemptError> {
+    let (executor, runtime_provider) =
+        executor_for_provider(app, &provider).map_err(|error| AiPolishAttemptError {
+            error,
+            provider_id: provider,
+            model_id: model.clone(),
+        })?;
     // CLI providers are cold-spawned with their own hard kill-timeout
     // (AgentCliRuntime::COLD_SPAWN_TIMEOUT); cap the executor budget to ~9s so
     // a wedged CLI surfaces promptly. HTTP providers keep the 30s budget.
@@ -1163,14 +1185,19 @@ async fn polish_text_with_prompt_result_typed(
     };
     let request = AiPolishRequest {
         provider_id: runtime_provider.clone(),
-        model_id: model,
+        model_id: model.clone(),
         input_text: text.to_string(),
         prompt,
         timeout_ms,
     };
     let result = executor
         .polish(request, tokio_util::sync::CancellationToken::new())
-        .await?;
+        .await
+        .map_err(|error| AiPolishAttemptError {
+            error,
+            provider_id: runtime_provider,
+            model_id: model,
+        })?;
     log::info!(
         "Text enhanced successfully via {} (original: {}, enhanced: {}, duration_ms: {})",
         result.provider_id,
@@ -1189,8 +1216,9 @@ pub async fn polish_text_typed(
     transcript_language: Option<&str>,
     context: Option<&str>,
     app_category_hint: Option<&str>,
-) -> Result<crate::ai::contract::AiPolishResult, crate::ai::error::AiProviderError> {
-    let (provider, model) = selected_ai_provider_and_model(app)?;
+) -> Result<crate::ai::contract::AiPolishResult, AiPolishAttemptError> {
+    let (provider, model) =
+        selected_ai_provider_and_model(app).map_err(AiPolishAttemptError::unattributed)?;
     let prompt = crate::ai::prompts::build_enhancement_prompt_for_transcript_language(
         context,
         options,
