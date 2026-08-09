@@ -11,6 +11,7 @@ const {
   checkMicrophonePermissionMock,
   requestNotificationPermissionServiceMock,
   refreshSettingsMock,
+  mockGetVersion,
   mockGetJustUpdatedVersion,
   mockInvoke,
   tauriEventListeners,
@@ -23,6 +24,7 @@ const {
   checkMicrophonePermissionMock: vi.fn(),
   requestNotificationPermissionServiceMock: vi.fn(),
   refreshSettingsMock: vi.fn(),
+  mockGetVersion: vi.fn(),
   mockGetJustUpdatedVersion: vi.fn(),
   mockInvoke: vi.fn(),
   tauriEventListeners: new Map<string, Set<(event: { payload: unknown }) => void>>(),
@@ -30,6 +32,10 @@ const {
 
 vi.mock('@tauri-apps/api/core', () => ({
   invoke: (...args: unknown[]) => mockInvoke(...args),
+}));
+
+vi.mock('@tauri-apps/api/app', () => ({
+  getVersion: () => mockGetVersion(),
 }));
 
 vi.mock('sonner', () => ({
@@ -228,6 +234,7 @@ describe('AppContainer', () => {
     });
     refreshSettingsMock.mockReset();
     mockGetJustUpdatedVersion.mockReset().mockReturnValue(null);
+    mockGetVersion.mockReset().mockResolvedValue('2.0.0');
     checkAccessibilityPermissionMock.mockReset().mockResolvedValue(true);
     checkMicrophonePermissionMock.mockReset().mockResolvedValue(true);
     requestNotificationPermissionServiceMock.mockReset();
@@ -539,14 +546,79 @@ describe('AppContainer', () => {
   });
 
   describe('post-update modal', () => {
-    it('shows update dialog when app was just updated', async () => {
+    it('shows a generic update dialog for older releases', async () => {
       mockGetJustUpdatedVersion.mockReturnValue('1.13.0');
+      mockGetVersion.mockResolvedValue('1.13.0');
       render(<AppContainer />);
 
       await waitFor(() => {
         expect(screen.getByText('Voicetypr Updated')).toBeInTheDocument();
       });
       expect(screen.getByText(/Successfully updated to version 1\.13\.0/)).toBeInTheDocument();
+      expect(screen.queryByText('Polish is now simpler')).not.toBeInTheDocument();
+    });
+
+    it('explains the Polish migration after the 2.0.6 update', async () => {
+      mockGetJustUpdatedVersion.mockReturnValue('2.0.6-beta.1');
+      mockGetVersion.mockResolvedValue('2.0.6-beta.1');
+      render(<AppContainer />);
+
+      await waitFor(() => {
+        expect(screen.getByText('Polish is now simpler')).toBeInTheDocument();
+      });
+      expect(
+        screen.getByText(/Writing, Notes, Message, and Code styles now work through App Rules/),
+      ).toBeInTheDocument();
+      expect(
+        screen.getByText(/Your models, AI setup, hotkeys, corrections, Saved Text/),
+      ).toBeInTheDocument();
+    });
+
+    it('ignores an update marker retained from an older installed version', async () => {
+      mockGetJustUpdatedVersion.mockReturnValue('2.0.6-beta.1');
+      mockGetVersion.mockResolvedValue('2.0.7');
+      render(<AppContainer />);
+
+      await waitFor(() => {
+        expect(screen.getByTestId('sidebar')).toBeInTheDocument();
+      });
+      expect(screen.queryByText('Voicetypr Updated')).not.toBeInTheDocument();
+    });
+
+    it('does not consume the update marker before version validation completes', async () => {
+      let resolveVersion: (version: string) => void = () => undefined;
+      mockGetVersion.mockReturnValue(
+        new Promise<string>((resolve) => {
+          resolveVersion = resolve;
+        }),
+      );
+      mockGetJustUpdatedVersion.mockReturnValue('2.0.6-beta.1');
+      render(<AppContainer />);
+
+      await waitFor(() => {
+        expect(mockGetVersion).toHaveBeenCalled();
+      });
+      expect(mockGetJustUpdatedVersion).not.toHaveBeenCalled();
+
+      await act(async () => {
+        resolveVersion('2.0.6-beta.1');
+      });
+
+      await waitFor(() => {
+        expect(screen.getByText('Polish is now simpler')).toBeInTheDocument();
+      });
+    });
+
+    it('leaves the update marker untouched when version validation fails', async () => {
+      mockGetVersion.mockRejectedValue(new Error('version unavailable'));
+      mockGetJustUpdatedVersion.mockReturnValue('2.0.6-beta.1');
+      render(<AppContainer />);
+
+      await waitFor(() => {
+        expect(mockGetVersion).toHaveBeenCalled();
+      });
+      expect(mockGetJustUpdatedVersion).not.toHaveBeenCalled();
+      expect(screen.queryByText('Voicetypr Updated')).not.toBeInTheDocument();
     });
 
     it('does not show update dialog when no update marker exists', async () => {

@@ -127,7 +127,7 @@ mod behavior_tests {
         }
     }
 
-    // Transform present ONLY for Writing/Notes/Message/Code; absent for Personal/Clean.
+    // Reshaping transforms stay exclusive to Writing/Notes/Message/Code.
     #[test]
     fn transform_present_only_for_formatting_presets() {
         let formatting_markers: &[(EnhancementPreset, &str)] = &[
@@ -165,6 +165,28 @@ mod behavior_tests {
                     marker
                 );
             }
+        }
+    }
+
+    #[test]
+    fn clean_dictation_adds_restrained_paragraph_guidance() {
+        let clean =
+            build_enhancement_prompt(None, &options(EnhancementPreset::CleanDictation), None);
+        assert!(clean.contains("clear topic or intent change"));
+        assert!(clean.contains("Keep short dictation in one paragraph"));
+        assert!(clean.contains("Do not add headings or bullets"));
+
+        let personal =
+            build_enhancement_prompt(None, &options(EnhancementPreset::PersonalDictation), None);
+        assert!(!personal.contains("clear topic or intent change"));
+    }
+
+    #[test]
+    fn polish_does_not_execute_spoken_formatting_commands() {
+        for &preset in ALL_PRESETS {
+            let prompt = build_enhancement_prompt(None, &options(preset), None);
+            assert!(!prompt.contains("Do dictation commands"));
+            assert!(prompt.contains("Do not execute spoken formatting commands"));
         }
     }
 

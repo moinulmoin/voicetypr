@@ -787,14 +787,12 @@ pub async fn update_ai_settings(
             if selection_clears_model_reselection(&provider, &model) {
                 store.set("ai_model_needs_reselection", json!(false));
             }
-            if !enabled {
-                store.set(
-                    "enhancement_options",
-                    serde_json::to_value(EnhancementOptions {
-                        preset: crate::ai::prompts::EnhancementPreset::PersonalDictation,
-                    })
+            store.set(
+                "enhancement_options",
+                serde_json::to_value(EnhancementOptions::default_for_ai_enabled(enabled))
                     .map_err(|e| format!("Failed to serialize enhancement options: {}", e))?,
-                );
+            );
+            if !enabled {
                 store.set(
                     "final_text_language",
                     json!(FINAL_TEXT_LANGUAGE_SAME_AS_TRANSCRIPT),
@@ -853,11 +851,11 @@ pub async fn get_enhancement_options_for_ai_enabled(
     ai_enabled: bool,
 ) -> Result<EnhancementOptions, String> {
     let store = app.store("settings").map_err(|e| e.to_string())?;
+    let stored_options = store.get("enhancement_options");
     let options = crate::ai::prompts::enhancement_options_for_ai_enabled(
-        store.get("enhancement_options").as_ref(),
+        stored_options.as_ref(),
         ai_enabled,
     )?;
-    drop(store);
 
     let settings = load_writing_settings(&app)?;
     let effective = crate::writing::resolve_pipeline_config(
@@ -1597,18 +1595,19 @@ mod tests {
     }
 
     #[test]
-    fn test_enhancement_options_for_ai_enabled_preserves_stored_preset() {
+    fn test_enhancement_options_for_ai_enabled_normalizes_global_preset() {
         use crate::ai::prompts::{enhancement_options_for_ai_enabled, EnhancementPreset};
 
-        let value = serde_json::json!({ "preset": "Writing" });
-        let options = enhancement_options_for_ai_enabled(Some(&value), false).unwrap();
-        assert_eq!(options.preset, EnhancementPreset::Writing);
+        let writing = serde_json::json!({ "preset": "Writing" });
+        let disabled = enhancement_options_for_ai_enabled(Some(&writing), false).unwrap();
+        assert_eq!(disabled.preset, EnhancementPreset::PersonalDictation);
 
-        let enabled = enhancement_options_for_ai_enabled(Some(&value), true).unwrap();
-        assert_eq!(enabled.preset, EnhancementPreset::Writing);
+        let enabled = enhancement_options_for_ai_enabled(Some(&writing), true).unwrap();
+        assert_eq!(enabled.preset, EnhancementPreset::CleanDictation);
 
-        let defaults = enhancement_options_for_ai_enabled(None, true).unwrap();
-        assert_eq!(defaults.preset, EnhancementPreset::CleanDictation);
+        let clean = serde_json::json!({ "preset": "CleanDictation" });
+        let enabled_clean = enhancement_options_for_ai_enabled(Some(&clean), true).unwrap();
+        assert_eq!(enabled_clean.preset, EnhancementPreset::CleanDictation);
     }
 
     #[test]

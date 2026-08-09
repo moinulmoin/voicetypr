@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import { sendNotification, isPermissionGranted, requestPermission } from "@tauri-apps/plugin-notification";
+import { getVersion } from "@tauri-apps/api/app";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import type { UnlistenFn } from "@tauri-apps/api/event";
@@ -82,14 +83,34 @@ export function AppContainer() {
           await updateService.initialize(settings);
         }
 
-        // Check if the app was just updated and show post-update dialog
+        // Read the running version before consuming the one-shot update marker.
+        // Settings hydration can restart this effect; a cancelled run must leave
+        // the marker available for the replacement run.
+        let currentVersion: string;
+        try {
+          currentVersion = await getVersion();
+        } catch (error) {
+          log.error("Failed to read current app version:", error);
+          return;
+        }
+
+        if (cancelled) return;
+
+        // Check if this exact app version was just installed. A retained marker
+        // from an interrupted older update must not announce the wrong release.
         const updatedVersion = updateService.getJustUpdatedVersion?.();
         if (updatedVersion) {
-          setJustUpdatedVersion(updatedVersion);
-          try {
-            await invoke("focus_main_window");
-          } catch {
-            // Window focus is best-effort; dialog still renders.
+          if (currentVersion !== updatedVersion) {
+            log.warn(
+              `Ignoring stale update marker for ${updatedVersion}; running ${currentVersion}`,
+            );
+          } else {
+            setJustUpdatedVersion(updatedVersion);
+            try {
+              await invoke("focus_main_window");
+            } catch {
+              // Window focus is best-effort; dialog still renders.
+            }
           }
         }
       } catch (error) {

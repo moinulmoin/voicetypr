@@ -339,12 +339,12 @@ fn next_ai_enabled_toggles_correctly() {
 
 #[test]
 fn enabling_polish_normalizes_any_non_clean_preset_to_clean() {
-    // A Personal preset would leave Polish "on but inert" — normalize to Clean.
+    // A non-AI preset would leave Polish "on but inert" — normalize to Clean.
     assert!(should_normalize_preset_to_clean_on_enable(Some(
         "PersonalDictation"
     )));
-    // Legacy global reshaping presets must NOT survive a tray/shortcut enable
-    // (the Polish-screen migration only runs on the screen) — normalize them.
+    // Legacy global reshaping presets must NOT survive a tray/shortcut enable;
+    // normalize them even before the recording-path migration runs.
     assert!(should_normalize_preset_to_clean_on_enable(Some("Notes")));
     assert!(should_normalize_preset_to_clean_on_enable(Some("Writing")));
     assert!(should_normalize_preset_to_clean_on_enable(Some("Message")));

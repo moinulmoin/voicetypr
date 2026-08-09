@@ -82,13 +82,6 @@ const modelMatchesQuery = (model: AIProviderModel, query: string) =>
   model.name.toLowerCase().includes(query) ||
   Boolean(model.sourceProvider?.toLowerCase().includes(query));
 
-const POLISH_RESHAPE_MIGRATION_NOTICE_KEY = "polish_reshape_migration_notified";
-const RESHAPING_PRESETS = new Set<EnhancementPreset>([
-  "Writing",
-  "Notes",
-  "Message",
-  "Code",
-]);
 const GUIDED_PROVIDER_IDS = ["anthropic", "openai", "gemini", "openrouter", "claude-code", "pi", "omp"] as const;
 const GUIDED_PROVIDER_LABELS: Record<(typeof GUIDED_PROVIDER_IDS)[number], string> = {
   anthropic: "Anthropic",
@@ -144,21 +137,6 @@ const isGuidedProviderId = (
 ): providerId is (typeof GUIDED_PROVIDER_IDS)[number] =>
   GUIDED_PROVIDER_IDS.includes(providerId as (typeof GUIDED_PROVIDER_IDS)[number]);
 
-const hasShownReshapeMigrationNotice = () => {
-  try {
-    return window.localStorage.getItem(POLISH_RESHAPE_MIGRATION_NOTICE_KEY) === "true";
-  } catch {
-    return false;
-  }
-};
-
-const markReshapeMigrationNoticeShown = () => {
-  try {
-    window.localStorage.setItem(POLISH_RESHAPE_MIGRATION_NOTICE_KEY, "true");
-  } catch {
-    // localStorage can be unavailable in restricted environments; the migration still persists.
-  }
-};
 
 export function EnhancementsSection() {
   const readiness = useReadinessState();
@@ -216,21 +194,7 @@ export function EnhancementsSection() {
   const loadEnhancementOptions = async (aiEnabled: boolean) => {
     try {
       const options = await invoke<EnhancementOptions>("get_enhancement_options");
-      let nextOptions = fromBackendOptions(options, aiEnabled);
-      if (!aiEnabled && nextOptions.preset !== "PersonalDictation") {
-        nextOptions = { preset: "PersonalDictation" };
-      }
-      if (aiEnabled && RESHAPING_PRESETS.has(nextOptions.preset)) {
-        nextOptions = { preset: "CleanDictation" };
-        await invoke("update_enhancement_options", {
-          options: toBackendOptions(nextOptions),
-        });
-        if (!hasShownReshapeMigrationNotice()) {
-          toast.info("Reshaping now lives in Advanced -> App Rules.");
-          markReshapeMigrationNoticeShown();
-        }
-      }
-      setEnhancementOptions(nextOptions);
+      setEnhancementOptions(fromBackendOptions(options, aiEnabled));
     } catch (error) {
       log.error("Failed to load Polish options:", error);
     }
@@ -1485,7 +1449,7 @@ export function EnhancementsSection() {
                   <div className="space-y-3 text-sm leading-6 text-muted-foreground">
                     <p><strong className="text-foreground">Setup</strong> starts with Anthropic, OpenAI, or Google. Save a key and Polish chooses a recommended fast model for you.</p>
                     <p><strong className="text-foreground">Polish</strong> fixes grammar and punctuation while keeping your meaning.</p>
-                    <p><strong className="text-foreground">Static Rules</strong> are exact corrections, words and names, and text shortcuts that work with or without Polish.</p>
+                    <p><strong className="text-foreground">Static Rules</strong> are exact corrections, words and names, and saved text that work with or without Polish.</p>
                     <p><strong className="text-foreground">App Rules</strong> live in Advanced for app-specific reshaping.</p>
                   </div>
                 </DialogContent>

@@ -22,7 +22,8 @@ Fix it in this order:
    Keep the meaning and tone.
 3. Spell names and terms right only if you are sure. If not, leave them as said.
 4. Write numbers, dates, and times the normal way for {language}.
-5. Do dictation commands only when clearly said ("period", "new line").
+5. Do not execute spoken formatting commands. Keep phrases like "period" and
+   "new line" as dictated words when they are part of the content.
 
 Output only the fixed text. No preamble, no wrapping quotes, no markdown fences."#;
 
@@ -177,13 +178,18 @@ pub fn enhancement_options_for_ai_enabled(
     options_value: Option<&serde_json::Value>,
     ai_enabled: bool,
 ) -> Result<EnhancementOptions, String> {
-    let options = if let Some(value) = options_value {
+    let stored = if let Some(value) = options_value {
         parse_enhancement_options_from_value(value, ai_enabled)?
     } else {
         EnhancementOptions::default_for_ai_enabled(ai_enabled)
     };
+    let expected = EnhancementOptions::default_for_ai_enabled(ai_enabled);
 
-    Ok(options)
+    Ok(if stored.preset == expected.preset {
+        stored
+    } else {
+        expected
+    })
 }
 
 impl Default for EnhancementOptions {
@@ -233,7 +239,8 @@ pub fn build_enhancement_prompt_for_transcript_language(
     };
 
     let mode_transform = match options.preset {
-        EnhancementPreset::PersonalDictation | EnhancementPreset::CleanDictation => "",
+        EnhancementPreset::PersonalDictation => "",
+        EnhancementPreset::CleanDictation => CLEAN_DICTATION_TRANSFORM,
         EnhancementPreset::Writing => WRITING_TRANSFORM,
         EnhancementPreset::Notes => NOTES_TRANSFORM,
         EnhancementPreset::Message => MESSAGE_TRANSFORM,
@@ -268,6 +275,11 @@ pub fn build_enhancement_prompt_for_transcript_language(
 
     prompt
 }
+
+const CLEAN_DICTATION_TRANSFORM: &str = r#"For longer dictation:
+  - Start a new paragraph only at a clear topic or intent change.
+  - Keep short dictation in one paragraph.
+  - Do not add headings or bullets."#;
 
 const WRITING_TRANSFORM: &str = r#"Then make it read well:
   - Smoother flow and transitions.

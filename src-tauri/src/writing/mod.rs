@@ -13,9 +13,9 @@ pub use pipeline::{
 };
 #[allow(unused_imports)]
 pub use settings::{
-    load_writing_settings, sanitize_writing_settings, save_writing_settings, AppFormattingRule,
-    AppliedWritingOperation, ContextHint, CustomWord, Snippet, TextReplacementRule,
-    VoiceCommandRule, WritingError, WritingOperationKind, WritingProfile, WritingResult,
+    load_writing_settings, sanitize_writing_settings, save_writing_settings, AiExecutionMetadata,
+    AppFormattingRule, AppliedWritingOperation, ContextHint, CustomWord, Snippet,
+    TextReplacementRule, WritingError, WritingOperationKind, WritingProfile, WritingResult,
     WritingSettings, WritingStageTimings, WritingWarning,
 };
 #[allow(unused_imports)]
@@ -27,8 +27,7 @@ pub use vocabulary::{
 
 #[allow(unused_imports)]
 pub(crate) use library_rules::{
-    apply_final_restoration_guard, apply_library_rules, apply_voice_command_stage,
-    sanitize_transcript, voice_command_output,
+    apply_final_restoration_guard, apply_library_rules, sanitize_transcript,
 };
 #[allow(unused_imports)]
 pub(crate) use pipeline::{

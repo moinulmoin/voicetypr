@@ -324,7 +324,7 @@ describe('EnhancementsSection', () => {
       expect(screen.getByRole('button', { name: /toggle advanced/i })).toBeInTheDocument()
       expect(screen.getByText('Corrections')).toBeInTheDocument()
       expect(screen.getByText('Words & Names')).toBeInTheDocument()
-      expect(screen.getByText('Text Shortcuts')).toBeInTheDocument()
+      expect(screen.getByText('Saved Text')).toBeInTheDocument()
       expect(screen.queryByRole('button', { name: 'Personal Dictation' })).not.toBeInTheDocument()
     })
 
@@ -510,7 +510,7 @@ describe('EnhancementsSection', () => {
     expect(screen.queryByText(/premium|paywall|locked|requires Polish/i)).not.toBeInTheDocument()
   })
 
-  it('hides specific language selection when Personal Dictation is loaded', async () => {
+  it('hides specific language selection when Polish Off is loaded', async () => {
     ;(invoke as ReturnType<typeof vi.fn>).mockImplementation((cmd: string) => {
       if (cmd === 'list_ai_providers') {
         return Promise.resolve(providerListResponse)
@@ -526,7 +526,7 @@ describe('EnhancementsSection', () => {
         return Promise.resolve({ preset: 'PersonalDictation' })
       }
       if (cmd === 'get_writing_settings') {
-        return Promise.resolve({ ...defaultWritingSettings, voice_commands: [] })
+        return Promise.resolve(defaultWritingSettings)
       }
       if (cmd === 'get_ai_settings') {
         return Promise.resolve(baseAISettings)
@@ -546,106 +546,8 @@ describe('EnhancementsSection', () => {
     })
   })
 
-  it('migrates reshaping presets to Clean Dictation when Polish is on', async () => {
-    aiSettingsResponse = enabledAISettings
-    enhancementOptionsResponse = { preset: 'Writing' }
-    ;(hasApiKey as ReturnType<typeof vi.fn>).mockImplementation(async (providerId: string) =>
-      providerId === 'openai',
-    )
 
-    renderWithProviders()
-
-    await waitFor(() => {
-      expect(invoke).toHaveBeenCalledWith('update_enhancement_options', {
-        options: { preset: 'CleanDictation' },
-      })
-      expect(toast.info).toHaveBeenCalledWith('Reshaping now lives in Advanced -> App Rules.')
-    })
-    expect(window.localStorage.getItem('polish_reshape_migration_notified')).toBe('true')
-  })
-
-  it('keeps the reshaping migration notice one-time while still migrating', async () => {
-    window.localStorage.setItem('polish_reshape_migration_notified', 'true')
-    aiSettingsResponse = enabledAISettings
-    enhancementOptionsResponse = { preset: 'Notes' }
-    ;(hasApiKey as ReturnType<typeof vi.fn>).mockImplementation(async (providerId: string) =>
-      providerId === 'openai',
-    )
-
-    renderWithProviders()
-
-    await waitFor(() => {
-      expect(invoke).toHaveBeenCalledWith('update_enhancement_options', {
-        options: { preset: 'CleanDictation' },
-      })
-    })
-    expect(toast.info).not.toHaveBeenCalled()
-  })
-
-  it('does not migrate reshaping presets while Polish is off', async () => {
-    enhancementOptionsResponse = { preset: 'Writing' }
-    renderWithProviders()
-
-    await waitFor(() => {
-      expect(screen.getByText('Static Rules')).toBeInTheDocument()
-    })
-    expect(invoke).not.toHaveBeenCalledWith('update_enhancement_options', {
-      options: { preset: 'CleanDictation' },
-    })
-  })
-
-  it('surfaces migration persistence failures without looping', async () => {
-    aiSettingsResponse = enabledAISettings
-    enhancementOptionsResponse = { preset: 'Writing' }
-    ;(hasApiKey as ReturnType<typeof vi.fn>).mockImplementation(async (providerId: string) =>
-      providerId === 'openai',
-    )
-    ;(invoke as ReturnType<typeof vi.fn>).mockImplementation((cmd: string, args?: Record<string, unknown>) => {
-      if (cmd === 'list_ai_providers') {
-        return Promise.resolve(providerListResponse)
-      }
-      if (cmd === 'get_settings') {
-        return Promise.resolve(baseAppSettings)
-      }
-      if (cmd === 'save_settings') {
-        return Promise.resolve(undefined)
-      }
-      if (cmd === 'get_enhancement_options') {
-        return Promise.resolve({ preset: 'Writing' })
-      }
-      if (cmd === 'update_enhancement_options') {
-        return Promise.reject(new Error('preset save failed'))
-      }
-      if (cmd === 'get_writing_settings') {
-        return Promise.resolve(defaultWritingSettings)
-      }
-      if (cmd === 'get_ai_settings') {
-        return Promise.resolve(aiSettingsResponse)
-      }
-      if (cmd === 'get_ai_settings_for_provider') {
-        const provider = (args as { provider?: string })?.provider || ''
-        return Promise.resolve({ ...aiSettingsResponse, provider, hasApiKey: provider === 'openai' })
-      }
-      if (cmd === 'get_openai_config') {
-        return Promise.resolve({ baseUrl: 'https://api.openai.com/v1' })
-      }
-      if (cmd === 'cache_ai_api_key') {
-        return Promise.resolve(undefined)
-      }
-      return Promise.resolve(undefined)
-    })
-
-    renderWithProviders()
-
-    await waitFor(() => {
-      expect(invoke).toHaveBeenCalledWith('update_enhancement_options', {
-        options: { preset: 'CleanDictation' },
-      })
-    })
-    expect(toast.info).not.toHaveBeenCalled()
-  })
-
-  it('switches to Personal Dictation when Polish is turned off', async () => {
+  it('uses the non-AI preset when Polish is turned off', async () => {
     aiSettingsResponse = { ...enabledAISettings, enabled: true }
     ;(hasApiKey as ReturnType<typeof vi.fn>).mockImplementation(async (providerId: string) =>
       providerId === 'openai',
@@ -718,7 +620,7 @@ describe('EnhancementsSection', () => {
     })
   })
 
-  it('switches to Clean Dictation when Polish is turned on from Personal Dictation', async () => {
+  it('switches to Clean Dictation when Polish is turned on', async () => {
     aiSettingsResponse = { ...enabledAISettings, enabled: false }
     ;(hasApiKey as ReturnType<typeof vi.fn>).mockImplementation(async (providerId: string) =>
       providerId === 'openai',
@@ -820,10 +722,10 @@ describe('EnhancementsSection', () => {
 
     await waitFor(() => expect(screen.getByText('Corrections')).toBeInTheDocument())
     expect(screen.getByText('Words & Names')).toBeInTheDocument()
-    expect(screen.getByText('Text Shortcuts')).toBeInTheDocument()
+    expect(screen.getByText('Saved Text')).toBeInTheDocument()
   })
 
-  it('keeps AiProviderStatus single-sourced and drops the app-hint field on merge', () => {
+  it('keeps AiProviderStatus single-sourced and drops removed writing fields on merge', () => {
     const projectRoot = path.resolve(
       path.dirname(fileURLToPath(import.meta.url)),
       '..',
@@ -840,13 +742,14 @@ describe('EnhancementsSection', () => {
       replacements: [{ from: 'x', to: 'y', language: null, enabled: true }],
       custom_words: [],
       snippets: [],
-      voice_commands: [],
       context_policy: 'app_hint_only',
+      voice_commands: [{ phrase: 'insert comma', output: 'comma', enabled: true }],
     } as unknown as Partial<typeof defaultWritingSettings>
     const merged = mergeWritingSettings(legacy)
     expect(merged.replacements).toHaveLength(1)
     expect(merged.app_formatting_rules).toEqual([])
     expect('context_policy' in merged).toBe(false)
+    expect('voice_commands' in merged).toBe(false)
     expect(mergeWritingSettings({})).toEqual(defaultWritingSettings)
   })
 
@@ -1018,74 +921,6 @@ describe('EnhancementsSection', () => {
     })
   })
 
-  it.skip('adds a voice command row and persists writing settings (Voice Commands removed from UI)', async () => {
-    const user = userEvent.setup()
-    // Built-in voice commands now ship in `defaultWritingSettings` (mirroring
-    // the Rust serde default). This test exercises add-row/persist from an
-    // empty list, so load writing settings without the built-ins.
-    ;(invoke as ReturnType<typeof vi.fn>).mockImplementation(
-      (cmd: string, args?: Record<string, unknown>) => {
-        if (cmd === 'list_ai_providers') {
-          return Promise.resolve(providerListResponse)
-        }
-        if (cmd === 'get_settings') {
-          return Promise.resolve(baseAppSettings)
-        }
-        if (cmd === 'get_enhancement_options') {
-          return Promise.resolve({ preset: 'PersonalDictation' })
-        }
-        if (cmd === 'get_writing_settings') {
-          return Promise.resolve({ ...defaultWritingSettings, voice_commands: [] })
-        }
-        if (cmd === 'update_writing_settings') {
-          return Promise.resolve(undefined)
-        }
-        if (cmd === 'get_ai_settings') {
-          return Promise.resolve(aiSettingsResponse)
-        }
-        if (cmd === 'get_ai_settings_for_provider') {
-          const provider = (args as { provider?: string })?.provider || ''
-          return Promise.resolve({ ...aiSettingsResponse, provider })
-        }
-        if (cmd === 'get_openai_config') {
-          return Promise.resolve({ baseUrl: 'https://api.openai.com/v1' })
-        }
-        return Promise.resolve(undefined)
-      },
-    )
-    renderWithProviders()
-
-    const voiceCommandsHeading = await screen.findByText('Voice Commands')
-    const voiceCommandsCard = voiceCommandsHeading.parentElement?.parentElement
-    expect(voiceCommandsCard).toBeTruthy()
-
-    await user.click(
-      within(voiceCommandsCard as HTMLElement).getByRole('button', { name: /add command/i }),
-    )
-
-    fireEvent.change(await screen.findByLabelText('Voice command phrase 1'), {
-      target: { value: 'new paragraph' },
-    })
-    fireEvent.change(screen.getByLabelText('Voice command language 1'), {
-      target: { value: 'en' },
-    })
-    await user.click(screen.getByRole('switch', { name: 'Enable voice command 1' }))
-
-    await waitFor(() => {
-      expect(invoke).toHaveBeenCalledWith('update_writing_settings', {
-        settings: expect.objectContaining({
-          voice_commands: [
-            expect.objectContaining({
-              phrase: 'new paragraph',
-              output: 'period',
-              language: 'en',
-              enabled: false,
-            }),
-          ],
-        }),
-      })
-    })
-  })
 
   it('coalesces rapid writing settings saves so the latest edit wins on disk', async () => {
     const user = userEvent.setup()

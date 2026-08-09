@@ -24,7 +24,7 @@ export const presetRequiresAiFormatting = (preset: EnhancementPreset): boolean =
 export const presetDisplayLabel = (preset: EnhancementPreset): string => {
   switch (preset) {
     case 'PersonalDictation':
-      return 'Personal Dictation';
+      return 'Polish Off';
     case 'CleanDictation':
       return 'Clean Dictation';
     case 'Writing':

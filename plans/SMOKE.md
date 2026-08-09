@@ -439,6 +439,38 @@ cannot prove production ingestion boundaries.
       ingest to the EU endpoint, and confirm funnels/retention can join the
       anonymous journey by installation ID.
 
+## Plan 046 — Polish workflow alignment (NEEDS-SMOKE)
+
+Run these checks on the next newly cut signed Beta. The automated contract tests
+cover stage ordering, settings normalization, deterministic rules, and prompt
+construction; they do not prove provider output or upgraded desktop state.
+
+- [ ] 046-S1 Dictate a short sentence and a longer two-topic passage without
+      speaking punctuation → Polish supplies natural punctuation, keeps the
+      short result in one paragraph, and adds only a restrained topic-change
+      paragraph break to the longer result (no invented headings or bullets).
+- [ ] 046-S2 Say `comma`, `full stop`, `new line`, and `new paragraph` as
+      complete utterances with Polish off and on → none is deterministically
+      replaced by punctuation or whitespace as a hidden spoken command.
+- [ ] 046-S3 Add Saved Text entries, restart, then speak an exact whole trigger
+      and the same trigger inside a longer sentence → only the whole utterance
+      expands. Confirm `Insert exactly` bypasses Polish while a normal entry
+      continues through Polish.
+- [ ] 046-S4 Add different App Rules for two applications, dictate equivalent
+      text into each, and inspect diagnostics → the matching app preset is
+      selected before the single logical Polish stage; the generic app category
+      does not override an explicit rule.
+- [ ] 046-S5 Upgrade profiles whose global preset is Writing, Notes, Message,
+      or Code without first opening the Polish page → recording uses Clean
+      Dictation when Polish is on and bypasses Polish when it is off. The
+      normalized value persists across restart, and App Rules label the bypass
+      option `Polish Off`.
+- [ ] 046-S6 Install the update from the previous signed Beta → the one-time
+      2.0.6 announcement explains automatic Polish migration and confirms which
+      settings remain unchanged. Dismiss it, restart, and confirm it does not
+      return; existing models, AI setup, hotkeys, corrections, Saved Text, and
+      App Rules remain intact.
+
 ## 2.0.5 Beta train — Windows issue triage
 
 Current Beta: `2.0.5-beta.7`. Stable remains `2.0.4`. This signed candidate
@@ -473,8 +505,8 @@ checks above.
 
 ## Release rule
 
-015 + 016 smoke are ship gates for the AI-polish release; 004/008 smoke are
-ship gates for the recording-path release. None block further feature
+015 + 016 + 046 smoke are ship gates for the AI-polish release; 004/008 smoke
+are ship gates for the recording-path release. None block further feature
 development on this branch.
 
 Native triggers (NT-S1..S4) are a SEPARATE post-2.0.0 add-on (plan 022 P2,

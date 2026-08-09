@@ -1445,21 +1445,12 @@ fn plan_desktop_writing_success(
     }
 }
 
-fn load_ai_enabled(app: &AppHandle) -> Result<bool, String> {
-    let store = app.store("settings").map_err(|e| e.to_string())?;
-    Ok(store
-        .get("ai_enabled")
-        .and_then(|value| value.as_bool())
-        .unwrap_or(false))
-}
-
 fn resolve_transcription_task_for_audio(
     app: &AppHandle,
-    ai_enabled: bool,
     legacy_translate_to_english: bool,
     stored_transcription_task: Option<&str>,
 ) -> Result<String, String> {
-    if crate::writing::effective_personal_dictation_mode(app, ai_enabled)? {
+    if crate::writing::effective_personal_dictation_mode(app)? {
         Ok(TRANSCRIPTION_TASK_TRANSCRIBE.to_string())
     } else {
         Ok(normalize_transcription_task(
@@ -1919,6 +1910,8 @@ mod tests {
                 ai_polish_ms: Some(34),
                 insertion_ms: None,
             },
+            polish_enabled: true,
+            ai_execution: None,
             ai_error: None,
         };
 
@@ -1963,6 +1956,8 @@ mod tests {
             warnings: vec![],
             context_hint: None,
             stage_timings: crate::writing::WritingStageTimings::default(),
+            polish_enabled: true,
+            ai_execution: None,
             ai_error: None,
         };
 
@@ -1993,6 +1988,8 @@ mod tests {
             warnings: vec![],
             context_hint: None,
             stage_timings: crate::writing::WritingStageTimings::default(),
+            polish_enabled: true,
+            ai_execution: None,
             ai_error: None,
         };
 
@@ -2037,6 +2034,8 @@ mod tests {
             }],
             context_hint: None,
             stage_timings: crate::writing::WritingStageTimings::default(),
+            polish_enabled: true,
+            ai_execution: None,
             ai_error: Some(crate::ai::error::AiProviderError::Timeout),
         };
 
@@ -2482,6 +2481,8 @@ mod tests {
                 ..Default::default()
             }),
             stage_timings: crate::writing::WritingStageTimings::default(),
+            polish_enabled: true,
+            ai_execution: None,
             ai_error: None,
         }
     }
@@ -5321,7 +5322,6 @@ pub async fn stop_recording(
     };
     let transcription_task = resolve_transcription_task_for_audio(
         &app,
-        config.ai_enabled,
         false,
         Some(config.transcription_task.as_str()),
     )?;
@@ -5642,9 +5642,8 @@ pub async fn stop_recording(
                     return;
                 }
 
-                let ai_enabled = config.ai_enabled;
                 let should_emit_enhancing =
-                    crate::writing::effective_pipeline_config(&app_for_task, ai_enabled)
+                    crate::writing::effective_pipeline_config(&app_for_task)
                         .map(|config| config.preset.requires_ai_formatting() && config.ai_effective)
                         .unwrap_or(false);
 
@@ -5657,18 +5656,7 @@ pub async fn stop_recording(
                 let text_for_process = transcription.raw_text.clone();
                 let model_for_process = transcription.model.clone();
                 let transcription_for_process = transcription.clone();
-                let ai_enabled_for_task = ai_enabled;
                 let should_emit_enhancing_for_task = should_emit_enhancing;
-                let ai_provider_for_task = if ai_enabled {
-                    config.ai_provider.clone()
-                } else {
-                    String::new()
-                };
-                let ai_model_for_task = if ai_enabled {
-                    config.ai_model.clone()
-                } else {
-                    String::new()
-                };
                 let recording_file_for_task = recording_file.clone();
                 let telemetry_transaction_for_process = telemetry_transaction.take();
 
@@ -5686,7 +5674,6 @@ pub async fn stop_recording(
                         match crate::writing::process_transcription(
                             app_for_process.clone(),
                             transcription_for_process.clone(),
-                            ai_enabled_for_task,
                         )
                         .await
                         {
@@ -5720,10 +5707,10 @@ pub async fn stop_recording(
 
                                 if writing_result.ai_applied {
                                     log::info!("AI enhancement applied successfully");
-                                } else if !ai_enabled_for_task {
+                                } else if !writing_result.polish_enabled {
                                     log::debug!("AI enhancement is disabled, using original text");
                                 }
-                                let polish_outcome = if !ai_enabled_for_task {
+                                let polish_outcome = if !writing_result.polish_enabled {
                                     crate::product_analytics::PolishOutcome::Disabled
                                 } else if writing_result.ai_error.is_some() {
                                     crate::product_analytics::PolishOutcome::Fallback
@@ -5736,12 +5723,22 @@ pub async fn stop_recording(
                                 } else {
                                     crate::product_analytics::PolishOutcome::Unchanged
                                 };
+                                let (provider_id, model_id) = writing_result
+                                    .ai_execution
+                                    .as_ref()
+                                    .map(|execution| {
+                                        (
+                                            execution.provider_id.clone(),
+                                            execution.model_id.clone(),
+                                        )
+                                    })
+                                    .unwrap_or_default();
                                 crate::product_analytics::capture(
                                     crate::product_analytics::ProductEvent::PolishFinished {
                                         outcome: polish_outcome,
                                         preset: writing_result.mode.into(),
-                                        provider_id: ai_provider_for_task.clone(),
-                                        model_id: ai_model_for_task.clone(),
+                                        provider_id,
+                                        model_id,
                                     },
                                 );
                                 let plan = plan_desktop_writing_success(
@@ -6779,16 +6776,11 @@ async fn transcribe_audio_file_impl(
         .get("speech_language")
         .and_then(|v| v.as_str().map(|s| s.to_string()))
         .unwrap_or(legacy_speech_language);
-    let ai_enabled = store
-        .get("ai_enabled")
-        .and_then(|v| v.as_bool())
-        .unwrap_or(false);
     let stored_transcription_task = store
         .get("transcription_task")
         .and_then(|v| v.as_str().map(|s| s.to_string()));
     let transcription_task = resolve_transcription_task_for_audio(
         &app,
-        ai_enabled,
         legacy_translate_to_english,
         stored_transcription_task.as_deref(),
     )?;
@@ -7023,14 +7015,10 @@ async fn transcribe_audio_file_impl(
         "[UPLOAD] Completed transcription, {} characters",
         transcription_result.raw_text.len()
     );
-    let ai_enabled = load_ai_enabled(&app)?;
-    let writing_result = crate::writing::process_transcription(
-        app.clone(),
-        transcription_result.clone(),
-        ai_enabled,
-    )
-    .await
-    .map_err(|e| e.user_message())?;
+    let writing_result =
+        crate::writing::process_transcription(app.clone(), transcription_result.clone())
+            .await
+            .map_err(|e| e.user_message())?;
     if let Some(error) = writing_result.ai_error.as_ref() {
         log::warn!(
             "AI polish failed with {}; returning deterministic upload text",
@@ -7130,16 +7118,11 @@ pub async fn transcribe_audio(
         .get("speech_language")
         .and_then(|v| v.as_str().map(|s| s.to_string()))
         .unwrap_or(legacy_speech_language);
-    let ai_enabled = store
-        .get("ai_enabled")
-        .and_then(|v| v.as_bool())
-        .unwrap_or(false);
     let stored_transcription_task = store
         .get("transcription_task")
         .and_then(|v| v.as_str().map(|s| s.to_string()));
     let transcription_task = resolve_transcription_task_for_audio(
         &app,
-        ai_enabled,
         legacy_translate_to_english,
         stored_transcription_task.as_deref(),
     )?;
@@ -7317,14 +7300,10 @@ pub async fn transcribe_audio(
         log::warn!("Failed to remove test audio file: {}", e);
     }
 
-    let ai_enabled = load_ai_enabled(&app)?;
-    let writing_result = crate::writing::process_transcription(
-        app.clone(),
-        transcription_result.clone(),
-        ai_enabled,
-    )
-    .await
-    .map_err(|e| e.user_message())?;
+    let writing_result =
+        crate::writing::process_transcription(app.clone(), transcription_result.clone())
+            .await
+            .map_err(|e| e.user_message())?;
     if let Some(error) = writing_result.ai_error.as_ref() {
         log::warn!(
             "AI polish failed with {}; returning and saving deterministic test transcription text",
