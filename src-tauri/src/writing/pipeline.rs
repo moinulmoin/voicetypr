@@ -364,7 +364,7 @@ struct SmartFormattingOutcome {
 
 async fn run_smart_formatting(
     request: SmartFormattingRequest<'_>,
-) -> Result<(String, u64, AiExecutionMetadata), AiProviderError> {
+) -> Result<(String, u64, AiExecutionMetadata), crate::commands::ai::AiPolishAttemptError> {
     let options = crate::ai::EnhancementOptions {
         preset: request.config.preset,
     };
@@ -402,7 +402,11 @@ async fn run_smart_formatting(
                 duration_ms,
             } = result;
             if enhanced.trim().is_empty() {
-                return Err(AiProviderError::BadResponse);
+                return Err(crate::commands::ai::AiPolishAttemptError {
+                    error: AiProviderError::BadResponse,
+                    provider_id,
+                    model_id,
+                });
             }
 
             if enhanced != request.text {
@@ -451,7 +455,7 @@ async fn run_smart_formatting(
 }
 
 fn resolve_smart_formatting_outcome(
-    result: Result<(String, u64, AiExecutionMetadata), AiProviderError>,
+    result: Result<(String, u64, AiExecutionMetadata), crate::commands::ai::AiPolishAttemptError>,
     library_text: &str,
     needs_output_language_transform: bool,
     _transcript_language: Option<&str>,
@@ -467,22 +471,26 @@ fn resolve_smart_formatting_outcome(
         }),
         Err(error) if needs_output_language_transform => Err(WritingError::TranslationFailed {
             target_language: output_language.to_string(),
-            detail: user_facing_message(&error).to_string(),
+            detail: user_facing_message(&error.error).to_string(),
         }),
         Err(error) => {
             warnings.push(WritingWarning {
                 code: "ai_formatting_failed".to_string(),
                 message: format!(
                     "AI formatting failed ({}); used deterministic text instead",
-                    user_facing_message(&error)
+                    user_facing_message(&error.error)
                 ),
+            });
+            let execution = (!error.provider_id.is_empty()).then_some(AiExecutionMetadata {
+                provider_id: error.provider_id,
+                model_id: error.model_id,
             });
 
             Ok(SmartFormattingOutcome {
                 text: library_text.to_string(),
-                error: Some(error),
+                error: Some(error.error),
                 duration_ms: None,
-                execution: None,
+                execution,
             })
         }
     }
@@ -727,6 +735,13 @@ mod tests {
         TranscriptionResult::new(&job, raw_text.to_string())
             .with_transcript_language(transcript_language.map(str::to_string))
     }
+    fn attempt_error(error: AiProviderError) -> crate::commands::ai::AiPolishAttemptError {
+        crate::commands::ai::AiPolishAttemptError {
+            error,
+            provider_id: "openai".to_string(),
+            model_id: "gpt-4.1-mini".to_string(),
+        }
+    }
 
     #[test]
     fn test_resolve_smart_formatting_outcome_preserves_success() {
@@ -758,7 +773,7 @@ mod tests {
         let mut warnings = Vec::new();
         let output_language = "fr".to_string();
         let error = resolve_smart_formatting_outcome(
-            Err(AiProviderError::Network),
+            Err(attempt_error(AiProviderError::Network)),
             "library",
             true,
             Some("en"),
@@ -788,7 +803,7 @@ mod tests {
         let mut warnings = Vec::new();
         let output_language = "en".to_string();
         let outcome = resolve_smart_formatting_outcome(
-            Err(AiProviderError::Timeout),
+            Err(attempt_error(AiProviderError::Timeout)),
             "library text",
             false,
             None,
@@ -800,7 +815,13 @@ mod tests {
         assert_eq!(outcome.text, "library text");
         assert_eq!(outcome.error, Some(AiProviderError::Timeout));
         assert_eq!(outcome.duration_ms, None);
-        assert_eq!(outcome.execution, None);
+        assert_eq!(
+            outcome.execution,
+            Some(AiExecutionMetadata {
+                provider_id: "openai".to_string(),
+                model_id: "gpt-4.1-mini".to_string(),
+            })
+        );
         assert_eq!(warnings.len(), 1);
         assert_eq!(warnings[0].code, "ai_formatting_failed");
         assert!(warnings[0].message.contains("timed out"));
