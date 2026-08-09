@@ -46,7 +46,7 @@ Verification commands used across all plans: `pnpm typecheck`, `pnpm lint`,
 | 043  | README + canonical AGPL license refresh | P1 | S | — | DONE — GitHub detects AGPL-3.0; README link + formatting validation passed 2026-08-03 |
 | 044  | Agent-CLI Polish hardening + model selection | P1 | L | 030 | DONE (code) — NEEDS-SMOKE; automated gates + adversarial review passed 2026-08-06 |
 | 045  | Privacy-safe PostHog product analytics | P1 | L | 031 | DONE (code) — NEEDS-SMOKE 045-S1..S6; full gate, release compile, local dev UI smoke, and adversarial reviews passed 2026-08-06 |
-| 046  | Polish workflow alignment — natural punctuation, Saved Text, app-first mode resolution | P1 | S | 016, 027, 040 | DONE (code) — NEEDS-SMOKE 046-S1..S5; full gate and local native UI smoke passed 2026-08-09 |
+| 046  | Polish workflow alignment — natural punctuation, Saved Text, app-first mode resolution | P1 | S | 016, 027, 040 | DONE (code) — NEEDS-SMOKE 046-S1..S6; full gate and local native/browser UI smokes passed 2026-08-09 |
 
 ## Code-done, awaiting batched manual smoke (`plans/SMOKE.md`)
 

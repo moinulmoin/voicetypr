@@ -591,7 +591,8 @@ pub async fn process_transcription(
             ),
         );
         return Err(WritingError::Config(
-            "This writing mode requires AI formatting. Enable AI formatting in settings or switch to Personal Dictation.".into(),
+            "This app rule requires Polish. Turn Polish on or choose Polish Off for this app."
+                .into(),
         ));
     }
 

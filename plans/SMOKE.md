@@ -462,8 +462,14 @@ construction; they do not prove provider output or upgraded desktop state.
       does not override an explicit rule.
 - [ ] 046-S5 Upgrade profiles whose global preset is Writing, Notes, Message,
       or Code without first opening the Polish page → recording uses Clean
-      Dictation when Polish is on and Personal Dictation when it is off, and the
-      normalized value persists across restart.
+      Dictation when Polish is on and bypasses Polish when it is off. The
+      normalized value persists across restart, and App Rules label the bypass
+      option `Polish Off`.
+- [ ] 046-S6 Install the update from the previous signed Beta → the one-time
+      2.0.5 announcement explains automatic Polish migration and confirms which
+      settings remain unchanged. Dismiss it, restart, and confirm it does not
+      return; existing models, AI setup, hotkeys, corrections, Saved Text, and
+      App Rules remain intact.
 
 ## 2.0.5 Beta train — Windows issue triage
 

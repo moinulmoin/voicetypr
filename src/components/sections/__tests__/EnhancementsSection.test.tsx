@@ -510,7 +510,7 @@ describe('EnhancementsSection', () => {
     expect(screen.queryByText(/premium|paywall|locked|requires Polish/i)).not.toBeInTheDocument()
   })
 
-  it('hides specific language selection when Personal Dictation is loaded', async () => {
+  it('hides specific language selection when Polish Off is loaded', async () => {
     ;(invoke as ReturnType<typeof vi.fn>).mockImplementation((cmd: string) => {
       if (cmd === 'list_ai_providers') {
         return Promise.resolve(providerListResponse)
@@ -547,7 +547,7 @@ describe('EnhancementsSection', () => {
   })
 
 
-  it('switches to Personal Dictation when Polish is turned off', async () => {
+  it('uses the non-AI preset when Polish is turned off', async () => {
     aiSettingsResponse = { ...enabledAISettings, enabled: true }
     ;(hasApiKey as ReturnType<typeof vi.fn>).mockImplementation(async (providerId: string) =>
       providerId === 'openai',
@@ -620,7 +620,7 @@ describe('EnhancementsSection', () => {
     })
   })
 
-  it('switches to Clean Dictation when Polish is turned on from Personal Dictation', async () => {
+  it('switches to Clean Dictation when Polish is turned on', async () => {
     aiSettingsResponse = { ...enabledAISettings, enabled: false }
     ;(hasApiKey as ReturnType<typeof vi.fn>).mockImplementation(async (providerId: string) =>
       providerId === 'openai',

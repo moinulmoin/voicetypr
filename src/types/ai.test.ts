@@ -4,6 +4,7 @@ import {
   defaultPresetForAiEnabled,
   fromBackendOptions,
   migratePreset,
+  presetDisplayLabel,
   presetRequiresAiFormatting,
   type EnhancementPreset,
 } from './ai';
@@ -47,6 +48,10 @@ describe('AI enhancement mode migration', () => {
   it('selects defaults based on AI formatting state', () => {
     expect(defaultPresetForAiEnabled(false)).toBe('PersonalDictation');
     expect(defaultPresetForAiEnabled(true)).toBe('CleanDictation');
+  });
+
+  it('labels the non-AI app rule as Polish Off', () => {
+    expect(presetDisplayLabel('PersonalDictation')).toBe('Polish Off');
   });
 
   it('migrates backend options without changing current modes', () => {

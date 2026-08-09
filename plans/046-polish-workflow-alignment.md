@@ -7,7 +7,7 @@
 - **Risk**: MEDIUM
 - **Depends on**: Plans 016, 027, 040
 - **Claimed**: Main, 2026-08-09
-- **State**: DONE (code) — NEEDS-SMOKE 046-S1..S5
+- **State**: DONE (code) — NEEDS-SMOKE 046-S1..S6
 
 ## Goal
 
@@ -21,6 +21,8 @@ Align the shipped Polish pipeline with the simplified product contract before th
 - Saved Text matches a spoken trigger as the whole utterance; literal entries bypass Polish.
 - Spoken formatting commands are not a shipped feature in this release. Remove their hidden defaults and runtime stage rather than hiding them behind an unadvertised setting.
 - Legacy global reshaping presets migrate in the backend settings path, without requiring the user to open the Polish screen.
+- The persisted `PersonalDictation` value remains an upgrade-compatible internal
+  name only; the App Rules UI labels that behavior `Polish Off`.
 
 ## Deliverables
 
@@ -29,22 +31,28 @@ Align the shipped Polish pipeline with the simplified product contract before th
 3. Rename Text Shortcuts to Saved Text and clarify trigger/body/literal behavior in the UI.
 4. Add restrained paragraph guidance to default AI Polish without changing the stronger Writing, Notes, Message, or Code contracts.
 5. Update focused backend/frontend behavior tests and add the affected manual runtime checks to `plans/SMOKE.md`.
+6. Explain the migration in the 2.0.5 post-update dialog and remove
+   `Personal Dictation` from customer-facing labels and errors.
 
 ## Verification
 
 - Focused Rust tests cover default Polish paragraph guidance, backend preset
   normalization, and deterministic rule ordering; the source residue check
   confirms no active spoken-command schema or runtime stage remains.
-- Focused frontend tests cover Saved Text naming and guidance.
+- Focused frontend tests cover Saved Text guidance, the `Polish Off` label, and
+  version-scoped migration announcement content.
 - `pnpm typecheck`, `pnpm lint`, `pnpm test`, backend Rust tests, formatting, and Clippy pass.
 - Manual Beta smoke remains required for natural punctuation/paragraphing, Saved Text, app-rule precedence, and upgraded-settings migration.
 
 ## Observed evidence
 
-- `pnpm quality-gate` passed: 624 frontend tests and 1,352 backend tests passed,
+- `pnpm quality-gate` passed: 626 frontend tests and 1,352 backend tests passed,
   with 13 backend tests ignored; typecheck, lint, Clippy, and Rust formatting
   also passed.
 - Native macOS development app launched successfully; the Polish page exposed
   Saved Text with the new guidance and no Voice Commands section.
+- The 2.0.5 migration announcement was rendered at desktop and 375×667
+  viewports; its hierarchy, wrapping, close control, and Dismiss action remained
+  visible without overflow.
 - Provider-backed audio behavior and upgraded-profile migration remain assigned
   to the signed-Beta checks in `plans/SMOKE.md`.

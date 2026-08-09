@@ -539,7 +539,7 @@ describe('AppContainer', () => {
   });
 
   describe('post-update modal', () => {
-    it('shows update dialog when app was just updated', async () => {
+    it('shows a generic update dialog for older releases', async () => {
       mockGetJustUpdatedVersion.mockReturnValue('1.13.0');
       render(<AppContainer />);
 
@@ -547,6 +547,22 @@ describe('AppContainer', () => {
         expect(screen.getByText('Voicetypr Updated')).toBeInTheDocument();
       });
       expect(screen.getByText(/Successfully updated to version 1\.13\.0/)).toBeInTheDocument();
+      expect(screen.queryByText('Polish is now simpler')).not.toBeInTheDocument();
+    });
+
+    it('explains the Polish migration after the 2.0.5 update', async () => {
+      mockGetJustUpdatedVersion.mockReturnValue('2.0.5-beta.8');
+      render(<AppContainer />);
+
+      await waitFor(() => {
+        expect(screen.getByText('Polish is now simpler')).toBeInTheDocument();
+      });
+      expect(
+        screen.getByText(/Writing, Notes, Message, and Code styles now work through App Rules/),
+      ).toBeInTheDocument();
+      expect(
+        screen.getByText(/Your models, AI setup, hotkeys, corrections, Saved Text/),
+      ).toBeInTheDocument();
     });
 
     it('does not show update dialog when no update marker exists', async () => {
