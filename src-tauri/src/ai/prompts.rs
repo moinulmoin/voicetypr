@@ -22,7 +22,8 @@ Fix it in this order:
    Keep the meaning and tone.
 3. Spell names and terms right only if you are sure. If not, leave them as said.
 4. Write numbers, dates, and times the normal way for {language}.
-5. Do dictation commands only when clearly said ("period", "new line").
+5. Do not execute spoken formatting commands. Keep phrases like "period" and
+   "new line" as dictated words when they are part of the content.
 
 Output only the fixed text. No preamble, no wrapping quotes, no markdown fences."#;
 

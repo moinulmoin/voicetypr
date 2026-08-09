@@ -162,6 +162,12 @@ pub struct WritingStageTimings {
     pub insertion_ms: Option<u64>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AiExecutionMetadata {
+    pub provider_id: String,
+    pub model_id: String,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct WritingResult {
     pub raw_text: String,
@@ -177,6 +183,10 @@ pub struct WritingResult {
     pub context_hint: Option<ContextHint>,
     #[serde(default)]
     pub stage_timings: WritingStageTimings,
+    #[serde(skip)]
+    pub polish_enabled: bool,
+    #[serde(skip)]
+    pub ai_execution: Option<AiExecutionMetadata>,
     #[serde(skip)]
     pub ai_error: Option<AiProviderError>,
 }

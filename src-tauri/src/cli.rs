@@ -7,7 +7,6 @@ use clap::{Args, Parser, Subcommand};
 use serde_json::json;
 use tauri::async_runtime::{Mutex as AsyncMutex, RwLock as AsyncRwLock};
 use tauri::Manager;
-use tauri_plugin_store::StoreExt;
 
 use crate::audio::recorder::AudioRecorder;
 use crate::commands::ai::{ai_provider_key_names, cache_ai_api_key, CacheApiKeyArgs};
@@ -588,12 +587,7 @@ async fn transcribe_via_remote(
     let transcription = TranscriptionResult::new(&job, response.text)
         .with_transcript_language(response.transcript_language)
         .with_processing_duration_ms(Some(response.duration_ms));
-    let ai_enabled = app
-        .store("settings")?
-        .get("ai_enabled")
-        .and_then(|value| value.as_bool())
-        .unwrap_or(false);
-    let writing = crate::writing::process_transcription(app.clone(), transcription, ai_enabled)
+    let writing = crate::writing::process_transcription(app.clone(), transcription)
         .await
         .map_err(|error| std::io::Error::other(error.user_message()))?;
 

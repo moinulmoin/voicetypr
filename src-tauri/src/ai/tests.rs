@@ -181,6 +181,15 @@ mod behavior_tests {
         assert!(!personal.contains("clear topic or intent change"));
     }
 
+    #[test]
+    fn polish_does_not_execute_spoken_formatting_commands() {
+        for &preset in ALL_PRESETS {
+            let prompt = build_enhancement_prompt(None, &options(preset), None);
+            assert!(!prompt.contains("Do dictation commands"));
+            assert!(prompt.contains("Do not execute spoken formatting commands"));
+        }
+    }
+
     // Language directive: en->English, es->Spanish, ja->Japanese, None->English.
     #[test]
     fn language_directive_in_prompt() {

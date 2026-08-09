@@ -856,23 +856,6 @@ pub async fn get_enhancement_options_for_ai_enabled(
         stored_options.as_ref(),
         ai_enabled,
     )?;
-    let mut migrated = false;
-    if let Some(stored) = stored_options {
-        let normalized = serde_json::to_value(&options)
-            .map_err(|e| format!("Failed to serialize Polish options: {e}"))?;
-        if stored != normalized {
-            store.set("enhancement_options", normalized);
-            store
-                .save()
-                .map_err(|e| format!("Failed to migrate Polish options: {e}"))?;
-            migrated = true;
-        }
-    }
-    drop(store);
-    if migrated {
-        crate::commands::audio::invalidate_recording_config_cache(&app).await;
-        log::info!("Migrated global Polish preset to {:?}", options.preset);
-    }
 
     let settings = load_writing_settings(&app)?;
     let effective = crate::writing::resolve_pipeline_config(

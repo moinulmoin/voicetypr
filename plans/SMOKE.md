@@ -466,7 +466,7 @@ construction; they do not prove provider output or upgraded desktop state.
       normalized value persists across restart, and App Rules label the bypass
       option `Polish Off`.
 - [ ] 046-S6 Install the update from the previous signed Beta → the one-time
-      2.0.5 announcement explains automatic Polish migration and confirms which
+      2.0.6 announcement explains automatic Polish migration and confirms which
       settings remain unchanged. Dismiss it, restart, and confirm it does not
       return; existing models, AI setup, hotkeys, corrections, Saved Text, and
       App Rules remain intact.
@@ -505,8 +505,8 @@ checks above.
 
 ## Release rule
 
-015 + 016 smoke are ship gates for the AI-polish release; 004/008 smoke are
-ship gates for the recording-path release. None block further feature
+015 + 016 + 046 smoke are ship gates for the AI-polish release; 004/008 smoke
+are ship gates for the recording-path release. None block further feature
 development on this branch.
 
 Native triggers (NT-S1..S4) are a SEPARATE post-2.0.0 add-on (plan 022 P2,

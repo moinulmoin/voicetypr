@@ -1743,23 +1743,34 @@ fn migrate_ai_settings_before_key_cache(app: &tauri::AppHandle) {
         return;
     };
 
-    let mut values = serde_json::Map::new();
-    for key in [
+    const MIGRATION_KEYS: [&str; 6] = [
         "ai_enabled",
         "ai_provider",
         "ai_model",
         "ai_models_by_provider",
-    ] {
+        "ai_model_needs_reselection",
+        "enhancement_options",
+    ];
+    let mut values = serde_json::Map::new();
+    for key in MIGRATION_KEYS {
         if let Some(value) = store.get(key) {
             values.insert(key.to_string(), value.clone());
         }
     }
+    let original_values = values.clone();
 
     if migrate_ai_settings_values(&mut values) {
         for (key, value) in values {
             store.set(key, value);
         }
         if let Err(error) = store.save() {
+            for key in MIGRATION_KEYS {
+                if let Some(value) = original_values.get(key) {
+                    store.set(key, value.clone());
+                } else {
+                    store.delete(key);
+                }
+            }
             log::warn!("AI settings migration save failed: {}", error);
         } else {
             log::info!("AI settings migration applied");
@@ -1829,6 +1840,25 @@ fn migrate_ai_settings_values(values: &mut serde_json::Map<String, serde_json::V
             );
         }
         changed = true;
+    }
+
+    if let Some(stored_options) = values.get("enhancement_options").cloned() {
+        let normalized = crate::ai::prompts::enhancement_options_for_ai_enabled(
+            Some(&stored_options),
+            ai_enabled,
+        )
+        .and_then(|options| {
+            serde_json::to_value(options)
+                .map_err(|error| format!("Failed to serialize Polish options: {error}"))
+        });
+        match normalized {
+            Ok(normalized) if normalized != stored_options => {
+                values.insert("enhancement_options".to_string(), normalized);
+                changed = true;
+            }
+            Ok(_) => {}
+            Err(error) => log::warn!("Polish settings migration skipped: {}", error),
+        }
     }
 
     changed
@@ -2244,6 +2274,46 @@ mod ai_settings_migration_tests {
 
         assert!(!migrate_ai_settings_values(&mut values));
         assert_eq!(values["ai_model"], json!("local-model"));
+    }
+
+    #[test]
+    fn migration_normalizes_legacy_global_preset_for_enabled_polish() {
+        let mut values = values_with_enabled(
+            true,
+            "custom",
+            "local-model",
+            json!({ "custom": "local-model" }),
+        );
+        values.insert(
+            "enhancement_options".to_string(),
+            json!({ "preset": "Writing" }),
+        );
+
+        assert!(migrate_ai_settings_values(&mut values));
+        assert_eq!(
+            values["enhancement_options"],
+            json!({ "preset": "CleanDictation" })
+        );
+    }
+
+    #[test]
+    fn migration_normalizes_legacy_global_preset_for_disabled_polish() {
+        let mut values = values_with_enabled(
+            false,
+            "custom",
+            "local-model",
+            json!({ "custom": "local-model" }),
+        );
+        values.insert(
+            "enhancement_options".to_string(),
+            json!({ "preset": "Writing" }),
+        );
+
+        assert!(migrate_ai_settings_values(&mut values));
+        assert_eq!(
+            values["enhancement_options"],
+            json!({ "preset": "PersonalDictation" })
+        );
     }
 
     #[test]

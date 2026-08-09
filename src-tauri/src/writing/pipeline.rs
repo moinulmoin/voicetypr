@@ -15,10 +15,10 @@ use crate::whisper::languages::validate_language;
 
 use super::{
     apply_final_restoration_guard, apply_library_rules, category_label, category_prompt_hint,
-    classify, compile_context_for_target, load_writing_settings, sanitize_transcript, AppCategory,
-    AppFormattingRule, AppliedWritingOperation, ContextHint, ProviderContextTarget, WritingError,
-    WritingOperationKind, WritingProfile, WritingResult, WritingSettings, WritingStageTimings,
-    WritingWarning,
+    classify, compile_context_for_target, load_writing_settings, sanitize_transcript,
+    AiExecutionMetadata, AppCategory, AppFormattingRule, AppliedWritingOperation, ContextHint,
+    ProviderContextTarget, WritingError, WritingOperationKind, WritingProfile, WritingResult,
+    WritingSettings, WritingStageTimings, WritingWarning,
 };
 
 fn enabled_app_rules(settings: &WritingSettings) -> impl Iterator<Item = &AppFormattingRule> {
@@ -188,27 +188,17 @@ pub fn resolve_pipeline_config(
     }
 }
 
-fn read_pipeline_config_inputs(
-    app: &AppHandle,
-    ai_enabled: bool,
-) -> Result<PipelineConfigInputs, String> {
+fn read_pipeline_config_inputs(app: &AppHandle) -> Result<PipelineConfigInputs, String> {
     let store = app.store("settings").map_err(|e| e.to_string())?;
+    let ai_enabled = store
+        .get("ai_enabled")
+        .and_then(|value| value.as_bool())
+        .unwrap_or(false);
     let stored_options = store.get("enhancement_options");
     let options = crate::ai::prompts::enhancement_options_for_ai_enabled(
         stored_options.as_ref(),
         ai_enabled,
     )?;
-    if let Some(stored) = stored_options {
-        let normalized = serde_json::to_value(&options)
-            .map_err(|e| format!("Failed to serialize Polish options: {e}"))?;
-        if stored != normalized {
-            store.set("enhancement_options", normalized);
-            store
-                .save()
-                .map_err(|e| format!("Failed to migrate Polish options: {e}"))?;
-            log::info!("Migrated global Polish preset to {:?}", options.preset);
-        }
-    }
     let global_preset = options.preset;
     let legacy_translate_to_english = store
         .get("translate_to_english")
@@ -238,14 +228,12 @@ fn read_pipeline_config_inputs(
     })
 }
 
-pub fn effective_pipeline_config(
-    app: &AppHandle,
-    ai_enabled: bool,
-) -> Result<EffectiveConfig, String> {
+pub fn effective_pipeline_config(app: &AppHandle) -> Result<EffectiveConfig, String> {
     let settings = load_writing_settings(app)?;
-    let should_capture_active_app = app_rules_need_active_app(&settings) || ai_enabled;
+    let inputs = read_pipeline_config_inputs(app)?;
+    let should_capture_active_app =
+        app_rules_need_active_app(&settings) || inputs.ai_state.stored_ai_enabled;
     let active_app = capture_active_app_context(should_capture_active_app);
-    let inputs = read_pipeline_config_inputs(app, ai_enabled)?;
 
     Ok(resolve_pipeline_config(
         &settings,
@@ -258,28 +246,8 @@ pub fn effective_pipeline_config(
 
 /// Resolves whether the effective writing mode is Personal Dictation for the current
 /// foreground app, using the same preset resolution as `process_transcription`.
-pub fn effective_personal_dictation_mode(
-    app: &AppHandle,
-    ai_enabled: bool,
-) -> Result<bool, String> {
-    Ok(effective_pipeline_config(app, ai_enabled)?.preset == EnhancementPreset::PersonalDictation)
-}
-
-async fn load_writing_profile(
-    app: &AppHandle,
-    ai_enabled: bool,
-    settings: &WritingSettings,
-    active_app: Option<&ContextHint>,
-) -> Result<EffectiveConfig, String> {
-    let inputs = read_pipeline_config_inputs(app, ai_enabled)?;
-
-    Ok(resolve_pipeline_config(
-        settings,
-        inputs.global_preset,
-        inputs.final_text_language,
-        active_app,
-        inputs.ai_state,
-    ))
+pub fn effective_personal_dictation_mode(app: &AppHandle) -> Result<bool, String> {
+    Ok(effective_pipeline_config(app)?.preset == EnhancementPreset::PersonalDictation)
 }
 
 pub(crate) fn normalize_language_scope(value: Option<&str>) -> Option<String> {
@@ -386,9 +354,17 @@ struct SmartFormattingRequest<'a> {
     warnings: &'a mut Vec<WritingWarning>,
 }
 
+#[derive(Debug)]
+struct SmartFormattingOutcome {
+    text: String,
+    error: Option<AiProviderError>,
+    duration_ms: Option<u64>,
+    execution: Option<AiExecutionMetadata>,
+}
+
 async fn run_smart_formatting(
     request: SmartFormattingRequest<'_>,
-) -> Result<(String, u64), AiProviderError> {
+) -> Result<(String, u64, AiExecutionMetadata), AiProviderError> {
     let options = crate::ai::EnhancementOptions {
         preset: request.config.preset,
     };
@@ -419,7 +395,12 @@ async fn run_smart_formatting(
     .await
     {
         Ok(result) => {
-            let enhanced = result.output_text;
+            let crate::ai::contract::AiPolishResult {
+                output_text: enhanced,
+                provider_id,
+                model_id,
+                duration_ms,
+            } = result;
             if enhanced.trim().is_empty() {
                 return Err(AiProviderError::BadResponse);
             }
@@ -456,22 +437,34 @@ async fn run_smart_formatting(
                 );
             }
 
-            Ok((enhanced, result.duration_ms))
+            Ok((
+                enhanced,
+                duration_ms,
+                AiExecutionMetadata {
+                    provider_id,
+                    model_id,
+                },
+            ))
         }
         Err(error) => Err(error),
     }
 }
 
 fn resolve_smart_formatting_outcome(
-    result: Result<(String, u64), AiProviderError>,
+    result: Result<(String, u64, AiExecutionMetadata), AiProviderError>,
     library_text: &str,
     needs_output_language_transform: bool,
     _transcript_language: Option<&str>,
     output_language: &str,
     warnings: &mut Vec<WritingWarning>,
-) -> Result<(String, Option<AiProviderError>, Option<u64>), WritingError> {
+) -> Result<SmartFormattingOutcome, WritingError> {
     match result {
-        Ok((text, ai_polish_ms)) => Ok((text, None, Some(ai_polish_ms))),
+        Ok((text, ai_polish_ms, ai_execution)) => Ok(SmartFormattingOutcome {
+            text,
+            error: None,
+            duration_ms: Some(ai_polish_ms),
+            execution: Some(ai_execution),
+        }),
         Err(error) if needs_output_language_transform => Err(WritingError::TranslationFailed {
             target_language: output_language.to_string(),
             detail: user_facing_message(&error).to_string(),
@@ -485,7 +478,12 @@ fn resolve_smart_formatting_outcome(
                 ),
             });
 
-            Ok((library_text.to_string(), Some(error), None))
+            Ok(SmartFormattingOutcome {
+                text: library_text.to_string(),
+                error: Some(error),
+                duration_ms: None,
+                execution: None,
+            })
         }
     }
 }
@@ -493,14 +491,19 @@ fn resolve_smart_formatting_outcome(
 pub async fn process_transcription(
     app: AppHandle,
     transcription: TranscriptionResult,
-    ai_enabled: bool,
 ) -> Result<WritingResult, WritingError> {
     let settings = load_writing_settings(&app).map_err(WritingError::Config)?;
+    let inputs = read_pipeline_config_inputs(&app).map_err(WritingError::Config)?;
+    let ai_enabled = inputs.ai_state.stored_ai_enabled;
     let should_capture_active_app = app_rules_need_active_app(&settings) || ai_enabled;
     let mut active_app = capture_active_app_context(should_capture_active_app);
-    let pipeline_config = load_writing_profile(&app, ai_enabled, &settings, active_app.as_ref())
-        .await
-        .map_err(WritingError::Config)?;
+    let pipeline_config = resolve_pipeline_config(
+        &settings,
+        inputs.global_preset,
+        inputs.final_text_language,
+        active_app.as_ref(),
+        inputs.ai_state,
+    );
     // Stamp resolved category for transparency (history badge).
     if let Some(hint) = &mut active_app {
         hint.category = pipeline_config.category_hint;
@@ -600,6 +603,7 @@ pub async fn process_transcription(
 
     let mut ai_error = None;
     let mut ai_polish_ms = None;
+    let mut ai_execution = None;
     let mut final_text = if library_result.literal_locked {
         if needs_output_language_transform {
             record_output_language_transform_fallback(
@@ -624,7 +628,7 @@ pub async fn process_transcription(
             warnings: &mut warnings,
         })
         .await;
-        let (text, error, duration_ms) = match resolve_smart_formatting_outcome(
+        let outcome = match resolve_smart_formatting_outcome(
             smart_formatting,
             &library_result.text,
             needs_output_language_transform,
@@ -643,15 +647,16 @@ pub async fn process_transcription(
                 return Err(error);
             }
         };
-        ai_error = error;
-        ai_polish_ms = duration_ms;
+        ai_error = outcome.error;
+        ai_polish_ms = outcome.duration_ms;
+        ai_execution = outcome.execution;
         if let Some(duration_ms) = ai_polish_ms {
             log::info!(
                 "transcription_stage_timing stage=ai_polish duration_ms={}",
                 duration_ms
             );
         }
-        text
+        outcome.text
     } else {
         library_result.text.clone()
     };
@@ -682,6 +687,7 @@ pub async fn process_transcription(
 
     Ok(WritingResult {
         raw_text: transcription.raw_text.clone(),
+        polish_enabled: ai_enabled,
         ai_applied,
         final_text,
         output_language,
@@ -694,6 +700,7 @@ pub async fn process_transcription(
             ai_polish_ms,
             insertion_ms: None,
         },
+        ai_execution,
         ai_error,
     })
 }
@@ -725,8 +732,12 @@ mod tests {
     fn test_resolve_smart_formatting_outcome_preserves_success() {
         let mut warnings = Vec::new();
         let output_language = "en".to_string();
-        let (out, error, duration_ms) = resolve_smart_formatting_outcome(
-            Ok(("formatted".to_string(), 123)),
+        let execution = AiExecutionMetadata {
+            provider_id: "provider".to_string(),
+            model_id: "model".to_string(),
+        };
+        let outcome = resolve_smart_formatting_outcome(
+            Ok(("formatted".to_string(), 123, execution.clone())),
             "library",
             false,
             None,
@@ -735,9 +746,10 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(out, "formatted");
-        assert_eq!(error, None);
-        assert_eq!(duration_ms, Some(123));
+        assert_eq!(outcome.text, "formatted");
+        assert_eq!(outcome.error, None);
+        assert_eq!(outcome.duration_ms, Some(123));
+        assert_eq!(outcome.execution, Some(execution));
         assert!(warnings.is_empty());
     }
 
@@ -775,7 +787,7 @@ mod tests {
     fn test_resolve_smart_formatting_outcome_falls_back_without_translation() {
         let mut warnings = Vec::new();
         let output_language = "en".to_string();
-        let (out, error, duration_ms) = resolve_smart_formatting_outcome(
+        let outcome = resolve_smart_formatting_outcome(
             Err(AiProviderError::Timeout),
             "library text",
             false,
@@ -785,9 +797,10 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(out, "library text");
-        assert_eq!(error, Some(AiProviderError::Timeout));
-        assert_eq!(duration_ms, None);
+        assert_eq!(outcome.text, "library text");
+        assert_eq!(outcome.error, Some(AiProviderError::Timeout));
+        assert_eq!(outcome.duration_ms, None);
+        assert_eq!(outcome.execution, None);
         assert_eq!(warnings.len(), 1);
         assert_eq!(warnings[0].code, "ai_formatting_failed");
         assert!(warnings[0].message.contains("timed out"));

@@ -13,10 +13,10 @@ pub use pipeline::{
 };
 #[allow(unused_imports)]
 pub use settings::{
-    load_writing_settings, sanitize_writing_settings, save_writing_settings, AppFormattingRule,
-    AppliedWritingOperation, ContextHint, CustomWord, Snippet, TextReplacementRule, WritingError,
-    WritingOperationKind, WritingProfile, WritingResult, WritingSettings, WritingStageTimings,
-    WritingWarning,
+    load_writing_settings, sanitize_writing_settings, save_writing_settings, AiExecutionMetadata,
+    AppFormattingRule, AppliedWritingOperation, ContextHint, CustomWord, Snippet,
+    TextReplacementRule, WritingError, WritingOperationKind, WritingProfile, WritingResult,
+    WritingSettings, WritingStageTimings, WritingWarning,
 };
 #[allow(unused_imports)]
 pub use vocabulary::{

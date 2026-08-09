@@ -15,7 +15,7 @@ interface UpdateAnnouncementDialogProps {
 }
 
 function isPolishWorkflowUpdate(version: string | null): boolean {
-  return version === "2.0.5" || Boolean(version?.match(/^2\.0\.5-beta\.\d+$/));
+  return version === "2.0.6" || Boolean(version?.match(/^2\.0\.6-beta\.\d+$/));
 }
 
 export function UpdateAnnouncementDialog({
