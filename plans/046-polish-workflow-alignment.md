@@ -7,7 +7,7 @@
 - **Risk**: MEDIUM
 - **Depends on**: Plans 016, 027, 040
 - **Claimed**: Main, 2026-08-09
-- **State**: IN PROGRESS
+- **State**: DONE (code) — NEEDS-SMOKE 046-S1..S5
 
 ## Goal
 
@@ -32,7 +32,19 @@ Align the shipped Polish pipeline with the simplified product contract before th
 
 ## Verification
 
-- Focused Rust tests cover default Polish paragraph guidance, backend preset migration, deterministic rules, and the absence of spoken-command substitution.
+- Focused Rust tests cover default Polish paragraph guidance, backend preset
+  normalization, and deterministic rule ordering; the source residue check
+  confirms no active spoken-command schema or runtime stage remains.
 - Focused frontend tests cover Saved Text naming and guidance.
 - `pnpm typecheck`, `pnpm lint`, `pnpm test`, backend Rust tests, formatting, and Clippy pass.
 - Manual Beta smoke remains required for natural punctuation/paragraphing, Saved Text, app-rule precedence, and upgraded-settings migration.
+
+## Observed evidence
+
+- `pnpm quality-gate` passed: 624 frontend tests and 1,352 backend tests passed,
+  with 13 backend tests ignored; typecheck, lint, Clippy, and Rust formatting
+  also passed.
+- Native macOS development app launched successfully; the Polish page exposed
+  Saved Text with the new guidance and no Voice Commands section.
+- Provider-backed audio behavior and upgraded-profile migration remain assigned
+  to the signed-Beta checks in `plans/SMOKE.md`.

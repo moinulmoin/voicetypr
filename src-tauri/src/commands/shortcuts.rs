@@ -288,13 +288,10 @@ fn personal_dictation_options() -> serde_json::Value {
 }
 
 /// Pure decision: when enabling Polish, should the stored global preset be
-/// normalized to Clean? Clean is the ONLY "on" global preset now — reshaping is
-/// per-app — so any stored preset that doesn't already resolve to Clean is
-/// normalized. This covers PersonalDictation (which would leave Polish "on but
-/// inert") AND legacy global reshaping presets (Writing/Notes/Message/Code) that
-/// a tray/shortcut enable must not resurrect (the Polish-screen migration only
-/// runs when that screen is opened). A missing or already-Clean preset is left
-/// alone (both resolve to Clean when enabled).
+/// normalized to Clean? Clean is the only enabled global preset; reshaping is
+/// selected through per-app rules. Any stored preset that does not already
+/// resolve to Clean is normalized so a tray or shortcut enable cannot resurrect
+/// PersonalDictation or a legacy global reshaping preset.
 pub fn should_normalize_preset_to_clean_on_enable(stored_preset: Option<&str>) -> bool {
     match stored_preset {
         Some(preset) => {

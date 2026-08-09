@@ -546,9 +546,10 @@ function SnippetEditor({
     <FieldSet className="rounded-xl border border-border/60 bg-card p-4">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
-          <FieldLegend className="mb-1">Text Shortcuts</FieldLegend>
+          <FieldLegend className="mb-1">Saved Text</FieldLegend>
           <FieldDescription>
-            Replace a whole spoken phrase with a template. "Preserve literally" skips cleanup.
+            Say a trigger phrase by itself to insert a saved signature, address, response, or
+            template. "Insert exactly" skips Polish.
           </FieldDescription>
         </div>
         <Button
@@ -570,16 +571,16 @@ function SnippetEditor({
           }
         >
           <Plus className="mr-2 h-4 w-4" />
-          Add shortcut
+          Add saved text
         </Button>
       </div>
 
       {snippets.length === 0 ? (
         <Empty className="mt-3 border-border/60 bg-muted/20 p-6">
           <EmptyHeader className="max-w-none gap-1">
-            <EmptyTitle className="text-sm">No text shortcuts yet</EmptyTitle>
+            <EmptyTitle className="text-sm">No saved text yet</EmptyTitle>
             <EmptyDescription className="text-xs">
-              Example trigger: <span className="font-mono">insert bug report template</span>
+              Example trigger: <span className="font-mono">insert my signature</span>
             </EmptyDescription>
           </EmptyHeader>
         </Empty>
@@ -591,7 +592,7 @@ function SnippetEditor({
               className="rounded-lg border border-border/60 bg-background/60 p-3"
             >
               <div className="mb-3 flex items-center justify-between gap-3">
-                <FieldTitle>Shortcut {index + 1}</FieldTitle>
+                <FieldTitle>Saved text {index + 1}</FieldTitle>
                 <div className="flex items-center gap-2">
                   <span className="text-xs text-muted-foreground">Enabled</span>
                   <Switch
@@ -617,10 +618,10 @@ function SnippetEditor({
                 <Field>
                   <InputGroup>
                     <InputGroupAddon>
-                      <InputGroupText>Trigger</InputGroupText>
+                      <InputGroupText>Spoken trigger</InputGroupText>
                     </InputGroupAddon>
                     <InputGroupInput
-                      placeholder="Whole spoken trigger"
+                      placeholder="e.g. insert my signature"
                       value={snippet.trigger}
                       disabled={disabled}
                       onChange={(event) =>
@@ -638,10 +639,10 @@ function SnippetEditor({
                 <Field>
                   <InputGroup>
                     <InputGroupAddon align="block-start">
-                      <InputGroupText>Body</InputGroupText>
+                      <InputGroupText>Text to insert</InputGroupText>
                     </InputGroupAddon>
                     <InputGroupTextarea
-                      placeholder="Snippet body"
+                      placeholder="Saved text"
                       value={snippet.body}
                       disabled={disabled}
                       onChange={(event) =>
@@ -692,7 +693,7 @@ function SnippetEditor({
                         }
                       />
                       <FieldContent>
-                        <FieldTitle className="text-xs">Preserve literally</FieldTitle>
+                        <FieldTitle className="text-xs">Insert exactly</FieldTitle>
                       </FieldContent>
                     </Field>
                   </FieldLabel>

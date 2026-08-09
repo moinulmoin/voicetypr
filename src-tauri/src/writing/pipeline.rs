@@ -14,11 +14,11 @@ use crate::transcription::TranscriptionResult;
 use crate::whisper::languages::validate_language;
 
 use super::{
-    apply_final_restoration_guard, apply_library_rules, apply_voice_command_stage, category_label,
-    category_prompt_hint, classify, compile_context_for_target, load_writing_settings,
-    sanitize_transcript, AppCategory, AppFormattingRule, AppliedWritingOperation, ContextHint,
-    ProviderContextTarget, WritingError, WritingOperationKind, WritingProfile, WritingResult,
-    WritingSettings, WritingStageTimings, WritingWarning,
+    apply_final_restoration_guard, apply_library_rules, category_label, category_prompt_hint,
+    classify, compile_context_for_target, load_writing_settings, sanitize_transcript, AppCategory,
+    AppFormattingRule, AppliedWritingOperation, ContextHint, ProviderContextTarget, WritingError,
+    WritingOperationKind, WritingProfile, WritingResult, WritingSettings, WritingStageTimings,
+    WritingWarning,
 };
 
 fn enabled_app_rules(settings: &WritingSettings) -> impl Iterator<Item = &AppFormattingRule> {
@@ -193,16 +193,23 @@ fn read_pipeline_config_inputs(
     ai_enabled: bool,
 ) -> Result<PipelineConfigInputs, String> {
     let store = app.store("settings").map_err(|e| e.to_string())?;
-    let global_preset = store
-        .get("enhancement_options")
-        .map(|value| {
-            crate::ai::prompts::parse_enhancement_options_from_value(&value, ai_enabled)
-                .map(|options| options.preset)
-        })
-        .transpose()?
-        .unwrap_or_else(|| {
-            crate::ai::EnhancementOptions::default_for_ai_enabled(ai_enabled).preset
-        });
+    let stored_options = store.get("enhancement_options");
+    let options = crate::ai::prompts::enhancement_options_for_ai_enabled(
+        stored_options.as_ref(),
+        ai_enabled,
+    )?;
+    if let Some(stored) = stored_options {
+        let normalized = serde_json::to_value(&options)
+            .map_err(|e| format!("Failed to serialize Polish options: {e}"))?;
+        if stored != normalized {
+            store.set("enhancement_options", normalized);
+            store
+                .save()
+                .map_err(|e| format!("Failed to migrate Polish options: {e}"))?;
+            log::info!("Migrated global Polish preset to {:?}", options.preset);
+        }
+    }
+    let global_preset = options.preset;
     let legacy_translate_to_english = store
         .get("translate_to_english")
         .and_then(|v| v.as_bool())
@@ -518,14 +525,8 @@ pub async fn process_transcription(
             detail: "Applied transcript cleanup".to_string(),
         });
     }
-    let mut library_result = apply_library_rules(
+    let library_result = apply_library_rules(
         cleaned_text.as_ref(),
-        &settings,
-        transcript_language.as_deref(),
-        &mut applied_operations,
-    );
-    apply_voice_command_stage(
-        &mut library_result,
         &settings,
         transcript_language.as_deref(),
         &mut applied_operations,

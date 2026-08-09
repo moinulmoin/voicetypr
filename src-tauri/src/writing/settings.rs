@@ -5,7 +5,7 @@ use tauri_plugin_store::StoreExt;
 use crate::ai::error::AiProviderError;
 use crate::ai::prompts::EnhancementPreset;
 
-use super::{normalize_language_scope, voice_command_output};
+use super::normalize_language_scope;
 
 const WRITING_SETTINGS_KEY: &str = "writing_settings";
 
@@ -95,17 +95,7 @@ pub struct AppFormattingRule {
     pub enabled: bool,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct VoiceCommandRule {
-    pub phrase: String,
-    pub output: String,
-    #[serde(default)]
-    pub language: Option<String>,
-    #[serde(default = "default_enabled")]
-    pub enabled: bool,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct WritingSettings {
     #[serde(default)]
     pub replacements: Vec<TextReplacementRule>,
@@ -115,41 +105,6 @@ pub struct WritingSettings {
     pub snippets: Vec<Snippet>,
     #[serde(default)]
     pub app_formatting_rules: Vec<AppFormattingRule>,
-    #[serde(default = "default_voice_commands")]
-    pub voice_commands: Vec<VoiceCommandRule>,
-}
-
-impl Default for WritingSettings {
-    fn default() -> Self {
-        Self {
-            replacements: Vec::new(),
-            custom_words: Vec::new(),
-            snippets: Vec::new(),
-            app_formatting_rules: Vec::new(),
-            voice_commands: default_voice_commands(),
-        }
-    }
-}
-
-fn default_voice_commands() -> Vec<VoiceCommandRule> {
-    [
-        ("new paragraph", "paragraph"),
-        ("new line", "new_line"),
-        ("question mark", "question_mark"),
-        ("exclamation point", "exclamation_mark"),
-        ("exclamation mark", "exclamation_mark"),
-        ("full stop", "period"),
-        ("insert comma", "comma"),
-        ("insert period", "period"),
-    ]
-    .into_iter()
-    .map(|(phrase, output)| VoiceCommandRule {
-        phrase: phrase.to_string(),
-        output: output.to_string(),
-        language: Some("en".to_string()),
-        enabled: true,
-    })
-    .collect()
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -166,6 +121,7 @@ pub enum WritingOperationKind {
     Snippet,
     Translation,
     AiCleanup,
+    // Retained so history written before spoken commands were removed still deserializes.
     VoiceCommand,
     FinalGuard,
 }
@@ -290,23 +246,6 @@ pub fn sanitize_writing_settings(settings: WritingSettings) -> WritingSettings {
                 })
             })
             .collect(),
-        voice_commands: settings
-            .voice_commands
-            .into_iter()
-            .filter_map(|rule| {
-                let phrase = rule.phrase.trim();
-                let output = rule.output.trim();
-                if phrase.is_empty() || voice_command_output(output).is_none() {
-                    return None;
-                }
-                Some(VoiceCommandRule {
-                    phrase: phrase.to_string(),
-                    output: output.to_string(),
-                    language: normalize_language_scope(rule.language.as_deref()),
-                    enabled: rule.enabled,
-                })
-            })
-            .collect(),
         app_formatting_rules: settings
             .app_formatting_rules
             .into_iter()
@@ -352,7 +291,6 @@ pub fn save_writing_settings(app: &AppHandle, settings: &WritingSettings) -> Res
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::writing::library_rules::apply_voice_commands;
 
     #[test]
     fn test_sanitize_writing_settings_trims_and_drops_empty_entries() {
@@ -425,92 +363,6 @@ mod tests {
         assert_eq!(
             settings.app_formatting_rules[0].preset,
             EnhancementPreset::Message
-        );
-    }
-
-    #[test]
-    fn test_writing_settings_default_contains_builtin_voice_commands() {
-        let settings = WritingSettings::default();
-
-        assert_eq!(settings.voice_commands, default_voice_commands());
-        assert_eq!(settings.voice_commands.len(), 8);
-        assert!(settings
-            .voice_commands
-            .iter()
-            .all(|command| command.language.as_deref() == Some("en")));
-    }
-
-    #[test]
-    fn test_writing_settings_deserializes_legacy_and_empty_voice_commands() {
-        let legacy: WritingSettings = serde_json::from_value(serde_json::json!({
-            "replacements": [],
-            "custom_words": [],
-            "snippets": [],
-            "context_policy": "off",
-            "app_formatting_rules": []
-        }))
-        .unwrap();
-        assert_eq!(legacy.voice_commands, default_voice_commands());
-
-        let explicit_empty: WritingSettings = serde_json::from_value(serde_json::json!({
-            "voice_commands": []
-        }))
-        .unwrap();
-        let (text, ops) =
-            apply_voice_commands("hello insert comma world", &explicit_empty, Some("en"), &[]);
-        assert_eq!(text, "hello insert comma world");
-        assert!(ops.is_empty());
-        assert!(explicit_empty.voice_commands.is_empty());
-    }
-
-    #[test]
-    fn test_sanitize_writing_settings_filters_voice_commands() {
-        let settings = sanitize_writing_settings(WritingSettings {
-            voice_commands: vec![
-                VoiceCommandRule {
-                    phrase: " slash ".to_string(),
-                    output: "dash".to_string(),
-                    language: Some(" en ".to_string()),
-                    enabled: true,
-                },
-                VoiceCommandRule {
-                    phrase: " stop ".to_string(),
-                    output: " period ".to_string(),
-                    language: None,
-                    enabled: false,
-                },
-                VoiceCommandRule {
-                    phrase: " ".to_string(),
-                    output: "comma".to_string(),
-                    language: None,
-                    enabled: true,
-                },
-                VoiceCommandRule {
-                    phrase: "smiley".to_string(),
-                    output: "arbitrary_text".to_string(),
-                    language: None,
-                    enabled: true,
-                },
-            ],
-            ..WritingSettings::default()
-        });
-
-        assert_eq!(
-            settings.voice_commands,
-            vec![
-                VoiceCommandRule {
-                    phrase: "slash".to_string(),
-                    output: "dash".to_string(),
-                    language: Some("en".to_string()),
-                    enabled: true,
-                },
-                VoiceCommandRule {
-                    phrase: "stop".to_string(),
-                    output: "period".to_string(),
-                    language: None,
-                    enabled: false,
-                },
-            ]
         );
     }
 }
