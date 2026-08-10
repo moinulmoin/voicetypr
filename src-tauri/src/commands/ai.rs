@@ -1018,13 +1018,42 @@ fn selected_ai_provider_and_model(
     Ok((provider, model))
 }
 
+#[derive(Debug)]
+pub(crate) struct AiPolishAttemptError {
+    pub error: AiProviderError,
+    pub provider_id: String,
+    pub model_id: String,
+}
+
+impl AiPolishAttemptError {
+    fn unattributed(error: AiProviderError) -> Self {
+        Self {
+            error,
+            provider_id: String::new(),
+            model_id: String::new(),
+        }
+    }
+
+    fn for_provider(error: AiProviderError, provider_id: impl Into<String>) -> Self {
+        Self {
+            error,
+            provider_id: provider_id.into(),
+            model_id: String::new(),
+        }
+    }
+
+    fn with_model(mut self, model_id: String) -> Self {
+        self.model_id = model_id;
+        self
+    }
+}
 fn executor_for_provider(
     app: &tauri::AppHandle,
     selected_provider: &str,
-) -> Result<(AiExecutor, String), AiProviderError> {
-    let cache = API_KEY_CACHE
-        .lock()
-        .map_err(|_| AiProviderError::Internal)?;
+) -> Result<(AiExecutor, String), AiPolishAttemptError> {
+    let cache = API_KEY_CACHE.lock().map_err(|_| {
+        AiPolishAttemptError::for_provider(AiProviderError::Internal, selected_provider)
+    })?;
     let openai_key = cache.get("ai_api_key_openai").cloned();
     let custom_key = cache.get("ai_api_key_custom").cloned();
     let selected_key = cache
@@ -1056,7 +1085,10 @@ fn executor_for_provider(
                 keys,
             )
         } else {
-            return Err(AiProviderError::MissingApiKey);
+            return Err(AiPolishAttemptError::for_provider(
+                AiProviderError::MissingApiKey,
+                selected_provider,
+            ));
         }
     } else if selected_provider == PROVIDER_CUSTOM {
         let has_key = custom_key.is_some();
@@ -1074,7 +1106,9 @@ fn executor_for_provider(
             keys,
         )
     } else if selected_provider == PROVIDER_OPENROUTER {
-        let key = selected_key.ok_or(AiProviderError::MissingApiKey)?;
+        let key = selected_key.ok_or_else(|| {
+            AiPolishAttemptError::for_provider(AiProviderError::MissingApiKey, selected_provider)
+        })?;
         let mut keys = HashMap::new();
         keys.insert(PROVIDER_OPENROUTER.to_string(), key);
         (
@@ -1105,7 +1139,9 @@ fn executor_for_provider(
             HashMap::new(),
         )
     } else {
-        let key = selected_key.ok_or(AiProviderError::MissingApiKey)?;
+        let key = selected_key.ok_or_else(|| {
+            AiPolishAttemptError::for_provider(AiProviderError::MissingApiKey, selected_provider)
+        })?;
         let mut keys = HashMap::new();
         keys.insert(selected_provider.to_string(), key);
         (
@@ -1121,7 +1157,10 @@ fn executor_for_provider(
                 openai_compatible_config.base_url,
                 reason
             );
-            return Err(AiProviderError::BadResponse);
+            return Err(AiPolishAttemptError::for_provider(
+                AiProviderError::BadResponse,
+                runtime_provider,
+            ));
         }
     }
 
@@ -1129,7 +1168,10 @@ fn executor_for_provider(
         && !openai_compatible_config.no_auth
         && !keys.contains_key(PROVIDER_CUSTOM)
     {
-        return Err(AiProviderError::MissingApiKey);
+        return Err(AiPolishAttemptError::for_provider(
+            AiProviderError::MissingApiKey,
+            runtime_provider,
+        ));
     }
 
     let key_resolver: AiKeyResolver = Arc::new(move |provider_id| keys.get(provider_id).cloned());
@@ -1145,23 +1187,6 @@ fn executor_for_provider(
     ))
 }
 
-#[derive(Debug)]
-pub(crate) struct AiPolishAttemptError {
-    pub error: AiProviderError,
-    pub provider_id: String,
-    pub model_id: String,
-}
-
-impl AiPolishAttemptError {
-    fn unattributed(error: AiProviderError) -> Self {
-        Self {
-            error,
-            provider_id: String::new(),
-            model_id: String::new(),
-        }
-    }
-}
-
 async fn polish_text_with_prompt_result_typed(
     app: &tauri::AppHandle,
     text: &str,
@@ -1170,11 +1195,7 @@ async fn polish_text_with_prompt_result_typed(
     prompt: String,
 ) -> Result<crate::ai::contract::AiPolishResult, AiPolishAttemptError> {
     let (executor, runtime_provider) =
-        executor_for_provider(app, &provider).map_err(|error| AiPolishAttemptError {
-            error,
-            provider_id: provider,
-            model_id: model.clone(),
-        })?;
+        executor_for_provider(app, &provider).map_err(|error| error.with_model(model.clone()))?;
     // CLI providers are cold-spawned with their own hard kill-timeout
     // (AgentCliRuntime::COLD_SPAWN_TIMEOUT); cap the executor budget to ~9s so
     // a wedged CLI surfaces promptly. HTTP providers keep the 30s budget.
