@@ -23,7 +23,6 @@
     "opener:default",
     "store:default",
     "dialog:default",
-    "dialog:allow-ask",
     "fs:scope-appdata",
     "shell:allow-open",
     "autostart:allow-enable",
