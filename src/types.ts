@@ -41,10 +41,17 @@ export interface LocalModelInfo extends BaseModelInfo {
   accuracy_score: number;
 }
 
+export interface CloudSttModel {
+  id: string;
+  display_name: string;
+}
+
 export interface CloudModelInfo extends BaseModelInfo {
   kind: 'cloud';
   /** Backend-sourced transcription model id used by this cloud provider. */
   underlying_model?: string | null;
+  /** Curated, friendly-labeled API models for this provider. */
+  available_models?: CloudSttModel[] | null;
 }
 
 export type ModelInfo = LocalModelInfo | CloudModelInfo;
@@ -61,7 +68,6 @@ export type PillIndicatorStyle = 'compact' | 'full';
 export type PillIndicatorPosition = 'top-left' | 'top-center' | 'top-right' | 'bottom-left' | 'bottom-center' | 'bottom-right';
 export type TranscriptionAcceleration = 'auto' | 'gpu' | 'cpu';
 export type UpdateChannel = 'stable' | 'beta';
-export type SettingsMode = 'recommended' | 'advanced';
 
 export interface AppSettings {
   hotkey: string;
@@ -70,7 +76,6 @@ export interface AppSettings {
   transcription_task?: 'transcribe' | 'translate_to_english';
   final_text_language?: string;
   theme: string;
-  settings_mode?: SettingsMode;
   transcription_cleanup_days?: number | null;
   launch_at_startup?: boolean;
   onboarding_completed?: boolean;
@@ -131,8 +136,10 @@ export interface TranscriptionWritingMeta {
   ai_applied?: boolean;
   /** Pre-AI raw transcript saved when AI formatting changed the text (desktop only). Never logged; local history only. */
   original_text?: string;
-  /** App that received the dictated text (set when App Rules capture the active app). */
-  context_hint?: { app_name?: string; category?: string };
+  /** App active when desktop recording started. Captured locally whether Polish is on or off. */
+  context_hint?: { app_name?: string; process_path?: string; category?: string };
+  ai_provider?: string;
+  ai_model?: string;
 }
 
 export interface TranscriptionHistory {

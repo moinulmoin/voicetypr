@@ -167,7 +167,10 @@ mod tests {
     #[test]
     fn labels_are_stable() {
         assert_eq!(device_type_label(VulkanDeviceType::Discrete), "discrete");
-        assert_eq!(device_type_label(VulkanDeviceType::Integrated), "integrated");
+        assert_eq!(
+            device_type_label(VulkanDeviceType::Integrated),
+            "integrated"
+        );
         assert_eq!(device_type_label(VulkanDeviceType::Other), "other");
     }
 }

@@ -1,9 +1,7 @@
 import { Brandmark } from "@/components/Brandmark";
 import {
-  advancedNavScreens,
-  powerUserUtilityNavScreens,
-  recommendedNavScreens,
-  reportProblemNavScreens,
+  footerNavScreens,
+  navScreens,
   type ScreenDefinition,
   type ScreenId,
 } from "@/components/navigation";
@@ -21,7 +19,6 @@ import {
   Sidebar as SidebarPrimitive,
 } from "@/components/ui/sidebar";
 import { useLicense } from "@/contexts/LicenseContext";
-import { useSettings } from "@/contexts/SettingsContext";
 import type { LicenseStatus } from "@/types";
 import { cn } from "@/lib/utils";
 import { RefreshCw } from "lucide-react";
@@ -45,7 +42,7 @@ function getLicenseBadge(status: LicenseStatus | null, daysLeft: number) {
   if (status.status === "licensed") {
     return {
       label: "Pro",
-      className: "border-emerald-500/30 bg-emerald-500/10 text-emerald-700",
+      className: "border-emerald-500/30 bg-emerald-500/10 text-emerald-800",
     };
   }
 
@@ -53,48 +50,42 @@ function getLicenseBadge(status: LicenseStatus | null, daysLeft: number) {
     if (daysLeft > 1) {
       return {
         label: `Trial · ${daysLeft} days left`,
-        className: "border-green-500/25 bg-green-500/10 text-green-700 dark:text-green-400",
+      className: "border-green-500/25 bg-green-500/10 text-green-800 dark:text-green-400",
       };
     }
 
     if (daysLeft === 1) {
       return {
         label: "Trial · 1 day left",
-        className: "border-amber-500/25 bg-amber-500/10 text-amber-700 dark:text-amber-400",
+      className: "border-amber-500/25 bg-amber-500/10 text-amber-800 dark:text-amber-400",
       };
     }
 
     if (daysLeft === 0) {
       return {
         label: "Trial expires today",
-        className: "border-amber-500/25 bg-amber-500/10 text-amber-700 dark:text-amber-400",
+      className: "border-amber-500/25 bg-amber-500/10 text-amber-800 dark:text-amber-400",
       };
     }
 
     return {
       label: "Trial",
-      className: "border-green-500/25 bg-green-500/10 text-green-700 dark:text-green-400",
+      className: "border-green-500/25 bg-green-500/10 text-green-800 dark:text-green-400",
     };
   }
 
   return {
     label: "Trial expired",
-    className: "border-red-500/25 bg-red-500/10 text-red-700 dark:text-red-400",
+    className: "border-red-500/25 bg-red-500/10 text-red-800 dark:text-red-400",
   };
 }
-export function Sidebar({ activeSection, onSectionChange }: SidebarProps) {
+export function Sidebar({
+  activeSection,
+  onSectionChange,
+}: SidebarProps) {
   const { status, isLoading } = useLicense();
-  const { settings } = useSettings();
   const [appVersion, setAppVersion] = useState("—");
   const licenseBadge = getLicenseBadge(status, status?.trial_days_left ?? -1);
-  const visibleScreens =
-    settings?.settings_mode === "advanced"
-      ? advancedNavScreens
-      : recommendedNavScreens;
-  const utilityScreens =
-    settings?.settings_mode === "advanced"
-      ? powerUserUtilityNavScreens
-      : reportProblemNavScreens;
 
   useEffect(() => {
     const loadVersion = async () => {
@@ -110,7 +101,7 @@ export function Sidebar({ activeSection, onSectionChange }: SidebarProps) {
 
   return (
     <>
-      <SidebarPrimitive collapsible="icon" className="border-sidebar-border/80 bg-sidebar/95 pt-9 backdrop-blur-sm">
+      <SidebarPrimitive collapsible="icon" className="group-data-[side=left]:border-r-0 bg-sidebar/95 pt-9 backdrop-blur-sm">
         <SidebarHeader className="gap-2 px-4 pb-2 pt-4 group-data-[collapsible=icon]:px-2">
           <button
             type="button"
@@ -126,7 +117,7 @@ export function Sidebar({ activeSection, onSectionChange }: SidebarProps) {
             {!isLoading && status ? (
               <span
                 className={cn(
-                  "shrink-0 rounded-full border px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.12em] group-data-[collapsible=icon]:hidden",
+                  "shrink-0 rounded-full border px-2 py-0.5 text-[11px] font-semibold uppercase tracking-[0.12em] group-data-[collapsible=icon]:hidden",
                   licenseBadge.className,
                 )}
               >
@@ -138,20 +129,20 @@ export function Sidebar({ activeSection, onSectionChange }: SidebarProps) {
 
         <SidebarContent className="px-2">
           <SidebarNavMenu
-            items={visibleScreens}
+            items={navScreens}
             activeSection={activeSection}
             onSectionChange={onSectionChange}
           />
-          <div className="mt-auto pb-2">
+        </SidebarContent>
+
+        <SidebarFooter className="gap-3 px-2">
+          <nav data-testid="sidebar-footer-nav">
             <SidebarNavMenu
-              items={utilityScreens}
+              items={footerNavScreens}
               activeSection={activeSection}
               onSectionChange={onSectionChange}
             />
-          </div>
-        </SidebarContent>
-
-        <SidebarFooter className="border-t border-sidebar-border/70 px-3 py-2 group-data-[collapsible=icon]:px-2">
+          </nav>
           <SidebarFooterStatus appVersion={appVersion} />
         </SidebarFooter>
       </SidebarPrimitive>
@@ -219,11 +210,7 @@ function SidebarNavItem({
 }
 
 
-function SidebarFooterStatus({
-  appVersion,
-}: {
-  appVersion: string;
-}) {
+function SidebarFooterStatus({ appVersion }: { appVersion: string }) {
   const [isCheckingUpdates, setIsCheckingUpdates] = useState(false);
 
   const checkUpdates = async () => {
@@ -236,20 +223,26 @@ function SidebarFooterStatus({
   };
 
   return (
-    <div className="flex items-center justify-between gap-2 group-data-[collapsible=icon]:justify-center">
-      <span className="text-xs text-muted-foreground group-data-[collapsible=icon]:hidden">v{appVersion}</span>
-      <Button
-        type="button"
-        variant="ghost"
-        size="icon-sm"
-        className="size-7 rounded-md text-muted-foreground"
-        onClick={checkUpdates}
-        disabled={isCheckingUpdates}
-        title="Check for updates"
-      >
-        <RefreshCw className={cn("size-3.5", isCheckingUpdates && "animate-spin")} />
-        <span className="sr-only">Check for updates</span>
-      </Button>
+    <div className="flex flex-col gap-2 px-2">
+      <div className="flex items-center justify-between gap-2 group-data-[collapsible=icon]:justify-center">
+        <span className="text-xs text-muted-foreground group-data-[collapsible=icon]:hidden">
+          v{appVersion}
+        </span>
+        <Button
+          type="button"
+          variant="ghost"
+          size="icon-sm"
+          className="size-7 rounded-md text-muted-foreground"
+          onClick={checkUpdates}
+          disabled={isCheckingUpdates}
+          title="Check for updates"
+        >
+          <RefreshCw
+            className={cn("size-3.5", isCheckingUpdates && "animate-spin")}
+          />
+          <span className="sr-only">Check for updates</span>
+        </Button>
+      </div>
     </div>
   );
 }

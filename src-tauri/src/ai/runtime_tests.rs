@@ -295,6 +295,8 @@ mod tests {
                 AiPolishRequest {
                     provider_id: PROVIDER_OPENROUTER.to_string(),
                     model_id: "google/gemini-2.5-flash-lite".to_string(),
+                    reasoning_level: None,
+                    fast_mode: false,
                     input_text: "raw transcript".to_string(),
                     prompt: "polish the transcript".to_string(),
                     timeout_ms: 1_000,
@@ -715,6 +717,8 @@ mod tests {
         AiPolishRequest {
             provider_id: case.id.to_string(),
             model_id: case.model.to_string(),
+            reasoning_level: None,
+            fast_mode: false,
             input_text: "raw transcript".to_string(),
             prompt: "polish the transcript".to_string(),
             timeout_ms,
@@ -821,6 +825,8 @@ mod tests {
         let request = AiPolishRequest {
             provider_id: PROVIDER_CLAUDE_CODE.to_string(),
             model_id: String::new(),
+            reasoning_level: Some("low".to_string()),
+            fast_mode: false,
             input_text: "raw transcript".to_string(),
             prompt: "polish the transcript".to_string(),
             timeout_ms: 2_000,

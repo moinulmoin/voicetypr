@@ -88,20 +88,15 @@ vi.mock("@tauri-apps/api/event", () => ({
   emit: vi.fn().mockResolvedValue(undefined),
 }));
 
-vi.mock("@tauri-apps/plugin-shell", () => ({
-  open: vi.fn().mockResolvedValue(undefined),
-}));
 
 const platformMock = vi.hoisted(() => ({ isMacOS: true, isWindows: false, isLinux: false }));
 vi.mock("@/lib/platform", () => platformMock);
 
-const renderOnboarding = (licensed = false, licenseLoading = false) =>
+const renderOnboarding = () =>
   render(
     <OnboardingDesktop
-      licenseLoading={licenseLoading}
       onComplete={onCompleteMock}
       modelManagement={modelManagement as never}
-      licensed={licensed}
     />,
   );
 
@@ -175,64 +170,15 @@ describe("OnboardingDesktop", () => {
       shortcut: "CommandOrControl+Shift+Space",
     });
 
-    // Success screen (Screen A): advance to the upgrade screen.
-    await user.click(screen.getByRole("button", { name: /continue/i }));
-    // Upgrade screen (Screen B): completion happens via "Continue".
-    await user.click(screen.getByRole("button", { name: /^continue$/i }));
+    await user.click(
+      screen.getByRole("button", { name: /start using voicetypr/i }),
+    );
 
     expect(updateSettingsMock).toHaveBeenCalledWith({ onboarding_completed: true });
     expect(onCompleteMock).toHaveBeenCalledTimes(1);
-    expect(onCompleteMock).toHaveBeenCalledWith(undefined);
+    expect(onCompleteMock).toHaveBeenCalledWith();
   });
 
-  it("finishes directly without an upgrade screen for licensed users", async () => {
-    const user = userEvent.setup();
-    renderOnboarding(true);
-
-    await user.click(screen.getByRole("button", { name: /start setup/i }));
-    await user.click(screen.getByRole("button", { name: /continue/i }));
-    await user.click(screen.getByRole("button", { name: /continue/i }));
-    await user.click(screen.getByRole("button", { name: /continue/i }));
-    await user.click(screen.getByRole("button", { name: /save hotkey/i }));
-    await user.click(await screen.findByRole("button", { name: /continue/i }));
-
-    expect(screen.queryByText(/upgrade to pro/i)).not.toBeInTheDocument();
-    expect(onCompleteMock).toHaveBeenCalledWith(undefined);
-  });
-
-  it("waits for license status before choosing the completion route", async () => {
-    const user = userEvent.setup();
-    renderOnboarding(false, true);
-
-    await user.click(screen.getByRole("button", { name: /start setup/i }));
-    await user.click(screen.getByRole("button", { name: /continue/i }));
-    await user.click(screen.getByRole("button", { name: /continue/i }));
-    await user.click(screen.getByRole("button", { name: /continue/i }));
-    await user.click(screen.getByRole("button", { name: /save hotkey/i }));
-
-    expect(
-      await screen.findByRole("button", { name: /checking license/i }),
-    ).toBeDisabled();
-    expect(screen.queryByText(/upgrade to pro/i)).not.toBeInTheDocument();
-  });
-
-  it("routes to the License tab when the user already has a license", async () => {
-    const user = userEvent.setup();
-    renderOnboarding();
-
-    await user.click(screen.getByRole("button", { name: /start setup/i }));
-    await user.click(screen.getByRole("button", { name: /continue/i }));
-    await user.click(screen.getByRole("button", { name: /continue/i }));
-    await user.click(screen.getByRole("button", { name: /continue/i }));
-    await user.click(screen.getByRole("button", { name: /save hotkey/i }));
-
-    await screen.findByRole("heading", { name: /you're all set/i });
-    await user.click(screen.getByRole("button", { name: /continue/i }));
-    await user.click(screen.getByRole("button", { name: /already have a license/i }));
-
-    expect(updateSettingsMock).toHaveBeenCalledWith({ onboarding_completed: true });
-    expect(onCompleteMock).toHaveBeenCalledWith("license");
-  });
 
   it("strips a stale onboarding hold binding when a combo hotkey is saved", async () => {
     const user = userEvent.setup();
@@ -733,8 +679,9 @@ describe("OnboardingDesktop", () => {
     expect(screen.getByRole("checkbox", { name: /crash & error reporting/i })).toBeChecked();
     expect(screen.getByRole("checkbox", { name: /usage analytics/i })).toBeChecked();
 
-    await user.click(screen.getByRole("button", { name: /continue/i }));
-    await user.click(screen.getByRole("button", { name: /^continue$/i }));
+    await user.click(
+      screen.getByRole("button", { name: /start using voicetypr/i }),
+    );
     await waitFor(() => {
       expect(invokeMock).toHaveBeenCalledWith("set_telemetry_consent", { enabled: true });
       expect(invokeMock).toHaveBeenCalledWith("set_product_analytics_consent", {
@@ -757,8 +704,9 @@ describe("OnboardingDesktop", () => {
     await screen.findByRole("heading", { name: /you're all set/i });
 
     await user.click(screen.getByRole("checkbox", { name: /usage analytics/i }));
-    await user.click(screen.getByRole("button", { name: /continue/i }));
-    await user.click(screen.getByRole("button", { name: /^continue$/i }));
+    await user.click(
+      screen.getByRole("button", { name: /start using voicetypr/i }),
+    );
     await waitFor(() => {
       expect(invokeMock).toHaveBeenCalledWith("set_telemetry_consent", { enabled: true });
       expect(invokeMock).toHaveBeenCalledWith("set_product_analytics_consent", {

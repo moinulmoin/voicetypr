@@ -397,20 +397,20 @@ describe('original text toggle', () => {
     expect(await screen.findByText('AI formatted text')).toBeInTheDocument();
     expect(screen.queryByText('raw transcript before AI')).not.toBeInTheDocument();
 
-    // Click to show original
+    // Click to expand the original block — polished text stays visible
     await user.click(screen.getByText('Show original'));
     expect(await screen.findByText('raw transcript before AI')).toBeInTheDocument();
-    expect(screen.queryByText('AI formatted text')).not.toBeInTheDocument();
-    expect(screen.getByText('Show polished')).toBeInTheDocument();
+    expect(screen.getByText('AI formatted text')).toBeInTheDocument();
+    expect(screen.getByText('Hide original')).toBeInTheDocument();
 
-    // Click again to restore polished text
-    await user.click(screen.getByText('Show polished'));
+    // Click again to collapse the original block
+    await user.click(screen.getByText('Hide original'));
     expect(await screen.findByText('AI formatted text')).toBeInTheDocument();
     expect(screen.queryByText('raw transcript before AI')).not.toBeInTheDocument();
     expect(screen.getByText('Show original')).toBeInTheDocument();
   });
 
-  it('copy button copies whichever text is currently shown', async () => {
+  it('copy actions copy polished and original text separately', async () => {
     const user = userEvent.setup();
     const writeTextMock = vi.fn().mockResolvedValue(undefined);
     Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText: writeTextMock } });
@@ -428,14 +428,18 @@ describe('original text toggle', () => {
 
     render(<RecentRecordings history={[item]} onHistoryUpdate={vi.fn()} />);
 
-    // Default: copy copies formatted text
+    // Default: copy copies the polished text
     await user.click(await screen.findByTitle('Copy'));
     expect(writeTextMock).toHaveBeenLastCalledWith('AI formatted text');
 
-    // After toggle: copy copies original text
+    // Expanded original block has its own copy action
     await user.click(screen.getByText('Show original'));
-    await user.click(screen.getByTitle('Copy'));
+    await user.click(screen.getByTitle('Copy original transcript'));
     expect(writeTextMock).toHaveBeenLastCalledWith('raw transcript before AI');
+
+    // Row copy still copies the polished text while the block is expanded
+    await user.click(screen.getByTitle('Copy'));
+    expect(writeTextMock).toHaveBeenLastCalledWith('AI formatted text');
   });
 
   it('does not show toggle when original_text is absent', async () => {
@@ -487,5 +491,96 @@ describe('original text toggle', () => {
 
     expect(await screen.findByText('Plain text')).toBeInTheDocument();
     expect(screen.queryByText('Show original')).not.toBeInTheDocument();
+  });
+});
+
+describe('history load states', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    invokeMock.mockImplementation(async (cmd: string) => {
+      if (cmd === 'check_recording_exists') return false;
+      if (cmd === 'get_active_remote_server') return null;
+      return undefined;
+    });
+  });
+
+  it('shows skeleton rows while loading with empty history', () => {
+    render(<RecentRecordings history={[]} isLoading onHistoryUpdate={vi.fn()} />);
+
+    const skeleton = document.querySelector('[aria-hidden]');
+    expect(skeleton).toBeInTheDocument();
+    expect(screen.queryByText('No recordings yet')).not.toBeInTheDocument();
+    expect(screen.queryByText("Couldn't load your history.")).not.toBeInTheDocument();
+  });
+
+  it('shows an error banner with retry when the initial load failed', async () => {
+    const user = userEvent.setup();
+    const onHistoryUpdate = vi.fn();
+    render(
+      <RecentRecordings history={[]} loadError="Couldn't load history" onHistoryUpdate={onHistoryUpdate} />,
+    );
+
+    expect(await screen.findByText("Couldn't load your history.")).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /retry/i })).toBeInTheDocument();
+    expect(screen.queryByText('No recordings yet')).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: /retry/i }));
+    expect(onHistoryUpdate).toHaveBeenCalledTimes(1);
+  });
+
+  it('renders the list without the error banner when history has data despite a prior error', () => {
+    render(
+      <RecentRecordings
+        history={[historyItem]}
+        loadError="Couldn't load history"
+        onHistoryUpdate={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByText('Original transcript')).toBeInTheDocument();
+    expect(screen.queryByText("Couldn't load your history.")).not.toBeInTheDocument();
+  });
+});
+
+describe('application context badge', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    invokeMock.mockImplementation(async (cmd: string) => {
+      if (cmd === 'get_application_icon') {
+        return 'data:image/png;base64,aWNvbg==';
+      }
+      if (cmd === 'get_active_remote_server') return null;
+      return null;
+    });
+  });
+
+  it('shows the target app with its icon and hides the internal Other category', async () => {
+    const item: TranscriptionHistory = {
+      id: 'app-context-1',
+      text: 'Ghostty recording',
+      timestamp: new Date('2024-01-01T00:00:00Z'),
+      model: 'base.en',
+      writing: {
+        context_hint: {
+          app_name: 'Ghostty',
+          process_path: '/Applications/Ghostty.app',
+          category: 'other',
+        },
+      },
+    };
+
+    render(<RecentRecordings history={[item]} onHistoryUpdate={vi.fn()} />);
+
+    const badge = await screen.findByLabelText('Application: Ghostty');
+    await waitFor(() => {
+      expect(badge.querySelector('img')).toHaveAttribute(
+        'src',
+        'data:image/png;base64,aWNvbg==',
+      );
+    });
+    expect(screen.queryByText('other', { exact: true })).not.toBeInTheDocument();
+    expect(invokeMock).toHaveBeenCalledWith('get_application_icon', {
+      processPath: '/Applications/Ghostty.app',
+    });
   });
 });

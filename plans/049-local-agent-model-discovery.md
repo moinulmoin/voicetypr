@@ -1,6 +1,6 @@
 # Plan 049 — Local agent model discovery
 
-**Status:** IN PROGRESS — claimed Main 2026-08-10  
+**Status:** DONE — frontend/backend gates, Finder-style installed-CLI smoke, and native CUA model selector/default smoke passed 2026-08-10  
 **Priority:** P1  
 **Effort:** M  
 **Depends on:** 044, 048
@@ -17,7 +17,6 @@ Local-agent model selectors currently expose a generic `CLI default` label for m
 - List selectable models for providers with a stable non-interactive listing command.
 - Use an honest provider-specific default label when the exact model cannot be discovered.
 - Preserve empty model IDs as “let the CLI choose” and preserve explicit model overrides.
-- Keep Amp provider-managed because its CLI exposes modes, not a model selector.
 
 ## Provider contract
 
@@ -28,12 +27,9 @@ Local-agent model selectors currently expose a generic `CLI default` label for m
 | oh-my-pi | `config get modelRoles --json` + `models --json --no-extensions` | exact default + available models |
 | Codex | `doctor --json` | exact default only |
 | Droid | `exec --help` Available Models section | exact default + available models |
-| Amp | no model selector | provider-managed default only |
 | Grok | `models` | exact default + available models |
 | OpenCode | `models --pure` | available models + provider default |
 | Cline | no stable non-interactive list/default command | provider default only |
-| Kilo Code | `models` | available models + provider default |
-| Hermes | `config get model` | exact default only |
 
 ## Acceptance
 
@@ -41,6 +37,6 @@ Local-agent model selectors currently expose a generic `CLI default` label for m
 2. Empty selection still persists an empty model ID.
 3. Claude empty selection no longer silently pins Haiku.
 4. Installed pi, oh-my-pi, Droid, Grok, and OpenCode expose their available models without making a completion request.
-5. Installed Codex and Hermes show their current configured/default model.
+5. Installed Codex shows its current configured/default model.
 6. Missing, malformed, oversized, failed, and timed-out discovery commands return the existing typed provider errors without leaving child processes behind.
 7. Focused Rust/frontend tests, quality checks, direct installed-CLI smokes, and native model-dropdown smoke pass.

@@ -35,10 +35,12 @@ vi.mock('@tauri-apps/api/core', () => ({
 
 // Mock RecentRecordings component
 vi.mock('@/components/sections/RecentRecordings', () => ({
-  RecentRecordings: ({ history, onRefresh }: any) => (
+  RecentRecordings: ({ history, onHistoryUpdate, isLoading, loadError }: any) => (
     <div data-testid="recent-recordings">
       <div>History count: {history.length}</div>
-      <button onClick={onRefresh}>Refresh</button>
+      {isLoading ? <div>Loading history</div> : null}
+      {loadError ? <div>{loadError}</div> : null}
+      <button onClick={onHistoryUpdate}>Refresh</button>
       {history.map((item: any) => (
         <div key={item.id}>{item.text}</div>
       ))}
@@ -92,21 +94,21 @@ describe('RecordingsTab', () => {
     });
   });
 
-  it('silently handles errors when loading history', async () => {
+  it('surfaces errors when loading history', async () => {
     const consoleSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
-    
-    // Mock to throw an error
+
     invokeMock = vi.fn(async (cmd: string) => {
       if (cmd === 'get_transcription_history') throw new Error('Failed to load');
       return null;
     });
-    
+
     render(<RecordingsTab />);
-    
+
     await waitFor(() => {
       expect(consoleSpy).toHaveBeenCalledWith('Failed to load transcription history:', expect.any(Error));
+      expect(screen.getByText("Couldn't load history")).toBeInTheDocument();
     });
-    
+
     consoleSpy.mockRestore();
   });
 

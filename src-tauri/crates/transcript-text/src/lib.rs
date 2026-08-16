@@ -52,10 +52,7 @@ fn has_structural_guard(input: &str) -> bool {
 }
 
 fn should_drop_space_before(ch: char) -> bool {
-    matches!(
-        ch,
-        '.' | ',' | '!' | '?' | ';' | ':' | ')' | ']' | '…'
-    )
+    matches!(ch, '.' | ',' | '!' | '?' | ';' | ':' | ')' | ']' | '…')
 }
 
 #[cfg(test)]
@@ -102,10 +99,7 @@ mod tests {
             normalize_transcript_spacing("wait  ,  what").into_owned(),
             "wait, what"
         );
-        assert_eq!(
-            normalize_transcript_spacing("end  !").into_owned(),
-            "end!"
-        );
+        assert_eq!(normalize_transcript_spacing("end  !").into_owned(), "end!");
         assert_eq!(
             normalize_transcript_spacing("really  ?").into_owned(),
             "really?"

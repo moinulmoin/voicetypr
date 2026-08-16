@@ -79,6 +79,8 @@ export interface AISettings {
   model: string;
   hasApiKey: boolean;
   modelsByProvider: Record<string, string>;
+  reasoningByProvider: Record<string, string>;
+  fastModeByProvider: Record<string, boolean>;
   enhancement_options?: EnhancementOptions;
 }
 

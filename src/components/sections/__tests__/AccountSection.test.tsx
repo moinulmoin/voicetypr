@@ -21,6 +21,13 @@ vi.mock('sonner', () => ({
   toast: { error: vi.fn() },
 }));
 
+vi.mock('@/contexts/SettingsContext', () => ({
+  useSettings: () => ({
+    settings: { onboarding_completed: true },
+    updateSettings: vi.fn().mockResolvedValue(undefined),
+  }),
+}));
+
 describe('AccountSection license verification', () => {
   beforeEach(() => {
     vi.clearAllMocks();

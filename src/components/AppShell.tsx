@@ -17,15 +17,10 @@ import {
   SidebarProvider,
   SidebarTrigger,
 } from "@/components/ui/sidebar";
-import { Switch } from "@/components/ui/switch";
 import { Spinner } from "@/components/ui/spinner";
-import { useSettings } from "@/contexts/SettingsContext";
 import { createLogger } from "@/lib/logger";
-import {
-  getTrayStatus,
-  retryTrayCreation,
-  type TrayStatus,
-} from "@/lib/tray";
+import { isMacOS } from "@/lib/platform";
+import { getTrayStatus, retryTrayCreation, type TrayStatus } from "@/lib/tray";
 
 const log = createLogger("app-shell");
 
@@ -37,10 +32,6 @@ interface AppShellProps {
 export function AppShell({ activeSection, onSectionChange }: AppShellProps) {
   const [trayStatus, setTrayStatus] = useState<TrayStatus | null>(null);
   const [isRetryingTray, setIsRetryingTray] = useState(false);
-  const [isModeUpdating, setIsModeUpdating] = useState(false);
-  const { settings, updateSettings } = useSettings();
-  const settingsMode = settings?.settings_mode ?? "recommended";
-
   useEffect(() => {
     let isMounted = true;
     let unlisten: (() => void) | undefined;
@@ -77,34 +68,17 @@ export function AppShell({ activeSection, onSectionChange }: AppShellProps) {
       if (status.available) {
         toast.success("Menu-bar icon restored");
       } else {
-        toast.error("Menu-bar icon is still unavailable. Keep this window open and report the issue.");
+        toast.error(
+          "Menu-bar icon is still unavailable. Keep this window open and report the issue.",
+        );
       }
     } catch (error) {
       log.error("Failed to retry tray creation:", error);
-      toast.error("Could not retry the menu-bar icon. Keep this window open and report the issue.");
+      toast.error(
+        "Could not retry the menu-bar icon. Keep this window open and report the issue.",
+      );
     } finally {
       setIsRetryingTray(false);
-    }
-  };
-
-  const handleModeChange = async (value: "recommended" | "advanced") => {
-    if (isModeUpdating) return;
-
-    setIsModeUpdating(true);
-    try {
-      await updateSettings({ settings_mode: value });
-      if (
-        value === "recommended" &&
-        (activeSection === "network" ||
-          activeSection === "agent" ||
-          activeSection === "advanced")
-      ) {
-        onSectionChange("general");
-      }
-    } catch {
-      toast.error("Could not change interface mode");
-    } finally {
-      setIsModeUpdating(false);
     }
   };
 
@@ -112,31 +86,31 @@ export function AppShell({ activeSection, onSectionChange }: AppShellProps) {
     trayStatus !== null && !trayStatus.available && trayStatus.attempts > 0;
 
   return (
-    <SidebarProvider style={{ "--sidebar-width": "14rem" } as CSSProperties}>
+    <SidebarProvider
+      className="bg-background"
+      style={
+        {
+          "--sidebar-width": "14rem",
+          "--sidebar": "var(--background)",
+        } as CSSProperties
+      }
+    >
       <header
         data-tauri-drag-region
-        className="fixed inset-x-0 top-0 z-50 flex h-9 items-center border-b border-border/60 bg-background/95 px-3 backdrop-blur-sm"
+        className={`fixed inset-x-0 top-0 z-50 flex h-9 items-center bg-sidebar pr-3 ${
+          isMacOS ? "pl-[4.75rem]" : "pl-3"
+        }`}
       >
         <SidebarTrigger
-          className="ml-8 size-7 text-muted-foreground"
+          className="size-7 text-muted-foreground"
           title="Toggle sidebar"
         />
-        <label className="ml-auto flex cursor-pointer items-center gap-2 text-xs font-medium text-muted-foreground">
-          <span className="text-right">Power user</span>
-          <Switch
-            size="sm"
-            checked={settingsMode === "advanced"}
-            onCheckedChange={(checked) =>
-              void handleModeChange(checked ? "advanced" : "recommended")
-            }
-            aria-label="Power user mode"
-            title="Show Network sharing, Agent & CLI, and diagnostics"
-            disabled={!settings || isModeUpdating}
-          />
-        </label>
       </header>
-      <Sidebar activeSection={activeSection} onSectionChange={onSectionChange} />
-      <SidebarInset className="pt-9">
+      <Sidebar
+        activeSection={activeSection}
+        onSectionChange={onSectionChange}
+      />
+      <SidebarInset className="mb-2 mr-2 mt-9 h-[calc(100svh-2.75rem)] min-h-0 rounded-2xl border border-l-0 border-border/70 bg-background">
         {trayUnavailable ? (
           <Alert variant="destructive" className="mx-4 mt-4">
             <CircleAlert />

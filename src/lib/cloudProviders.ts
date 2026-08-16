@@ -1,4 +1,4 @@
-import type { SpeechModelEngine } from '@/types';
+import type { CloudModelInfo, SpeechModelEngine } from '@/types';
 import {
   hasSttApiKey,
   removeSttApiKey,
@@ -31,7 +31,7 @@ const cloudProviderDefinitions = [
     id: 'openai',
     displayName: 'OpenAI',
     providerName: 'OpenAI',
-    description: 'Cloud transcription via OpenAI (gpt-4o-transcribe)',
+    description: 'Cloud transcription via OpenAI',
     docsUrl: 'https://platform.openai.com/docs/guides/speech-to-text',
   },
   {
@@ -87,3 +87,16 @@ export const getCloudProviderByModel = (modelName: string): CloudProviderDefinit
 
 export const isCloudEngine = (engine: string): boolean =>
   Object.values(CLOUD_PROVIDERS).some((provider) => provider.engine === engine);
+
+export function resolveCloudModelLabel(
+  model: Pick<CloudModelInfo, 'available_models' | 'underlying_model'>,
+): string | undefined {
+  const options = model.available_models ?? [];
+  if (options.length === 0) return undefined;
+
+  const selected = model.underlying_model
+    ? options.find((option) => option.id === model.underlying_model)
+    : undefined;
+
+  return (selected ?? options[0])?.display_name;
+}

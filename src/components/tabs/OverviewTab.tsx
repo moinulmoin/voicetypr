@@ -1,29 +1,19 @@
 import { Button } from "@/components/ui/button";
+import { ShareStatsModal } from "@/components/ShareStatsModal";
+import { languages } from "@/components/LanguageSelection";
 import { useCanAutoInsert, useReadiness } from "@/contexts/ReadinessContext";
 import { useSettings } from "@/contexts/SettingsContext";
 import { cn } from "@/lib/utils";
 import { useTranscriptionHistory } from "@/hooks/useTranscriptionHistory";
 import { useActiveTrigger } from "@/hooks/useActiveTrigger";
-import { isMacOS } from "@/lib/platform";
 import { getModelDisplayName } from "@/lib/model-display";
 import { invoke } from "@tauri-apps/api/core";
-import {
-  Clock3,
-  FileText,
-  Loader2,
-  Share2,
-  TrendingUp,
-} from "lucide-react";
-import { lazy, Suspense, useEffect, useMemo, useState, type ReactNode } from "react";
+import { Share2 } from "lucide-react";
+import { useEffect, useMemo, useState } from "react";
 import { createLogger } from "@/lib/logger";
 
 const log = createLogger("overview-tab");
 
-const ShareStatsModal = lazy(() =>
-  import("@/components/ShareStatsModal").then((module) => ({
-    default: module.ShareStatsModal,
-  })),
-);
 
 interface SavedConnection {
   id: string;
@@ -39,18 +29,12 @@ export function OverviewTab() {
   const { settings } = useSettings();
   const { label: triggerLabel } = useActiveTrigger(settings?.hotkey);
   const [shareModalOpen, setShareModalOpen] = useState(false);
-  const [activeRemoteLabel, setActiveRemoteLabel] = useState<string | null>(null);
+  const [activeRemoteLabel, setActiveRemoteLabel] = useState<string | null>(
+    null,
+  );
   const selectedSourceLabel = readiness.remoteSelected
-    ? activeRemoteLabel ?? "Remote Voicetypr"
-    : getModelDisplayName(settings?.current_model) ?? "No source selected";
-  const setupMessage =
-    readiness.licenseStatus === "expired" || readiness.licenseStatus === "none"
-      ? "Activate a license to keep recording with Voicetypr."
-      : readiness.hasModels === false || readiness.selectedModelAvailable === false
-        ? "Choose a ready local model, cloud provider, or remote Voicetypr source before recording."
-        : isMacOS && readiness.hasMicrophonePermission === false
-          ? "Allow microphone access in macOS Settings before recording."
-          : "Finish setup before recording will work cleanly.";
+    ? (activeRemoteLabel ?? "Remote Voicetypr")
+    : (getModelDisplayName(settings?.current_model) ?? "No source selected");
 
   useEffect(() => {
     if (!readiness.remoteSelected) {
@@ -67,12 +51,20 @@ export function OverviewTab() {
         ]);
         if (cancelled) return;
 
-        const activeServer = servers.find((server) => server.id === activeServerId);
+        const activeServer = servers.find(
+          (server) => server.id === activeServerId,
+        );
         setActiveRemoteLabel(
-          activeServer?.name || (activeServer ? `${activeServer.host}:${activeServer.port}` : "Remote Voicetypr"),
+          activeServer?.name ||
+            (activeServer
+              ? `${activeServer.host}:${activeServer.port}`
+              : "Remote Voicetypr"),
         );
       } catch (error) {
-        log.error("[OverviewTab] Failed to load active remote Voicetypr:", error);
+        log.error(
+          "[OverviewTab] Failed to load active remote Voicetypr:",
+          error,
+        );
         if (!cancelled) {
           setActiveRemoteLabel("Remote Voicetypr");
         }
@@ -86,10 +78,11 @@ export function OverviewTab() {
     };
   }, [readiness.remoteSelected]);
 
-  const { history, totalCount } = useTranscriptionHistory({
-    limit: 500,
-    includeTotalCount: true,
-  });
+  const { history, totalCount, isLoading, loadError, refreshHistory } =
+    useTranscriptionHistory({
+      limit: 500,
+      includeTotalCount: true,
+    });
 
   const stats = useMemo(() => {
     const now = new Date();
@@ -98,25 +91,20 @@ export function OverviewTab() {
 
     const startOfWeek = new Date(now);
     startOfWeek.setDate(startOfWeek.getDate() - 7);
-
-    const startOfMonth = new Date(now);
-    startOfMonth.setDate(startOfMonth.getDate() - 30);
-
     const todayCount = history.filter(
       (item) => new Date(item.timestamp) >= startOfToday,
     ).length;
     const weekCount = history.filter(
       (item) => new Date(item.timestamp) >= startOfWeek,
     ).length;
-    const monthCount = history.filter(
-      (item) => new Date(item.timestamp) >= startOfMonth,
-    ).length;
+
 
     const totalWords = history.reduce(
       (acc, item) => acc + item.text.split(/\s+/).filter(Boolean).length,
       0,
     );
-    const avgLength = history.length > 0 ? Math.round(totalWords / history.length) : 0;
+    const avgLength =
+      history.length > 0 ? Math.round(totalWords / history.length) : 0;
 
     const avgTypingSpeed = 40;
     const timeSavedMinutes = Math.round(totalWords / avgTypingSpeed);
@@ -134,7 +122,9 @@ export function OverviewTab() {
       }).length;
       return {
         key: dayStart.getTime(),
-        label: dayStart.toLocaleDateString(undefined, { weekday: "short" }).slice(0, 3),
+        label: dayStart
+          .toLocaleDateString(undefined, { weekday: "short" })
+          .slice(0, 3),
         count,
       };
     });
@@ -191,11 +181,9 @@ export function OverviewTab() {
       }
     }
 
-
     return {
       todayCount,
       weekCount,
-      monthCount,
       totalWords,
       avgLength,
       timeSavedHours,
@@ -209,295 +197,199 @@ export function OverviewTab() {
     };
   }, [history, totalCount]);
 
-  const todayLabel = useMemo(
-    () => new Date().toLocaleDateString(undefined, { weekday: "long", month: "long", day: "numeric" }),
-    [],
-  );
 
-  const hotkeyHint =
-    triggerLabel === "Not set"
-      ? "Set a recording trigger in Settings, then speak in any app — the text lands at your cursor."
-      : `Press ${triggerLabel} in any app — speak, release, and the text lands at your cursor.`;
+  const spokenLanguage =
+    languages.find(
+      (language) => language.value === (settings?.speech_language ?? "en"),
+    )?.label ?? settings?.speech_language ?? "English";
 
   return (
     <div className="h-full min-h-0 overflow-auto">
-      <div className="mx-auto flex w-full max-w-5xl flex-col gap-3.5 px-6 py-7 md:px-8">
-        {/* ===== Head ===== */}
-        <div className="mb-1 flex flex-wrap items-start gap-4">
-          <div>
-            <h1 className="text-2xl font-semibold tracking-tight text-foreground">Overview</h1>
-            <p className="mt-0.5 text-sm text-muted-foreground">{todayLabel}</p>
-          </div>
-          <div className="ml-auto flex flex-wrap items-center gap-2.5">
-            <StatusChip>
-              <span
-                className={cn(
-                  "size-1.5 rounded-full",
-                  canRecord ? "bg-sage" : "bg-amber-500",
-                )}
-              />
-              {selectedSourceLabel}
-            </StatusChip>
-            <StatusChip>{canAutoInsert ? "Auto-insert on" : "Manual paste"}</StatusChip>
-            <Button size="sm" onClick={() => setShareModalOpen(true)} className="gap-2">
-              <Share2 className="h-4 w-4" />
-              Share stats
-            </Button>
-          </div>
-        </div>
+      <div className="mx-auto flex w-full max-w-4xl flex-col gap-6 px-6 py-7 md:px-8">
+        <header>
+          <h1 className="text-[1.75rem] font-semibold tracking-[-0.025em] text-foreground">
+            Overview
+          </h1>
+          <p className="mt-1 text-sm text-muted-foreground">
+            Your active dictation setup and usage at a glance.
+          </p>
+        </header>
 
-        {/* ===== Ready hero ===== */}
-        <div className="relative overflow-hidden rounded-3xl border border-border bg-gradient-to-br from-sage-bg/70 via-card to-card p-7 shadow-sm md:p-8">
-          <div className="flex items-center gap-6">
-            <div className="min-w-0">
-              <h2 className="text-[2rem] font-semibold leading-[1.1] tracking-tight text-foreground md:text-[2.25rem]">
-                {stats.currentStreak > 1
-                  ? `${stats.currentStreak}-day dictation streak`
-                  : "Ready for the next recording"}
+        <section className="rounded-xl border border-border/80 bg-card p-5">
+          <div className="flex items-start justify-between gap-4">
+            <div>
+              <h2 className="text-[15px] font-semibold text-foreground">
+                Current setup
               </h2>
-              <p className="mt-2.5 max-w-md text-sm leading-relaxed text-muted-foreground">
-                {canRecord ? hotkeyHint : setupMessage}
+              <p className="mt-1 text-[13px] text-muted-foreground">
+                Defaults used for your next desktop recording.
               </p>
             </div>
-            <Waveform active={canRecord} className="ml-auto hidden shrink-0 sm:flex" />
+            <span
+              className={cn(
+                "rounded-full px-2.5 py-1 text-xs font-medium",
+                canRecord
+                  ? "bg-sage-bg text-sage"
+                  : "bg-amber-500/10 text-amber-700 dark:text-amber-300",
+              )}
+            >
+              {canRecord ? "Ready" : "Needs attention"}
+            </span>
           </div>
-        </div>
+          <dl className="mt-5 grid gap-x-8 gap-y-5 sm:grid-cols-2">
+            <SetupValue label="Source" value={selectedSourceLabel} />
+            <SetupValue
+              label="Recording shortcut"
+              value={triggerLabel === "Not set" ? "Not configured" : triggerLabel}
+            />
+            <SetupValue label="Spoken language" value={spokenLanguage} />
+            <SetupValue
+              label="After recording"
+              value={canAutoInsert ? "Insert at the cursor" : "Keep in History"}
+            />
+          </dl>
+        </section>
 
-        {/* ===== Stat cards ===== */}
-        <div className="grid gap-3.5 sm:grid-cols-3">
-          <StatCard
-            icon={FileText}
-            kicker="Transcriptions"
-            value={stats.totalTranscriptions.toLocaleString()}
-            foot={
-              <>
-                <b className="font-semibold text-sage">+{stats.todayCount} today</b> · all time
-              </>
-            }
-          />
-          <StatCard
-            icon={TrendingUp}
-            kicker="Words captured"
-            value={stats.totalWords.toLocaleString()}
-            foot={
-              <>
-                avg <b className="font-semibold text-foreground">{stats.avgLength} words</b> per take
-              </>
-            }
-          />
-          <StatCard
-            icon={Clock3}
-            kicker="Time saved"
-            value={
-              stats.timeSavedHours > 0 ? (
-                <>
-                  {stats.timeSavedHours}
-                  <small className="text-[0.5em] text-muted-foreground">h </small>
-                  {stats.timeSavedRemMinutes}
-                  <small className="text-[0.5em] text-muted-foreground">m</small>
-                </>
-              ) : (
-                <>
-                  {stats.timeSavedMinutes}
-                  <small className="text-[0.5em] text-muted-foreground">m</small>
-                </>
-              )
-            }
-            foot="vs. typing at 40 wpm"
-          />
-        </div>
-
-        {/* ===== Glance row ===== */}
-        <div className="grid gap-3.5 lg:grid-cols-[1.7fr_1fr]">
-          <div className="rounded-2xl border border-border bg-card p-6 shadow-sm">
-            <p className="text-sm font-semibold text-foreground">Weekly rhythm</p>
-            <div className="mt-4 flex h-24 items-end gap-2">
-              {stats.weekDays.map((day) => {
-                const isHot = day.count > 0 && day.count === stats.weekMax;
-                const heightPct = Math.max(6, Math.round((day.count / stats.weekMax) * 100));
-                return (
+        <div className="grid gap-6 lg:grid-cols-[1.08fr_0.92fr]">
+          <section
+            aria-labelledby="weekly-rhythm-title"
+            className="rounded-xl border border-border/80 bg-card p-5"
+          >
+            <div>
+              <h2
+                id="weekly-rhythm-title"
+                className="text-[15px] font-semibold text-foreground"
+              >
+                Last 7 days
+              </h2>
+              <p className="mt-1 text-[13px] text-muted-foreground">
+                Completed transcripts by day.
+              </p>
+            </div>
+            {isLoading && history.length === 0 ? (
+              <div aria-hidden className="mt-5 flex h-36 items-end gap-2">
+                {[40, 70, 55].map((height) => (
                   <div
-                    key={day.key}
-                    className={cn(
-                      "flex-1 rounded-md transition-colors",
-                      isHot ? "bg-sage" : "bg-sage/25",
-                    )}
-                    style={{ height: `${heightPct}%` }}
-                    title={`${day.count} on ${day.label}`}
+                    key={height}
+                    className="min-w-0 flex-1 bg-muted animate-pulse h-full rounded-md"
+                    style={{ height: `${height}%` }}
                   />
-                );
-              })}
-            </div>
-            <div className="mt-2 flex gap-2">
-              {stats.weekDays.map((day) => (
-                <span
-                  key={day.key}
-                  className="flex-1 text-center text-[10px] font-medium uppercase tracking-wide text-muted-foreground"
-                >
-                  {day.label}
-                </span>
-              ))}
-            </div>
-          </div>
-
-          <div className="rounded-2xl border border-border bg-card p-6 shadow-sm">
-            <p className="text-sm font-semibold text-foreground">At a glance</p>
-            <div className="mt-4 grid gap-2">
-              <GlanceItem label="Today" value={`${stats.todayCount} transcriptions`} />
-              <GlanceItem label="Last 7 days" value={`${stats.weekCount}`} />
-              <GlanceItem
-                label="Best streak"
-                value={stats.longestStreak > 0 ? `${stats.longestStreak} days` : "—"}
-              />
-            </div>
-          </div>
-        </div>
-
-        {/* ===== How it works ===== */}
-        <div className="grid grid-cols-1 overflow-hidden rounded-2xl border border-border bg-card shadow-sm sm:grid-cols-3">
-          <LoopStep
-            n={1}
-            title="Trigger"
-            body={triggerLabel === "Not set" ? "Set a hotkey in Settings to start." : `Press ${triggerLabel} — or tap to toggle.`}
-          />
-          <LoopStep
-            n={2}
-            title="Speak"
-            body="Talk naturally. Transcription runs on this device."
-            divider
-          />
-          <LoopStep
-            n={3}
-            title="Release"
-            body={canAutoInsert ? "Text lands at your cursor. Keep moving." : "Copy the transcript, or enable auto-insert."}
-            divider
-          />
-        </div>
-
-        <Suspense
-          fallback={
-            <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30 backdrop-blur-sm">
-              <div className="flex items-center gap-2 rounded-2xl border border-border bg-background px-4 py-3 shadow-lg">
-                <Loader2 className="h-5 w-5 animate-spin" />
-                <span className="text-sm">Loading share modal…</span>
+                ))}
               </div>
-            </div>
-          }
-        >
-          <ShareStatsModal
-            open={shareModalOpen}
-            onOpenChange={setShareModalOpen}
-            stats={{
-              totalTranscriptions: stats.totalTranscriptions,
-              todayCount: stats.todayCount,
-              totalWords: stats.totalWords,
-              avgLength: stats.avgLength,
-              timeSavedDisplay:
-                stats.timeSavedHours > 0
+            ) : loadError && history.length === 0 ? (
+              <p className="mt-5 text-[13px] text-muted-foreground">
+                Couldn&apos;t load history{" "}
+                <button
+                  type="button"
+                  onClick={() => {
+                    void refreshHistory();
+                  }}
+                  className="text-[11px] text-sage hover:underline"
+                >
+                  Retry
+                </button>
+              </p>
+            ) : stats.weekCount === 0 ? (
+              <p className="mt-5 text-[13px] text-muted-foreground">
+                No transcripts this week — your daily activity will chart here.
+              </p>
+            ) : (
+              <div className="mt-5 flex h-36 items-end gap-2">
+                {stats.weekDays.map((day) => {
+                  const isPeak = day.count > 0 && day.count === stats.weekMax;
+                  const heightPct = Math.max(
+                    6,
+                    Math.round((day.count / stats.weekMax) * 100),
+                  );
+                  return (
+                    <div
+                      key={day.key}
+                      className="flex h-full min-w-0 flex-1 flex-col justify-end gap-2"
+                    >
+                      <div
+                        className={cn(
+                          "w-full rounded-md",
+                          isPeak ? "bg-sage" : "bg-sage/20",
+                        )}
+                        style={{ height: `${heightPct}%` }}
+                        title={`${day.count} on ${day.label}`}
+                      />
+                      <span className="text-center text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
+                        {day.label}
+                      </span>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+            <p className="mt-4 text-[13px] tabular-nums text-muted-foreground">
+              {stats.todayCount.toLocaleString()} today ·{" "}
+              {stats.weekCount.toLocaleString()} last 7 days
+              {stats.avgLength > 0 ? ` · ${stats.avgLength}/transcript` : ""}
+            </p>
+          </section>
+
+          <section className="relative isolate overflow-hidden rounded-xl bg-[#52674f] p-6 text-white">
+            <div
+              className="absolute -right-16 -top-20 -z-10 size-56 rounded-full border-[32px] border-white/5"
+              aria-hidden
+            />
+            <p className="text-xs font-semibold uppercase tracking-[0.16em] text-white/65">
+              Your voice, in numbers
+            </p>
+            <p className="mt-5 text-4xl font-semibold tracking-[-0.045em] tabular-nums">
+              {stats.totalWords.toLocaleString()}
+            </p>
+            <p className="mt-1 text-sm text-white/70">words captured</p>
+            <div className="mt-8 flex items-end justify-between gap-4">
+              <p className="max-w-44 text-sm leading-relaxed text-white/70">
+                {stats.totalTranscriptions.toLocaleString()} transcripts ·{" "}
+                {stats.timeSavedHours > 0
                   ? `${stats.timeSavedHours}h ${stats.timeSavedRemMinutes}m`
-                  : `${stats.timeSavedMinutes}m`,
-              currentStreak: stats.currentStreak,
-              longestStreak: stats.longestStreak,
-            }}
-          />
-        </Suspense>
-      </div>
-    </div>
-  );
-}
+                  : `${stats.timeSavedMinutes}m`}{" "}
+                saved
+              </p>
+              <Button
+                type="button"
+                className="shrink-0 bg-white text-[#263225] hover:bg-white/90"
+                onClick={() => setShareModalOpen(true)}
+              >
+                <Share2 />
+                Share
+              </Button>
+            </div>
+          </section>
+        </div>
 
-function StatusChip({ children }: { children: ReactNode }) {
-  return (
-    <span className="inline-flex items-center gap-2 whitespace-nowrap rounded-full border border-border bg-card px-3 py-1.5 text-xs font-medium text-muted-foreground">
-      {children}
-    </span>
-  );
-}
-
-function StatCard({
-  icon: Icon,
-  kicker,
-  value,
-  foot,
-}: {
-  icon: typeof FileText;
-  kicker: string;
-  value: ReactNode;
-  foot: ReactNode;
-}) {
-  return (
-    <div className="rounded-2xl border border-border bg-card p-6 shadow-sm">
-      <p className="flex items-center gap-2 text-[11px] font-semibold uppercase tracking-[0.12em] text-muted-foreground">
-        <Icon className="h-3.5 w-3.5 text-sage" />
-        {kicker}
-      </p>
-      <p className="mt-3 text-[2.6rem] font-semibold leading-none tracking-tight text-foreground tabular-nums">
-        {value}
-      </p>
-      <p className="mt-2.5 text-xs text-muted-foreground">{foot}</p>
-    </div>
-  );
-}
-
-function GlanceItem({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="flex items-center justify-between rounded-xl bg-muted px-3.5 py-2.5">
-      <span className="text-[10px] font-semibold uppercase tracking-[0.08em] text-muted-foreground">
-        {label}
-      </span>
-      <span className="text-sm font-semibold text-foreground">{value}</span>
-    </div>
-  );
-}
-
-function LoopStep({
-  n,
-  title,
-  body,
-  divider,
-}: {
-  n: number;
-  title: string;
-  body: string;
-  divider?: boolean;
-}) {
-  return (
-    <div className={cn("flex items-start gap-3.5 p-5", divider && "border-t border-border sm:border-l sm:border-t-0")}>
-      <span className="grid size-7 shrink-0 place-items-center rounded-full border border-sage/20 bg-sage-bg text-sm font-semibold text-sage">
-        {n}
-      </span>
-      <div>
-        <b className="block text-sm font-semibold text-foreground">{title}</b>
-        <p className="mt-0.5 text-xs leading-relaxed text-muted-foreground">{body}</p>
-      </div>
-    </div>
-  );
-}
-
-const WAVE_BARS = [14, 22, 34, 26, 44, 30, 52, 38, 48, 28, 40, 20, 30, 16];
-
-function Waveform({ active, className }: { active: boolean; className?: string }) {
-  return (
-    <div className={cn("h-[54px] items-center gap-[3px]", className)} aria-hidden>
-      {WAVE_BARS.map((h, i) => (
-        <span
-          key={i}
-          className={cn(
-            "w-[3.5px] rounded-full",
-            active ? "bg-sage/70 animate-pill-wave" : "bg-sage/30",
-          )}
-          style={{
-            height: `${h}px`,
-            ...(active
-              ? {
-                  animationDelay: `${i * 70}ms`,
-                  ["--wave-min" as string]: "0.4",
-                  ["--wave-max" as string]: "1",
-                }
-              : {}),
+        <ShareStatsModal
+          open={shareModalOpen}
+          onOpenChange={setShareModalOpen}
+          stats={{
+            totalTranscriptions: stats.totalTranscriptions,
+            todayCount: stats.todayCount,
+            totalWords: stats.totalWords,
+            avgLength: stats.avgLength,
+            timeSavedDisplay:
+              stats.timeSavedHours > 0
+                ? `${stats.timeSavedHours}h ${stats.timeSavedRemMinutes}m`
+                : `${stats.timeSavedMinutes}m`,
+            currentStreak: stats.currentStreak,
+            longestStreak: stats.longestStreak,
           }}
         />
-      ))}
+      </div>
     </div>
   );
 }
+
+function SetupValue({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="min-w-0 border-t border-border/70 pt-4 first:border-t-0 first:pt-0 sm:border-t-0 sm:pt-0">
+      <dt className="text-xs font-medium text-muted-foreground">{label}</dt>
+      <dd className="mt-1 truncate text-sm font-semibold text-foreground">
+        {value}
+      </dd>
+    </div>
+  );
+}
+

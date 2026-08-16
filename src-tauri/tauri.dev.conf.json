@@ -11,17 +11,17 @@
         "titleBarStyle": "Overlay",
         "trafficLightPosition": { "x": 12, "y": 11 },
         "label": "main",
-        "width": 1120,
-        "height": 760,
-        "minWidth": 1040,
-        "minHeight": 700,
+        "width": 1000,
+        "height": 680,
+        "minWidth": 1000,
+        "minHeight": 680,
         "resizable": true,
         "center": true,
         "visible": false,
         "skipTaskbar": true,
         "alwaysOnTop": false,
-        "minimizable": false,
-        "maximizable": false
+        "minimizable": true,
+        "maximizable": true
       }
     ],
     "security": {
@@ -39,11 +39,7 @@
   "bundle": {
     "publisher": "Ideaplexa LLC",
     "active": true,
-    "targets": [
-      "nsis",
-      "app",
-      "dmg"
-    ],
+    "targets": ["nsis", "app", "dmg"],
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",

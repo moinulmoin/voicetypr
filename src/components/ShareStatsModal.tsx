@@ -8,8 +8,9 @@ import {
 } from "@/components/ui/dialog";
 import { cn } from "@/lib/utils";
 import { invoke } from "@tauri-apps/api/core";
+import { save } from "@tauri-apps/plugin-dialog";
 import { Check, Copy, Download, Loader2 } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import { toast } from "sonner";
 import { createLogger } from "@/lib/logger";
 
@@ -29,178 +30,211 @@ interface ShareStatsModalProps {
   };
 }
 
-export function ShareStatsModal({ open, onOpenChange, stats }: ShareStatsModalProps) {
-  const canvasRef = useRef<HTMLCanvasElement>(null);
+export function ShareStatsModal({
+  open,
+  onOpenChange,
+  stats,
+}: ShareStatsModalProps) {
+  const [canvas, setCanvas] = useState<HTMLCanvasElement | null>(null);
   const [copied, setCopied] = useState(false);
-  const [imageDataUrl, setImageDataUrl] = useState<string>("");
+  const [imageDataUrl, setImageDataUrl] = useState("");
   const [isLoading, setIsLoading] = useState(true);
   const [isCopying, setIsCopying] = useState(false);
 
   useEffect(() => {
-    if (open) {
-      setIsLoading(true);
-      // Use requestAnimationFrame to ensure DOM is ready
-      requestAnimationFrame(() => {
-        if (canvasRef.current) {
-          drawStatsCard();
-          setIsLoading(false);
-        }
-      });
-    } else {
-      // Reset states when modal closes
+    if (!open) {
       setIsLoading(true);
       setCopied(false);
+      return;
     }
-  }, [open, stats]);
 
-  const drawStatsCard = () => {
-    const canvas = canvasRef.current;
+    setImageDataUrl("");
+    setIsLoading(true);
     if (!canvas) return;
 
-    const ctx = canvas.getContext("2d");
-    if (!ctx) return;
+    const context = canvas.getContext("2d");
+    if (!context) {
+      log.error("Could not create the share card canvas");
+      setIsLoading(false);
+      return;
+    }
 
     canvas.width = 2400;
-    canvas.height = 1600;
-    ctx.imageSmoothingEnabled = true;
-    ctx.imageSmoothingQuality = "high";
+    canvas.height = 1260;
+    context.imageSmoothingEnabled = true;
+    context.imageSmoothingQuality = "high";
 
-    const background = ctx.createLinearGradient(0, 0, canvas.width, canvas.height);
-    background.addColorStop(0, "#f8f8f3");
-    background.addColorStop(1, "#e9efe6");
-    ctx.fillStyle = background;
-    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    const fontFamily =
+      "-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif";
+    const forest = "#17352e";
+    const paper = "#f5f2e9";
+    const mint = "#98e7bd";
+    const mutedMint = "#b8d9c7";
 
-    ctx.fillStyle = "rgba(101, 122, 98, 0.08)";
-    ctx.beginPath();
-    ctx.arc(2210, 100, 420, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.beginPath();
-    ctx.arc(80, 1540, 300, 0, Math.PI * 2);
-    ctx.fill();
+    context.fillStyle = forest;
+    context.fillRect(0, 0, canvas.width, canvas.height);
 
-    const fontFamily = "-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif";
-    ctx.textAlign = "left";
+    const glow = context.createRadialGradient(1880, 460, 40, 1880, 460, 880);
+    glow.addColorStop(0, "rgba(93, 189, 145, 0.22)");
+    glow.addColorStop(0.55, "rgba(74, 139, 110, 0.08)");
+    glow.addColorStop(1, "rgba(23, 53, 46, 0)");
+    context.fillStyle = glow;
+    context.fillRect(0, 0, canvas.width, canvas.height);
 
-    ctx.fillStyle = "#657a62";
-    ctx.beginPath();
-    ctx.roundRect(150, 120, 58, 58, 16);
-    ctx.fill();
-    ctx.fillStyle = "#f8f8f3";
+    context.save();
+    context.translate(2150, 90);
+    context.rotate(Math.PI / 10);
+    context.strokeStyle = "rgba(245, 242, 233, 0.06)";
+    context.lineWidth = 70;
+    context.beginPath();
+    context.arc(0, 0, 430, 0, Math.PI * 2);
+    context.stroke();
+    context.restore();
+
+    context.textAlign = "left";
+    context.fillStyle = mint;
+    context.beginPath();
+    context.roundRect(120, 92, 58, 58, 18);
+    context.fill();
+    context.fillStyle = forest;
     [0, 1, 2].forEach((index) => {
-      ctx.beginPath();
-      ctx.arc(171 + index * 8, 149, 3, 0, Math.PI * 2);
-      ctx.fill();
+      context.beginPath();
+      context.arc(141 + index * 8, 121, 3.2, 0, Math.PI * 2);
+      context.fill();
     });
 
-    ctx.font = `600 36px ${fontFamily}`;
-    ctx.fillStyle = "#52604f";
-    ctx.fillText("VOICETYPR", 232, 161);
+    context.font = `650 34px ${fontFamily}`;
+    context.fillStyle = paper;
+    context.fillText("VOICETYPR", 202, 132);
+    context.textAlign = "right";
+    context.font = `600 24px ${fontFamily}`;
+    context.fillStyle = "rgba(245, 242, 233, 0.52)";
+    context.fillText("MY VOICE / IN NUMBERS", 2280, 130);
 
-    ctx.font = `600 88px ${fontFamily}`;
-    ctx.fillStyle = "#20251f";
-    ctx.fillText("Your voice, in numbers", 150, 342);
+    context.textAlign = "left";
+    context.font = `500 34px ${fontFamily}`;
+    context.fillStyle = mutedMint;
+    context.fillText("I turned my voice into", 120, 302);
+    context.font = `720 196px ${fontFamily}`;
+    context.fillStyle = paper;
+    context.fillText(stats.totalWords.toLocaleString(), 110, 490);
+    context.font = `720 80px ${fontFamily}`;
+    context.fillStyle = mint;
+    context.fillText("WORDS OUT LOUD.", 120, 592);
 
-    ctx.font = `36px ${fontFamily}`;
-    ctx.fillStyle = "#6b7468";
-    ctx.fillText("A snapshot of your dictation momentum", 150, 412);
+    const waveformHeights = [
+      112, 190, 286, 164, 350, 494, 246, 408, 552, 318, 462, 220, 356, 176, 274,
+      128,
+    ];
+    waveformHeights.forEach((height, index) => {
+      const x = 1540 + index * 43;
+      const y = 430 - height / 2;
+      context.fillStyle = "rgba(152, 231, 189, 0.32)";
+      context.beginPath();
+      context.roundRect(x, y, 20, height, 10);
+      context.fill();
+    });
 
-    const cards = [
+    const timeSaved =
+      stats.timeSavedDisplay === "0m"
+        ? "Just getting started"
+        : stats.timeSavedDisplay;
+    context.font = `400 31px ${fontFamily}`;
+    context.fillStyle = "rgba(245, 242, 233, 0.64)";
+    context.fillText(
+      `${stats.totalTranscriptions.toLocaleString()} thoughts captured · ${timeSaved} not spent typing`,
+      120,
+      676,
+    );
+
+    context.strokeStyle = "rgba(245, 242, 233, 0.14)";
+    context.lineWidth = 2;
+    context.beginPath();
+    context.moveTo(120, 785);
+    context.lineTo(2280, 785);
+    context.stroke();
+
+    const streakValue =
+      stats.currentStreak > 0
+        ? `${stats.currentStreak} ${stats.currentStreak === 1 ? "day" : "days"}`
+        : "Start today";
+    const statItems = [
       {
         label: "TRANSCRIPTIONS",
         value: stats.totalTranscriptions.toLocaleString(),
         detail: `+${stats.todayCount.toLocaleString()} today`,
       },
       {
-        label: "WORDS CAPTURED",
-        value: stats.totalWords.toLocaleString(),
-        detail: `${stats.avgLength.toLocaleString()} words per take`,
+        label: "AVERAGE TAKE",
+        value: `${stats.avgLength.toLocaleString()} words`,
+        detail: "from thought to text",
       },
       {
-        label: "TIME SAVED",
-        value: stats.timeSavedDisplay,
-        detail: "vs. typing at 40 wpm",
+        label: "CURRENT STREAK",
+        value: streakValue,
+        detail:
+          stats.longestStreak > 0
+            ? `${stats.longestStreak} day personal best`
+            : "your rhythm starts here",
       },
     ];
 
-    const cardWidth = 660;
-    const cardHeight = 430;
-    const cardGap = 60;
-    const cardY = 520;
-
-    cards.forEach((card, index) => {
-      const x = 150 + index * (cardWidth + cardGap);
-      ctx.fillStyle = "rgba(255, 255, 255, 0.88)";
-      ctx.strokeStyle = "rgba(82, 96, 79, 0.14)";
-      ctx.lineWidth = 3;
-      ctx.beginPath();
-      ctx.roundRect(x, cardY, cardWidth, cardHeight, 36);
-      ctx.fill();
-      ctx.stroke();
-
-      ctx.font = `600 28px ${fontFamily}`;
-      ctx.fillStyle = "#657a62";
-      ctx.fillText(card.label, x + 52, cardY + 88);
-
-      ctx.font = `600 92px ${fontFamily}`;
-      ctx.fillStyle = "#20251f";
-      ctx.fillText(card.value, x + 52, cardY + 230);
-
-      ctx.font = `32px ${fontFamily}`;
-      ctx.fillStyle = "#6b7468";
-      ctx.fillText(card.detail, x + 52, cardY + 330);
+    statItems.forEach((item, index) => {
+      const x = 120 + index * 720;
+      context.font = `650 22px ${fontFamily}`;
+      context.fillStyle = "rgba(152, 231, 189, 0.7)";
+      context.fillText(item.label, x, 876);
+      context.font = `650 50px ${fontFamily}`;
+      context.fillStyle = paper;
+      context.fillText(item.value, x, 950);
+      context.font = `400 25px ${fontFamily}`;
+      context.fillStyle = "rgba(245, 242, 233, 0.48)";
+      context.fillText(item.detail, x, 1004);
     });
 
-    ctx.fillStyle = "#52674f";
-    ctx.beginPath();
-    ctx.roundRect(150, 1050, 2100, 330, 44);
-    ctx.fill();
+    context.fillStyle = mint;
+    context.beginPath();
+    context.roundRect(120, 1102, 330, 48, 24);
+    context.fill();
+    context.font = `650 22px ${fontFamily}`;
+    context.fillStyle = forest;
+    context.fillText("SPOKEN, NOT TYPED", 143, 1135);
+    context.textAlign = "right";
+    context.font = `500 24px ${fontFamily}`;
+    context.fillStyle = "rgba(245, 242, 233, 0.48)";
+    context.fillText("voicetypr.com", 2280, 1135);
 
-    ctx.font = `600 60px ${fontFamily}`;
-    ctx.fillStyle = "#f7f8f4";
-    ctx.fillText(
-      stats.currentStreak > 1
-        ? `${stats.currentStreak}-day dictation streak`
-        : "Built one thought at a time",
-      220,
-      1170,
-    );
-
-    ctx.font = `34px ${fontFamily}`;
-    ctx.fillStyle = "rgba(247, 248, 244, 0.74)";
-    const longestStreak =
-      stats.longestStreak > 0 ? `${stats.longestStreak} day best streak` : "Start your streak today";
-    ctx.fillText(
-      `${stats.totalTranscriptions.toLocaleString()} transcriptions  ·  ${longestStreak}`,
-      220,
-      1252,
-    );
-
-    ctx.textAlign = "right";
-    ctx.font = `500 34px ${fontFamily}`;
-    ctx.fillStyle = "rgba(247, 248, 244, 0.74)";
-    ctx.fillText("voicetypr.com", 2180, 1328);
-
-    setImageDataUrl(canvas.toDataURL("image/png"));
-  };
+    try {
+      setImageDataUrl(canvas.toDataURL("image/png"));
+    } catch (error) {
+      log.error("Could not encode the share card", error);
+    } finally {
+      setIsLoading(false);
+    }
+  }, [
+    canvas,
+    open,
+    stats.avgLength,
+    stats.currentStreak,
+    stats.longestStreak,
+    stats.timeSavedDisplay,
+    stats.todayCount,
+    stats.totalTranscriptions,
+    stats.totalWords,
+  ]);
 
   const copyImageToClipboard = async () => {
-    if (!canvasRef.current || !imageDataUrl || isCopying) return;
+    if (!imageDataUrl || isCopying) return;
 
     setIsCopying(true);
-    
     try {
-      // Use Tauri's clipboard API for system-level copy
-      await invoke("copy_image_to_clipboard", {
-        imageDataUrl: imageDataUrl
-      });
-
+      await invoke("copy_image_to_clipboard", { imageDataUrl });
       setCopied(true);
-      toast.success("Stats image copied to clipboard!");
-      setTimeout(() => setCopied(false), 2000);
-    } catch (err) {
-      log.error("Failed to copy image to clipboard:", err);
-      toast.error("Failed to copy image. Try the download button instead.");
+      toast.success("Stats image copied to clipboard");
+      window.setTimeout(() => setCopied(false), 2000);
+    } catch (error) {
+      log.error("Failed to copy stats image:", error);
+      toast.error("Could not copy the image. Try downloading it instead.");
     } finally {
       setIsCopying(false);
     }
@@ -211,61 +245,67 @@ export function ShareStatsModal({ open, onOpenChange, stats }: ShareStatsModalPr
 
     try {
       const fileName = `voicetypr-stats-${Date.now()}.png`;
-
-      // Use Tauri's save dialog to let user choose location
-      const { save } = await import('@tauri-apps/plugin-dialog');
       const filePath = await save({
         defaultPath: fileName,
-        filters: [{
-          name: 'Image',
-          extensions: ['png']
-        }]
+        filters: [{ name: "Image", extensions: ["png"] }],
       });
-
       if (filePath) {
-        // Use the Rust backend to save the file (best practice)
-        await invoke("save_image_to_file", {
-          imageDataUrl: imageDataUrl,
-          filePath: filePath
-        });
+        await invoke("save_image_to_file", { imageDataUrl, filePath });
       }
-    } catch (err) {
-      log.error("Failed to download image:", err);
-      // Fallback to browser download
+    } catch (error) {
+      log.error("Failed to save stats image:", error);
       const link = document.createElement("a");
       link.download = `voicetypr-stats-${Date.now()}.png`;
       link.href = imageDataUrl;
       document.body.appendChild(link);
       link.click();
-      document.body.removeChild(link);
+      link.remove();
     }
   };
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-4xl">
-        <DialogHeader>
-          <DialogTitle>Share your stats</DialogTitle>
+      <DialogContent
+        className="overflow-hidden p-0"
+        style={{ width: "calc(100% - 4rem)", maxWidth: "38rem" }}
+      >
+        <DialogHeader className="border-b border-border/70 px-5 py-4 text-left">
+          <DialogTitle className="text-lg">Share your momentum</DialogTitle>
           <DialogDescription>
-            Copy or save a private snapshot of your dictation progress.
+            Export a private progress card. Transcript text is never included.
           </DialogDescription>
         </DialogHeader>
 
-        <div className="space-y-4">
-          {/* Canvas Preview */}
-          <div className="relative min-h-[300px] overflow-hidden rounded-2xl border border-border bg-muted/30">
-            {isLoading && (
-              <div className="absolute inset-0 z-10 flex items-center justify-center bg-background/70 backdrop-blur-sm">
+        <div className="flex min-w-0 flex-col gap-3 p-4">
+          <div
+            className="relative w-full min-w-0 overflow-hidden rounded-xl bg-[#17352e] ring-1 ring-black/10"
+            style={{ aspectRatio: "40 / 21" }}
+          >
+            {isLoading ? (
+              <div className="absolute inset-0 z-10 flex items-center justify-center bg-[#17352e]/85 backdrop-blur-sm">
                 <div className="flex flex-col items-center gap-2">
-                  <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
-                  <span className="text-sm text-muted-foreground">Generating stats image...</span>
+                  <Loader2 className="size-8 animate-spin text-[#98e7bd]" />
+                  <span className="text-sm text-white/70">
+                    Creating your share card…
+                  </span>
                 </div>
               </div>
-            )}
+            ) : null}
+            {imageDataUrl ? (
+              <img
+                src={imageDataUrl}
+                alt="Voicetypr voice statistics share card"
+                className="block h-auto w-full max-w-full"
+              />
+            ) : null}
             <canvas
-              ref={canvasRef}
-              className="h-auto w-full"
-              style={{ maxHeight: "420px", objectFit: "contain" }}
+              ref={setCanvas}
+              width={2400}
+              height={1260}
+              className={cn(
+                "block h-auto w-full max-w-full",
+                imageDataUrl && "hidden",
+              )}
             />
           </div>
 
@@ -274,33 +314,21 @@ export function ShareStatsModal({ open, onOpenChange, stats }: ShareStatsModalPr
               onClick={copyImageToClipboard}
               disabled={isCopying || !imageDataUrl}
               className={cn(
-                "min-w-32 gap-2",
+                "min-w-32",
                 copied && "bg-sage text-sage-foreground hover:bg-sage/90",
               )}
             >
               {isCopying ? (
-                <>
-                  <Loader2 className="h-4 w-4 animate-spin" />
-                  Copying...
-                </>
+                <Loader2 className="animate-spin" />
               ) : copied ? (
-                <>
-                  <Check className="h-4 w-4" />
-                  Copied!
-                </>
+                <Check />
               ) : (
-                <>
-                  <Copy className="h-4 w-4" />
-                  Copy Image
-                </>
+                <Copy />
               )}
+              {isCopying ? "Copying…" : copied ? "Copied" : "Copy image"}
             </Button>
-            <Button
-              onClick={downloadImage}
-              variant="outline"
-              className="gap-2"
-            >
-              <Download className="h-4 w-4" />
+            <Button onClick={downloadImage} variant="outline">
+              <Download />
               Download
             </Button>
           </div>

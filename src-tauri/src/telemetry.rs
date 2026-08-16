@@ -1224,40 +1224,35 @@ mod tests {
             scrubbed
                 .attributes
                 .get("os")
-                .map(|a| a.0.as_str())
-                .flatten(),
+                .and_then(|attribute| attribute.0.as_str()),
             Some(std::env::consts::OS)
         );
         assert_eq!(
             scrubbed
                 .attributes
                 .get("arch")
-                .map(|a| a.0.as_str())
-                .flatten(),
+                .and_then(|attribute| attribute.0.as_str()),
             Some(std::env::consts::ARCH)
         );
         assert_eq!(
             scrubbed
                 .attributes
                 .get("app_version")
-                .map(|a| a.0.as_str())
-                .flatten(),
+                .and_then(|attribute| attribute.0.as_str()),
             Some(env!("CARGO_PKG_VERSION"))
         );
         assert_eq!(
             scrubbed
                 .attributes
                 .get("release_channel")
-                .map(|a| a.0.as_str())
-                .flatten(),
+                .and_then(|attribute| attribute.0.as_str()),
             Some(RELEASE_CHANNEL)
         );
         assert_eq!(
             scrubbed
                 .attributes
                 .get("install_id")
-                .map(|a| a.0.as_str())
-                .flatten(),
+                .and_then(|attribute| attribute.0.as_str()),
             Some("install-xyz")
         );
 

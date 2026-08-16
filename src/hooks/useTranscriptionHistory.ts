@@ -1,5 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useEventCoordinator } from "@/hooks/useEventCoordinator";
 import type { TranscriptionHistory } from "@/types";
 import { createLogger } from "@/lib/logger";
@@ -34,6 +34,8 @@ interface UseTranscriptionHistoryOptions {
 interface UseTranscriptionHistoryResult {
   history: TranscriptionHistory[];
   totalCount: number;
+  isLoading: boolean;
+  loadError: string | null;
   refreshHistory: () => Promise<void>;
 }
 
@@ -72,8 +74,14 @@ export function useTranscriptionHistory({
   const { registerEvent } = useEventCoordinator("main");
   const [history, setHistory] = useState<TranscriptionHistory[]>([]);
   const [totalCount, setTotalCount] = useState(0);
+  const [isLoading, setIsLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const requestIdRef = useRef(0);
+
 
   const refreshHistory = useCallback(async () => {
+    const requestId = requestIdRef.current + 1;
+    requestIdRef.current = requestId;
     try {
       const historyPromise = invoke<RawTranscriptionHistoryItem[]>(
         "get_transcription_history",
@@ -88,11 +96,20 @@ export function useTranscriptionHistory({
         countPromise,
       ]);
 
+      if (requestIdRef.current !== requestId) return;
+
       const formattedHistory = storedHistory.map(toHistoryItem);
       setHistory(formattedHistory);
       setTotalCount(count ?? formattedHistory.length);
+      setLoadError(null);
     } catch (error) {
+      if (requestIdRef.current !== requestId) return;
       log.error("Failed to load transcription history:", error);
+      setLoadError("Couldn't load history");
+    } finally {
+      if (requestIdRef.current === requestId) {
+        setIsLoading(false);
+      }
     }
   }, [includeTotalCount, limit]);
 
@@ -115,6 +132,7 @@ export function useTranscriptionHistory({
 
       await register<TranscriptionAddedEvent>("transcription-added", (data) => {
         const newItem = fromAddedEvent(data);
+        setLoadError(null);
         setHistory((previous) => {
           if (previous.some((item) => item.id === newItem.id)) {
             return previous;
@@ -150,6 +168,8 @@ export function useTranscriptionHistory({
   return {
     history,
     totalCount,
+    isLoading,
+    loadError,
     refreshHistory,
   };
 }

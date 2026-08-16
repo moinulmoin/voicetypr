@@ -3,12 +3,8 @@ import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { MockInstance } from 'vitest';
 import { ReportProblemSection } from '../ReportProblemSection';
-import { buildReportBody, gatherManualReportData, getSystemSpecs, submitManualReport } from '@/utils/crashReport';
+import { buildReportBody, gatherManualReportData, submitManualReport } from '@/utils/crashReport';
 import { toast } from 'sonner';
-
-const platformMock = vi.hoisted(() => ({ isMacOS: false }));
-
-vi.mock('@/lib/platform', () => platformMock);
 
 vi.mock('sonner', () => ({
   toast: {
@@ -35,7 +31,6 @@ vi.mock('@/contexts/ModelManagementContext', () => ({
 
 vi.mock('@/utils/crashReport', () => ({
   gatherManualReportData: vi.fn(),
-  getSystemSpecs: vi.fn(),
   buildReportBody: vi.fn(),
   submitManualReport: vi.fn(),
 }));
@@ -59,17 +54,6 @@ const reportData = {
   logStatusNote: '',
 };
 
-const windowsSpecs = {
-  osName: 'Windows',
-  osVersion: '11 Pro 23H2',
-  kernelVersion: '10.0.22631',
-  arch: 'x86_64',
-  cpuBrand: 'AMD Ryzen 9 7950X',
-  cpuCores: 16,
-  totalMemoryMb: 32768,
-  gpus: ['NVIDIA GeForce RTX 4080'],
-};
-
 async function fillRequiredReportFields(
   user: ReturnType<typeof userEvent.setup>,
   message: string,
@@ -81,9 +65,7 @@ async function fillRequiredReportFields(
 describe('ReportProblemSection', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    platformMock.isMacOS = false;
     vi.mocked(gatherManualReportData).mockResolvedValue(reportData);
-    vi.mocked(getSystemSpecs).mockResolvedValue(windowsSpecs);
     vi.mocked(buildReportBody).mockReturnValue('REPORT BODY with The app broke');
     vi.mocked(submitManualReport).mockResolvedValue({ success: true, message: 'Report submitted' });
     if (!navigator.clipboard) {
@@ -113,35 +95,22 @@ describe('ReportProblemSection', () => {
     expect(submitManualReport).not.toHaveBeenCalled();
   });
 
-  it('shows the Windows system configuration that will be attached', async () => {
+  it('shows the report form and automatic attachment disclosure', () => {
     render(<ReportProblemSection />);
 
-    expect(await screen.findByText(/Windows 11 Pro 23H2/)).toBeInTheDocument();
-    expect(screen.getByText(/AMD Ryzen 9 7950X/)).toBeInTheDocument();
-    expect(screen.getByText('32 GB')).toBeInTheDocument();
-    expect(screen.getByText('NVIDIA GeForce RTX 4080')).toBeInTheDocument();
-    expect(screen.getByText(/latest redacted app log/i)).toBeInTheDocument();
-  });
-
-  it('shows Windows-specific quick fixes before the report form', async () => {
-    const user = userEvent.setup();
-    render(<ReportProblemSection />);
-
-    expect(screen.getByText('Try a quick fix first')).toBeInTheDocument();
-    await user.click(screen.getByRole('button', { name: /shortcut not responding/i }));
-
-    expect(screen.getByText(/choose another shortcut/i)).toBeInTheDocument();
-    expect(screen.queryByText(/grant Accessibility permission/i)).not.toBeInTheDocument();
-  });
-
-  it('shows macOS permission guidance only on macOS', async () => {
-    platformMock.isMacOS = true;
-    const user = userEvent.setup();
-    render(<ReportProblemSection />);
-
-    await user.click(screen.getByRole('button', { name: /shortcut not responding/i }));
-
-    expect(screen.getByText(/grant Accessibility permission/i)).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Report a problem' })).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        "Tell us what happened and how to reach you. We'll attach the app version, your current model, system details, and recent diagnostic logs automatically.",
+      ),
+    ).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Report details' })).toBeInTheDocument();
+    expect(screen.getByLabelText('Name (optional)')).toBeInTheDocument();
+    expect(screen.getByLabelText('Email')).toBeInTheDocument();
+    expect(screen.getByLabelText('Describe the issue')).toBeInTheDocument();
+    expect(screen.queryByText('Try a quick fix first')).not.toBeInTheDocument();
+    expect(screen.queryByText('Quick fixes')).not.toBeInTheDocument();
+    expect(screen.queryByText('System configuration included')).not.toBeInTheDocument();
   });
 
   it('rejects an invalid contact email', async () => {

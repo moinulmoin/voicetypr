@@ -12,22 +12,38 @@ import {
 } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import {
-  Field,
+  Combobox,
+  ComboboxCollection,
+  ComboboxContent,
+  ComboboxEmpty,
+  ComboboxGroup,
+  ComboboxInput,
+  ComboboxItem,
+  ComboboxLabel,
+  ComboboxList,
+} from "@/components/ui/combobox";
+import {
   FieldDescription,
-  FieldGroup,
-  FieldLegend,
   FieldSet,
-  FieldTitle,
 } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Spinner } from "@/components/ui/spinner";
 import { Switch } from "@/components/ui/switch";
-import type { AISettings, EnhancementOptions, EnhancementPreset } from "@/types/ai";
 import {
-  fromBackendOptions,
-  toBackendOptions,
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import type {
+  AISettings,
+  EnhancementOptions,
+  EnhancementPreset,
 } from "@/types/ai";
+import { fromBackendOptions, toBackendOptions } from "@/types/ai";
 import type { WritingSettings } from "@/types/writing";
 import { defaultWritingSettings, mergeWritingSettings } from "@/types/writing";
 import type {
@@ -39,7 +55,12 @@ import type {
 } from "@/types/providers";
 import { toProviderConfig } from "@/types/providers";
 import { useAllProviderModels } from "@/hooks/useProviderModels";
-import { hasApiKey, removeApiKey, saveApiKey, getApiKey } from "@/utils/keyring";
+import {
+  hasApiKey,
+  removeApiKey,
+  saveApiKey,
+  getApiKey,
+} from "@/utils/keyring";
 import { getErrorMessage } from "@/utils/error";
 import { useReadinessState } from "@/contexts/ReadinessContext";
 import { useSettings } from "@/contexts/SettingsContext";
@@ -47,22 +68,47 @@ import { humanizeModelId } from "@/lib/model-display";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { ask } from "@tauri-apps/plugin-dialog";
-import { Fragment, useEffect, useMemo, useState, useCallback, useRef } from "react";
+import { useEffect, useMemo, useState, useCallback, useRef } from "react";
 import { toast } from "sonner";
-import { Check, ExternalLink, HelpCircle, Key, Loader2, RefreshCw, Search, Settings2, Star, Trash2 } from "lucide-react";
+import {
+  AlertTriangle,
+  Brain,
+  Check,
+  ChevronDown,
+  ExternalLink,
+  HelpCircle,
+  Key,
+  RefreshCw,
+  Search,
+  Settings2,
+  Trash2,
+  X,
+} from "lucide-react";
 import { createLogger } from "@/lib/logger";
+import {
+  useEnhancementsStore,
+  type PolishErrorKind,
+} from "@/state/enhancements";
 
 const log = createLogger("enhancements");
 
+type ProviderTab = "cloud" | "local";
 
-type AISettingsResponse = Omit<AISettings, "modelsByProvider"> & {
+type AISettingsResponse = Omit<
+  AISettings,
+  "modelsByProvider" | "reasoningByProvider" | "fastModeByProvider"
+> & {
   modelsByProvider?: Record<string, string>;
+  reasoningByProvider?: Record<string, string>;
+  fastModeByProvider?: Record<string, boolean>;
   aiModelNeedsReselection?: boolean;
 };
 
 const normalizeAISettings = (settings: AISettingsResponse): AISettings => ({
   ...settings,
   modelsByProvider: settings.modelsByProvider ?? {},
+  reasoningByProvider: settings.reasoningByProvider ?? {},
+  fastModeByProvider: settings.fastModeByProvider ?? {},
 });
 
 const providerSupportsReasoning = (provider: AIProviderConfig) =>
@@ -82,49 +128,271 @@ const modelMatchesQuery = (model: AIProviderModel, query: string) =>
   model.name.toLowerCase().includes(query) ||
   Boolean(model.sourceProvider?.toLowerCase().includes(query));
 
-const GUIDED_PROVIDER_IDS = ["anthropic", "openai", "gemini", "openrouter", "claude-code", "pi", "omp"] as const;
-const GUIDED_PROVIDER_LABELS: Record<(typeof GUIDED_PROVIDER_IDS)[number], string> = {
-  anthropic: "Anthropic",
-  openai: "OpenAI",
-  gemini: "Google",
-  openrouter: "OpenRouter",
-  "claude-code": "Claude Code",
-  pi: "pi",
-  omp: "oh-my-pi",
-};
-
-/// Agent-CLI provider ids (Phase 4C): subscription-authenticated local CLIs.
-/// Availability is probed via `probe_agent_cli`, not `hasApiKey`.
-const AGENT_CLI_PROVIDER_IDS = ["claude-code", "pi", "omp"] as const;
+/// Subscription-authenticated local coding CLIs.
+const AGENT_CLI_PROVIDER_IDS = [
+  "claude-code",
+  "pi",
+  "omp",
+  "codex",
+  "droid",
+  "grok",
+  "opencode",
+  "cline",
+] as const;
 
 const CLAUDE_CODE_MODELS: AIProviderModel[] = [
-  { id: "haiku", name: "Haiku", recommended: true, sourceProvider: null, cliDefault: false },
-  { id: "sonnet", name: "Sonnet", recommended: false, sourceProvider: null, cliDefault: false },
-  { id: "opus", name: "Opus", recommended: false, sourceProvider: null, cliDefault: false },
+  {
+    id: "",
+    name: "Default",
+    recommended: true,
+    sourceProvider: null,
+    cliDefault: true,
+  },
+  {
+    id: "haiku",
+    name: "Haiku",
+    recommended: false,
+    sourceProvider: null,
+    cliDefault: false,
+  },
+  {
+    id: "sonnet",
+    name: "Sonnet",
+    recommended: false,
+    sourceProvider: null,
+    cliDefault: false,
+  },
+  {
+    id: "opus",
+    name: "Opus",
+    recommended: false,
+    sourceProvider: null,
+    cliDefault: false,
+  },
 ];
 
-const CLI_DEFAULT_MODEL: AIProviderModel = {
+const AGENT_CLI_DEFAULT_LABEL = "Default";
+
+const fallbackAgentCliDefault = (_providerId: string): AIProviderModel => ({
   id: "",
-  name: "CLI default",
+  name: AGENT_CLI_DEFAULT_LABEL,
   recommended: true,
   cliDefault: true,
-};
+});
 
 const isAgentCliProvider = (providerId: string): boolean =>
   (AGENT_CLI_PROVIDER_IDS as readonly string[]).includes(providerId);
 
-const getAgentCliProbeState = (probe?: AgentCliProbe): AgentCliProbeState => {
-  if (probe?.state) {
-    return probe.state;
+const CLI_DEFAULT_MODEL_VALUE = "__voicetypr_cli_default__";
+
+const toModelSelectValue = (modelId: string) =>
+  modelId === "" ? CLI_DEFAULT_MODEL_VALUE : modelId;
+
+const fromModelSelectValue = (modelId: string) =>
+  modelId === CLI_DEFAULT_MODEL_VALUE ? "" : modelId;
+
+interface ModelPickerItem {
+  value: string;
+  label: string;
+  qualifiedId: string;
+  model: AIProviderModel;
+}
+
+interface ModelPickerGroup {
+  value: string;
+  items: ModelPickerItem[];
+}
+interface AgentModelPickerDialogProps {
+  provider: AIProviderConfig;
+  groups: ModelPickerGroup[];
+  selectedItem: ModelPickerItem | null;
+  disabled: boolean;
+  loading: boolean;
+  onSelect: (modelId: string) => void;
+  onOpen: () => void;
+}
+
+function AgentModelPickerDialog({
+  provider,
+  groups,
+  selectedItem,
+  disabled,
+  loading,
+  onSelect,
+  onOpen,
+}: AgentModelPickerDialogProps) {
+  const [open, setOpen] = useState(false);
+  const [query, setQuery] = useState("");
+  const normalizedQuery = query.trim().toLowerCase();
+  const visibleGroups = useMemo(
+    () =>
+      groups
+        .map((group) => ({
+          ...group,
+          items: group.items.filter((item) => {
+            if (!normalizedQuery) return true;
+            return [
+              item.label,
+              item.qualifiedId,
+              item.model.sourceProvider ?? "",
+            ]
+              .join(" ")
+              .toLowerCase()
+              .includes(normalizedQuery);
+          }),
+        }))
+        .filter((group) => group.items.length > 0),
+    [groups, normalizedQuery],
+  );
+
+  return (
+    <Dialog
+      open={open}
+      onOpenChange={(nextOpen) => {
+        setOpen(nextOpen);
+        if (nextOpen) {
+          onOpen();
+        } else {
+          setQuery("");
+        }
+      }}
+    >
+      <DialogTrigger asChild>
+        <Button
+          type="button"
+          variant="outline"
+          disabled={disabled}
+          className="h-9 w-full justify-between gap-3 px-3 sm:w-52"
+          aria-label={`Model for ${provider.name}`}
+        >
+          <span className="min-w-0 truncate text-left">
+            {selectedItem?.label ?? AGENT_CLI_DEFAULT_LABEL}
+          </span>
+          {loading ? (
+            <Spinner className="h-3.5 w-3.5 shrink-0" />
+          ) : (
+            <ChevronDown className="h-3.5 w-3.5 shrink-0 opacity-60" />
+          )}
+        </Button>
+      </DialogTrigger>
+      <DialogContent className="sm:max-w-2xl">
+        <DialogHeader>
+          <DialogTitle>Choose a {provider.name} model</DialogTitle>
+          <DialogDescription>
+            Search models reported by your installed CLI. The selection is saved
+            for this agent.
+          </DialogDescription>
+        </DialogHeader>
+        <div className="relative">
+          <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+          <Input
+            autoFocus
+            value={query}
+            onChange={(event) => setQuery(event.target.value)}
+            placeholder={`Search ${provider.name} models`}
+            aria-label={`Search ${provider.name} models`}
+            className="pl-9"
+          />
+        </div>
+        <ScrollArea className="max-h-[min(60vh,28rem)] pr-3">
+          <div className="space-y-5 py-1">
+            {visibleGroups.length === 0 ? (
+              <p className="rounded-lg border border-dashed px-4 py-8 text-center text-sm text-muted-foreground">
+                No models match your search.
+              </p>
+            ) : (
+              visibleGroups.map((group) => (
+                <section
+                  key={`${provider.id}-${group.value}`}
+                  className="space-y-2"
+                >
+                  <h3 className="px-1 text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                    {group.value}
+                  </h3>
+                  <div className="grid gap-1">
+                    {group.items.map((item) => {
+                      const selected = selectedItem?.value === item.value;
+                      const detail = [
+                        item.model.reasoning ? "Reasoning" : "",
+                        item.model.contextWindow
+                          ? `${Math.round(item.model.contextWindow / 1000)}k context`
+                          : "",
+                      ]
+                        .filter(Boolean)
+                        .join(" · ");
+                      return (
+                        <button
+                          key={item.value}
+                          type="button"
+                          aria-pressed={selected}
+                          className={`flex min-h-14 w-full items-center gap-3 rounded-lg border px-3 py-2.5 text-left transition-colors ${
+                            selected
+                              ? "border-sage/50 bg-sage-bg/50"
+                              : "border-transparent hover:border-border hover:bg-muted/50"
+                          }`}
+                          onClick={() => {
+                            onSelect(fromModelSelectValue(item.value));
+                            setOpen(false);
+                          }}
+                        >
+                          <span className="min-w-0 flex-1">
+                            <span className="block truncate text-sm font-medium">
+                              {item.label}
+                            </span>
+                            <span className="mt-0.5 block truncate font-mono text-[11px] text-muted-foreground">
+                              {item.qualifiedId}
+                              {detail ? ` · ${detail}` : ""}
+                            </span>
+                          </span>
+                          <Check
+                            className={`h-4 w-4 shrink-0 text-sage ${
+                              selected ? "opacity-100" : "opacity-0"
+                            }`}
+                          />
+                        </button>
+                      );
+                    })}
+                  </div>
+                </section>
+              ))
+            )}
+          </div>
+        </ScrollArea>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+const qualifyModelId = (providerId: string, modelId: string) =>
+  modelId
+    ? modelId.includes("/")
+      ? modelId
+      : `${providerId}/${modelId}`
+    : `${providerId}/default`;
+
+const shortModelName = (modelId: string, fallbackName?: string) => {
+  if (fallbackName && !fallbackName.includes("/")) {
+    return fallbackName;
   }
-  if (probe?.installed && probe?.authed) {
-    return "ready";
-  }
-  if (probe?.installed) {
-    return "not_authenticated";
-  }
-  return "missing";
+  const shortId = modelId.includes("/")
+    ? modelId.slice(modelId.lastIndexOf("/") + 1)
+    : modelId;
+  return humanizeModelId(shortId || modelId);
 };
+
+const defaultAgentCliReasoning = (providerId: string) =>
+  providerId === "pi" || providerId === "omp" ? "off" : "low";
+
+const formatAgentCliReasoning = (providerId: string, reasoning: string) =>
+  providerId === "claude-code"
+    ? `Effort ${reasoning}`
+    : `Thinking ${reasoning}`;
+
+const formatReasoningLevel = (reasoning: string) =>
+  reasoning.charAt(0).toUpperCase() + reasoning.slice(1);
+
+const getAgentCliProbeState = (probe?: AgentCliProbe): AgentCliProbeState =>
+  probe?.state ?? "missing";
 
 const isAgentCliReady = (probe?: AgentCliProbe): boolean =>
   getAgentCliProbeState(probe) === "ready";
@@ -132,17 +400,16 @@ const isAgentCliReady = (probe?: AgentCliProbe): boolean =>
 const isDefaultAgentCliModel = (model: AIProviderModel) =>
   Boolean(model.cliDefault) || model.id === "";
 
-const isGuidedProviderId = (
-  providerId: string,
-): providerId is (typeof GUIDED_PROVIDER_IDS)[number] =>
-  GUIDED_PROVIDER_IDS.includes(providerId as (typeof GUIDED_PROVIDER_IDS)[number]);
-
-
 export function EnhancementsSection() {
   const readiness = useReadinessState();
   const { settings, updateSettings } = useSettings();
-  const { fetchModels, getModels, isLoading: isModelsLoading, getError, clearModels } =
-    useAllProviderModels();
+  const {
+    fetchModels,
+    getModels,
+    isLoading: isModelsLoading,
+    getError,
+    clearModels,
+  } = useAllProviderModels();
 
   const [aiSettings, setAISettings] = useState<AISettings>({
     enabled: false,
@@ -150,13 +417,16 @@ export function EnhancementsSection() {
     model: "",
     hasApiKey: false,
     modelsByProvider: {},
+    reasoningByProvider: {},
+    fastModeByProvider: {},
   });
   const [aiModelNeedsReselection, setAiModelNeedsReselection] = useState(false);
 
   const [providers, setProviders] = useState<AIProviderConfig[]>([]);
 
   const [providerSearch, setProviderSearch] = useState("");
-  const [advancedOpen, setAdvancedOpen] = useState(false);
+  const [providerSetupOpen, setProviderSetupOpen] = useState(false);
+  const [providerTab, setProviderTab] = useState<ProviderTab>("cloud");
 
   const [showApiKeyModal, setShowApiKeyModal] = useState(false);
   const [showOpenAIConfig, setShowOpenAIConfig] = useState(false);
@@ -165,23 +435,34 @@ export function EnhancementsSection() {
   );
   const [customModelName, setCustomModelName] = useState<string>("");
   const [selectedProvider, setSelectedProvider] = useState<string>("");
-  const [guidedSetupProvider, setGuidedSetupProvider] = useState<string | null>(null);
+  const [guidedSetupProvider, setGuidedSetupProvider] = useState<string | null>(
+    null,
+  );
   const [isLoading, setIsLoading] = useState(false);
-  const [providerApiKeys, setProviderApiKeys] = useState<Record<string, boolean>>({});
-  // Per-provider probe result for agent-CLI providers (Claude Code). Lets the
-  // card distinguish "installed but not signed in" from "not installed",
-  // which `providerApiKeys` (installed && authed) collapses to a single false.
-  const [agentCliStatus, setAgentCliStatus] = useState<Record<string, AgentCliProbe>>({});
-  const [agentCliProbing, setAgentCliProbing] = useState<Record<string, boolean>>({});
+  const [providerApiKeys, setProviderApiKeys] = useState<
+    Record<string, boolean>
+  >({});
+  // Per-provider executable-resolution result for local agent CLIs.
+  const [agentCliStatus, setAgentCliStatus] = useState<
+    Record<string, AgentCliProbe>
+  >({});
+  const [agentCliProbing, setAgentCliProbing] = useState<
+    Record<string, boolean>
+  >({});
   const agentCliProbingRef = useRef<Set<string>>(new Set());
+  const settingsLoadStartedRef = useRef(false);
   const [enhancementOptions, setEnhancementOptions] = useState<{
     preset: EnhancementPreset;
   }>({
     preset: "PersonalDictation",
   });
-  const [writingSettings, setWritingSettings] =
-    useState<WritingSettings>(defaultWritingSettings);
+  const [writingSettings, setWritingSettings] = useState<WritingSettings>(
+    defaultWritingSettings,
+  );
   const [settingsLoaded, setSettingsLoaded] = useState(false);
+  const polishError = useEnhancementsStore((s) => s.polishError);
+  const setPolishError = useEnhancementsStore((s) => s.setPolishError);
+  const clearPolishError = useEnhancementsStore((s) => s.clearPolishError);
   const writingSaveGeneration = useRef(0);
   const enhancementSaveGeneration = useRef(0);
   const writingSettingsRef = useRef(writingSettings);
@@ -193,7 +474,9 @@ export function EnhancementsSection() {
 
   const loadEnhancementOptions = async (aiEnabled: boolean) => {
     try {
-      const options = await invoke<EnhancementOptions>("get_enhancement_options");
+      const options = await invoke<EnhancementOptions>(
+        "get_enhancement_options",
+      );
       setEnhancementOptions(fromBackendOptions(options, aiEnabled));
     } catch (error) {
       log.error("Failed to load Polish options:", error);
@@ -202,7 +485,9 @@ export function EnhancementsSection() {
 
   const loadWritingSettings = async () => {
     try {
-      const nextSettings = await invoke<Partial<WritingSettings>>("get_writing_settings");
+      const nextSettings = await invoke<Partial<WritingSettings>>(
+        "get_writing_settings",
+      );
       setWritingSettings(mergeWritingSettings(nextSettings));
       return true;
     } catch (error) {
@@ -210,86 +495,43 @@ export function EnhancementsSection() {
       return false;
     }
   };
+  const probeAgentCli = useCallback(
+    async (
+      providerId: string,
+      refresh: boolean,
+    ): Promise<AgentCliProbe | null> => {
+      if (agentCliProbingRef.current.has(providerId)) return null;
+      agentCliProbingRef.current.add(providerId);
+      setAgentCliProbing((prev) => ({ ...prev, [providerId]: true }));
+      try {
+        const probe = await invoke<AgentCliProbe>("probe_agent_cli", {
+          provider: providerId,
+          refresh,
+        });
+        const ready = isAgentCliReady(probe);
+        setAgentCliStatus((prev) => ({ ...prev, [providerId]: probe }));
+        setProviderApiKeys((prev) => ({ ...prev, [providerId]: ready }));
+        return probe;
+      } catch (error) {
+        log.error(`Failed to probe ${providerId} CLI:`, error);
+        return null;
+      } finally {
+        agentCliProbingRef.current.delete(providerId);
+        setAgentCliProbing((prev) => ({ ...prev, [providerId]: false }));
+      }
+    },
+    [],
+  );
 
   const loadAISettings = useCallback(async () => {
     try {
-      const listedProviders = (await invoke<AiProvider[]>("list_ai_providers")).map(
-        toProviderConfig,
-      );
+      const listedProviders = (
+        await invoke<AiProvider[]>("list_ai_providers")
+      ).map(toProviderConfig);
       setProviders(listedProviders);
-      const allProviders = listedProviders.map((provider) => provider.id);
-      const keyStatus: Record<string, boolean> = {};
-      const agentCliStatusMap: Record<string, AgentCliProbe> = {};
 
-      await Promise.all(
-        allProviders.map(async (providerId) => {
-          // Agent-CLI providers are subscription-authenticated local CLIs.
-          // Availability comes from probe_agent_cli, NOT hasApiKey.
-          if (isAgentCliProvider(providerId)) {
-            try {
-              const probe = await invoke<AgentCliProbe>(
-                "probe_agent_cli",
-                { provider: providerId },
-              );
-              agentCliStatusMap[providerId] = probe;
-              keyStatus[providerId] = isAgentCliReady(probe);
-            } catch (error) {
-              log.error(`Failed to probe ${providerId} CLI:`, error);
-              agentCliStatusMap[providerId] = {
-                state: "incompatible",
-                installed: false,
-                authed: false,
-                detail: "",
-              };
-              keyStatus[providerId] = false;
-            }
-            return;
-          }
-
-          const keyId = providerId;
-          let isConfigured = await hasApiKey(keyId);
-
-          if ((providerId === "custom" || providerId === "openai") && !isConfigured) {
-            try {
-              const providerSettings = normalizeAISettings(
-                await invoke<AISettingsResponse>("get_ai_settings_for_provider", {
-                  provider: providerId,
-                }),
-              );
-              isConfigured = providerSettings.hasApiKey;
-            } catch (error) {
-              log.error(`Failed to resolve ${providerId} provider readiness:`, error);
-            }
-          }
-
-          keyStatus[providerId] = isConfigured;
-
-          if (isConfigured) {
-            try {
-              const apiKey = await getApiKey(keyId);
-              if (apiKey) {
-                await invoke("cache_ai_api_key", {
-                  args: { provider: providerId, apiKey },
-                });
-              }
-            } catch (error) {
-              log.error(`Failed to cache ${keyId} API key:`, error);
-            }
-          }
-        }),
-      );
-
-      setProviderApiKeys(keyStatus);
-      setAgentCliStatus(agentCliStatusMap);
-
-      try {
-        const customConfig = await invoke<{ baseUrl: string }>("get_openai_config");
-        setOpenAIDefaultBaseUrl(customConfig.baseUrl || "https://api.openai.com/v1");
-      } catch (error) {
-        log.error("Failed to load custom config:", error);
-      }
-
-      const loadedAISettingsResponse = await invoke<AISettingsResponse>("get_ai_settings");
+      const loadedAISettingsResponse =
+        await invoke<AISettingsResponse>("get_ai_settings");
       const loadedAISettings = normalizeAISettings(loadedAISettingsResponse);
       const customModel =
         loadedAISettings.modelsByProvider.custom ||
@@ -297,8 +539,61 @@ export function EnhancementsSection() {
       if (customModel) {
         setCustomModelName(customModel);
       }
-      setAiModelNeedsReselection(Boolean(loadedAISettingsResponse.aiModelNeedsReselection));
+      setAiModelNeedsReselection(
+        Boolean(loadedAISettingsResponse.aiModelNeedsReselection),
+      );
       setAISettings(loadedAISettings);
+
+      if (isAgentCliProvider(loadedAISettings.provider)) {
+        void probeAgentCli(loadedAISettings.provider, false);
+      }
+
+      const keyStatus: Record<string, boolean> = {};
+      await Promise.all(
+        listedProviders
+          .filter((provider) => !isAgentCliProvider(provider.id))
+          .map(async ({ id: providerId }) => {
+            let isConfigured = await hasApiKey(providerId);
+
+            if (
+              (providerId === "custom" || providerId === "openai") &&
+              !isConfigured
+            ) {
+              try {
+                const providerSettings = normalizeAISettings(
+                  await invoke<AISettingsResponse>(
+                    "get_ai_settings_for_provider",
+                    {
+                      provider: providerId,
+                    },
+                  ),
+                );
+                isConfigured = providerSettings.hasApiKey;
+              } catch (error) {
+                log.error(
+                  `Failed to resolve ${providerId} provider readiness:`,
+                  error,
+                );
+              }
+            }
+
+            keyStatus[providerId] = isConfigured;
+            if (isConfigured) {
+              try {
+                const apiKey = await getApiKey(providerId);
+                if (apiKey) {
+                  await invoke("cache_ai_api_key", {
+                    args: { provider: providerId, apiKey },
+                  });
+                }
+              } catch (error) {
+                log.error(`Failed to cache ${providerId} API key:`, error);
+              }
+            }
+          }),
+      );
+      setProviderApiKeys((prev) => ({ ...prev, ...keyStatus }));
+
       if (
         readiness?.ai_ready &&
         loadedAISettings.provider &&
@@ -310,18 +605,23 @@ export function EnhancementsSection() {
         }));
       }
 
+      try {
+        const customConfig = await invoke<{ baseUrl: string }>(
+          "get_openai_config",
+        );
+        setOpenAIDefaultBaseUrl(
+          customConfig.baseUrl || "https://api.openai.com/v1",
+        );
+      } catch (error) {
+        log.error("Failed to load custom config:", error);
+      }
+
       listedProviders
-        .filter((provider) => {
-          if (provider.isCustom) {
-            return false;
-          }
-          if (!isAgentCliProvider(provider.id)) {
-            return true;
-          }
-          return isAgentCliReady(agentCliStatusMap[provider.id]);
-        })
+        .filter(
+          (provider) => !provider.isCustom && !isAgentCliProvider(provider.id),
+        )
         .forEach((provider) => {
-          fetchModels(provider.id);
+          void fetchModels(provider.id);
         });
 
       return loadedAISettings;
@@ -329,84 +629,70 @@ export function EnhancementsSection() {
       log.error("Failed to load AI settings:", error);
       return null;
     }
-  }, [readiness, fetchModels]);
-  // Re-probe a single agent-CLI provider (Refresh button). Updates both the
- // per-provider probe status and the collapsed keyStatus used for gating, and
- // toasts the outcome. The ref guards against double-clicks firing two probes.
-  const handleRefreshAgentCli = useCallback(async (provider: AIProviderConfig) => {
-    if (agentCliProbingRef.current.has(provider.id)) return;
-    agentCliProbingRef.current.add(provider.id);
-    setAgentCliProbing((prev) => ({ ...prev, [provider.id]: true }));
-    try {
-      const probe = await invoke<AgentCliProbe>("probe_agent_cli", {
-        provider: provider.id,
-      });
-      const state = getAgentCliProbeState(probe);
-      setAgentCliStatus((prev) => ({ ...prev, [provider.id]: probe }));
-      setProviderApiKeys((prev) => ({
-        ...prev,
-        [provider.id]: state === "ready",
-      }));
-
-      if (state === "ready") {
-        await fetchModels(provider.id);
-        toast.success(`${provider.name}: signed in`);
-      } else {
-        if (state === "not_authenticated") {
-          toast.info(`${provider.name}: sign in, then Refresh.`);
-        } else if (state === "missing") {
-          toast.info(
-            `${provider.name}: install it in an existing PATH directory, then Refresh. Restart only if PATH itself changed.`,
-          );
-        } else if (state === "unsafe_launcher") {
-          toast.info(
-            `${provider.name}: the launcher could not be used safely. Install a compatible launcher in an existing PATH directory, then Refresh.`,
-          );
-        } else {
-          toast.info(
-            `${provider.name}: this CLI is incompatible. Install a compatible version in an existing PATH directory, then Refresh.`,
-          );
-        }
+  }, [readiness?.ai_ready, fetchModels, probeAgentCli]);
+  const handleRefreshAgentCli = useCallback(
+    async (provider: AIProviderConfig) => {
+      const probe = await probeAgentCli(provider.id, true);
+      if (!probe) {
+        toast.info(
+          `${provider.name}: status refresh failed. Your previous selection was kept.`,
+        );
+        return;
       }
-    } catch (error) {
-      log.error(`Failed to probe ${provider.name} CLI:`, error);
-      clearModels(provider.id);
-      setAgentCliStatus((prev) => ({
-        ...prev,
-        [provider.id]: {
-          state: "incompatible",
-          installed: false,
-          authed: false,
-          detail: "",
-        },
-      }));
-      setProviderApiKeys((prev) => ({ ...prev, [provider.id]: false }));
-      toast.info(
-        `${provider.name}: unable to use this CLI. Install a compatible version in an existing PATH directory, then Refresh.`,
-      );
-    } finally {
-      agentCliProbingRef.current.delete(provider.id);
-      setAgentCliProbing((prev) => ({ ...prev, [provider.id]: false }));
-    }
-  }, [clearModels, fetchModels]);
+
+      const state = getAgentCliProbeState(probe);
+      if (state === "ready") {
+        toast.success(`${provider.name}: installed`);
+      } else if (state === "missing") {
+        toast.info(
+          `${provider.name}: install it in an existing PATH directory, then Refresh. Restart only if PATH itself changed.`,
+        );
+      } else if (state === "unsafe_launcher") {
+        toast.info(
+          `${provider.name}: install a compatible launcher in an existing PATH directory, then Refresh.`,
+        );
+      } else {
+        toast.info(`${provider.name}: status unavailable. Try Refresh again.`);
+      }
+    },
+    [probeAgentCli],
+  );
 
   useEffect(() => {
-    if (!settingsLoaded) {
-      (async () => {
-        const loadedAISettings = await loadAISettings();
-        await loadEnhancementOptions(loadedAISettings?.enabled ?? false);
-        const writingSettingsLoaded = await loadWritingSettings();
-        setSettingsLoaded(writingSettingsLoaded);
-      })().catch((error) => {
-        log.error("Failed to load Polish settings:", error);
-      });
+    if (settingsLoaded || settingsLoadStartedRef.current) {
+      return;
     }
+
+    settingsLoadStartedRef.current = true;
+    (async () => {
+      const loadedAISettings = await loadAISettings();
+      await loadEnhancementOptions(loadedAISettings?.enabled ?? false);
+      const writingSettingsLoaded = await loadWritingSettings();
+      setSettingsLoaded(writingSettingsLoaded);
+      if (!writingSettingsLoaded) {
+        settingsLoadStartedRef.current = false;
+      }
+    })().catch((error) => {
+      settingsLoadStartedRef.current = false;
+      log.error("Failed to load Polish settings:", error);
+    });
   }, [settingsLoaded, loadAISettings]);
 
   useEffect(() => {
     const unlistenReady = listen("ai-ready", async () => {
-      if (settingsLoaded) {
-        await loadAISettings();
+      if (!settingsLoaded) return;
+      const loadedAISettings = normalizeAISettings(
+        await invoke<AISettingsResponse>("get_ai_settings"),
+      );
+      setAISettings(loadedAISettings);
+      if (
+        loadedAISettings.provider &&
+        !isAgentCliProvider(loadedAISettings.provider)
+      ) {
+        setProviderApiKeys((prev) => ({
+          ...prev,
+          [loadedAISettings.provider]: true,
+        }));
       }
     });
 
@@ -418,7 +704,8 @@ export function EnhancementsSection() {
       if (!provider || provider === loadedAISettings.provider) {
         setAISettings(loadedAISettings);
       } else {
-        const rememberedModel = loadedAISettings.modelsByProvider[provider] || "";
+        const rememberedModel =
+          loadedAISettings.modelsByProvider[provider] || "";
         setAISettings({
           ...loadedAISettings,
           provider,
@@ -438,7 +725,10 @@ export function EnhancementsSection() {
       async (event) => {
         let providerStillConfigured = false;
 
-        if (event.payload.provider === "custom" || event.payload.provider === "openai") {
+        if (
+          event.payload.provider === "custom" ||
+          event.payload.provider === "openai"
+        ) {
           try {
             const providerSettings = normalizeAISettings(
               await invoke<AISettingsResponse>("get_ai_settings_for_provider", {
@@ -451,7 +741,10 @@ export function EnhancementsSection() {
               [event.payload.provider]: providerStillConfigured,
             }));
           } catch (error) {
-            log.error(`Failed to refresh ${event.payload.provider} provider readiness after key removal:`, error);
+            log.error(
+              `Failed to refresh ${event.payload.provider} provider readiness after key removal:`,
+              error,
+            );
             setProviderApiKeys((prev) => ({
               ...prev,
               [event.payload.provider]: false,
@@ -467,7 +760,8 @@ export function EnhancementsSection() {
         clearModels(event.payload.provider);
 
         const isCurrentProviderRemoved =
-          aiSettings.provider === event.payload.provider && !providerStillConfigured;
+          aiSettings.provider === event.payload.provider &&
+          !providerStillConfigured;
 
         if (isCurrentProviderRemoved) {
           setAISettings((prev) => ({
@@ -490,15 +784,21 @@ export function EnhancementsSection() {
               transcription_task: "transcribe",
             });
           } catch (error) {
-            log.error("Failed to refresh language settings after API key removal:", error);
+            log.error(
+              "Failed to refresh language settings after API key removal:",
+              error,
+            );
           }
         }
       },
     );
 
-    const unlistenAiEnabledChanged = listen<boolean>("ai-enabled-changed", (event) => {
-      setAISettings((prev) => ({ ...prev, enabled: event.payload }));
-    });
+    const unlistenAiEnabledChanged = listen<boolean>(
+      "ai-enabled-changed",
+      (event) => {
+        setAISettings((prev) => ({ ...prev, enabled: event.payload }));
+      },
+    );
 
     return () => {
       Promise.all([
@@ -512,7 +812,60 @@ export function EnhancementsSection() {
     };
   }, [settingsLoaded, aiSettings.provider, clearModels, updateSettings]);
 
-  const persistEnhancementOptions = async (nextOptions: { preset: EnhancementPreset }) => {
+  // Surface persistent Polish failures inline on the Polish card (toasts are
+  // left to EnhancementsTab); a successful polish run clears the banner.
+  useEffect(() => {
+    const unlistenAuthError = listen("ai-enhancement-auth-error", (event) => {
+      if (typeof event.payload === "string") {
+        setPolishError("auth", event.payload);
+      }
+    });
+
+    const unlistenEnhancementError = listen(
+      "ai-enhancement-error",
+      (event) => {
+        if (typeof event.payload === "string") {
+          setPolishError("generic", event.payload);
+        }
+      },
+    );
+
+    const unlistenEnhancementFailed = listen<{
+      category?: string;
+      message?: string;
+    } | null>("enhancing-failed", (event) => {
+      const payload = event.payload;
+      if (!payload || payload.category === "canceled") return;
+      const kind: PolishErrorKind =
+        payload.category === "missing_api_key" ||
+        payload.category === "invalid_api_key"
+          ? "auth"
+          : "generic";
+      setPolishError(kind, payload.message || "Polish failed");
+    });
+
+    const unlistenEnhancementCompleted = listen(
+      "enhancing-completed",
+      () => {
+        clearPolishError();
+      },
+    );
+
+    return () => {
+      Promise.all([
+        unlistenAuthError,
+        unlistenEnhancementError,
+        unlistenEnhancementFailed,
+        unlistenEnhancementCompleted,
+      ]).then((fns) => {
+        fns.forEach((fn) => fn());
+      });
+    };
+  }, [setPolishError, clearPolishError]);
+
+  const persistEnhancementOptions = async (nextOptions: {
+    preset: EnhancementPreset;
+  }) => {
     const rollbackOptions = enhancementOptions;
     const generationAtEnqueue = enhancementSaveGeneration.current + 1;
     enhancementSaveGeneration.current = generationAtEnqueue;
@@ -542,7 +895,10 @@ export function EnhancementsSection() {
         if (writingSaveGeneration.current === generationAtEnqueue) {
           setWritingSettings(rollbackSettings);
           writingSettingsRef.current = rollbackSettings;
-          const message = getErrorMessage(error, "Failed to save writing settings");
+          const message = getErrorMessage(
+            error,
+            "Failed to save writing settings",
+          );
           toast.error(message);
         }
       }
@@ -556,7 +912,11 @@ export function EnhancementsSection() {
     setWritingSettings(nextSettings);
     writingSettingsRef.current = nextSettings;
     if (settingsLoaded) {
-      enqueueWritingSettingsSave(nextSettings, rollbackSettings, generationAtEnqueue);
+      enqueueWritingSettingsSave(
+        nextSettings,
+        rollbackSettings,
+        generationAtEnqueue,
+      );
     }
   };
 
@@ -569,7 +929,10 @@ export function EnhancementsSection() {
         transcription_task: nextTask,
       });
     } catch (error) {
-      const message = getErrorMessage(error, "Failed to save final text language");
+      const message = getErrorMessage(
+        error,
+        "Failed to save final text language",
+      );
       toast.error(message);
     }
   };
@@ -581,8 +944,8 @@ export function EnhancementsSection() {
         if (providerId === "claude-code") {
           return CLAUDE_CODE_MODELS;
         }
-        if (providerId === "pi" || providerId === "omp") {
-          return [CLI_DEFAULT_MODEL];
+        if (isAgentCliProvider(providerId)) {
+          return [fallbackAgentCliDefault(providerId)];
         }
       }
       return models;
@@ -596,10 +959,16 @@ export function EnhancementsSection() {
 
     if (!cachedModels.some((model) => model.recommended)) {
       const fetchedModels = await fetchModels(providerId);
-      models = fetchedModels?.length > 0 ? fetchedModels : getDisplayModels(providerId);
+      models =
+        fetchedModels?.length > 0
+          ? fetchedModels
+          : getDisplayModels(providerId);
     }
-    if (providerId === "pi" || providerId === "omp") {
-      return models.find((model) => model.cliDefault) ?? CLI_DEFAULT_MODEL;
+    if (isAgentCliProvider(providerId)) {
+      return (
+        models.find((model) => model.cliDefault) ??
+        fallbackAgentCliDefault(providerId)
+      );
     }
 
     return models.find((model) => model.recommended) ?? null;
@@ -650,12 +1019,16 @@ export function EnhancementsSection() {
   ) => {
     const recommendedModel = await resolveRecommendedModel(providerId);
     if (!recommendedModel) {
-      setAdvancedOpen(true);
-      toast.error("No recommended model was available. Choose a model in Advanced.");
+      setProviderSetupOpen(true);
+      toast.error("No recommended model was available. Choose a model below.");
       return false;
     }
 
-    await enablePolishForProviderModel(providerId, recommendedModel.id, modelsByProvider);
+    await enablePolishForProviderModel(
+      providerId,
+      recommendedModel.id,
+      modelsByProvider,
+    );
     toast.success("Polish on");
     return true;
   };
@@ -663,7 +1036,11 @@ export function EnhancementsSection() {
   const handleToggleEnabled = async (enabled: boolean) => {
     const hasActiveProviderKey = Boolean(providerApiKeys[aiSettings.provider]);
 
-    if (enabled && (!hasActiveProviderKey || (!aiSettings.model && !isAgentCliProvider(aiSettings.provider)))) {
+    if (
+      enabled &&
+      (!hasActiveProviderKey ||
+        (!aiSettings.model && !isAgentCliProvider(aiSettings.provider)))
+    ) {
       toast.error("Polish is not set up yet. Connect an AI to turn it on.");
       return;
     }
@@ -677,7 +1054,9 @@ export function EnhancementsSection() {
 
       setAISettings((prev) => ({ ...prev, enabled }));
 
-      const nextPreset: EnhancementPreset = enabled ? "CleanDictation" : "PersonalDictation";
+      const nextPreset: EnhancementPreset = enabled
+        ? "CleanDictation"
+        : "PersonalDictation";
 
       if (
         nextPreset === "PersonalDictation" &&
@@ -711,7 +1090,9 @@ export function EnhancementsSection() {
           }),
         ]);
         const providerSettings = normalizeAISettings(providerSettingsResponse);
-        setOpenAIDefaultBaseUrl(savedConfig.baseUrl || "https://api.openai.com/v1");
+        setOpenAIDefaultBaseUrl(
+          savedConfig.baseUrl || "https://api.openai.com/v1",
+        );
         if (providerSettings.model) {
           setCustomModelName(providerSettings.model);
         }
@@ -721,53 +1102,6 @@ export function EnhancementsSection() {
       setShowOpenAIConfig(true);
     } else {
       setShowApiKeyModal(true);
-    }
-  };
-
-  const handleGuidedProviderConnect = async (providerId: string) => {
-    setGuidedSetupProvider(providerId);
-    setSelectedProvider(providerId);
-
-    if (!providerApiKeys[providerId]) {
-      if (isAgentCliProvider(providerId)) {
-        const probe = agentCliStatus[providerId];
-        const state = getAgentCliProbeState(probe);
-        const label =
-          (GUIDED_PROVIDER_LABELS as Record<string, string>)[providerId] ?? providerId;
-        const refreshNote =
-          "Refresh can detect installs in existing PATH directories; restart only if PATH itself changed.";
-        let message: string;
-        if (state === "not_authenticated") {
-          message = `Sign in to ${label} in your terminal, then Refresh. ${refreshNote}`;
-        } else if (state === "missing") {
-          message = `Install ${label} in an existing PATH directory, then Refresh. ${refreshNote}`;
-        } else if (state === "unsafe_launcher") {
-          message = `${label} could not be used safely. Install a compatible launcher in an existing PATH directory, then Refresh.`;
-        } else {
-          message = `${label} is incompatible. Install a compatible version in an existing PATH directory, then Refresh.`;
-        }
-        toast.info(message);
-        setGuidedSetupProvider(null);
-        return;
-      }
-      await handleSetupApiKey(providerId);
-      return;
-    }
-
-    setIsLoading(true);
-    try {
-      const providerSettings = normalizeAISettings(
-        await invoke<AISettingsResponse>("get_ai_settings_for_provider", {
-          provider: providerId,
-        }),
-      );
-      await enableGuidedProvider(providerId, providerSettings.modelsByProvider);
-    } catch (error) {
-      const message = getErrorMessage(error, "Failed to turn on Polish");
-      toast.error(message);
-    } finally {
-      setIsLoading(false);
-      setGuidedSetupProvider(null);
     }
   };
 
@@ -791,7 +1125,10 @@ export function EnhancementsSection() {
       setProviderApiKeys((prev) => ({ ...prev, [selectedProvider]: true }));
 
       if (shouldAutoEnable) {
-        const didEnable = await enableGuidedProvider(selectedProvider, modelsByProvider);
+        const didEnable = await enableGuidedProvider(
+          selectedProvider,
+          modelsByProvider,
+        );
         if (!didEnable) {
           setAISettings((prev) => ({
             ...prev,
@@ -870,6 +1207,7 @@ export function EnhancementsSection() {
         };
       });
       setAiModelNeedsReselection(false);
+      setProviderSetupOpen(true);
       if (shouldEnable) {
         await loadEnhancementOptions(true);
       }
@@ -881,548 +1219,773 @@ export function EnhancementsSection() {
     }
   };
 
+  const handleSelectReasoning = async (
+    providerId: string,
+    reasoning: string,
+  ) => {
+    try {
+      await invoke("update_agent_cli_reasoning", {
+        provider: providerId,
+        reasoning,
+      });
+      setAISettings((prev) => ({
+        ...prev,
+        reasoningByProvider: {
+          ...prev.reasoningByProvider,
+          [providerId]: reasoning,
+        },
+      }));
+      toast.success("Thinking setting saved");
+    } catch (error) {
+      toast.error(getErrorMessage(error, "Failed to save thinking setting"));
+    }
+  };
+
+  const handleToggleFastMode = async (
+    providerId: string,
+    enabled: boolean,
+  ) => {
+    try {
+      await invoke("update_agent_cli_fast_mode", {
+        provider: providerId,
+        enabled,
+      });
+      setAISettings((prev) => ({
+        ...prev,
+        fastModeByProvider: {
+          ...prev.fastModeByProvider,
+          [providerId]: enabled,
+        },
+      }));
+      toast.success(`Fast mode ${enabled ? "on" : "off"}`);
+    } catch (error) {
+      toast.error(getErrorMessage(error, "Failed to save fast mode"));
+    }
+  };
+
   const isUsingCustomProvider = aiSettings.provider === "custom";
   const hasSelectedModel = Boolean(
     aiSettings.provider &&
-      // Agent-CLI providers carry no model — waive the model requirement
-      // (availability still requires a probed provider key below).
-      (aiSettings.model || isAgentCliProvider(aiSettings.provider)) &&
-      (isUsingCustomProvider || providerApiKeys[aiSettings.provider]),
+    // Agent-CLI providers carry no model — waive the model requirement
+    // (availability still requires a probed provider key below).
+    (aiSettings.model || isAgentCliProvider(aiSettings.provider)) &&
+    (isUsingCustomProvider || providerApiKeys[aiSettings.provider]),
   );
 
   const showAiModelReselectionNotice =
     aiModelNeedsReselection && aiSettings.enabled && !aiSettings.model;
 
-  const storedFinalTextLanguage = settings?.final_text_language ?? "same_as_transcript";
+  const storedFinalTextLanguage =
+    settings?.final_text_language ?? "same_as_transcript";
   const effectiveFinalTextLanguage =
     enhancementOptions.preset === "PersonalDictation"
       ? "same_as_transcript"
       : storedFinalTextLanguage;
 
+  const selectedDisplayModel = getDisplayModels(aiSettings.provider).find(
+    (model) => model.id === aiSettings.model,
+  );
   const activeModelName = isUsingCustomProvider
     ? customModelName
     : !aiSettings.model && isAgentCliProvider(aiSettings.provider)
-      ? "CLI default"
-      : getDisplayModels(aiSettings.provider).find((model) => model.id === aiSettings.model)?.name ||
-        humanizeModelId(aiSettings.model);
+      ? AGENT_CLI_DEFAULT_LABEL
+      : shortModelName(aiSettings.model, selectedDisplayModel?.name);
   const activeProviderName =
     providers.find((provider) => provider.id === aiSettings.provider)?.name ||
     aiSettings.provider;
+  const activeReasoningLevels =
+    agentCliStatus[aiSettings.provider]?.reasoningLevels ?? [];
+  const activeReasoningName =
+    isAgentCliProvider(aiSettings.provider) && activeReasoningLevels.length > 0
+      ? formatAgentCliReasoning(
+          aiSettings.provider,
+          aiSettings.reasoningByProvider[aiSettings.provider] ??
+            defaultAgentCliReasoning(aiSettings.provider),
+        )
+      : "";
 
-  const guidedProviders = useMemo(
-    () =>
-      GUIDED_PROVIDER_IDS.map((providerId) =>
-        providers.find((provider) => provider.id === providerId),
-      ).filter((provider): provider is AIProviderConfig => Boolean(provider)),
-    [providers],
-  );
   const providerQuery = providerSearch.trim().toLowerCase();
-  const filteredProviders = useMemo(() => {
-    const matches = providerQuery
-      ? providers.filter((provider) => {
-          const providerMatches = provider.name.toLowerCase().includes(providerQuery);
-          const customModelMatches =
-            provider.isCustom && customModelName.toLowerCase().includes(providerQuery);
-          const modelsMatch = getDisplayModels(provider.id).some((model) =>
+  const filteredProviders = useMemo(
+    () =>
+      providers.filter((provider) => {
+        const matchesTab =
+          providerTab === "local"
+            ? isAgentCliProvider(provider.id)
+            : !isAgentCliProvider(provider.id);
+        if (!matchesTab) return false;
+        if (providerTab === "local" || !providerQuery) return true;
+
+        return (
+          provider.name.toLowerCase().includes(providerQuery) ||
+          (provider.isCustom &&
+            customModelName.toLowerCase().includes(providerQuery)) ||
+          getDisplayModels(provider.id).some((model) =>
             modelMatchesQuery(model, providerQuery),
-          );
-          return providerMatches || customModelMatches || modelsMatch;
-        })
-      : providers;
-
-    return [...matches].sort(
-      (left, right) =>
-        Number(isAgentCliProvider(left.id)) - Number(isAgentCliProvider(right.id)),
-    );
-  }, [customModelName, getDisplayModels, providerQuery, providers]);
-
-  const hasLoadingProviders = providers.some((provider) => isModelsLoading(provider.id));
-  const showGuidedSetup = !aiSettings.enabled && !hasSelectedModel;
-  const polishControls = (
-    <div className="flex flex-col items-start gap-2 sm:items-end">
-      <Field
-        orientation="horizontal"
-        className="w-auto items-center gap-3 rounded-lg border border-border/60 bg-card px-3 py-1.5"
-      >
-        <FieldTitle className="text-sm">Polish</FieldTitle>
-        <Switch
-          id="polish-enabled"
-          aria-label="Polish"
-          checked={aiSettings.enabled}
-          onCheckedChange={handleToggleEnabled}
-          disabled={!hasSelectedModel}
-        />
-      </Field>
-      {hasSelectedModel ? (
-        <div className="flex max-w-80 flex-wrap items-center gap-x-1.5 gap-y-1 text-left text-xs text-muted-foreground sm:justify-end sm:text-right">
-          <span>Using</span>
-          {" "}
-          <span className="text-foreground">{activeProviderName}</span>
-          {activeModelName ? (
-            <>
-              {" · "}
-              <span className="text-foreground">{activeModelName}</span>
-            </>
-          ) : null}
-          {aiSettings.enabled && (
-            <>
-              {" · "}
-              <Badge variant="secondary" className="text-sage">
-                Active
-              </Badge>
-            </>
-          )}
-          {" · "}
-          <Button
-            type="button"
-            variant="link"
-            size="sm"
-            className="h-auto p-0 text-xs"
-            aria-label="Change Polish provider or model"
-            onClick={() => setAdvancedOpen(true)}
-          >
-            Change
-          </Button>
-        </div>
-      ) : (
-        <p className="max-w-80 text-left text-xs text-muted-foreground sm:text-right">
-          Not set up yet
-        </p>
-      )}
-    </div>
+          )
+        );
+      }),
+    [customModelName, getDisplayModels, providerQuery, providerTab, providers],
   );
 
-  const polishSetupContent = showGuidedSetup ? (
-    <FieldSet className="rounded-xl border border-border/60 bg-card p-4">
-      <div className="space-y-1">
-        <FieldLegend>Connect an AI to turn on Polish</FieldLegend>
-        <FieldDescription>
-          Polish uses a cloud AI you bring a key for. Pick one — setup takes about two minutes.
-        </FieldDescription>
+  const openProviderSetup = () => {
+    setProviderTab(isAgentCliProvider(aiSettings.provider) ? "local" : "cloud");
+    setProviderSearch("");
+    setProviderSetupOpen(true);
+  };
+
+  const hasLoadingProviders = providers.some((provider) =>
+    isModelsLoading(provider.id),
+  );
+  const showGuidedSetup = settingsLoaded && !hasSelectedModel;
+  const polishHeaderActions = hasSelectedModel ? (
+    <div className="flex items-center gap-3 rounded-lg border border-border/60 bg-card px-3 py-1.5">
+      <div className="min-w-0 max-w-56 flex-1 text-right">
+        <p className="truncate text-xs font-medium text-foreground">
+          {activeProviderName}
+        </p>
+        <p className="truncate text-[11px] text-muted-foreground">
+          {activeModelName || "Connected"}
+        </p>
       </div>
+      <Switch
+        id="polish-enabled"
+        aria-label="Polish"
+        className="shrink-0"
+        checked={aiSettings.enabled}
+        onCheckedChange={handleToggleEnabled}
+      />
+    </div>
+  ) : (
+    <Button type="button" variant="outline" onClick={openProviderSetup}>
+      Select a provider to enable Polish
+    </Button>
+  );
 
-      <div className="mt-4 flex flex-wrap gap-2">
-        {guidedProviders.map((provider) => {
-          const label = isGuidedProviderId(provider.id)
-            ? GUIDED_PROVIDER_LABELS[provider.id]
-            : provider.name;
-          const isProviderLoading = isLoading && guidedSetupProvider === provider.id;
+  const polishSetupExpanded = showGuidedSetup || providerSetupOpen;
 
-          return (
-            <Button
-              key={provider.id}
+  useEffect(() => {
+    if (!polishSetupExpanded || providerTab !== "local") return;
+
+    providers
+      .filter((provider) => isAgentCliProvider(provider.id))
+      .forEach((provider) => {
+        if (!agentCliStatus[provider.id]) {
+          void probeAgentCli(provider.id, false);
+        }
+      });
+  }, [
+    agentCliStatus,
+    polishSetupExpanded,
+    probeAgentCli,
+    providerTab,
+    providers,
+  ]);
+  const polishSetupContent = (
+    <FieldSet className="overflow-hidden rounded-xl border border-border/60 bg-card [&_button:not(:disabled)]:cursor-pointer">
+      {polishError && (
+        <div className="border-b border-border/60 p-4">
+          <div className="flex items-start gap-2 rounded-lg border border-amber-500/20 bg-amber-500/10 p-3">
+            <AlertTriangle className="mt-0.5 h-4 w-4 flex-shrink-0 text-amber-500" />
+            <p className="flex-1 text-sm font-medium text-amber-700 dark:text-amber-400">
+              {polishError.kind === "auth"
+                ? "Polish failed — your API key was rejected. Update it below."
+                : polishError.message}
+            </p>
+            <button
               type="button"
-              variant="outline"
-              className="justify-start gap-2"
-              disabled={isLoading}
-              onClick={() => {
-                void handleGuidedProviderConnect(provider.id);
-              }}
+              onClick={clearPolishError}
+              aria-label="Dismiss Polish error"
+              className="-m-1 shrink-0 rounded-md p-1 text-amber-600 transition-colors hover:bg-amber-500/10 hover:text-amber-700 focus-visible:ring-2 focus-visible:ring-ring dark:text-amber-400 dark:hover:text-amber-300"
             >
-              {isProviderLoading ? (
-                <Loader2 className="h-4 w-4 animate-spin" />
-              ) : (
-                <Key className={`h-4 w-4 ${provider.color}`} />
-              )}
-              <span className={provider.color}>{label}</span>
-            </Button>
-          );
-        })}
-      </div>
-
-      <div className="mt-4 flex flex-wrap items-center justify-between gap-3 text-sm">
-        <Dialog>
-          <DialogTrigger asChild>
-            <Button type="button" variant="link" size="sm" className="h-auto p-0">
-              Which AI should I pick? →
-            </Button>
-          </DialogTrigger>
-          <DialogContent className="sm:max-w-md">
-            <DialogHeader>
-              <DialogTitle>Which AI should I pick?</DialogTitle>
-              <DialogDescription>
-                Anthropic Claude, OpenAI GPT, and Google Gemini all work well for Polish. Pick the
-                one you already have an account with. You can change it anytime in Advanced.
-              </DialogDescription>
-            </DialogHeader>
-          </DialogContent>
-        </Dialog>
-        <p className="text-xs text-muted-foreground">Your key stays on this device.</p>
-      </div>
-    </FieldSet>
-  ) : null;
-
-  const advancedProviderContent = (
-    <FieldSet className="rounded-xl border border-border/60 bg-background p-4">
-      <div className="mb-3 flex items-center justify-between gap-3">
-        <FieldLegend className="mb-0 text-sm">Providers & Models</FieldLegend>
-        <div className="flex items-center gap-3 text-xs text-muted-foreground">
-          {hasLoadingProviders && (
-            <span className="inline-flex items-center gap-1.5">
-              <Spinner className="h-3.5 w-3.5" />
-              Refreshing models
-            </span>
-          )}
-        </div>
-      </div>
-
-      {showAiModelReselectionNotice && (
-        <div className="mb-3 rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-700 dark:text-amber-300">
-          Your previously selected AI model is no longer available. Please choose a model to
-          continue using Polish.
+              <X className="h-4 w-4" />
+            </button>
+          </div>
         </div>
       )}
+      <button
+        type="button"
+        className="flex w-full items-center justify-between gap-4 px-4 py-3 text-left outline-none transition-colors hover:bg-muted/30 focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset"
+        aria-expanded={polishSetupExpanded}
+        aria-label={
+          polishSetupExpanded
+            ? "Collapse provider and model"
+            : "Expand provider and model"
+        }
+        onClick={() => {
+          if (showGuidedSetup) return;
+          if (polishSetupExpanded) {
+            setProviderSetupOpen(false);
+          } else {
+            openProviderSetup();
+          }
+        }}
+      >
+        <span className="min-w-0">
+          <span className="block text-sm font-semibold">
+            {showGuidedSetup
+              ? "Connect an AI to turn on Polish"
+              : "Provider & model"}
+          </span>
+          <span className="mt-0.5 block truncate text-xs text-muted-foreground">
+            {hasSelectedModel
+              ? `${activeProviderName}${activeModelName ? ` · ${activeModelName}` : ""}${activeReasoningName ? ` · ${activeReasoningName}` : ""}`
+              : "Choose a cloud API or local agent"}
+          </span>
+        </span>
+        <span className="flex shrink-0 items-center gap-2">
+          {hasSelectedModel && (
+            <Badge variant="secondary" className="text-sage">
+              Active
+            </Badge>
+          )}
+          <ChevronDown
+            className={`size-4 text-muted-foreground transition-transform ${
+              polishSetupExpanded ? "rotate-180" : ""
+            }`}
+          />
+        </span>
+      </button>
 
-      <FieldGroup className="gap-3">
-        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-          <div className="relative flex-1">
-            <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
-            <Input
-              id="ai-provider-model-search"
-              aria-label="Search providers and models"
-              value={providerSearch}
-              onChange={(event) => setProviderSearch(event.target.value)}
-              placeholder="Search providers or models"
-              className="pl-9"
-            />
-          </div>
-        </div>
+      {polishSetupExpanded && (
+        <div className="border-t border-border/60 px-4 py-4">
+          <FieldDescription className="mb-4">
+            Use your own cloud API key or an agent already installed on this
+            Mac.
+          </FieldDescription>
 
-        {filteredProviders.length === 0 && (
-          <div className="rounded-lg border border-dashed border-border/70 px-4 py-6 text-center text-sm text-muted-foreground">
-            No providers or models match your search.
-          </div>
-        )}
+          {showAiModelReselectionNotice && (
+            <div className="mb-3 rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-700 dark:text-amber-300">
+              Your previous model is unavailable. Choose another model to
+              continue.
+            </div>
+          )}
 
-        {filteredProviders.map((provider, providerIndex) => {
-          const agentCli = isAgentCliProvider(provider.id);
-          const startsProviderGroup =
-            providerIndex === 0 ||
-            isAgentCliProvider(filteredProviders[providerIndex - 1].id) !== agentCli;
-          const agentCliState = agentCli
-            ? getAgentCliProbeState(agentCliStatus[provider.id])
-            : null;
-          const agentCliReady = agentCliState === "ready";
-          const hasKey = agentCli ? agentCliReady : providerApiKeys[provider.id] || false;
-          const isCustomActive = Boolean(
-            provider.isCustom &&
-              aiSettings.provider === "custom" &&
-              providerApiKeys.custom &&
-              aiSettings.enabled,
-          );
-          const isActive = provider.isCustom
-            ? isCustomActive
-            : Boolean(aiSettings.provider === provider.id && aiSettings.enabled);
-          const selectedModel = provider.isCustom
-            ? aiSettings.modelsByProvider.custom || customModelName || null
-            : Object.prototype.hasOwnProperty.call(aiSettings.modelsByProvider, provider.id)
-              ? aiSettings.modelsByProvider[provider.id]
-              : aiSettings.provider === provider.id
-                ? aiSettings.model
-                : null;
-          const fetchedModels = getModels(provider.id);
-          const models = getDisplayModels(provider.id);
-          const providerMatches = provider.name.toLowerCase().includes(providerQuery);
-          const displayModels =
-            providerQuery && !providerMatches
-              ? models.filter((model) => modelMatchesQuery(model, providerQuery))
-              : models;
-          const recommendedModels = displayModels.filter((model) => model.recommended);
-          const allModels = displayModels.filter((model) => !model.recommended);
-          const selectedModelData = models.find((model) => model.id === selectedModel);
-          const showModelPicker =
-            !provider.isCustom &&
-            (agentCli ? agentCliReady : hasKey || Boolean(providerQuery));
-          const sourceGroups = new Map<string, AIProviderModel[]>();
-          displayModels
-            .filter((model) => !isDefaultAgentCliModel(model))
-            .forEach((model) => {
-              const label = model.sourceProvider?.trim() || "Discovered";
-              const group = sourceGroups.get(label) || [];
-              group.push(model);
-              sourceGroups.set(label, group);
-            });
-          const unfilteredAgentCliGroups: Array<[string, AIProviderModel[]]> = [
-            ["CLI default", displayModels.filter(isDefaultAgentCliModel)],
-            ...Array.from(sourceGroups.entries()),
-          ];
-          const agentCliGroups: Array<[string, AIProviderModel[]]> =
-            unfilteredAgentCliGroups.filter(([, groupModels]) => groupModels.length > 0);
-          const modelGroups: Array<[string, AIProviderModel[]]> =
-            provider.id === "claude-code"
-              ? ([
-                  ["Recommended", recommendedModels],
-                  ["All", allModels],
-                ] satisfies Array<[string, AIProviderModel[]]>).filter(
-                  ([, groupModels]) => groupModels.length > 0,
-                )
-              : agentCli
-                ? agentCliGroups
-                : ([
-                    ["Recommended", recommendedModels],
-                    ["All", allModels],
-                  ] satisfies Array<[string, AIProviderModel[]]>).filter(
-                    ([, groupModels]) => groupModels.length > 0,
-                  );
-
-          const agentCliStatusCopy =
-            agentCliState === "not_authenticated"
-              ? agentCliStatus[provider.id]?.detail?.trim() ||
-                "Installed — not signed in. Sign in in your terminal, then Refresh."
-              : agentCliState === "missing"
-                ? "CLI not found. Install it in an existing PATH directory, then Refresh. Refresh can detect installs in existing PATH directories; restart only if PATH itself changed."
-                : agentCliState === "unsafe_launcher"
-                  ? "Launcher could not be used safely. Install a compatible launcher in an existing PATH directory, then Refresh. Restart only if PATH itself changed."
-                  : "CLI is incompatible. Install a compatible version in an existing PATH directory, then Refresh. Restart only if PATH itself changed.";
-          return (
-            <Fragment key={provider.id}>
-              {startsProviderGroup && (
-                <div className="pt-2 first:pt-0">
-                  <p className="text-xs font-semibold uppercase tracking-[0.12em] text-muted-foreground">
-                    {agentCli ? "Agent Polish providers" : "Cloud providers"}
-                  </p>
+          <Tabs
+            value={providerTab}
+            onValueChange={(value) => {
+              setProviderTab(value as ProviderTab);
+              setProviderSearch("");
+            }}
+          >
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+              <TabsList aria-label="Polish provider type">
+                <TabsTrigger value="cloud">Cloud API</TabsTrigger>
+                <TabsTrigger value="local">Local Agents</TabsTrigger>
+              </TabsList>
+              {providerTab === "cloud" && (
+                <div className="relative min-w-0 flex-1 sm:max-w-72">
+                  <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+                  <Input
+                    id="ai-provider-model-search"
+                    aria-label="Search cloud providers and models"
+                    value={providerSearch}
+                    onChange={(event) => setProviderSearch(event.target.value)}
+                    placeholder="Search cloud APIs"
+                    className="pl-9"
+                  />
                 </div>
               )}
-              <div
-                className={`rounded-xl border border-border/60 bg-background p-4 transition-all ${
-                  isActive ? "border-sage/50 bg-sage-bg/40" : ""
-                }`}
-              >
-              <div className="flex items-start justify-between gap-4">
-                <div className="min-w-0 flex-1">
-                  <div className="mb-1 flex flex-wrap items-center gap-2">
-                    <h3 className={`font-semibold ${provider.color}`}>{provider.name}</h3>
-                    {provider.status === "experimental" && (
-                      <Badge
-                        variant="outline"
-                        className="border-amber-500/40 text-amber-700 dark:text-amber-300"
-                      >
-                        Experimental
-                      </Badge>
-                    )}
-                    {provider.status === "hidden" && (
-                      <Badge variant="outline">Advanced</Badge>
-                    )}
-                    {providerSupportsReasoning(provider) && (
-                      <Badge variant="secondary">Reasoning</Badge>
-                    )}
-                    {isActive && (
+            </div>
+
+            <TabsContent value={providerTab} className="mt-3 space-y-2">
+              {providerTab === "cloud" && hasLoadingProviders && (
+                <p className="flex items-center gap-1.5 text-xs text-muted-foreground">
+                  <Spinner className="h-3.5 w-3.5" />
+                  Refreshing models
+                </p>
+              )}
+              {filteredProviders.length === 0 && (
+                <div className="rounded-lg border border-dashed border-border/70 px-4 py-6 text-center text-sm text-muted-foreground">
+                  No providers or models match your search.
+                </div>
+              )}
+
+              {filteredProviders.map((provider) => {
+                const agentCli = isAgentCliProvider(provider.id);
+                const agentProbe = agentCli
+                  ? agentCliStatus[provider.id]
+                  : undefined;
+                const agentCliState = agentProbe
+                  ? getAgentCliProbeState(agentProbe)
+                  : null;
+                const agentCliChecking =
+                  agentCli && !agentProbe && agentCliProbing[provider.id];
+                const agentCliRefreshing =
+                  agentCli &&
+                  Boolean(agentProbe) &&
+                  agentCliProbing[provider.id];
+                const agentCliReady = agentCliState === "ready";
+                const hasKey = agentCli
+                  ? agentCliReady
+                  : Boolean(providerApiKeys[provider.id]);
+                const isSelected = aiSettings.provider === provider.id;
+                const hasSelectedProviderModel =
+                  Object.prototype.hasOwnProperty.call(
+                    aiSettings.modelsByProvider,
+                    provider.id,
+                  ) || isSelected;
+                const selectedModel = provider.isCustom
+                  ? aiSettings.modelsByProvider.custom || customModelName
+                  : Object.prototype.hasOwnProperty.call(
+                        aiSettings.modelsByProvider,
+                        provider.id,
+                      )
+                    ? aiSettings.modelsByProvider[provider.id]
+                    : aiSettings.provider === provider.id
+                      ? aiSettings.model
+                      : "";
+                const discoveredModels = getDisplayModels(provider.id);
+                const defaultAgentCliModel = agentCli
+                  ? (discoveredModels.find(isDefaultAgentCliModel) ??
+                    fallbackAgentCliDefault(provider.id))
+                  : undefined;
+                const models =
+                  defaultAgentCliModel &&
+                  !discoveredModels.some(isDefaultAgentCliModel)
+                    ? [defaultAgentCliModel, ...discoveredModels]
+                    : discoveredModels;
+                const modelSelectValue = hasSelectedProviderModel
+                  ? toModelSelectValue(selectedModel)
+                  : defaultAgentCliModel
+                    ? CLI_DEFAULT_MODEL_VALUE
+                    : undefined;
+                const providerMatches = provider.name
+                  .toLowerCase()
+                  .includes(providerQuery);
+                const displayModels =
+                  providerQuery && !providerMatches
+                    ? models.filter((model) =>
+                        modelMatchesQuery(model, providerQuery),
+                      )
+                    : models;
+                const toPickerItem = (
+                  model: AIProviderModel,
+                ): ModelPickerItem => ({
+                  value: toModelSelectValue(model.id),
+                  label: isDefaultAgentCliModel(model)
+                    ? AGENT_CLI_DEFAULT_LABEL
+                    : shortModelName(model.id, model.name),
+                  qualifiedId: qualifyModelId(provider.id, model.id),
+                  model,
+                });
+                const modelPickerGroups: ModelPickerGroup[] = [
+                  {
+                    value: "Recommended",
+                    items: displayModels
+                      .filter((model) => model.recommended)
+                      .map(toPickerItem),
+                  },
+                  {
+                    value: "All models",
+                    items: displayModels
+                      .filter((model) => !model.recommended)
+                      .map(toPickerItem),
+                  },
+                ].filter((group) => group.items.length > 0);
+                const modelPickerItems = modelPickerGroups.flatMap(
+                  (group) => group.items,
+                );
+                const selectedModelItem =
+                  modelPickerItems.find(
+                    (item) => item.value === modelSelectValue,
+                  ) ??
+                  (selectedModel
+                    ? toPickerItem({
+                        id: selectedModel,
+                        name: humanizeModelId(selectedModel),
+                        recommended: false,
+                      })
+                    : null);
+                const statusCopy = agentCli
+                  ? agentCliChecking
+                    ? "Checking installation…"
+                    : agentCliRefreshing
+                      ? agentCliReady
+                        ? "Installed · Refreshing…"
+                        : "Refreshing installation…"
+                      : agentCliReady
+                        ? "Installed"
+                        : agentCliState === "missing"
+                            ? "Not installed in PATH"
+                            : "Installation status unavailable"
+                  : hasKey
+                    ? isSelected
+                      ? null
+                      : "Ready"
+                    : provider.isCustom
+                      ? "Endpoint not configured"
+                      : "API key required";
+                const reasoning =
+                  aiSettings.reasoningByProvider[provider.id] ??
+                  defaultAgentCliReasoning(provider.id);
+                const reasoningLevels = agentProbe?.reasoningLevels ?? [];
+                const fastModeEnabled =
+                  aiSettings.fastModeByProvider[provider.id] ?? false;
+                const providerSummary = (
+                  <div className="flex flex-wrap items-center gap-2">
+                    <h3
+                      className={`pointer-events-none text-sm font-semibold ${provider.color}`}
+                    >
+                      {provider.name}
+                    </h3>
+                    {isSelected && (
                       <Badge variant="secondary" className="text-sage">
                         Active
                       </Badge>
                     )}
-                  </div>
-
-                  {!hasKey && !agentCli && (
-                    <p className="text-sm text-muted-foreground">
-                      {provider.isCustom ? "Configure endpoint to enable" : "Add API key to enable"}
-                    </p>
-                  )}
-                  {agentCli && !agentCliReady && (
-                    <p className="text-sm text-muted-foreground">{agentCliStatusCopy}</p>
-                  )}
-                  {showModelPicker && selectedModel !== null && (
-                    <p className="text-sm text-muted-foreground">
-                      Selected model:{" "}
-                      <span className="text-foreground">
-                        {selectedModelData?.name || humanizeModelId(selectedModel)}
+                    {provider.status === "experimental" && (
+                      <Badge variant="outline">Experimental</Badge>
+                    )}
+                    {statusCopy && (
+                      <span className="text-xs text-muted-foreground">
+                        {statusCopy}
                       </span>
-                    </p>
-                  )}
-                </div>
+                    )}
+                  </div>
+                );
 
-                <div className="flex items-center gap-2">
-                  {agentCli ? (
-                    agentCliReady ? (
-                      <span className="text-xs text-muted-foreground">Signed in</span>
-                    ) : (
-                      <Button
-                        onClick={() => handleRefreshAgentCli(provider)}
-                        variant="ghost"
-                        size="sm"
-                        className="text-muted-foreground"
-                        disabled={agentCliProbing[provider.id]}
-                        aria-label={`Refresh ${provider.name} sign-in`}
-                        title={`Refresh ${provider.name} sign-in`}
-                      >
-                        <RefreshCw
-                          className={`h-3.5 w-3.5 ${
-                            agentCliProbing[provider.id] ? "animate-spin" : ""
-                          }`}
-                        />
-                      </Button>
-                    )
-                  ) : hasKey ? (
-                    <>
-                      {provider.isCustom && (
-                        <Button
-                          onClick={() => handleSetupApiKey(provider.id)}
-                          variant="ghost"
-                          size="sm"
-                          aria-label={`Configure ${provider.name}`}
-                        >
-                          <Settings2 className="h-3.5 w-3.5" />
-                        </Button>
-                      )}
-                      {!provider.isCustom && (
-                        <Button
-                          onClick={() => fetchModels(provider.id)}
-                          variant="ghost"
-                          size="sm"
-                          className="text-muted-foreground"
-                          disabled={isModelsLoading(provider.id)}
-                          title={`Refresh ${provider.name} models`}
-                          aria-label={`Refresh ${provider.name} models`}
-                        >
-                          <RefreshCw
-                            className={`h-3.5 w-3.5 ${
-                              isModelsLoading(provider.id) ? "animate-spin" : ""
-                            }`}
-                          />
-                        </Button>
-                      )}
-                      <Button
-                        onClick={async () => {
-                          const message = provider.isCustom
-                            ? `Remove configuration for ${provider.name}?`
-                            : `Remove API key for ${provider.name}?`;
-                          const confirmed = await ask(message, {
-                            title: provider.isCustom ? "Remove Configuration" : "Remove API Key",
-                            kind: "warning",
-                          });
-                          if (confirmed) {
-                            handleRemoveApiKey(provider.id);
-                          }
-                        }}
-                        variant="ghost"
-                        size="sm"
-                        className="text-muted-foreground hover:text-destructive"
-                        aria-label={`Remove ${provider.name} configuration`}
-                      >
-                        <Trash2 className="h-3.5 w-3.5" />
-                      </Button>
-                    </>
-                  ) : (
-                    <>
-                      {!provider.isCustom && provider.apiKeyUrl && (
-                        <Button
-                          onClick={() => window.open(provider.apiKeyUrl, "_blank")}
-                          variant="ghost"
-                          size="sm"
-                          className="text-muted-foreground"
-                          title={`Get ${provider.name} API Key`}
-                          aria-label={`Get ${provider.name} API Key`}
-                        >
-                          <ExternalLink className="h-3.5 w-3.5" />
-                        </Button>
-                      )}
-                      <Button
-                        onClick={() => handleSetupApiKey(provider.id)}
-                        variant="outline"
-                        size="sm"
-                      >
-                        {provider.isCustom ? (
+                return (
+                  <div
+                    key={provider.id}
+                    role={agentCli && hasKey ? "button" : undefined}
+                    tabIndex={agentCli && hasKey ? 0 : undefined}
+                    aria-pressed={agentCli && hasKey ? isSelected : undefined}
+                    aria-label={
+                      agentCli && hasKey
+                        ? `Select ${provider.name}`
+                        : undefined
+                    }
+                    className={`rounded-lg border p-3 transition-colors select-none ${
+                      agentCli && hasKey
+                        ? "cursor-pointer hover:border-sage/40 hover:bg-muted/30 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                        : ""
+                    } ${
+                      isSelected
+                        ? "border-sage/50 bg-sage-bg/40"
+                        : "border-border/60 bg-background"
+                    }`}
+                    onClick={(event) => {
+                      if (!agentCli || !hasKey) return;
+                      if (
+                        event.target instanceof Element &&
+                        event.target.closest(
+                          "button, input, [role='combobox'], [role='listbox'], [role='option'], [role='switch'], [role='dialog']",
+                        )
+                      ) {
+                        return;
+                      }
+                      void handleSelectModel(provider.id, selectedModel);
+                    }}
+                    onKeyDown={(event) => {
+                      if (!agentCli || !hasKey) return;
+                      if (event.key !== "Enter" && event.key !== " ") return;
+                      if (
+                        event.target instanceof Element &&
+                        event.target !== event.currentTarget
+                      ) {
+                        return;
+                      }
+                      event.preventDefault();
+                      void handleSelectModel(provider.id, selectedModel);
+                    }}
+                  >
+                    <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
+                      <div className="min-w-0 flex-1">{providerSummary}</div>
+
+                      <div className="flex min-w-0 flex-col gap-2 sm:flex-row sm:flex-nowrap sm:items-center sm:justify-end">
+                        {agentCli ? (
                           <>
-                            <Settings2 className="mr-1.5 h-3.5 w-3.5" />
-                            Configure
+                              <AgentModelPickerDialog
+                                provider={provider}
+                                groups={modelPickerGroups}
+                                selectedItem={selectedModelItem}
+                                disabled={!agentCliReady}
+                                loading={isModelsLoading(provider.id)}
+                                onOpen={() => {
+                                  if (getModels(provider.id).length === 0) {
+                                    void fetchModels(provider.id);
+                                  }
+                                }}
+                                onSelect={(modelId) =>
+                                  void handleSelectModel(provider.id, modelId)
+                                }
+                              />
+                              {reasoningLevels.length > 0 && (
+                                <Select
+                                  value={reasoning}
+                                  disabled={!agentCliReady}
+                                  onValueChange={(value) =>
+                                    void handleSelectReasoning(
+                                      provider.id,
+                                      value,
+                                    )
+                                  }
+                                >
+                                  <SelectTrigger
+                                    className="h-9 w-full justify-between gap-2 px-2.5 sm:w-24"
+                                    aria-label={`${provider.id === "claude-code" ? "Effort" : "Thinking"} for ${provider.name}`}
+                                  >
+                                    <SelectValue>
+                                      <span className="inline-flex items-center gap-1.5">
+                                        <Brain className="h-3.5 w-3.5 shrink-0" />
+                                        {formatReasoningLevel(reasoning)}
+                                      </span>
+                                    </SelectValue>
+                                  </SelectTrigger>
+                                  <SelectContent>
+                                    {reasoningLevels.map((level) => (
+                                      <SelectItem key={level} value={level}>
+                                        <span className="inline-flex items-center gap-1.5">
+                                          <Brain className="h-3.5 w-3.5 shrink-0" />
+                                          {formatReasoningLevel(level)}
+                                        </span>
+                                      </SelectItem>
+                                    ))}
+                                  </SelectContent>
+                                </Select>
+                              )}
+                              {agentProbe?.supportsFastMode && (
+                                <label
+                                  className="flex h-9 items-center gap-2 rounded-md border border-input bg-background px-3 text-xs font-medium"
+                                  title="Use this CLI's native fast service mode. Provider pricing may be higher."
+                                >
+                                  Fast
+                                  <Switch
+                                    aria-label={`Fast mode for ${provider.name}`}
+                                    checked={fastModeEnabled}
+                                    disabled={!agentCliReady}
+                                    onCheckedChange={(enabled) =>
+                                      void handleToggleFastMode(
+                                        provider.id,
+                                        enabled,
+                                      )
+                                    }
+                                  />
+                                </label>
+                              )}
+                            <Button
+                              type="button"
+                              variant="outline"
+                              size="icon-sm"
+                              aria-label={`Refresh ${provider.name} status`}
+                              title={`Refresh ${provider.name} status`}
+                              onClick={() =>
+                                void handleRefreshAgentCli(provider)
+                              }
+                              disabled={agentCliProbing[provider.id]}
+                            >
+                              <RefreshCw
+                                className={`h-3.5 w-3.5 ${
+                                  agentCliProbing[provider.id]
+                                    ? "animate-spin"
+                                    : ""
+                                }`}
+                              />
+                            </Button>
                           </>
                         ) : (
                           <>
-                            <Key className="mr-1.5 h-3.5 w-3.5" />
-                            Add Key
+                            {!provider.isCustom && hasKey && (
+                              <Combobox<ModelPickerItem>
+                                items={modelPickerGroups}
+                                value={selectedModelItem}
+                                onValueChange={(item) => {
+                                  if (item) {
+                                    void handleSelectModel(
+                                      provider.id,
+                                      fromModelSelectValue(item.value),
+                                    );
+                                  }
+                                }}
+                                itemToStringLabel={(item) => item.label}
+                                itemToStringValue={(item) => item.value}
+                                isItemEqualToValue={(item, value) =>
+                                  item.value === value.value
+                                }
+                                filter={(item, query) => {
+                                  const searchable = [
+                                    item.label,
+                                    item.qualifiedId,
+                                    item.model.sourceProvider ?? "",
+                                  ]
+                                    .join(" ")
+                                    .toLowerCase();
+                                  return searchable.includes(
+                                    query.trim().toLowerCase(),
+                                  );
+                                }}
+                                autoHighlight
+                              >
+                                <ComboboxInput
+                                  className="w-full sm:w-64"
+                                  placeholder="Search models"
+                                  aria-label={`Model for ${provider.name}`}
+                                />
+                                <ComboboxContent className="min-w-80">
+                                  <ComboboxEmpty>
+                                    No models found.
+                                  </ComboboxEmpty>
+                                  <ComboboxList>
+                                    {(group: ModelPickerGroup) => (
+                                      <ComboboxGroup
+                                        key={`${provider.id}-${group.value}`}
+                                        items={group.items}
+                                      >
+                                        <ComboboxLabel>
+                                          {group.value}
+                                        </ComboboxLabel>
+                                        <ComboboxCollection>
+                                          {(item: ModelPickerItem) => {
+                                            const cost = formatModelCost(
+                                              item.model,
+                                            );
+                                            const detail = [
+                                              item.model.reasoning ||
+                                              providerSupportsReasoning(
+                                                provider,
+                                              )
+                                                ? "reasoning"
+                                                : "",
+                                              cost,
+                                            ]
+                                              .filter(Boolean)
+                                              .join(" · ");
+                                            return (
+                                              <ComboboxItem
+                                                key={item.value}
+                                                value={item}
+                                              >
+                                                <span className="flex min-w-0 flex-1 items-center justify-between gap-3">
+                                                  <span className="min-w-0 truncate">
+                                                    {item.label}
+                                                    {detail
+                                                      ? ` · ${detail}`
+                                                      : ""}
+                                                  </span>
+                                                  <span className="max-w-40 shrink-0 truncate font-mono text-[11px] text-muted-foreground">
+                                                    {item.qualifiedId}
+                                                  </span>
+                                                </span>
+                                              </ComboboxItem>
+                                            );
+                                          }}
+                                        </ComboboxCollection>
+                                      </ComboboxGroup>
+                                    )}
+                                  </ComboboxList>
+                                </ComboboxContent>
+                              </Combobox>
+                            )}
+                            {hasKey ? (
+                              <>
+                                <Button
+                                  type="button"
+                                  variant="outline"
+                                  size="sm"
+                                  onClick={() =>
+                                    provider.isCustom
+                                      ? void handleSetupApiKey(provider.id)
+                                      : void fetchModels(provider.id)
+                                  }
+                                  disabled={
+                                    !provider.isCustom &&
+                                    isModelsLoading(provider.id)
+                                  }
+                                >
+                                  {provider.isCustom ? (
+                                    <Settings2 className="h-3.5 w-3.5" />
+                                  ) : (
+                                    <RefreshCw className="h-3.5 w-3.5" />
+                                  )}
+                                  {provider.isCustom ? "Configure" : "Refresh"}
+                                </Button>
+                                <Button
+                                  type="button"
+                                  variant="ghost"
+                                  size="sm"
+                                  className="text-muted-foreground hover:text-destructive"
+                                  aria-label={`Remove ${provider.name} configuration`}
+                                  onClick={async () => {
+                                    const confirmed = await ask(
+                                      provider.isCustom
+                                        ? `Remove configuration for ${provider.name}?`
+                                        : `Remove API key for ${provider.name}?`,
+                                      {
+                                        title: provider.isCustom
+                                          ? "Remove Configuration"
+                                          : "Remove API Key",
+                                        kind: "warning",
+                                      },
+                                    );
+                                    if (confirmed)
+                                      void handleRemoveApiKey(provider.id);
+                                  }}
+                                >
+                                  <Trash2 className="h-3.5 w-3.5" />
+                                </Button>
+                              </>
+                            ) : (
+                              <>
+                                {!provider.isCustom && provider.apiKeyUrl && (
+                                  <Button
+                                    type="button"
+                                    variant="ghost"
+                                    size="sm"
+                                    onClick={() =>
+                                      window.open(provider.apiKeyUrl, "_blank")
+                                    }
+                                  >
+                                    <ExternalLink className="h-3.5 w-3.5" />
+                                    Get key
+                                  </Button>
+                                )}
+                                <Button
+                                  type="button"
+                                  variant="outline"
+                                  size="sm"
+                                  aria-label={
+                                    provider.isCustom
+                                      ? `Configure ${provider.name}`
+                                      : `Add ${provider.name} API key`
+                                  }
+                                  onClick={() => {
+                                    if (showGuidedSetup)
+                                      setGuidedSetupProvider(provider.id);
+                                    void handleSetupApiKey(provider.id);
+                                  }}
+                                >
+                                  {provider.isCustom ? (
+                                    <Settings2 className="h-3.5 w-3.5" />
+                                  ) : (
+                                    <Key className="h-3.5 w-3.5" />
+                                  )}
+                                  {provider.isCustom ? "Configure" : "Add key"}
+                                </Button>
+                              </>
+                            )}
                           </>
                         )}
-                      </Button>
-                    </>
-                  )}
-                </div>
-              </div>
-
-              {showModelPicker && (
-                <div className="mt-3 space-y-3 border-t border-border/50 pt-3">
-                  {isModelsLoading(provider.id) && fetchedModels.length === 0 && (
-                    <div className="flex items-center gap-2 text-sm text-muted-foreground">
-                      <Loader2 className="h-4 w-4 animate-spin" />
-                      Loading models...
-                    </div>
-                  )}
-                  {getError(provider.id) && (
-                    <div className="flex items-center justify-between gap-3 rounded-md border border-destructive/30 px-3 py-2 text-sm text-destructive">
-                      <span>{getError(provider.id)}</span>
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        onClick={() => fetchModels(provider.id)}
-                        disabled={isModelsLoading(provider.id)}
-                      >
-                        Retry
-                      </Button>
-                    </div>
-                  )}
-                  {!agentCli &&
-                    !isModelsLoading(provider.id) &&
-                    !getError(provider.id) &&
-                    modelGroups.length === 0 && (
-                      <p className="text-sm text-muted-foreground">No models available</p>
-                    )}
-                  {modelGroups.map(([label, groupModels]) => (
-                    <div key={`${provider.id}-${label}`} className="space-y-1.5">
-                      <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
-                        {label}
-                      </p>
-                      <div className="grid gap-1.5 md:grid-cols-2">
-                        {groupModels.map((model) => {
-                          const cost = formatModelCost(model);
-                          return (
-                            <Button
-                              key={model.id}
-                              type="button"
-                              variant={selectedModel === model.id ? "secondary" : "ghost"}
-                              className="h-auto justify-start px-3 py-2 text-left"
-                              onClick={() => handleSelectModel(provider.id, model.id)}
-                              disabled={!hasKey}
-                              title={
-                                hasKey
-                                  ? undefined
-                                  : `Add a ${provider.name} API key to select this model`
-                              }
-                            >
-                              <span className="flex min-w-0 flex-1 items-start gap-2">
-                                {model.recommended && (
-                                  <Star className="mt-0.5 h-3.5 w-3.5 shrink-0 fill-amber-500 text-amber-500" />
-                                )}
-                                <span className="min-w-0">
-                                  <span className="block truncate font-medium">{model.name}</span>
-                                </span>
-                              </span>
-                              <span className="ml-2 flex shrink-0 items-center gap-1">
-                                {model.reasoning && (
-                                  <Badge variant="secondary" className="h-4 px-1.5 text-[10px]">
-                                    Reasoning
-                                  </Badge>
-                                )}
-                                {cost && (
-                                  <Badge variant="outline" className="h-4 px-1.5 text-[10px]">
-                                    {cost}
-                                  </Badge>
-                                )}
-                                {selectedModel === model.id && (
-                                  <Check className="h-3.5 w-3.5 text-sage" />
-                                )}
-                              </span>
-                            </Button>
-                          );
-                        })}
                       </div>
                     </div>
-                  ))}
-                </div>
-              )}
-              </div>
-            </Fragment>
-          );
-        })}
-      </FieldGroup>
+
+                    {getError(provider.id) && (
+                      <p className="mt-2 text-xs text-destructive">
+                        {getError(provider.id)}
+                      </p>
+                    )}
+                  </div>
+                );
+              })}
+            </TabsContent>
+          </Tabs>
+
+          <p className="mt-3 text-xs text-muted-foreground">
+            Cloud keys stay in the system keychain. Local agents receive the
+            Polish system prompt and dictated text in isolated one-shot mode
+            with tools and sessions disabled.
+          </p>
+        </div>
+      )}
     </FieldSet>
   );
 
@@ -1435,30 +1998,57 @@ export function EnhancementsSection() {
               <h1 className="text-2xl font-semibold tracking-tight">Polish</h1>
               <Dialog>
                 <DialogTrigger asChild>
-                  <Button type="button" variant="secondary" size="icon" aria-label="Polish guide" className="rounded-full">
+                  <Button
+                    type="button"
+                    variant="secondary"
+                    size="icon"
+                    aria-label="Polish guide"
+                    className="rounded-full"
+                  >
                     <HelpCircle className="h-4.5 w-4.5" />
                   </Button>
                 </DialogTrigger>
                 <DialogContent className="sm:max-w-lg">
                   <DialogHeader>
                     <DialogTitle>Polish guide</DialogTitle>
-                  <DialogDescription>
-                    Polish cleans up final text. Static Rules always run first.
-                  </DialogDescription>
+                    <DialogDescription>
+                      Configure the provider, dictionary, corrections, snippets,
+                      and writing modes.
+                    </DialogDescription>
                   </DialogHeader>
                   <div className="space-y-3 text-sm leading-6 text-muted-foreground">
-                    <p><strong className="text-foreground">Setup</strong> starts with Anthropic, OpenAI, or Google. Save a key and Polish chooses a recommended fast model for you.</p>
-                    <p><strong className="text-foreground">Polish</strong> fixes grammar and punctuation while keeping your meaning.</p>
-                    <p><strong className="text-foreground">Static Rules</strong> are exact corrections, words and names, and saved text that work with or without Polish.</p>
-                    <p><strong className="text-foreground">App Rules</strong> live in Advanced for app-specific reshaping.</p>
+                    <p>
+                      <strong className="text-foreground">Provider</strong>{" "}
+                      chooses the cloud API or isolated local agent used by
+                      Polish.
+                    </p>
+                    <p>
+                      <strong className="text-foreground">Dictionary</strong>{" "}
+                      protects words and names and can improve recognition.
+                    </p>
+                    <p>
+                      <strong className="text-foreground">Corrections</strong>{" "}
+                      applies exact replacements with or without Polish.
+                    </p>
+                    <p>
+                      <strong className="text-foreground">Snippets</strong>{" "}
+                      expands “insert” triggers into saved text.
+                    </p>
+                    <p>
+                      <strong className="text-foreground">Modes</strong>{" "}
+                      sets the default writing mode and optional per-app
+                      overrides.
+                    </p>
                   </div>
                 </DialogContent>
               </Dialog>
             </div>
             <p className="mt-0.5 text-sm leading-relaxed text-muted-foreground">
-              Clean up your dictation automatically, plus always-on text rules.
+              AI cleanup when enabled; dictionary, corrections, snippets, and
+              app identity remain available independently.
             </p>
           </div>
+          <div className="ml-auto shrink-0">{polishHeaderActions}</div>
         </div>
       </div>
 
@@ -1469,11 +2059,10 @@ export function EnhancementsSection() {
             finalTextLanguage={effectiveFinalTextLanguage}
             writingSettings={writingSettings}
             aiFormattingEnabled={aiSettings.enabled}
-            polishControls={polishControls}
-            polishSetupContent={polishSetupContent}
-            advancedProviderContent={advancedProviderContent}
-            advancedOpen={advancedOpen}
-            onAdvancedOpenChange={setAdvancedOpen}
+            providerContent={polishSetupContent}
+            onPresetChange={(preset) =>
+              void persistEnhancementOptions({ preset })
+            }
             onFinalTextLanguageChange={handleFinalTextLanguageChange}
             onWritingSettingsChange={handleWritingSettingsChange}
             writingSettingsDisabled={!settingsLoaded}
@@ -1558,7 +2147,10 @@ export function EnhancementsSection() {
             toast.success("Custom provider configured");
             setShowOpenAIConfig(false);
           } catch (error) {
-            const message = getErrorMessage(error, "Failed to save configuration");
+            const message = getErrorMessage(
+              error,
+              "Failed to save configuration",
+            );
             toast.error(message);
           } finally {
             setIsLoading(false);

@@ -402,9 +402,11 @@ export function ShortcutsSection() {
             Voicetypr tests global shortcuts and refuses combos already owned by macOS, Windows, or another app.
           </p>
         </div>
-        <p className="mt-1 text-xs">
-          {singleKeyCount} of {MAX_SINGLE_KEY_BINDINGS} single-key shortcuts used.
-        </p>
+        {singleKeyCount > 0 && (
+          <p className="mt-1 text-xs">
+            {singleKeyCount} of {MAX_SINGLE_KEY_BINDINGS} single-key shortcuts used.
+          </p>
+        )}
       </div>
 
       {actionLoadError && (
@@ -441,7 +443,11 @@ export function ShortcutsSection() {
               icon={Keyboard}
               title={section}
               description={
-                sectionBindingCount === 1 ? "1 binding configured" : `${sectionBindingCount} bindings configured`
+                sectionBindingCount > 0
+                  ? sectionBindingCount === 1
+                    ? "1 binding configured"
+                    : `${sectionBindingCount} bindings configured`
+                  : undefined
               }
             >
               <div className="mt-4 divide-y divide-border">
@@ -450,23 +456,27 @@ export function ShortcutsSection() {
 
                       return (
                         <div key={action.action} role="group" aria-label={action.label} className="space-y-3 py-4 first:pt-0 last:pb-0">
-                          <div className="min-w-0">
-                            <h3 className="text-[13.5px] font-semibold text-foreground">{action.label}</h3>
-                            <p className="mt-0.5 text-[12.5px] leading-relaxed text-muted-foreground">{action.description}</p>
+                          <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between sm:gap-6">
+                            <div className="min-w-0">
+                              <h3 className="text-[13.5px] font-semibold text-foreground">{action.label}</h3>
+                              <p className="mt-0.5 text-[12.5px] leading-relaxed text-muted-foreground">{action.description}</p>
+                            </div>
+                            {bindings.length === 0 && (
+                              <Button
+                                type="button"
+                                variant="outline"
+                                size="sm"
+                                className="w-full shrink-0 sm:w-auto"
+                                disabled={editingDisabled || isCapturing}
+                                onClick={() => addDraftBinding(action)}
+                              >
+                                <Plus className="h-3.5 w-3.5" />
+                                Set shortcut
+                              </Button>
+                            )}
                           </div>
 
-                          {bindings.length === 0 ? (
-                            <Button
-                              type="button"
-                              variant="outline"
-                              size="sm"
-                              disabled={editingDisabled || isCapturing}
-                              onClick={() => addDraftBinding(action)}
-                            >
-                              <Plus className="h-3.5 w-3.5" />
-                              Set shortcut
-                            </Button>
-                          ) : (
+                          {bindings.length > 0 && (
                             <div className="space-y-3">
                               {bindings.map((binding) => {
                                 const isEditing = editingCapture?.bindingId === binding.id;

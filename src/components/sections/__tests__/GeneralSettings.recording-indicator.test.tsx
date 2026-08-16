@@ -5,7 +5,6 @@ import { invoke } from '@tauri-apps/api/core';
 
 const mockUpdateSettings = vi.fn().mockResolvedValue(undefined);
 const baseSettings = {
-  settings_mode: 'advanced',
   recording_mode: 'toggle',
   hotkey: 'CommandOrControl+Shift+Space',
   keep_transcription_in_clipboard: false,
@@ -749,7 +748,6 @@ describe('GeneralSettings null handling', () => {
 
   it('handles undefined sound settings with enabled defaults', async () => {
     const settingsWithoutSound = {
-      settings_mode: 'advanced',
       recording_mode: 'toggle',
       hotkey: 'CommandOrControl+Shift+Space',
       keep_transcription_in_clipboard: false,

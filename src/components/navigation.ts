@@ -7,7 +7,7 @@ import {
   Home,
   Keyboard,
   Key,
-  Layers,
+  Activity,
   Settings2,
   Share2,
   Sparkles,
@@ -57,9 +57,9 @@ export const primaryScreens: ScreenDefinition[] = [
   },
   {
     id: "models",
-    label: "Models",
+    label: "Sources",
     icon: Cpu,
-    description: "Local models, cloud providers, and remote Voicetypr servers.",
+    description: "Choose local, cloud, or remote transcription.",
   },
   {
     id: "network",
@@ -71,7 +71,7 @@ export const primaryScreens: ScreenDefinition[] = [
     id: "formatting",
     label: "Polish",
     icon: Sparkles,
-    description: "Clean up your dictation automatically, plus always-on text rules.",
+    description: "Configure AI cleanup, dictionary, corrections, snippets, and modes.",
   },
   {
     id: "general",
@@ -102,9 +102,9 @@ export const primaryScreens: ScreenDefinition[] = [
 export const secondaryScreens: ScreenDefinition[] = [
   {
     id: "advanced",
-    label: "Advanced",
-    icon: Layers,
-    description: "Power-user and diagnostics settings.",
+    label: "Diagnostics",
+    icon: Activity,
+    description: "Permissions, recovery, and app diagnostics.",
   },
   {
     id: "report-problem",
@@ -123,39 +123,22 @@ export const isScreenId = (value: string): value is ScreenId =>
 const screenById = (id: ScreenId): ScreenDefinition =>
   screens.find((screen) => screen.id === id) as ScreenDefinition;
 
-const everydayScreens = [
+// Single navigation list for the main sidebar group.
+export const navScreens: ScreenDefinition[] = [
   screenById("overview"),
   screenById("recordings"),
   screenById("audio"),
-  screenById("general"),
-  screenById("shortcuts"),
   screenById("models"),
   screenById("formatting"),
-];
-
-const powerUserScreens = [
+  screenById("general"),
+  screenById("shortcuts"),
   screenById("network"),
   screenById("agent"),
 ];
 
-const accountScreen = screenById("license");
-
-export const reportProblemNavScreens: ScreenDefinition[] = [
-  screenById("report-problem"),
-];
-
-export const powerUserUtilityNavScreens: ScreenDefinition[] = [
+// Footer block is static across the app — always rendered, never mode-gated.
+export const footerNavScreens: ScreenDefinition[] = [
+  screenById("license"),
   screenById("advanced"),
   screenById("report-problem"),
-];
-
-export const recommendedNavScreens: ScreenDefinition[] = [
-  ...everydayScreens,
-  accountScreen,
-];
-
-export const advancedNavScreens: ScreenDefinition[] = [
-  ...everydayScreens,
-  ...powerUserScreens,
-  accountScreen,
 ];

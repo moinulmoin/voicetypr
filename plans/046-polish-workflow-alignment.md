@@ -58,3 +58,10 @@ Align the shipped Polish pipeline with the simplified product contract before th
   evidence-backed P0–P2 findings.
 - Provider-backed audio behavior and upgraded-profile migration remain assigned
   to the signed-Beta checks in `plans/SMOKE.md`.
+- Recent-history app context now renders one app badge with the native macOS
+  application icon; the internal category badge is not shown, and Ghostty is
+  classified as a terminal instead of `Other`.
+- The native icon conversion regression passed against Finder.app, the
+  RecentRecordings render suite passed, and the isolated badge was visually
+  exercised with the production stylesheet.
+

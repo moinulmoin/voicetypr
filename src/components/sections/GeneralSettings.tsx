@@ -33,9 +33,10 @@ import { invoke } from "@tauri-apps/api/core";
 import type { ShortcutBinding, ShortcutSettings } from "@/types/shortcuts";
 import type { AccelerationStatus } from "@/types/acceleration";
 import { isStoreDistribution, type DistributionInfo } from "@/types/distribution";
-import { AlertCircle, Check, Edit2, FolderOpen, HelpCircle, Mic, RefreshCw, Rocket, X } from "lucide-react";
+import { AlertCircle, Check, Edit2, FolderOpen, HelpCircle, Mic, RefreshCw, Rocket, Sun, X } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 import { toast } from "sonner";
+import { normalizeTheme } from "@/hooks/useTheme";
 import { MicrophoneSelection } from "../MicrophoneSelection";
 import { createLogger } from "@/lib/logger";
 
@@ -203,8 +204,6 @@ export function GeneralSettings() {
   }, [settings?.hotkey]);
 
   if (!settings) return null;
-  const settingsMode = settings.settings_mode ?? "recommended";
-  const isAdvanced = settingsMode === "advanced";
 
   const startEditing = () => {
     setPendingHotkey(settings.hotkey || "");
@@ -448,6 +447,39 @@ export function GeneralSettings() {
           <div className="rounded-2xl border border-border bg-card p-4">
             <div className="mb-4 flex items-center gap-2">
               <div className="rounded-md bg-sage-bg p-1.5">
+                <Sun className="h-4 w-4 text-sage" />
+              </div>
+              <div>
+                <h3 className="font-medium">Appearance</h3>
+                <p className="text-xs text-muted-foreground">Light, dark, or follow your system</p>
+              </div>
+            </div>
+            <FieldGroup className="gap-4">
+              <Field orientation="responsive" className="items-center gap-4">
+                <FieldContent>
+                  <FieldTitle>Theme</FieldTitle>
+                  <FieldDescription>Light, dark, or follow your system.</FieldDescription>
+                </FieldContent>
+                <Select
+                  value={normalizeTheme(settings.theme)}
+                  onValueChange={(value) => void updateSettings({ theme: normalizeTheme(value) })}
+                >
+                  <SelectTrigger className="w-full md:w-[190px]" aria-label="Theme">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="system">System</SelectItem>
+                    <SelectItem value="light">Light</SelectItem>
+                    <SelectItem value="dark">Dark</SelectItem>
+                  </SelectContent>
+                </Select>
+              </Field>
+            </FieldGroup>
+          </div>
+
+          <div className="rounded-2xl border border-border bg-card p-4">
+            <div className="mb-4 flex items-center gap-2">
+              <div className="rounded-md bg-sage-bg p-1.5">
                 <Rocket className="h-4 w-4 text-sage" />
               </div>
               <div>
@@ -578,7 +610,7 @@ export function GeneralSettings() {
                       <FieldDescription>
                         {isEditingHotkey
                           ? "Press a key or modifier, then save."
-                          : formatPrimaryHotkeyLabel(nativeBinding, settings.hotkey)}
+                          : "The shortcut that starts and stops recording."}
                       </FieldDescription>
                     </FieldContent>
                     <div className="w-full md:w-auto">
@@ -721,7 +753,6 @@ export function GeneralSettings() {
                 <FieldSet className="gap-4 border-t border-border/60 pt-5">
                   <FieldLegend className="mb-1 text-base font-semibold">Transcript handling</FieldLegend>
 
-                  {isAdvanced && (
                   <Field orientation="responsive" className="items-center gap-3">
                     <FieldContent>
                       <FieldTitle>Keep Transcript in Clipboard</FieldTitle>
@@ -739,7 +770,6 @@ export function GeneralSettings() {
                       }
                     />
                   </Field>
-                  )}
 
                   <Field orientation="responsive" className="items-center gap-3">
                     <FieldContent>
@@ -760,7 +790,6 @@ export function GeneralSettings() {
                   </Field>
 
 
-                  {isAdvanced && (
                   <Field orientation="responsive" className="items-center gap-3">
                     <FieldContent>
                       <FieldTitle>Pause media during recording</FieldTitle>
@@ -778,11 +807,9 @@ export function GeneralSettings() {
                       }
                     />
                   </Field>
-                  )}
 
                 </FieldSet>
 
-                {isAdvanced && (
                 <FieldSet className="gap-4 border-t border-border/60 pt-5">
                   <FieldLegend className="mb-1 text-base font-semibold">Audio feedback</FieldLegend>
 
@@ -842,9 +869,8 @@ export function GeneralSettings() {
                     />
                   </Field>
                 </FieldSet>
-                )}
 
-                {isAdvanced && isWindows && (
+                {isWindows && (
                 <FieldSet className="gap-4 border-t border-border/60 pt-5">
                   <FieldLegend className="mb-1 text-base font-semibold">Transcription performance</FieldLegend>
 
@@ -942,7 +968,7 @@ export function GeneralSettings() {
                     </Select>
                   </Field>
 
-                  {isAdvanced && settings.pill_indicator_mode !== "never" && (
+                  {settings.pill_indicator_mode !== "never" && (
                     <Field orientation="responsive" className="items-center gap-3">
                       <FieldContent>
                         <FieldTitle>Indicator detail</FieldTitle>
@@ -969,7 +995,7 @@ export function GeneralSettings() {
                     </Field>
                   )}
 
-                  {isAdvanced && settings.pill_indicator_mode !== "never" && (
+                  {settings.pill_indicator_mode !== "never" && (
                     <>
                       <Field orientation="responsive" className="items-center gap-3">
                         <FieldContent>
@@ -1032,7 +1058,6 @@ export function GeneralSettings() {
                   )}
                 </FieldSet>
 
-                {isAdvanced && (
                 <FieldSet className="gap-4 border-t border-border/60 pt-5">
                   <FieldLegend className="mb-1 text-base font-semibold">Storage & cleanup</FieldLegend>
 
@@ -1140,7 +1165,6 @@ export function GeneralSettings() {
                     </div>
                   </Field>
                 </FieldSet>
-                )}
 
                 <div className="flex items-center gap-2 rounded-lg border border-primary/15 bg-primary/5 p-3">
                   <Kbd>ESC</Kbd>

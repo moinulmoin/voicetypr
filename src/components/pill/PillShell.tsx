@@ -1,4 +1,4 @@
-import { AudioBars } from "@/components/AudioBars";
+import { PillActivityIndicator } from "@/components/PillActivityIndicator";
 import type { PillState } from "@/components/pill/usePillController";
 import type { PillIndicatorPosition, PillIndicatorStyle } from "@/types";
 import type { PropsWithChildren } from "react";
@@ -29,13 +29,20 @@ function formatElapsed(seconds: number): string {
   return `${minutes}:${remainder.toString().padStart(2, "0")}`;
 }
 
-export function PillShell({ children, isActive, position, style }: PillShellProps) {
+export function PillShell({
+  children,
+  isActive,
+  position,
+  style,
+}: PillShellProps) {
   const horizontalAlignment = position.endsWith("-left")
     ? "justify-start"
     : position.endsWith("-right")
       ? "justify-end"
       : "justify-center";
-  const verticalAlignment = position.startsWith("top-") ? "items-start" : "items-end";
+  const verticalAlignment = position.startsWith("top-")
+    ? "items-start"
+    : "items-end";
 
   return (
     <div
@@ -70,7 +77,7 @@ export function PillStatus({
       className="flex items-center justify-center gap-2"
       role={showLabel ? "status" : undefined}
     >
-      <AudioBars audioLevel={audioLevel} state={state} />
+      <PillActivityIndicator audioLevel={audioLevel} state={state} />
       {showLabel ? (
         <span className="whitespace-nowrap text-[11px] font-medium leading-none text-neutral-300">
           {label}

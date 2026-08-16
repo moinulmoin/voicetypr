@@ -231,6 +231,25 @@ class MockResizeObserver {
 
 global.ResizeObserver = MockResizeObserver as unknown as typeof ResizeObserver;
 
+Object.defineProperties(HTMLElement.prototype, {
+  hasPointerCapture: {
+    configurable: true,
+    value: vi.fn(() => false),
+  },
+  setPointerCapture: {
+    configurable: true,
+    value: vi.fn(),
+  },
+  releasePointerCapture: {
+    configurable: true,
+    value: vi.fn(),
+  },
+  scrollIntoView: {
+    configurable: true,
+    value: vi.fn(),
+  },
+});
+
 // Export helper to emit mock events in tests
 export const emitMockEvent = (event: string, payload: any) => {
   const handlers = eventListeners.get(event);

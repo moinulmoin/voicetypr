@@ -27,7 +27,7 @@ import { useCanAutoInsert, useReadiness } from "@/contexts/ReadinessContext";
 import { useSettings } from "@/contexts/SettingsContext";
 import { invoke } from "@tauri-apps/api/core";
 import { ask, save } from "@tauri-apps/plugin-dialog";
-import { AlertCircle, AlertTriangle, Mic, Trash2, Search, Copy, Monitor, Globe, FileAudio, Terminal, Download, RotateCcw, Loader2, FolderOpen, HelpCircle, ShieldCheck } from "lucide-react";
+import { AlertCircle, AlertTriangle, AppWindow, Mic, Trash2, Search, Copy, Monitor, Globe, FileAudio, Terminal, Download, RotateCcw, Loader2, FolderOpen, HelpCircle, ShieldCheck, Sparkles, ChevronDown } from "lucide-react";
 import { useState, useMemo, useCallback, useEffect } from "react";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
@@ -37,6 +37,54 @@ import { isMacOS } from "@/lib/platform";
 import { createLogger } from "@/lib/logger";
 
 const log = createLogger("recordings");
+
+const appIconRequests = new Map<string, Promise<string | null>>();
+
+function loadApplicationIcon(processPath: string): Promise<string | null> {
+  const cached = appIconRequests.get(processPath);
+  if (cached) return cached;
+
+  const request = invoke<string | null>("get_application_icon", { processPath })
+    .catch(() => null);
+  appIconRequests.set(processPath, request);
+  return request;
+}
+
+function ApplicationBadge({
+  appName,
+  processPath,
+}: {
+  appName: string;
+  processPath?: string;
+}) {
+  const [icon, setIcon] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!isMacOS || !processPath) return;
+
+    let cancelled = false;
+    void loadApplicationIcon(processPath).then((loadedIcon) => {
+      if (!cancelled) setIcon(loadedIcon);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [processPath]);
+
+  return (
+    <span
+      aria-label={`Application: ${appName}`}
+      className="inline-flex items-center gap-1 rounded-md bg-muted px-1.5 py-0.5 text-[11px] font-medium"
+    >
+      {icon ? (
+        <img src={icon} alt="" className="size-3 rounded-[3px]" />
+      ) : (
+        <AppWindow aria-hidden="true" className="size-3" />
+      )}
+      <span>{appName}</span>
+    </span>
+  );
+}
 
 interface SavedConnection {
   id: string;
@@ -60,6 +108,8 @@ interface RecentRecordingsProps {
   history: TranscriptionHistory[];
   hotkey?: string;
   onHistoryUpdate?: () => void;
+  isLoading?: boolean;
+  loadError?: string | null;
 }
 
 // ---------------------------------------------------------------------------
@@ -166,7 +216,13 @@ export function applyHistoryFilters(
   });
 }
 
-export function RecentRecordings({ history, hotkey = "Cmd+Shift+Space", onHistoryUpdate }: RecentRecordingsProps) {
+export function RecentRecordings({
+  history,
+  hotkey = "Cmd+Shift+Space",
+  onHistoryUpdate,
+  isLoading = false,
+  loadError = null,
+}: RecentRecordingsProps) {
   const [searchQuery, setSearchQuery] = useState("");
   const [reTranscribingIds, setReTranscribingIds] = useState<Set<string>>(new Set());
   const [verifiedRecordings, setVerifiedRecordings] = useState<Set<string>>(new Set());
@@ -639,8 +695,9 @@ export function RecentRecordings({ history, hotkey = "Cmd+Shift+Space", onHistor
 
       {/* Search + Filters */}
       {history.length > 0 && (
-        <div className="px-6 md:px-8 py-3 space-y-2.5">
-          <div className="relative">
+        <div className="px-6 py-3 md:px-8">
+          <div className="flex items-center gap-2.5">
+          <div className="relative min-w-0 flex-1">
             <Search className="absolute left-3.5 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
             <input
               type="text"
@@ -659,7 +716,7 @@ export function RecentRecordings({ history, hotkey = "Cmd+Shift+Space", onHistor
             )}
           </div>
           {/* Filter row */}
-          <div className="flex flex-wrap items-center gap-2">
+          <div className="flex shrink-0 items-center gap-2">
             <Select value={sourceFilter} onValueChange={setSourceFilter}>
               <SelectTrigger className="h-9 w-auto gap-1.5 rounded-lg border-border bg-card text-xs">
                 <SelectValue />
@@ -704,6 +761,7 @@ export function RecentRecordings({ history, hotkey = "Cmd+Shift+Space", onHistor
               </button>
             )}
           </div>
+          </div>
           {(searchQuery || sourceFilter !== 'all' || appFilter !== 'all' || dateFilter !== 'all') && (
             <p className="text-xs text-muted-foreground">
               Found {filteredHistory.length} result{filteredHistory.length !== 1 ? 's' : ''}
@@ -729,7 +787,8 @@ export function RecentRecordings({ history, hotkey = "Cmd+Shift+Space", onHistor
                       const isInProgress = reTranscribingIds.has(item.id) || isPersistedInProgress;
                       const hasOriginal = Boolean(item.writing?.ai_applied && item.writing?.original_text && item.writing.original_text !== item.text);
                       const showOriginal = hasOriginal && showOriginalIds.has(item.id);
-                      const displayText = showOriginal ? item.writing!.original_text! : item.text;
+                      const originalText = item.writing?.original_text;
+                      const displayText = item.text;
                       const wordCount = displayText.trim() ? displayText.trim().split(/\s+/).length : 0;
                       const SourceIcon = sourceIcon(item.writing?.source);
                       return (
@@ -810,6 +869,17 @@ export function RecentRecordings({ history, hotkey = "Cmd+Shift+Space", onHistor
                                 <span>{getModelDisplayName(item.model) ?? item.model}</span>
                               </>
                             )}
+                            {item.writing?.ai_provider && (
+                              <>
+                                <span className="text-muted-foreground/40">·</span>
+                                <span className="inline-flex items-center gap-1 text-foreground/70">
+                                  <Sparkles className="h-3 w-3" />
+                                  {item.writing.ai_model
+                                    ? getModelDisplayName(item.writing.ai_model) ?? item.writing.ai_model
+                                    : item.writing.ai_provider}
+                                </span>
+                              </>
+                            )}
                             <span className="text-muted-foreground/40">·</span>
                             <span>
                               {new Date(item.timestamp).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}
@@ -830,14 +900,10 @@ export function RecentRecordings({ history, hotkey = "Cmd+Shift+Space", onHistor
                               <span className="rounded-md bg-muted px-1.5 py-0.5 text-[11px] font-medium">Speakers</span>
                             )}
                             {item.writing?.context_hint?.app_name && (
-                              <span className="rounded-md bg-muted px-1.5 py-0.5 text-[11px] font-medium">
-                                {item.writing.context_hint.app_name}
-                              </span>
-                            )}
-                            {item.writing?.context_hint?.category && (
-                              <span className="rounded-md bg-muted/60 px-1.5 py-0.5 text-[11px] font-medium capitalize">
-                                {item.writing.context_hint.category}
-                              </span>
+                              <ApplicationBadge
+                                appName={item.writing.context_hint.app_name}
+                                processPath={item.writing.context_hint.process_path}
+                              />
                             )}
                             {hasOriginal && (
                               <button
@@ -849,13 +915,36 @@ export function RecentRecordings({ history, hotkey = "Cmd+Shift+Space", onHistor
                                     return next;
                                   });
                                 }}
-                                className="text-[11px] font-medium text-sage hover:underline"
-                                title={showOriginal ? "Show polished text" : "Show original text before Polish"}
+                                className="inline-flex items-center gap-1 text-[11px] font-medium text-sage hover:underline"
+                                title={showOriginal ? "Hide original transcript" : "Show original text before Polish"}
                               >
-                                {showOriginal ? "Show polished" : "Show original"}
+                                <ChevronDown
+                                  className={cn("h-3 w-3 transition-transform", showOriginal && "rotate-180")}
+                                />
+                                {showOriginal ? "Hide original" : "Show original"}
                               </button>
                             )}
                           </div>
+
+                          {hasOriginal && showOriginal && originalText && (
+                            <div className="mt-2 rounded-lg border border-border/60 bg-muted/40 px-3 py-2.5">
+                              <div className="flex items-center justify-between gap-2">
+                                <p className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+                                  Original · before Polish
+                                </p>
+                                <button
+                                  onClick={(e) => { e.stopPropagation(); handleCopy(originalText); }}
+                                  className="text-[11px] font-medium text-sage hover:underline"
+                                  title="Copy original transcript"
+                                >
+                                  Copy
+                                </button>
+                              </div>
+                              <p className="mt-1 whitespace-pre-wrap text-sm leading-relaxed text-muted-foreground">
+                                {originalText}
+                              </p>
+                            </div>
+                          )}
                         </div>
 
                         <div className="flex shrink-0 items-start gap-1 opacity-0 transition-opacity group-hover:opacity-100">
@@ -927,6 +1016,38 @@ export function RecentRecordings({ history, hotkey = "Cmd+Shift+Space", onHistor
             </div>
           </div>
         )
+      ) : isLoading ? (
+        <div aria-hidden className="px-6 md:px-8 py-4 space-y-2.5">
+          {[0, 1, 2].map((key) => (
+            <div
+              key={key}
+              className="h-16 rounded-lg bg-muted/60 animate-pulse"
+            />
+          ))}
+        </div>
+      ) : loadError ? (
+        <div className="px-6 md:px-8 py-4">
+          <div className="flex items-center gap-3.5 rounded-2xl border border-border bg-amber-500/[0.04] px-5 py-4">
+            <div className="mt-0.5 grid size-9 shrink-0 place-items-center rounded-xl border border-amber-500/30 bg-amber-500/10 text-amber-500">
+              <AlertTriangle className="h-4 w-4" />
+            </div>
+            <div className="min-w-0 flex-1">
+              <p className="text-xs font-medium text-amber-600 dark:text-amber-400">
+                Couldn&apos;t load your history.
+              </p>
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onHistoryUpdate?.();
+                }}
+                className="mt-1 text-[11px] font-medium text-sage hover:underline"
+              >
+                Retry
+              </button>
+            </div>
+          </div>
+        </div>
       ) : (
         <div className="flex-1 flex items-center justify-center">
           <div className="text-center">

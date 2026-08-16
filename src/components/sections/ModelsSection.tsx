@@ -30,10 +30,17 @@ import {
   SettingsPage,
 } from "@/components/settings/settings-ui";
 import { Spinner } from "@/components/ui/spinner";
-import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useSettings } from "@/contexts/SettingsContext";
 import { getErrorMessage } from "@/utils/error";
-import { getCloudProviderByModel } from "@/lib/cloudProviders";
+import { getCloudProviderByModel, resolveCloudModelLabel } from "@/lib/cloudProviders";
 import { cn } from "@/lib/utils";
 import { getModelDisplayName, humanizeModelId } from "@/lib/model-display";
 import { ModelInfo, SpeechModelEngine, isCloudModel, isLocalModel } from "@/types";
@@ -44,7 +51,6 @@ import {
   CheckCircle,
   Cloud,
   Download,
-  Globe,
   HardDrive,
   HelpCircle,
   Plus,
@@ -119,7 +125,7 @@ export function ModelsSection({
   const [discoveredServers, setDiscoveredServers] = useState<DiscoveredRemoteServer[]>([]);
   const [selectedDiscoveredServer, setSelectedDiscoveredServer] = useState<DiscoveredRemoteServer | null>(null);
   const [isDiscoveringServers, setIsDiscoveringServers] = useState(false);
-  const [sourceFilter, setSourceFilter] = useState<"all" | "local" | "cloud" | "remote">("all");
+  const [sourceFilter, setSourceFilter] = useState<"local" | "cloud" | "remote">("local");
 
   const { availableToUse, availableToSetup } = useMemo(() => {
     const useList: [string, ModelInfo][] = [];
@@ -146,18 +152,25 @@ export function ModelsSection({
     return { availableToUse: useList, availableToSetup: setupList };
   }, [models]);
 
-  const readyLocalModels = availableToUse.filter(([, model]) => isLocalModel(model));
-  const readyCloudModels = availableToUse.filter(([, model]) => isCloudModel(model));
+  const prioritizeCurrent = (
+    [left]: [string, ModelInfo],
+    [right]: [string, ModelInfo],
+  ) => Number(right === currentModel) - Number(left === currentModel);
+  const readyLocalModels = availableToUse
+    .filter(([, model]) => isLocalModel(model))
+    .sort(prioritizeCurrent);
+  const readyCloudModels = availableToUse
+    .filter(([, model]) => isCloudModel(model))
+    .sort(prioritizeCurrent);
   const setupLocalModels = availableToSetup.filter(([, model]) => isLocalModel(model));
   const setupCloudModels = availableToSetup.filter(([, model]) => isCloudModel(model));
 
   const localCount = readyLocalModels.length + setupLocalModels.length;
   const cloudCount = readyCloudModels.length + setupCloudModels.length;
   const remoteCount = remoteServers.length;
-  const allCount = localCount + cloudCount + remoteCount;
-  const showLocal = sourceFilter === "all" || sourceFilter === "local";
-  const showCloud = sourceFilter === "all" || sourceFilter === "cloud";
-  const showRemote = sourceFilter === "all" || sourceFilter === "remote";
+  const showLocal = sourceFilter === "local";
+  const showCloud = sourceFilter === "cloud";
+  const showRemote = sourceFilter === "remote";
 
   // No header summary line — section titles include counts
 
@@ -175,6 +188,28 @@ export function ModelsSection({
     }
     return false;
   }, [currentEngine, currentModelName, settings]);
+  const selectedModel = models.find(([name]) => name === currentModel)?.[1];
+  const selectedSourceType =
+    selectedModel && isCloudModel(selectedModel) ? "cloud" : "local";
+  const activeRemote = remoteServers.find(
+    (server) => server.id === activeRemoteServer,
+  );
+  const currentSourceType = activeRemoteServer
+    ? "Remote"
+    : selectedSourceType === "cloud"
+      ? "Cloud"
+      : "Local";
+  const currentSourceLabel = activeRemoteServer
+    ? activeRemote?.name ||
+      (activeRemote
+        ? `${activeRemote.host}:${activeRemote.port}`
+        : "Remote Voicetypr")
+    : getModelDisplayName(currentModel) || "No source selected";
+
+  useEffect(() => {
+    setSourceFilter(activeRemoteServer ? "remote" : selectedSourceType);
+  }, [activeRemoteServer, selectedSourceType]);
+
 
   const handleLanguageChange = useCallback(
     async (value: string) => {
@@ -450,14 +485,14 @@ export function ModelsSection({
     setCloudModal(null);
   }, [cloudModalLoading]);
 
-  const clearActiveRemote = async () => {
+  const clearActiveRemote = useCallback(async () => {
     try {
       await invoke("set_active_remote_server", { serverId: null });
       setActiveRemoteServer(null);
     } catch (error) {
       log.error("Failed to clear active remote:", error);
     }
-  };
+  }, []);
 
 
   const handleCloudKeySubmit = useCallback(
@@ -527,6 +562,22 @@ export function ModelsSection({
     [refreshModels, settings?.current_model, updateSettings],
   );
 
+  const handleCloudModelChange = useCallback(
+    async (providerId: string, modelId: string, requiresSetup: boolean) => {
+      try {
+        await invoke("set_cloud_stt_model", { providerId, modelId });
+        await refreshModels();
+        if (!requiresSetup) {
+          await clearActiveRemote();
+          await Promise.resolve(onSelect(providerId));
+        }
+      } catch (error) {
+        toast.error(getErrorMessage(error, "Failed to update cloud model"));
+      }
+    },
+    [clearActiveRemote, onSelect, refreshModels],
+  );
+
   const activeProvider = cloudModal
     ? getCloudProviderByModel(cloudModal.providerId)
     : undefined;
@@ -563,6 +614,19 @@ export function ModelsSection({
         getCloudProviderByModel(name) ?? getCloudProviderByModel(model.engine);
       const requiresSetup = model.requires_setup;
       const isActive = currentModel === name && !activeRemoteServer;
+      const availableModels = model.available_models ?? [];
+      const selectedModelId =
+        (model.underlying_model &&
+          availableModels.some((option) => option.id === model.underlying_model) &&
+          model.underlying_model) ||
+        availableModels[0]?.id;
+      const modelDisplayName =
+        resolveCloudModelLabel(model) ||
+        getModelDisplayName(name, { [name]: model }) ||
+        provider?.displayName ||
+        name;
+      const providerDisplayName = provider?.displayName || provider?.providerName;
+      const showModelSelector = availableModels.length > 1;
 
       return (
         <Card
@@ -587,11 +651,11 @@ export function ModelsSection({
             <div className="min-w-0 flex-1">
               <div className="flex items-center gap-2">
                 <h3 className={cn("truncate text-sm font-semibold tracking-tight", isActive && "text-sage")}>
-                  {provider?.displayName || provider?.providerName || getModelDisplayName(name, { [name]: model }) || name}
+                  {modelDisplayName}
                 </h3>
-                {isCloudModel(model) && model.underlying_model && (
-                  <Badge variant="outline" className="gap-1 font-mono text-muted-foreground">
-                    {model.underlying_model}
+                {providerDisplayName && (
+                  <Badge variant="outline" className="gap-1 text-muted-foreground">
+                    {providerDisplayName}
                   </Badge>
                 )}
                 {isActive && (
@@ -606,6 +670,36 @@ export function ModelsSection({
                   {provider.description}
                 </p>
               )}
+              {showModelSelector ? (
+                <div
+                  className="mt-2"
+                  onClick={(event) => event.stopPropagation()}
+                  onPointerDown={(event) => event.stopPropagation()}
+                >
+                  <Select
+                    value={selectedModelId}
+                    onValueChange={(modelId) => {
+                      void handleCloudModelChange(name, modelId, requiresSetup);
+                    }}
+                  >
+                    <SelectTrigger
+                      size="sm"
+                      className="h-8 w-full sm:w-[220px]"
+                      aria-label={`${providerDisplayName ?? name} transcription model`}
+                      onClick={(event) => event.stopPropagation()}
+                    >
+                      <SelectValue placeholder={modelDisplayName} />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {availableModels.map((option) => (
+                        <SelectItem key={option.id} value={option.id}>
+                          {option.display_name}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+              ) : null}
               <div className="mt-2 flex flex-wrap items-center gap-x-4 gap-y-1.5 text-xs text-muted-foreground">
                 <span className="inline-flex items-center gap-1.5">
                   <Zap className="size-3.5 text-sage" />
@@ -647,7 +741,7 @@ export function ModelsSection({
         </Card>
       );
     },
-    [currentModel, activeRemoteServer, handleCloudDisconnect, onSelect, openCloudModal, clearActiveRemote],
+    [currentModel, activeRemoteServer, handleCloudDisconnect, handleCloudModelChange, onSelect, openCloudModal, clearActiveRemote],
   );
 
   return (
@@ -656,16 +750,16 @@ export function ModelsSection({
       <SettingsHeader
         title={
           <span className="inline-flex items-center gap-2">
-            Models
+            Sources
             <Dialog>
               <DialogTrigger asChild>
-                <Button type="button" variant="ghost" size="icon-sm" aria-label="Models guide" className="size-7 rounded-full text-muted-foreground">
+                <Button type="button" variant="ghost" size="icon-sm" aria-label="Sources guide" className="size-7 rounded-full text-muted-foreground">
                   <HelpCircle className="h-4 w-4" />
                 </Button>
               </DialogTrigger>
               <DialogContent className="sm:max-w-lg">
                 <DialogHeader>
-                  <DialogTitle>Models guide</DialogTitle>
+                  <DialogTitle>Sources guide</DialogTitle>
                   <DialogDescription>
                     Choose where speech recognition runs before recording or uploading files.
                   </DialogDescription>
@@ -682,54 +776,60 @@ export function ModelsSection({
         description="Choose a local model, cloud provider, or remote Voicetypr server."
       />
 
-      <SettingsCard icon={Globe} title="Spoken language">
-        <SettingRow
-          title="Spoken language"
-          description="The language you speak. English-only models lock this to English."
-          control={
-            <div className="flex items-center gap-2">
-              {(hasDownloading || hasVerifying) && (
-                <Badge variant="outline" className="gap-1.5 bg-primary/10 text-primary">
-                  {hasDownloading ? (
-                    <Download className="size-3.5" />
-                  ) : (
-                    <Spinner className="size-3.5" />
-                  )}
-                  {hasDownloading ? "Downloading..." : "Verifying..."}
-                </Badge>
-              )}
-              <LanguageSelection
-                value={languageValue}
-                engine={currentEngine}
-                englishOnly={isEnglishOnlyModel}
-                onValueChange={(value) => {
-                  void handleLanguageChange(value);
-                }}
-              />
-            </div>
-          }
-        />
-      </SettingsCard>
+      <section className="rounded-xl border border-border/80 bg-card p-5">
+        <div className="flex flex-wrap items-center gap-4">
+          <div className="min-w-0">
+            <p className="text-sm font-semibold text-foreground">Current source</p>
+            <p className="mt-0.5 truncate text-sm text-muted-foreground">
+              {currentSourceLabel}
+            </p>
+          </div>
+          <Badge variant="secondary" className="ml-auto">
+            {currentSourceType}
+          </Badge>
+        </div>
+        <div className="mt-4 border-t border-border/70 pt-4">
+          <SettingRow
+            className="!mt-0 !border-t-0 !pt-0"
+            title="Spoken language"
+            description="The language you speak. English-only models lock this to English."
+            control={
+              <div className="flex items-center gap-2">
+                {(hasDownloading || hasVerifying) && (
+                  <Badge variant="outline" className="gap-1.5 bg-primary/10 text-primary">
+                    {hasDownloading ? <Download className="size-3.5" /> : <Spinner className="size-3.5" />}
+                    {hasDownloading ? "Downloading…" : "Verifying…"}
+                  </Badge>
+                )}
+                <LanguageSelection
+                  value={languageValue}
+                  engine={currentEngine}
+                  englishOnly={isEnglishOnlyModel}
+                  onValueChange={(value) => void handleLanguageChange(value)}
+                />
+              </div>
+            }
+          />
+        </div>
+      </section>
 
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <ToggleGroup
-          type="single"
-          variant="outline"
-          size="sm"
-          spacing={0}
-          value={sourceFilter}
-          onValueChange={(value) => {
-            if (value) setSourceFilter(value as typeof sourceFilter);
-          }}
-          aria-label="Filter transcription sources"
-          className="[&_[data-state=on]]:!bg-sage-bg [&_[data-state=on]]:!text-sage [&_[data-state=on]]:!border-sage/50 [&_[data-state=on]]:font-medium"
-        >
-          <ToggleGroupItem value="all">All ({allCount})</ToggleGroupItem>
-          <ToggleGroupItem value="local">Local ({localCount})</ToggleGroupItem>
-          <ToggleGroupItem value="cloud">Cloud ({cloudCount})</ToggleGroupItem>
-          <ToggleGroupItem value="remote">Remote ({remoteCount})</ToggleGroupItem>
-        </ToggleGroup>
-      </div>
+      <Tabs
+        value={sourceFilter}
+        onValueChange={(value) =>
+          setSourceFilter(value as typeof sourceFilter)
+        }
+      >
+        <TabsList aria-label="Transcription source type">
+          <TabsTrigger value="local">Local ({localCount})</TabsTrigger>
+          <TabsTrigger value="cloud">Cloud ({cloudCount})</TabsTrigger>
+          <TabsTrigger value="remote">Remote ({remoteCount})</TabsTrigger>
+        </TabsList>
+        {showLocal && localCount > 0 && (
+          <p className="mt-1.5 text-xs text-muted-foreground">
+            {localCount} available · {readyLocalModels.length} downloaded
+          </p>
+        )}
+      </Tabs>
 
       {showLocal && readyLocalModels.length > 0 && (
         <SettingsCard

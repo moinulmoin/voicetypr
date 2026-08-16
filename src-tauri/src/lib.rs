@@ -55,43 +55,70 @@ pub fn hide_dock_icon(app: &tauri::AppHandle) {
     let _ = app.set_activation_policy(tauri::ActivationPolicy::Accessory);
     log::debug!("Dock icon hidden (ActivationPolicy::Accessory)");
 }
+#[cfg(target_os = "macos")]
+fn align_main_window_controls(window: &tauri::WebviewWindow) {
+    use objc2::msg_send;
+    use objc2_app_kit::{NSView, NSWindow, NSWindowButton};
+
+    const TITLEBAR_HEIGHT: f64 = 36.0;
+    const TRAFFIC_LIGHT_LEFT: f64 = 12.0;
+
+    let Ok(ns_window) = window.ns_window() else {
+        log::warn!("Could not access the main NSWindow to align window controls");
+        return;
+    };
+
+    // SAFETY: Tauri owns this NSWindow for the lifetime of `window`, and setup,
+    // show, and window callbacks all execute on the AppKit main thread.
+    unsafe {
+        let ns_window = &*(ns_window.cast::<NSWindow>());
+        let Some(close) = ns_window.standardWindowButton(NSWindowButton::CloseButton) else {
+            return;
+        };
+        let Some(minimize) = ns_window.standardWindowButton(NSWindowButton::MiniaturizeButton)
+        else {
+            return;
+        };
+        let Some(zoom) = ns_window.standardWindowButton(NSWindowButton::ZoomButton) else {
+            return;
+        };
+        let Some(button_container) = close.superview() else {
+            return;
+        };
+        let Some(titlebar_container) = button_container.superview() else {
+            return;
+        };
+
+        let close_frame = NSView::frame(&close);
+        let mut titlebar_frame = NSView::frame(&titlebar_container);
+        titlebar_frame.size.height = TITLEBAR_HEIGHT;
+        titlebar_frame.origin.y = ns_window.frame().size.height - TITLEBAR_HEIGHT;
+        let _: () = msg_send![&titlebar_container, setFrame: titlebar_frame];
+        let mut button_container_frame = NSView::frame(&button_container);
+        button_container_frame.origin.y =
+            (TITLEBAR_HEIGHT - button_container_frame.size.height) / 2.0;
+        button_container.setFrameOrigin(button_container_frame.origin);
+
+        let horizontal_step = NSView::frame(&minimize).origin.x - close_frame.origin.x;
+        for (index, button) in [close, minimize, zoom].into_iter().enumerate() {
+            let mut origin = NSView::frame(&button).origin;
+            origin.x = TRAFFIC_LIGHT_LEFT + index as f64 * horizontal_step;
+            button.setFrameOrigin(origin);
+        }
+    }
+}
 
 /// Show the main window and keep the macOS Dock icon in sync. Single entry point so
 /// no caller forgets to reveal the Dock icon when the window becomes visible.
 fn show_main_window(app: &tauri::AppHandle) {
     if let Some(window) = app.get_webview_window("main") {
+        let _ = window.unminimize();
         let _ = window.show();
+        #[cfg(target_os = "macos")]
+        align_main_window_controls(&window);
         let _ = window.set_focus();
         #[cfg(target_os = "macos")]
         show_dock_icon(app);
-    }
-}
-
-#[cfg(target_os = "macos")]
-fn hide_unused_main_window_controls(app: &tauri::AppHandle) {
-    use objc2_app_kit::{NSWindow, NSWindowButton};
-
-    let Some(window) = app.get_webview_window("main") else {
-        log::warn!("Main window is unavailable; could not hide unused title-bar controls");
-        return;
-    };
-    let Ok(ns_window_ptr) = window.ns_window() else {
-        log::warn!("Could not access the native main window title bar");
-        return;
-    };
-
-    // The app intentionally does not support minimizing or zooming. Hiding these
-    // disabled controls leaves the close button and title-bar tools without dead UI.
-    unsafe {
-        let ns_window = &*ns_window_ptr.cast::<NSWindow>();
-        for kind in [
-            NSWindowButton::MiniaturizeButton,
-            NSWindowButton::ZoomButton,
-        ] {
-            if let Some(button) = ns_window.standardWindowButton(kind) {
-                button.setHidden(true);
-            }
-        }
     }
 }
 
@@ -264,7 +291,8 @@ use commands::{
         cache_ai_api_key, clear_ai_api_key_cache, disable_ai_enhancement, get_ai_settings,
         get_ai_settings_for_provider, get_enhancement_options, get_openai_config,
         get_writing_settings, list_ai_providers, list_provider_models, probe_agent_cli,
-        set_openai_config, test_openai_endpoint, update_ai_settings, update_enhancement_options,
+        set_openai_config, test_openai_endpoint, update_agent_cli_fast_mode,
+        update_agent_cli_reasoning, update_ai_settings, update_enhancement_options,
         update_writing_settings, validate_ai_api_key,
     },
     audio::*,
@@ -279,7 +307,7 @@ use commands::{
     model::{
         cancel_download, delete_model, download_model, download_parakeet_vocabulary_model,
         get_model_status, get_parakeet_vocabulary_status, list_downloaded_models, preload_model,
-        verify_model,
+        set_cloud_stt_model, verify_model,
     },
     permissions::{
         check_accessibility_permission, check_microphone_permission, open_accessibility_settings,
@@ -303,7 +331,7 @@ use commands::{
     system_info::get_system_specs,
     text::*,
     updater::{check_for_app_update, install_app_update},
-    utils::{export_transcriptions, save_transcript_file},
+    utils::{export_transcriptions, get_application_icon, save_transcript_file},
     window::*,
 };
 use remote::lifecycle::RemoteServerManager;
@@ -704,8 +732,17 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
                 ]);
 
                 app.set_activation_policy(tauri::ActivationPolicy::Accessory);
+                let app_handle = app.handle().clone();
+                tauri::async_runtime::spawn(async move {
+                    tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+                    let main_thread_handle = app_handle.clone();
+                    let _ = app_handle.run_on_main_thread(move || {
+                        if let Some(window) = main_thread_handle.get_webview_window("main") {
+                            align_main_window_controls(&window);
+                        }
+                    });
+                });
                 log::info!("🍎 Set macOS activation policy to Accessory");
-                hide_unused_main_window_controls(app.handle());
 
             }
 
@@ -1551,6 +1588,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             download_parakeet_vocabulary_model,
             preload_model,
             verify_model,
+            set_cloud_stt_model,
             transcribe_audio,
             transcribe_audio_file,
             diarize_audio_file,
@@ -1587,6 +1625,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             clear_all_transcriptions,
             export_transcriptions,
             save_transcript_file,
+            get_application_icon,
             show_pill_widget,
             hide_pill_widget,
             close_pill_widget,
@@ -1620,6 +1659,8 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             test_openai_endpoint,
             clear_ai_api_key_cache,
             update_ai_settings,
+            update_agent_cli_reasoning,
+            update_agent_cli_fast_mode,
             disable_ai_enhancement,
             get_enhancement_options,
             update_enhancement_options,

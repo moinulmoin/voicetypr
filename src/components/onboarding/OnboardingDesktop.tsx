@@ -34,7 +34,6 @@ import { findActivePrimaryBinding } from "@/lib/shortcut-display";
 import { cn } from "@/lib/utils";
 import { ValidationPresets } from "@/lib/keyboard-normalizer";
 import { invoke } from "@tauri-apps/api/core";
-import { open } from "@tauri-apps/plugin-shell";
 import {
   Cloud,
   CheckCircle2,
@@ -47,11 +46,9 @@ import {
   Laptop,
   Mic,
   Network,
-  Rocket,
   Server,
-  ShieldCheck,
-  Sparkles,
   Star,
+  ShieldCheck,
   Wifi,
   WifiOff,
   Zap,
@@ -64,14 +61,10 @@ import { createLogger } from "@/lib/logger";
 
 const log = createLogger("onboarding");
 
-const UPGRADE_URL = "https://voicetypr.com/#pricing"; // [Upgrade to Pro] opens this externally
-
 interface OnboardingDesktopProps {
   onCompletionStart?: () => void;
   onCompletionError?: () => void;
-  onComplete: (target?: "license") => void;
-  licensed?: boolean;
-  licenseLoading?: boolean;
+  onComplete: () => void;
   modelManagement: ReturnType<typeof useModelManagement>;
 }
 
@@ -81,8 +74,7 @@ type Step =
   | "permissions"
   | "readiness"
   | "hotkey"
-  | "success"
-  | "upgrade";
+  | "success";
 
 type SourceType = "local" | "cloud" | "remote";
 type PermissionStatus = "checking" | "granted" | "denied" | "error";
@@ -148,8 +140,6 @@ export const OnboardingDesktop = function OnboardingDesktop({
   onCompletionStart,
   onCompletionError,
   onComplete,
-  licensed = false,
-  licenseLoading = false,
   modelManagement,
 }: OnboardingDesktopProps) {
   const { settings, updateSettings } = useSettings();
@@ -239,7 +229,6 @@ export const OnboardingDesktop = function OnboardingDesktop({
             "readiness",
             "hotkey",
             "success",
-            "upgrade",
           ] satisfies Step[]
         : [
             "welcome",
@@ -247,7 +236,6 @@ export const OnboardingDesktop = function OnboardingDesktop({
             "readiness",
             "hotkey",
             "success",
-            "upgrade",
           ] satisfies Step[],
     [],
   );
@@ -665,7 +653,7 @@ export const OnboardingDesktop = function OnboardingDesktop({
     await updateSettings({ transcription_acceleration: checked ? 'auto' : 'cpu' });
   };
 
-  const completeOnboarding = async (target?: "license") => {
+  const completeOnboarding = async () => {
     setIsSavingCompletion(true);
     onCompletionStart?.();
     try {
@@ -681,7 +669,7 @@ export const OnboardingDesktop = function OnboardingDesktop({
       } catch (privacyError) {
         log.error("Failed to persist privacy choices:", privacyError);
       }
-      onComplete(target);
+      onComplete();
     } catch (error) {
       onCompletionError?.();
       log.error("Failed to complete onboarding:", error);
@@ -756,7 +744,7 @@ export const OnboardingDesktop = function OnboardingDesktop({
 
   return (
     <div className="min-h-screen overflow-hidden bg-[radial-gradient(110%_80%_at_50%_-10%,var(--sage-bg),transparent_55%),linear-gradient(180deg,var(--background),var(--background))] text-foreground">
-      {currentStep !== "success" && currentStep !== "upgrade" && (
+      {currentStep !== "success" && (
         <div className="mx-auto flex w-full max-w-5xl items-center justify-between gap-4 px-8 py-6">
           <div>
             <p className="text-sm font-semibold tracking-tight">Voicetypr Setup</p>
@@ -1376,64 +1364,12 @@ export const OnboardingDesktop = function OnboardingDesktop({
 
             <Button
               size="lg"
-              disabled={licenseLoading || (licensed && isSavingCompletion)}
-              onClick={() => {
-                if (licensed) {
-                  void completeOnboarding();
-                } else {
-                  setCurrentStep("upgrade");
-                }
-              }}
+              disabled={isSavingCompletion}
+              onClick={() => void completeOnboarding()}
             >
-              {licenseLoading || (licensed && isSavingCompletion) ? <Spinner /> : null}
-              {licenseLoading ? "Checking license..." : "Continue"}
-              {!licenseLoading && !licensed ? <ChevronRight /> : null}
+              {isSavingCompletion ? <Spinner /> : null}
+              Start using Voicetypr
             </Button>
-          </section>
-        )}
-
-        {currentStep === "upgrade" && (
-          <section className="mx-auto flex w-full max-w-xl flex-col items-center gap-6 text-center">
-            <div className="flex size-16 items-center justify-center rounded-3xl bg-sage text-sage-foreground shadow-sm">
-              <Rocket className="size-8" />
-            </div>
-            <div className="flex flex-col gap-3">
-              <h1 className="text-4xl font-semibold tracking-[-0.04em]">
-                You can upgrade to Pro anytime
-              </h1>
-              <p className="text-muted-foreground">
-                Continue now, or connect an existing license.
-              </p>
-            </div>
-
-            <div className="flex w-full flex-col gap-3">
-              <Button
-                size="lg"
-                className="w-full"
-                onClick={() => void open(UPGRADE_URL)}
-              >
-                <Sparkles className="size-4" />
-                Upgrade to Pro
-              </Button>
-              <Button
-                variant="outline"
-                size="lg"
-                className="w-full"
-                onClick={() => void completeOnboarding("license")}
-                disabled={isSavingCompletion}
-              >
-                {isSavingCompletion ? <Spinner /> : null}
-                I already have a license
-              </Button>
-              <Button
-                variant="ghost"
-                className="w-full text-muted-foreground"
-                onClick={() => void completeOnboarding()}
-                disabled={isSavingCompletion}
-              >
-                Continue
-              </Button>
-            </div>
           </section>
         )}
       </main>

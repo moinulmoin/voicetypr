@@ -68,50 +68,32 @@ fn parse_catalog(json: &str) -> Catalog {
         models: Vec::new(),
     });
 
-    // Agent-CLI providers (Phase 4C): subscription-authenticated local coding
-    // CLIs spawned headless. No API key, no base URL, no models (the CLI picks
-    // its own model). The `agent_cli` runtime dispatches in executor.rs to
-    // AgentCliRuntime (cold-spawn in 4C-i; warm-session in 4C-ii).
-    catalog.providers.push(CatalogProvider {
-        id: "claude-code".to_string(),
-        label: "Claude Code".to_string(),
-        status: "production".to_string(),
-        runtime: "agent_cli".to_string(),
-        adapter: None,
-        namespace: None,
-        requires_api_key: false,
-        supports_base_url: false,
-        supports_reasoning: false,
-        models: Vec::new(),
-    });
-    // pi: multi-provider coding CLI (pi). Same agent_cli contract as claude-code;
-    // cold-spawned with stdin input + JSONL output (see PI_SPEC).
-    catalog.providers.push(CatalogProvider {
-        id: "pi".to_string(),
-        label: "pi".to_string(),
-        status: "production".to_string(),
-        runtime: "agent_cli".to_string(),
-        adapter: None,
-        namespace: None,
-        requires_api_key: false,
-        supports_base_url: false,
-        supports_reasoning: false,
-        models: Vec::new(),
-    });
-    // omp (oh-my-pi): multi-provider coding CLI. Same agent_cli contract;
-    // cold-spawned with positional-arg input + JSONL output (see OMP_SPEC).
-    catalog.providers.push(CatalogProvider {
-        id: "omp".to_string(),
-        label: "oh-my-pi".to_string(),
-        status: "production".to_string(),
-        runtime: "agent_cli".to_string(),
-        adapter: None,
-        namespace: None,
-        requires_api_key: false,
-        supports_base_url: false,
-        supports_reasoning: false,
-        models: Vec::new(),
-    });
+    // Subscription-authenticated coding CLIs. Each is cold-spawned from an
+    // empty temporary directory by AgentCliRuntime; provider-specific flags
+    // live in agent_cli.rs.
+    for (id, label) in [
+        ("claude-code", "Claude Code"),
+        ("pi", "pi"),
+        ("omp", "oh-my-pi"),
+        ("codex", "Codex"),
+        ("droid", "Droid"),
+        ("grok", "Grok"),
+        ("opencode", "OpenCode"),
+        ("cline", "Cline"),
+    ] {
+        catalog.providers.push(CatalogProvider {
+            id: id.to_string(),
+            label: label.to_string(),
+            status: "production".to_string(),
+            runtime: "agent_cli".to_string(),
+            adapter: None,
+            namespace: None,
+            requires_api_key: false,
+            supports_base_url: false,
+            supports_reasoning: false,
+            models: Vec::new(),
+        });
+    }
     catalog
 }
 
@@ -341,12 +323,16 @@ mod tests {
 
     #[test]
     fn agent_cli_providers_share_runtime_contract() {
-        // Phase 4C invariant: claude-code, pi, and omp are all agent_cli
-        // providers (cold-spawn), carry no genai adapter, require no API key,
-        // and are NOT native providers (so executor dispatch routes each to
-        // AgentCliRuntime). pi/omp are synthesized in parse_catalog like
-        // claude-code and custom.
-        for id in ["claude-code", "pi", "omp"] {
+        for id in [
+            "claude-code",
+            "pi",
+            "omp",
+            "codex",
+            "droid",
+            "grok",
+            "opencode",
+            "cline",
+        ] {
             assert_eq!(runtime_kind(id), Some("agent_cli"), "{id} runtime");
             assert!(!is_native_provider(id), "{id} not native");
             assert_eq!(adapter_name(id), None, "{id} no adapter");
@@ -354,6 +340,9 @@ mod tests {
             assert!(!provider.requires_api_key, "{id} no api key");
             assert!(!provider.supports_base_url, "{id} no base url");
             assert!(provider.models.is_empty(), "{id} empty models");
+        }
+        for retired in ["amp", "kilo-code"] {
+            assert!(provider(retired).is_none(), "{retired} must stay retired");
         }
     }
 }

@@ -311,7 +311,7 @@ export function AudioUploadSection() {
                 <DialogHeader>
                   <DialogTitle>Upload guide</DialogTitle>
                   <DialogDescription>
-                    Upload uses your currently selected transcription source. Change it in Models if you want a different model or remote device first.
+                    Upload uses your currently selected transcription source. Change it in Sources if you want a different model or remote device first.
                   </DialogDescription>
                 </DialogHeader>
                 <div className="space-y-3 text-sm leading-6 text-muted-foreground">
@@ -331,9 +331,9 @@ export function AudioUploadSection() {
         description="Drag and drop an audio or video file, or browse to select one, then transcribe."
       >
         <div className={cn(
-          "mt-4 rounded-lg border-2 overflow-hidden transition-all",
+          "mt-4 overflow-hidden rounded-xl border-2 transition-colors",
           isDragging
-            ? "border-sage bg-sage-bg/40 scale-[1.02]"
+            ? "border-sage bg-sage-bg/40"
             : "border-transparent"
         )}>
           <div className="space-y-4">
@@ -360,10 +360,10 @@ export function AudioUploadSection() {
                         </div>
                       ) : (
                         <div className={cn(
-                          "relative rounded-lg border-2 border-dashed p-6 text-center transition-all",
+                          "relative rounded-xl border-2 border-dashed p-10 text-center transition-colors",
                           isDragging
                             ? "border-sage bg-sage-bg/40"
-                            : "border-border/50 hover:border-border"
+                            : "border-border/60 hover:border-border"
                         )}>
                           {isDragging ? (
                             <div className="space-y-1">
@@ -523,22 +523,21 @@ export function AudioUploadSection() {
         </div>
       )}
 
-      <SettingsCard
-        icon={AlertCircle}
-        title="Important information"
-        description="What to expect when uploading audio and video files."
-      >
-        <div className="mt-4 text-sm text-muted-foreground space-y-1">
-          <p>• <strong>Supported Formats:</strong> WAV, MP3, M4A, FLAC, OGG, MP4, WebM</p>
-          <p>• <strong>Conversion:</strong> Non-WAV files will be converted to 16 kHz mono WAV before transcription; this may take time</p>
-          <p>• <strong>Video:</strong> Video files are supported; audio is extracted first</p>
-          <p>• <strong>Processing:</strong> Uses your selected local, cloud, or remote transcription source</p>
-          <p>• <strong>Duration:</strong> Longer media may take longer and use more memory</p>
-          <p className="font-medium text-foreground/80 mt-2">
-            Long media (4-5+ hours) may take several minutes and use significant memory.
-          </p>
-        </div>
-      </SettingsCard>
+      <details className="group rounded-xl border border-border/70 bg-muted/20 px-4 py-3 text-sm">
+        <summary className="cursor-pointer font-medium text-foreground">
+          File and processing details
+        </summary>
+        <ul className="mt-3 grid gap-2 text-sm leading-relaxed text-muted-foreground sm:grid-cols-2">
+          <li>WAV, MP3, M4A, FLAC, OGG, MP4, and WebM are supported.</li>
+          <li>Video audio is extracted before transcription.</li>
+          <li>Non-WAV media is converted to 16 kHz mono WAV.</li>
+          <li>Long media takes more time and memory to process.</li>
+        </ul>
+        <p className="mt-3 text-xs text-muted-foreground">
+          Upload uses the source currently selected in Sources.
+        </p>
+      </details>
+
     </SettingsPage>
   );
 }

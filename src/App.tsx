@@ -7,19 +7,27 @@ import { ReadinessProvider } from "./contexts/ReadinessContext";
 import { SettingsProvider } from "./contexts/SettingsContext";
 import { ModelManagementProvider } from "./contexts/ModelManagementContext";
 import { ModelAvailabilityProvider } from "./contexts/ModelAvailabilityContext";
+import { useTheme } from "@/hooks/useTheme";
+
+/** Applies the stored theme to the document root. Must live inside SettingsProvider. */
+function ThemeSync() {
+  useTheme();
+  return null;
+}
 
 export default function App() {
   return (
     <AppErrorBoundary>
       <LicenseProvider>
         <SettingsProvider>
+          <ThemeSync />
           <ModelAvailabilityProvider>
             <ReadinessProvider>
               <ModelManagementProvider>
               <TooltipProvider>
                 <AppContainer />
                 <Toaster
-                  position="bottom-right"
+                  position="top-center"
                   closeButton
                   expand
                   visibleToasts={4}
@@ -32,10 +40,10 @@ export default function App() {
                       description: "text-sm leading-relaxed text-muted-foreground",
                       closeButton:
                         "border-border bg-background text-muted-foreground shadow-sm hover:bg-accent hover:text-accent-foreground",
-                      success: "border-l-4 border-l-sage",
-                      error: "border-l-4 border-l-destructive",
-                      warning: "border-l-4 border-l-amber-500",
-                      info: "border-l-4 border-l-sky-500",
+                      success: "border-sage/50",
+                      error: "border-destructive/50",
+                      warning: "border-amber-500/50",
+                      info: "border-sky-500/50",
                     },
                   }}
                 />

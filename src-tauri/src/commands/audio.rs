@@ -4,7 +4,9 @@ use tauri::{AppHandle, Emitter, Manager, State};
 use crate::ai::error::{user_facing_message, AiProviderError};
 use crate::audio::recorder::AudioRecorder;
 use crate::audio::silence_detector::SilenceDetectorEvent;
-use crate::audio::speech_evidence::{SpeechEvidenceAttempt, SpeechEvidenceOutcome};
+use crate::audio::speech_evidence::{
+    classify_speech_evidence, SpeechEvidenceAttempt, SpeechEvidenceOutcome,
+};
 use crate::commands::settings::{
     get_settings, normalize_final_text_language, normalize_speech_language_for_model,
     normalize_transcription_task, recording_retention_days_from_store, resolve_pill_indicator_mode,
@@ -1303,6 +1305,14 @@ fn build_writing_history_metadata(
         if wr.ai_applied && wr.raw_text != wr.final_text {
             map.insert("original_text".into(), wr.raw_text.clone().into());
         }
+        if let Some(execution) = wr.ai_execution.as_ref() {
+            if !execution.provider_id.is_empty() {
+                map.insert("ai_provider".into(), execution.provider_id.clone().into());
+            }
+            if !execution.model_id.is_empty() {
+                map.insert("ai_model".into(), execution.model_id.clone().into());
+            }
+        }
     }
     serde_json::Value::Object(map)
 }
@@ -1668,6 +1678,28 @@ fn transcription_task_header_value(task: crate::transcription::TranscriptionTask
     }
 }
 
+fn classify_polish_outcome(
+    polish_enabled: bool,
+    ai_failed: bool,
+    ai_applied: bool,
+    preset: crate::ai::prompts::EnhancementPreset,
+    ai_execution_recorded: bool,
+) -> crate::product_analytics::PolishOutcome {
+    if !polish_enabled {
+        crate::product_analytics::PolishOutcome::Disabled
+    } else if ai_failed {
+        crate::product_analytics::PolishOutcome::Fallback
+    } else if ai_applied {
+        crate::product_analytics::PolishOutcome::Applied
+    } else if preset == crate::ai::prompts::EnhancementPreset::PersonalDictation
+        || !ai_execution_recorded
+    {
+        crate::product_analytics::PolishOutcome::Skipped
+    } else {
+        crate::product_analytics::PolishOutcome::Unchanged
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
@@ -1675,8 +1707,8 @@ mod tests {
         build_failed_transcription_row, build_remote_server_error_payload,
         build_remote_transcription_result, build_remote_upload_transcription_request,
         build_transcription_job, build_translation_failed_history_metadata,
-        build_writing_history_metadata, classify_local_failure, finalize_in_flight_audio,
-        is_ai_auth_error, is_non_speech_transcript, persist_if_current,
+        build_writing_history_metadata, classify_local_failure, classify_polish_outcome,
+        finalize_in_flight_audio, is_ai_auth_error, is_non_speech_transcript, persist_if_current,
         plan_desktop_writing_success, recording_license_state, recording_started_cue_eligible,
         remote_server_error_pill_message, set_in_flight_transcription_audio,
         should_hide_pill_when_idle, should_use_active_remote, silence_event_runs_in_state,
@@ -1722,6 +1754,21 @@ mod tests {
         assert!(!transcript_ready_cue_eligible(false, true));
         assert!(!transcript_ready_cue_eligible(true, false));
         assert!(!transcript_ready_cue_eligible(false, false));
+    }
+
+    #[test]
+    fn polish_attempt_analytics_exclude_literal_preservation() {
+        use crate::ai::prompts::EnhancementPreset;
+        use crate::product_analytics::PolishOutcome;
+
+        assert_eq!(
+            classify_polish_outcome(true, false, false, EnhancementPreset::CleanDictation, false,),
+            PolishOutcome::Skipped
+        );
+        assert_eq!(
+            classify_polish_outcome(true, false, false, EnhancementPreset::CleanDictation, true,),
+            PolishOutcome::Unchanged
+        );
     }
 
     #[test]
@@ -1911,7 +1958,10 @@ mod tests {
                 insertion_ms: None,
             },
             polish_enabled: true,
-            ai_execution: None,
+            ai_execution: Some(crate::writing::AiExecutionMetadata {
+                provider_id: "pi".to_string(),
+                model_id: "gpt-5.6-luna".to_string(),
+            }),
             ai_error: None,
         };
 
@@ -1931,6 +1981,8 @@ mod tests {
             hint.get("window_title").is_none(),
             "window_title must NOT be serialized into history"
         );
+        assert_eq!(metadata["ai_provider"].as_str(), Some("pi"));
+        assert_eq!(metadata["ai_model"].as_str(), Some("gpt-5.6-luna"));
     }
 
     #[test]
@@ -4099,6 +4151,11 @@ pub async fn start_recording(
         app_state.clear_cancellation();
         clear_pending_stop_after_start(&app_state);
     }
+    if let Some(hint) = crate::writing::capture_active_app_context() {
+        if let Some(app_state) = app.try_state::<AppState>() {
+            app_state.set_recording_app_context(hint);
+        }
+    }
     update_recording_state(&app, RecordingState::Starting, None);
     // Ensure transition actually happened; if blocked, abort early
     if !matches!(
@@ -4167,16 +4224,13 @@ pub async fn start_recording(
             }
         });
     }
-    // Warm the LLM enhancement connection too (runs post-transcription regardless of the STT engine).
+    // Prefetch the LLM polish path too (runs post-transcription regardless of the STT engine):
+    // HTTP providers get a pooled HEAD, agent-CLI providers a binary + capability probe.
     if config.ai_enabled && !config.ai_provider.is_empty() {
         let app = app.clone();
         let provider_id = config.ai_provider.clone();
         tokio::spawn(async move {
-            if provider_id == crate::ai::providers::PROVIDER_CUSTOM
-                || crate::commands::ai::ai_provider_has_key(&provider_id)
-            {
-                crate::commands::ai::warm_ai_provider(app, provider_id).await;
-            }
+            crate::commands::ai::prefetch_ai_provider(app, provider_id).await;
         });
     }
     // Get app data directory for recordings
@@ -4914,6 +4968,26 @@ pub async fn stop_recording(
     crate::product_analytics::capture(crate::product_analytics::ProductEvent::RecordingStopped {
         duration_ms: capture_metrics.as_ref().map(|metrics| metrics.duration_ms),
     });
+
+    if classify_speech_evidence(capture_metrics, None).would_skip_engine() {
+        let mut speech_evidence_attempt =
+            SpeechEvidenceAttempt::new("none".to_string(), "pre_engine", capture_metrics);
+        speech_evidence_attempt.set_outcome(SpeechEvidenceOutcome::SkippedNoInput);
+        log::info!("Skipping speech engine: capture contained only exact digital zero samples");
+        if let Err(error) = std::fs::remove_file(&audio_path) {
+            log::debug!("Failed to remove no-input recording: {}", error);
+        }
+        update_recording_state(&app, RecordingState::Idle, None);
+        if should_hide_pill(&app).await {
+            if let Err(error) = crate::commands::window::hide_pill_widget(app.clone()).await {
+                log::error!(
+                    "Failed to hide pill window after no-input recording: {}",
+                    error
+                );
+            }
+        }
+        return Ok(String::new());
+    }
 
     // Decide engine early to optionally skip normalization for cloud providers
     let config = get_recording_config(&app).await.map_err(|e| {
@@ -5710,19 +5784,13 @@ pub async fn stop_recording(
                                 } else if !writing_result.polish_enabled {
                                     log::debug!("AI enhancement is disabled, using original text");
                                 }
-                                let polish_outcome = if !writing_result.polish_enabled {
-                                    crate::product_analytics::PolishOutcome::Disabled
-                                } else if writing_result.ai_error.is_some() {
-                                    crate::product_analytics::PolishOutcome::Fallback
-                                } else if writing_result.ai_applied {
-                                    crate::product_analytics::PolishOutcome::Applied
-                                } else if writing_result.mode
-                                    == crate::ai::prompts::EnhancementPreset::PersonalDictation
-                                {
-                                    crate::product_analytics::PolishOutcome::Skipped
-                                } else {
-                                    crate::product_analytics::PolishOutcome::Unchanged
-                                };
+                                let polish_outcome = classify_polish_outcome(
+                                    writing_result.polish_enabled,
+                                    writing_result.ai_error.is_some(),
+                                    writing_result.ai_applied,
+                                    writing_result.mode,
+                                    writing_result.ai_execution.is_some(),
+                                );
                                 let (provider_id, model_id) = writing_result
                                     .ai_execution
                                     .as_ref()

@@ -8,7 +8,6 @@ const mockUpdateSettings = vi.fn().mockResolvedValue(undefined);
 
 // A bare-modifier primary is active: `hotkey` is intentionally empty.
 const baseSettings: AppSettings = {
-  settings_mode: "advanced",
   recording_mode: "toggle",
   hotkey: "",
   current_model: "",

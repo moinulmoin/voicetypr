@@ -22,6 +22,8 @@ pub struct AiModel {
 pub struct AiPolishRequest {
     pub provider_id: String,
     pub model_id: String,
+    pub reasoning_level: Option<String>,
+    pub fast_mode: bool,
     pub input_text: String,
     pub prompt: String,
     pub timeout_ms: u64,

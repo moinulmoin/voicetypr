@@ -185,11 +185,11 @@ describe("NetworkSharingCard", () => {
       renderWithProviders(<NetworkSharingCard />);
 
       await waitFor(() => {
-        expect(screen.getByText("Large v3 Turbo")).toBeInTheDocument();
+        expect(screen.getByText(/Large v3 Turbo/)).toBeInTheDocument();
       });
 
       expect(
-        screen.getByText(/another Voicetypr app can use this device's/)
+        screen.getByText(/is only available on this device/),
       ).toBeInTheDocument();
     });
 

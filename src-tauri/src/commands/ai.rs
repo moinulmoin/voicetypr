@@ -1,9 +1,12 @@
+use crate::ai::agent_cli::{cold_spawn_timeout_ms, supports_fast_mode};
 use crate::ai::catalog;
 use crate::ai::contract::AiPolishRequest;
 use crate::ai::error::{user_facing_message, AiProviderError};
 use crate::ai::executor::{AiExecutor, OpenAiCompatibleConfig};
 use crate::ai::genai_runtime::AiKeyResolver;
-use crate::ai::providers::{launch_providers, PROVIDER_CUSTOM, PROVIDER_OPENROUTER};
+use crate::ai::providers::{
+    launch_providers, AGENT_CLI_PROVIDER_IDS, PROVIDER_CUSTOM, PROVIDER_OPENROUTER,
+};
 use crate::ai::EnhancementOptions;
 use crate::commands::settings::{
     persist_settings_and_invalidate, FINAL_TEXT_LANGUAGE_SAME_AS_TRANSCRIPT,
@@ -22,6 +25,8 @@ use tauri_plugin_store::StoreExt;
 // Keys are stored in Stronghold by frontend and cached here for backend use
 static API_KEY_CACHE: Lazy<Mutex<HashMap<String, String>>> =
     Lazy::new(|| Mutex::new(HashMap::new()));
+static AGENT_CLI_PROBE_CACHE: Lazy<Mutex<HashMap<String, AgentCliProbe>>> =
+    Lazy::new(|| Mutex::new(HashMap::new()));
 
 const DEFAULT_OPENAI_BASE_URL: &str = "https://api.openai.com/v1";
 const OPENROUTER_BASE_URL: &str = "https://openrouter.ai/api/v1";
@@ -29,6 +34,68 @@ const CUSTOM_BASE_URL_KEY: &str = "ai_custom_base_url";
 const CUSTOM_NO_AUTH_KEY: &str = "ai_custom_no_auth";
 const LEGACY_OPENAI_BASE_URL_KEY: &str = "ai_openai_base_url";
 const LEGACY_OPENAI_NO_AUTH_KEY: &str = "ai_openai_no_auth";
+const AGENT_CLI_REASONING_KEY: &str = "ai_agent_cli_reasoning_by_provider";
+const AGENT_CLI_FAST_MODE_KEY: &str = "ai_agent_cli_fast_mode_by_provider";
+
+fn default_agent_cli_reasoning(provider: &str) -> &'static str {
+    if matches!(provider, "pi" | "omp") {
+        "off"
+    } else {
+        "low"
+    }
+}
+
+fn normalize_agent_cli_reasoning(provider: &str, reasoning: &str) -> String {
+    match reasoning {
+        "off" | "low" | "medium" => reasoning.to_string(),
+        "high" => "medium".to_string(),
+        _ => default_agent_cli_reasoning(provider).to_string(),
+    }
+}
+
+fn agent_cli_supports_reasoning(provider: &str) -> bool {
+    catalog::runtime_kind(provider) == Some("agent_cli")
+}
+
+fn validate_agent_cli_reasoning(provider: &str, reasoning: &str) -> Result<(), String> {
+    if !agent_cli_supports_reasoning(provider) {
+        return Err("Reasoning is not configurable for this local agent".to_string());
+    }
+    if !matches!(reasoning, "off" | "low" | "medium") {
+        return Err("Unsupported reasoning level".to_string());
+    }
+    Ok(())
+}
+
+fn load_agent_cli_reasoning<R: tauri::Runtime>(
+    store: &tauri_plugin_store::Store<R>,
+) -> HashMap<String, String> {
+    let mut levels = store
+        .get(AGENT_CLI_REASONING_KEY)
+        .and_then(|value| serde_json::from_value::<HashMap<String, String>>(value.clone()).ok())
+        .unwrap_or_default();
+    for provider in AGENT_CLI_PROVIDER_IDS {
+        let normalized = levels
+            .get(*provider)
+            .map(|reasoning| normalize_agent_cli_reasoning(provider, reasoning))
+            .unwrap_or_else(|| default_agent_cli_reasoning(provider).to_string());
+        levels.insert(provider.to_string(), normalized);
+    }
+    levels
+}
+
+fn load_agent_cli_fast_mode<R: tauri::Runtime>(
+    store: &tauri_plugin_store::Store<R>,
+) -> HashMap<String, bool> {
+    let mut values = store
+        .get(AGENT_CLI_FAST_MODE_KEY)
+        .and_then(|value| serde_json::from_value::<HashMap<String, bool>>(value.clone()).ok())
+        .unwrap_or_default();
+    for provider in AGENT_CLI_PROVIDER_IDS {
+        values.entry(provider.to_string()).or_insert(false);
+    }
+    values
+}
 
 // One pooled reqwest::Client shared across the LLM enhancement path so the connection pool stays hot across calls.
 static SHARED_AI_CLIENT: std::sync::LazyLock<reqwest::Client> = std::sync::LazyLock::new(|| {
@@ -208,8 +275,10 @@ fn load_models_by_provider<R: tauri::Runtime>(
         .and_then(|v| serde_json::from_value::<HashMap<String, String>>(v.clone()).ok())
         .unwrap_or_default();
 
+    let current_selection_is_valid =
+        !current_model.is_empty() || catalog::runtime_kind(current_provider) == Some("agent_cli");
     if !current_provider.is_empty()
-        && !current_model.is_empty()
+        && current_selection_is_valid
         && !models_by_provider.contains_key(current_provider)
     {
         models_by_provider.insert(current_provider.to_string(), current_model.to_string());
@@ -227,7 +296,7 @@ fn remember_provider_model(
         return;
     }
 
-    if model.is_empty() {
+    if model.is_empty() && catalog::runtime_kind(provider) != Some("agent_cli") {
         models_by_provider.remove(provider);
     } else {
         models_by_provider.insert(provider.to_string(), model.to_string());
@@ -257,6 +326,8 @@ async fn run_openai_chat_probe(
         provider_id: PROVIDER_CUSTOM.to_string(),
         model_id: model.to_string(),
         input_text: "ping".to_string(),
+        reasoning_level: None,
+        fast_mode: false,
         prompt: "Reply with OK.".to_string(),
         timeout_ms: 10_000,
     };
@@ -288,6 +359,10 @@ pub struct AISettings {
     pub has_api_key: bool,
     #[serde(rename = "modelsByProvider")]
     pub models_by_provider: HashMap<String, String>,
+    #[serde(rename = "reasoningByProvider")]
+    pub reasoning_by_provider: HashMap<String, String>,
+    #[serde(rename = "fastModeByProvider")]
+    pub fast_mode_by_provider: HashMap<String, bool>,
     #[serde(rename = "aiModelNeedsReselection")]
     pub ai_model_needs_reselection: bool,
 }
@@ -327,6 +402,8 @@ pub async fn get_ai_settings(app: tauri::AppHandle) -> Result<AISettings, String
         .unwrap_or_else(|| "".to_string()); // Empty by default
 
     let models_by_provider = load_models_by_provider(&store, &provider, &model);
+    let reasoning_by_provider = load_agent_cli_reasoning(&store);
+    let fast_mode_by_provider = load_agent_cli_fast_mode(&store);
 
     let ai_model_needs_reselection = store
         .get("ai_model_needs_reselection")
@@ -347,6 +424,8 @@ pub async fn get_ai_settings(app: tauri::AppHandle) -> Result<AISettings, String
         model,
         has_api_key,
         models_by_provider,
+        reasoning_by_provider,
+        fast_mode_by_provider,
         ai_model_needs_reselection,
     })
 }
@@ -374,6 +453,8 @@ pub async fn get_ai_settings_for_provider(
         .and_then(|v| v.as_str().map(|s| s.to_string()))
         .unwrap_or_else(|| "".to_string()); // Empty by default
     let models_by_provider = load_models_by_provider(&store, &current_provider, &current_model);
+    let reasoning_by_provider = load_agent_cli_reasoning(&store);
+    let fast_mode_by_provider = load_agent_cli_fast_mode(&store);
     let model = models_by_provider
         .get(&provider)
         .cloned()
@@ -398,6 +479,8 @@ pub async fn get_ai_settings_for_provider(
         model,
         has_api_key,
         models_by_provider,
+        reasoning_by_provider,
+        fast_mode_by_provider,
         ai_model_needs_reselection,
     })
 }
@@ -609,6 +692,8 @@ pub async fn validate_ai_api_key(
         provider_id: provider.clone(),
         model_id: validation_model,
         input_text: "ok".to_string(),
+        reasoning_level: None,
+        fast_mode: false,
         prompt: "Reply with exactly: ok".to_string(),
         timeout_ms: 10_000,
     };
@@ -817,6 +902,50 @@ pub async fn update_ai_settings(
 }
 
 #[tauri::command]
+pub async fn update_agent_cli_reasoning(
+    provider: String,
+    reasoning: String,
+    app: tauri::AppHandle,
+) -> Result<(), String> {
+    validate_provider_name(&provider)?;
+    validate_agent_cli_reasoning(&provider, &reasoning)?;
+    persist_settings_and_invalidate(
+        &app,
+        |store| {
+            let mut levels = load_agent_cli_reasoning(store);
+            levels.insert(provider.clone(), reasoning.clone());
+            store.set(AGENT_CLI_REASONING_KEY, json!(levels));
+            Ok(())
+        },
+        |error| format!("Failed to save reasoning level: {error}"),
+    )
+    .await
+}
+
+#[tauri::command]
+pub async fn update_agent_cli_fast_mode(
+    provider: String,
+    enabled: bool,
+    app: tauri::AppHandle,
+) -> Result<(), String> {
+    validate_provider_name(&provider)?;
+    if !supports_fast_mode(&provider) {
+        return Err("Fast mode is not supported by this local agent".to_string());
+    }
+    persist_settings_and_invalidate(
+        &app,
+        |store| {
+            let mut values = load_agent_cli_fast_mode(store);
+            values.insert(provider.clone(), enabled);
+            store.set(AGENT_CLI_FAST_MODE_KEY, json!(values));
+            Ok(())
+        },
+        |error| format!("Failed to save fast mode: {error}"),
+    )
+    .await
+}
+
+#[tauri::command]
 pub async fn disable_ai_enhancement(app: tauri::AppHandle) -> Result<(), String> {
     persist_settings_and_invalidate(
         &app,
@@ -971,14 +1100,41 @@ fn url_origin(raw: &str) -> Option<String> {
     origin.is_tuple().then(|| origin.ascii_serialization())
 }
 
-pub(crate) fn ai_provider_origin(app: &tauri::AppHandle, provider_id: &str) -> Option<String> {
+fn validated_custom_origin(base: &str) -> Option<String> {
+    validate_custom_base_url(base).ok()?;
+    url_origin(base)
+}
+
+/// HTTP origin the selected polish provider will actually contact.
+///
+/// Mirrors `executor_for_provider`: native adapters, OpenRouter, custom, and
+/// the OpenAI-without-key legacy custom fallback. Custom/legacy URLs must pass
+/// `validate_custom_base_url` so warmup never HEADs an origin the executor
+/// would refuse. Agent-CLI providers have no HTTP origin.
+fn resolve_ai_provider_origin(
+    provider_id: &str,
+    custom_base_url: Option<&str>,
+    openai_has_key: bool,
+) -> Option<String> {
     if provider_id == PROVIDER_CUSTOM {
-        // Mirror executor_for_provider: custom falls back to DEFAULT_OPENAI_BASE_URL when unset.
-        let base = custom_base_url_from_settings(app)
-            .unwrap_or_else(|| DEFAULT_OPENAI_BASE_URL.to_string());
-        return url_origin(&base);
+        let base = custom_base_url.unwrap_or(DEFAULT_OPENAI_BASE_URL);
+        return validated_custom_origin(base);
+    }
+    if provider_id == PROVIDER_OPENROUTER {
+        return url_origin(OPENROUTER_BASE_URL);
+    }
+    if provider_id == "openai" && !openai_has_key {
+        return custom_base_url.and_then(validated_custom_origin);
     }
     native_origin(provider_id).map(str::to_string)
+}
+
+pub(crate) fn ai_provider_origin(app: &tauri::AppHandle, provider_id: &str) -> Option<String> {
+    resolve_ai_provider_origin(
+        provider_id,
+        custom_base_url_from_settings(app).as_deref(),
+        ai_provider_has_key("openai"),
+    )
 }
 
 pub(crate) fn ai_provider_has_key(provider_id: &str) -> bool {
@@ -988,6 +1144,42 @@ pub(crate) fn ai_provider_has_key(provider_id: &str) -> bool {
         .unwrap_or(false)
 }
 
+/// True when recording-start should fire a connection warmup for this provider.
+///
+/// Mirrors `executor_for_provider`'s credential preconditions: custom routes
+/// (selected `custom`, or OpenAI's legacy custom fallback without an OpenAI
+/// key) need either a cached custom key or an effective no-auth config —
+/// otherwise the executor rejects before any HTTP request and warmup must not
+/// contact the origin either. Other HTTP providers need a cached key.
+/// Agent-CLI is never warmed.
+fn should_warm_resolved_ai_provider(
+    provider_id: &str,
+    has_cached_key: bool,
+    custom_route_usable: bool,
+) -> bool {
+    if catalog::runtime_kind(provider_id) == Some("agent_cli") {
+        return false;
+    }
+    if provider_id == PROVIDER_CUSTOM {
+        return custom_route_usable;
+    }
+    if has_cached_key {
+        return true;
+    }
+    provider_id == "openai" && custom_route_usable
+}
+
+pub(crate) fn should_warm_ai_provider(app: &tauri::AppHandle, provider_id: &str) -> bool {
+    let custom_key_cached = ai_provider_has_key(PROVIDER_CUSTOM);
+    let custom_route_usable =
+        custom_key_cached || custom_no_auth_from_settings(app, custom_key_cached);
+    should_warm_resolved_ai_provider(
+        provider_id,
+        ai_provider_has_key(provider_id),
+        custom_route_usable,
+    )
+}
+
 pub(crate) async fn warm_ai_provider(app: tauri::AppHandle, provider_id: String) {
     if let Some(origin) = ai_provider_origin(&app, &provider_id) {
         let _ = shared_ai_client()
@@ -995,6 +1187,17 @@ pub(crate) async fn warm_ai_provider(app: tauri::AppHandle, provider_id: String)
             .timeout(std::time::Duration::from_secs(8))
             .send()
             .await;
+    }
+}
+
+/// Recording-start prefetch for the selected polish provider. HTTP providers
+/// get a pooled HEAD on their resolved origin; agent-CLI providers get a
+/// binary + `--help` capability prefetch. No user text is sent on either path.
+pub(crate) async fn prefetch_ai_provider(app: tauri::AppHandle, provider_id: String) {
+    if crate::ai::catalog::runtime_kind(&provider_id) == Some("agent_cli") {
+        crate::ai::agent_cli::prefetch_polish_capabilities(&provider_id).await;
+    } else if should_warm_ai_provider(&app, &provider_id) {
+        warm_ai_provider(app, provider_id).await;
     }
 }
 
@@ -1196,17 +1399,37 @@ async fn polish_text_with_prompt_result_typed(
 ) -> Result<crate::ai::contract::AiPolishResult, AiPolishAttemptError> {
     let (executor, runtime_provider) =
         executor_for_provider(app, &provider).map_err(|error| error.with_model(model.clone()))?;
-    // CLI providers are cold-spawned with their own hard kill-timeout
-    // (AgentCliRuntime::COLD_SPAWN_TIMEOUT); cap the executor budget to ~9s so
-    // a wedged CLI surfaces promptly. HTTP providers keep the 30s budget.
+    // The subprocess runtime owns provider-specific local-agent budgets; reuse
+    // that value here so the executor cannot cancel a healthy child first.
     let timeout_ms = if catalog::runtime_kind(&runtime_provider) == Some("agent_cli") {
-        9_000
+        cold_spawn_timeout_ms(&runtime_provider)
     } else {
         30_000
+    };
+    let is_agent_cli = catalog::runtime_kind(&runtime_provider) == Some("agent_cli");
+    let (reasoning_level, fast_mode) = if is_agent_cli {
+        let store = app.store("settings").map_err(|_| {
+            AiPolishAttemptError::for_provider(AiProviderError::Internal, runtime_provider.clone())
+                .with_model(model.clone())
+        })?;
+        (
+            Some(
+                load_agent_cli_reasoning(&store)
+                    .remove(&runtime_provider)
+                    .unwrap_or_else(|| default_agent_cli_reasoning(&runtime_provider).to_string()),
+            ),
+            load_agent_cli_fast_mode(&store)
+                .remove(&runtime_provider)
+                .unwrap_or(false),
+        )
+    } else {
+        (None, false)
     };
     let request = AiPolishRequest {
         provider_id: runtime_provider.clone(),
         model_id: model.clone(),
+        reasoning_level,
+        fast_mode,
         input_text: text.to_string(),
         prompt,
         timeout_ms,
@@ -1316,12 +1539,31 @@ pub async fn get_openai_config(app: tauri::AppHandle) -> Result<OpenAIConfig, St
 /// compiler sees as a distinct type).
 pub use crate::ai::agent_cli::AgentCliProbe;
 
-/// Probe an agent-CLI provider: locate its binary on the resolved login-shell
-/// PATH and run `<bin> --version`. Fixed argv — NEVER reads credential files.
-/// Cache-friendly (the frontend calls this at setup, not per-dictation).
+/// Detect an installed agent CLI from the hydrated login-shell PATH. Detection
+/// is cached for the app session; explicit Refresh rehydrates PATH and reruns
+/// executable resolution without invoking the CLI.
 #[tauri::command]
-pub async fn probe_agent_cli(provider: String) -> Result<AgentCliProbe, String> {
-    let probe = crate::ai::agent_cli::probe(&provider).await;
+pub async fn probe_agent_cli(
+    provider: String,
+    refresh: Option<bool>,
+) -> Result<AgentCliProbe, String> {
+    let refresh = refresh.unwrap_or(false);
+    if !refresh {
+        if let Some(probe) = AGENT_CLI_PROBE_CACHE
+            .lock()
+            .map_err(|_| "Failed to access agent status cache".to_string())?
+            .get(&provider)
+            .cloned()
+        {
+            return Ok(probe);
+        }
+    }
+
+    let probe = crate::ai::agent_cli::probe(&provider, refresh).await;
+    AGENT_CLI_PROBE_CACHE
+        .lock()
+        .map_err(|_| "Failed to access agent status cache".to_string())?
+        .insert(provider, probe.clone());
     Ok(probe)
 }
 
@@ -1461,13 +1703,13 @@ mod tests {
 
     #[test]
     fn selection_meets_model_requirement_waives_agent_cli() {
-        // Agent-CLI providers (Claude Code) carry no catalog model — the CLI
-        // picks its own — so an empty model must not fail the readiness guard
-        // (has_ai_model_and_key / selected_ai_provider_and_model). Key-based
-        // runtimes still require a non-empty model; unknown providers are not
-        // waived (no regression for non-agent_cli providers).
-        assert!(selection_meets_model_requirement("claude-code", ""));
-        assert!(selection_meets_model_requirement("claude-code", "anything"));
+        for provider in AGENT_CLI_PROVIDER_IDS {
+            assert!(
+                selection_meets_model_requirement(provider, ""),
+                "{provider} should allow its CLI default model"
+            );
+            assert!(selection_meets_model_requirement(provider, "anything"));
+        }
         assert!(!selection_meets_model_requirement("gemini", ""));
         assert!(selection_meets_model_requirement(
             "gemini",
@@ -1476,6 +1718,33 @@ mod tests {
         assert!(!selection_meets_model_requirement("openai", ""));
         assert!(selection_meets_model_requirement("openai", "gpt-5-nano"));
         assert!(!selection_meets_model_requirement("unknown-provider", ""));
+    }
+
+    #[test]
+    fn expanded_cli_reasoning_policy_matches_runtime_support() {
+        for provider in [
+            "claude-code",
+            "pi",
+            "omp",
+            "codex",
+            "droid",
+            "grok",
+            "cline",
+        ] {
+            assert!(validate_agent_cli_reasoning(provider, "low").is_ok());
+        }
+        assert!(validate_agent_cli_reasoning("opencode", "low").is_ok());
+        assert_eq!(default_agent_cli_reasoning("pi"), "off");
+        assert_eq!(default_agent_cli_reasoning("omp"), "off");
+        assert_eq!(default_agent_cli_reasoning("codex"), "low");
+        assert!(validate_agent_cli_reasoning("pi", "medium").is_ok());
+        assert!(validate_agent_cli_reasoning("pi", "high").is_err());
+        assert_eq!(normalize_agent_cli_reasoning("pi", "high"), "medium");
+        assert!(supports_fast_mode("claude-code"));
+        assert!(supports_fast_mode("omp"));
+        assert!(supports_fast_mode("codex"));
+        assert!(!supports_fast_mode("pi"));
+        assert!(!supports_fast_mode("droid"));
     }
 
     #[test]
@@ -1507,6 +1776,76 @@ mod tests {
             Some("http://[::1]:11434".to_string())
         );
         assert_eq!(url_origin("not a url"), None);
+    }
+
+    #[test]
+    fn resolve_origin_warms_openrouter_and_rejects_disallowed_custom() {
+        assert_eq!(
+            resolve_ai_provider_origin(PROVIDER_OPENROUTER, None, false),
+            Some("https://openrouter.ai".to_string())
+        );
+        assert_eq!(
+            resolve_ai_provider_origin(PROVIDER_CUSTOM, Some("http://localhost:11434/v1"), false),
+            Some("http://localhost:11434".to_string())
+        );
+        assert_eq!(
+            resolve_ai_provider_origin(
+                PROVIDER_CUSTOM,
+                Some("http://169.254.169.254/latest/meta-data/"),
+                false
+            ),
+            None
+        );
+        assert_eq!(
+            resolve_ai_provider_origin("openai", Some("http://192.168.1.50:1234/v1"), false),
+            Some("http://192.168.1.50:1234".to_string())
+        );
+        assert_eq!(
+            resolve_ai_provider_origin("openai", Some("http://192.168.1.50:1234/v1"), true),
+            Some("https://api.openai.com".to_string())
+        );
+        assert_eq!(
+            resolve_ai_provider_origin("openai", Some("http://169.254.169.254/"), false),
+            None
+        );
+        assert_eq!(resolve_ai_provider_origin("claude-code", None, false), None);
+    }
+
+    #[test]
+    fn should_warm_http_routes_but_not_agent_cli() {
+        // Custom routes warm only when the executor could actually use them:
+        // a cached custom key or an effective no-auth config.
+        assert!(should_warm_resolved_ai_provider(
+            PROVIDER_CUSTOM,
+            false,
+            true
+        ));
+        assert!(!should_warm_resolved_ai_provider(
+            PROVIDER_CUSTOM,
+            false,
+            false
+        ));
+        assert!(should_warm_resolved_ai_provider(
+            PROVIDER_OPENROUTER,
+            true,
+            false
+        ));
+        assert!(!should_warm_resolved_ai_provider(
+            PROVIDER_OPENROUTER,
+            false,
+            true
+        ));
+        // OpenAI without an OpenAI key falls back to the custom route — same
+        // credential precondition as the executor's custom branch.
+        assert!(should_warm_resolved_ai_provider("openai", false, true));
+        assert!(!should_warm_resolved_ai_provider("openai", false, false));
+        assert!(should_warm_resolved_ai_provider("openai", true, false));
+        assert!(!should_warm_resolved_ai_provider(
+            "claude-code",
+            false,
+            false
+        ));
+        assert!(!should_warm_resolved_ai_provider("claude-code", true, true));
     }
 
     #[test]
@@ -1580,21 +1919,24 @@ mod tests {
     }
 
     #[test]
-    fn remember_provider_model_removes_empty_cli_default_selection() {
+    fn remember_provider_model_preserves_explicit_cli_default_selection() {
         let mut models = HashMap::from([
             ("claude-code".to_string(), "sonnet".to_string()),
             ("openai".to_string(), "gpt-5-nano".to_string()),
         ]);
 
         remember_provider_model(&mut models, "claude-code", "");
-        assert!(!models.contains_key("claude-code"));
+        assert_eq!(models.get("claude-code"), Some(&String::new()));
         assert_eq!(models.get("openai"), Some(&"gpt-5-nano".to_string()));
+
+        remember_provider_model(&mut models, "openai", "");
+        assert!(!models.contains_key("openai"));
 
         // An empty provider is a deselection/no-op and must not clear another
         // provider's remembered model.
         remember_provider_model(&mut models, "", "");
         assert_eq!(models.len(), 1);
-        assert_eq!(models.get("openai"), Some(&"gpt-5-nano".to_string()));
+        assert_eq!(models.get("claude-code"), Some(&String::new()));
     }
 
     #[test]

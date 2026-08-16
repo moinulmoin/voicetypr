@@ -124,7 +124,7 @@ export function AgentCliSection() {
         </p>
 
         <div className="rounded-xl border border-border/70 bg-background/60 p-4">
-          <div className="flex items-start justify-between gap-4">
+          <div className="flex flex-wrap items-start justify-between gap-x-4 gap-y-2">
             <div className="flex min-w-0 items-start gap-3">
               {status === null ? (
                 <Loader2 className="mt-0.5 size-4 shrink-0 animate-spin text-muted-foreground" />
@@ -157,15 +157,36 @@ export function AgentCliSection() {
                 )}
               </div>
             </div>
-            <Button
-              variant="ghost"
-              size="icon-sm"
-              aria-label="Refresh command health"
-              onClick={() => void refresh(true)}
-              disabled={busy}
-            >
-              <RefreshCw className={pending === "refresh" ? "animate-spin" : ""} />
-            </Button>
+            <div className="flex shrink-0 flex-wrap items-center justify-end gap-2">
+              {manageable && (
+                installed ? (
+                  <>
+                    <Button variant="outline" size="sm" onClick={repair} disabled={busy}>
+                      {pending === "repair" && <Loader2 className="animate-spin" />}
+                      {compatible ? "Repair command" : "Update command"}
+                    </Button>
+                    <Button variant="ghost" size="sm" onClick={uninstall} disabled={busy}>
+                      {pending === "uninstall" && <Loader2 className="animate-spin" />}
+                      Remove command
+                    </Button>
+                  </>
+                ) : (
+                  <Button size="sm" onClick={install} disabled={busy}>
+                    {pending === "install" && <Loader2 className="animate-spin" />}
+                    Install command
+                  </Button>
+                )
+              )}
+              <Button
+                variant="ghost"
+                size="icon-sm"
+                aria-label="Refresh command health"
+                onClick={() => void refresh(true)}
+                disabled={busy}
+              >
+                <RefreshCw className={pending === "refresh" ? "animate-spin" : ""} />
+              </Button>
+            </div>
           </div>
 
           {status && (
@@ -177,28 +198,6 @@ export function AgentCliSection() {
             </div>
           )}
         </div>
-
-        {manageable && (
-          <div className="flex flex-wrap justify-end gap-2">
-            {installed ? (
-              <>
-                <Button variant="outline" size="sm" onClick={repair} disabled={busy}>
-                  {pending === "repair" && <Loader2 className="animate-spin" />}
-                  {compatible ? "Repair command" : "Update command"}
-                </Button>
-                <Button variant="ghost" size="sm" onClick={uninstall} disabled={busy}>
-                  {pending === "uninstall" && <Loader2 className="animate-spin" />}
-                  Remove command
-                </Button>
-              </>
-            ) : (
-              <Button size="sm" onClick={install} disabled={busy}>
-                {pending === "install" && <Loader2 className="animate-spin" />}
-                Install command
-              </Button>
-            )}
-          </div>
-        )}
 
         {status?.manageable === false && !status.detail && (
           <p className="text-xs text-muted-foreground">

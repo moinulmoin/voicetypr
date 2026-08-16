@@ -140,6 +140,8 @@ describe("ShortcutsSection", () => {
         (a) => a.action !== "toggle_recording" && a.action !== "hold_to_record",
       ).length,
     );
+    expect(screen.queryByText("0 of 5 single-key shortcuts used.")).not.toBeInTheDocument();
+    expect(screen.queryByText("0 bindings configured")).not.toBeInTheDocument();
   });
 
   it("adds a copy-last shortcut and sends the full settings object", async () => {

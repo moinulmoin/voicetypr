@@ -417,6 +417,7 @@ pub struct UnifiedModelInfo {
     pub engine: String,
     pub kind: String,
     pub requires_setup: bool,
+    pub available_models: Option<Vec<crate::cloud_stt::CloudSttModel>>,
     pub underlying_model: Option<String>,
 }
 
@@ -749,6 +750,7 @@ fn convert_whisper_model(name: String, info: ModelInfo) -> UnifiedModelInfo {
         kind: "local".to_string(),
         requires_setup: false,
         underlying_model: None,
+        available_models: None,
     }
 }
 
@@ -767,6 +769,7 @@ fn convert_parakeet_model(status: ParakeetModelStatus) -> UnifiedModelInfo {
         kind: "local".to_string(),
         requires_setup: false,
         underlying_model: None,
+        available_models: None,
     }
 }
 
@@ -796,10 +799,52 @@ fn collect_cloud_models(app: &AppHandle) -> Vec<UnifiedModelInfo> {
                 engine: provider.id().to_string(),
                 kind: "cloud".to_string(),
                 requires_setup: !has_key,
-                underlying_model: Some(provider.model_name().to_string()),
+                underlying_model: Some(provider.selected_model(app).id.to_string()),
+                available_models: Some(provider.available_models().to_vec()),
             }
         })
         .collect()
+}
+
+/// Persist a curated cloud STT API model for one provider without changing
+/// `current_model` / `current_model_engine` (those stay as the provider id).
+#[tauri::command]
+pub async fn set_cloud_stt_model(
+    app: AppHandle,
+    provider_id: String,
+    model_id: String,
+) -> Result<(), String> {
+    let provider = crate::cloud_stt::CloudProvider::from_id(&provider_id)
+        .ok_or_else(|| format!("Unknown cloud STT provider '{}'", provider_id.trim()))?;
+    let model = provider.model_by_id(model_id.trim()).ok_or_else(|| {
+        format!(
+            "Unknown {} model '{}'",
+            provider.display_name(),
+            model_id.trim()
+        )
+    })?;
+
+    crate::commands::settings::persist_settings_and_invalidate(
+        &app,
+        |store| {
+            let mut models_by_provider = crate::cloud_stt::stored_models_by_provider(store);
+            models_by_provider.insert(provider.id().to_string(), model.id.to_string());
+            store.set(
+                crate::cloud_stt::CLOUD_STT_MODELS_BY_PROVIDER_KEY,
+                serde_json::json!(models_by_provider),
+            );
+            Ok(())
+        },
+        |e| format!("Failed to save cloud STT model: {}", e),
+    )
+    .await?;
+
+    log::info!(
+        "Cloud STT model updated: provider={}, model={}",
+        provider.id(),
+        model.id
+    );
+    Ok(())
 }
 
 #[tauri::command]

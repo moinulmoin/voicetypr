@@ -572,9 +572,7 @@ export function NetworkSharingCard() {
       {hasShareableModel && currentSelectionShareable && !status.enabled && modelDisplayName && !activeRemoteServer && (
         <div className="px-4 py-3">
           <p className="text-xs text-muted-foreground">
-            When enabled, another Voicetypr app can use this device's{" "}
-            <span className="font-medium text-foreground">{modelDisplayName}</span>{" "}
-            model for transcription.
+            Off — {modelDisplayName} is only available on this device.
           </p>
         </div>
       )}

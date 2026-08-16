@@ -7,7 +7,6 @@ const mockUpdateSettings = vi.fn().mockResolvedValue(undefined);
 const mockInvoke = vi.fn().mockResolvedValue(false);
 
 const baseSettings: AppSettings = {
-  settings_mode: 'advanced',
   recording_mode: 'toggle',
   hotkey: 'CommandOrControl+Shift+Space',
   current_model: '',
@@ -188,19 +187,6 @@ describe('GeneralSettings auto-paste-transcription switch', () => {
         auto_paste_transcription: true,
       });
     });
-  });
-  it('keeps everyday controls focused in standard mode', async () => {
-    mockSettings = { ...baseSettings, settings_mode: 'recommended' };
-
-    render(<GeneralSettings />);
-
-    expect(screen.getByText('Auto-paste transcript')).toBeInTheDocument();
-    expect(screen.queryByText('Keep Transcript in Clipboard')).not.toBeInTheDocument();
-    expect(screen.queryByText('Audio feedback')).not.toBeInTheDocument();
-    expect(screen.queryByText('Storage & cleanup')).not.toBeInTheDocument();
-
-    expect(screen.queryByText('Recommended')).not.toBeInTheDocument();
-    expect(screen.queryByText('Advanced')).not.toBeInTheDocument();
   });
 
 });

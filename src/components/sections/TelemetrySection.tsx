@@ -99,8 +99,7 @@ export function TelemetrySection() {
           <div className="min-w-0">
             <p className="text-sm font-medium">Crash &amp; error reporting</p>
             <p className="mt-1 text-xs text-muted-foreground">
-              Sends scrubbed crashes and errors to GlitchTip for diagnostics and
-              native symbolication.
+              Anonymous crash reports that help us fix bugs faster.
             </p>
           </div>
           <Switch
@@ -120,8 +119,7 @@ export function TelemetrySection() {
           <div className="min-w-0">
             <p className="text-sm font-medium">Usage analytics</p>
             <p className="mt-1 text-xs text-muted-foreground">
-              Sends anonymous feature usage, outcomes, and performance buckets
-              to PostHog. No autocapture or session replay.
+              Anonymous usage analytics that help us improve the product.
             </p>
           </div>
           <Switch
@@ -144,16 +142,8 @@ export function TelemetrySection() {
           </div>
         )}
 
-        {!loading && (!diagnostics.available || !analytics.available) && (
-          <p className="text-xs text-muted-foreground">
-            Unavailable categories are inert in this build. Your saved choices
-            still apply to official releases.
-          </p>
-        )}
-
         <p className="text-xs text-muted-foreground">
-          Neither category includes audio, transcripts, clipboard contents,
-          prompts, API keys, paths, window titles, or session replay.
+          No audio, transcripts, or personal data — ever.
         </p>
       </div>
     </div>

@@ -212,6 +212,7 @@ impl ParakeetSidecar {
 
             let text = String::from_utf8_lossy(&line_bytes);
             let trimmed = text.trim();
+            let benign_coreml_shape_probe = is_benign_coreml_shape_probe(trimmed);
             if trimmed.is_empty() {
                 continue;
             }
@@ -252,7 +253,11 @@ impl ParakeetSidecar {
                         || lower.contains("rate limit")
                         || lower.contains("huggingface")
                         || trimmed.contains('❌');
-                    if looks_like_error {
+                    if benign_coreml_shape_probe {
+                        log::info!(
+                            "Parakeet sidecar: Core ML shape probe emitted a benign diagnostic; model loading continued"
+                        );
+                    } else if looks_like_error {
                         warn!("Parakeet sidecar: {}", trimmed);
                     } else {
                         log::info!("Parakeet sidecar: {}", trimmed);
@@ -406,10 +411,18 @@ impl ParakeetClient {
     }
 }
 
+fn is_benign_coreml_shape_probe(line: &str) -> bool {
+    let lower = line.to_ascii_lowercase();
+    lower.contains("e5rt encountered an stl exception")
+        && lower.contains("failed to propagateinputtensorshapes")
+        && lower.contains("zero shape error")
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
-        dispatch_cancellable, extract_json_payload, parse_response_line, request_with_timeout,
+        dispatch_cancellable, extract_json_payload, is_benign_coreml_shape_probe,
+        parse_response_line, request_with_timeout,
     };
     use crate::parakeet::error::ParakeetError;
     use crate::parakeet::messages::{
@@ -448,7 +461,11 @@ mod tests {
 
     #[test]
     fn parse_response_line_recovers_json_after_noisy_prefix() {
-        let raw = r#"E5RT encountered an STL exception. {"type":"status","loadedModel":"parakeet-tdt-0.6b-v2","modelVersion":"v2"}"#;
+        let raw = r#"E5RT encountered an STL exception. msg = Failed to PropagateInputTensorShapes: std::runtime_error during type inference for ios17.slice_by_index: zero shape error. {"type":"status","loadedModel":"parakeet-tdt-0.6b-v2","modelVersion":"v2"}"#;
+        assert!(is_benign_coreml_shape_probe(raw));
+        assert!(!is_benign_coreml_shape_probe(
+            "downloadFailed: unauthorized"
+        ));
         let response = parse_response_line(raw).expect("expected recovered response");
 
         match response {
