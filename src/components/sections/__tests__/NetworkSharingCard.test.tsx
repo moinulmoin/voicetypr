@@ -139,7 +139,7 @@ describe("NetworkSharingCard", () => {
 
       await waitFor(() => {
         const toggle = screen.getByRole("switch");
-        expect(toggle).toBeDisabled();
+        expect(toggle).toHaveAttribute("aria-disabled", "true");
       });
     });
   });
@@ -198,7 +198,7 @@ describe("NetworkSharingCard", () => {
 
       await waitFor(() => {
         const toggle = screen.getByRole("switch");
-        expect(toggle).not.toBeDisabled();
+        expect(toggle).not.toHaveAttribute("aria-disabled", "true");
       });
     });
 
@@ -485,7 +485,7 @@ describe("NetworkSharingCard", () => {
 
       await waitFor(() => {
         const toggle = screen.getByRole("switch");
-        expect(toggle).toBeDisabled();
+        expect(toggle).toHaveAttribute("aria-disabled", "true");
       });
     });
 
@@ -528,7 +528,7 @@ describe("NetworkSharingCard", () => {
       renderWithProviders(<NetworkSharingCard />);
 
       await waitFor(() => {
-        expect(screen.getByRole("switch")).not.toBeDisabled();
+        expect(screen.getByRole("switch")).not.toHaveAttribute("aria-disabled", "true");
       });
 
       activeRemoteServer = "remote-server-1";
@@ -664,7 +664,7 @@ describe("NetworkSharingCard", () => {
       renderWithProviders(<NetworkSharingCard />);
 
       await waitFor(() => {
-        expect(screen.getByRole("switch")).not.toBeDisabled();
+        expect(screen.getByRole("switch")).not.toHaveAttribute("aria-disabled", "true");
       });
 
       await user.click(screen.getByRole("switch"));
@@ -684,7 +684,7 @@ describe("NetworkSharingCard", () => {
       renderWithProviders(<NetworkSharingCard />);
 
       await waitFor(() => {
-        expect(screen.getByRole("switch")).not.toBeDisabled();
+        expect(screen.getByRole("switch")).not.toHaveAttribute("aria-disabled", "true");
       });
 
       await user.click(screen.getByRole("switch"));
@@ -738,7 +738,7 @@ describe("NetworkSharingCard", () => {
       renderWithProviders(<NetworkSharingCard />);
 
       await waitFor(() => {
-        expect(screen.getByRole("switch")).not.toBeDisabled();
+        expect(screen.getByRole("switch")).not.toHaveAttribute("aria-disabled", "true");
       });
 
       await user.click(screen.getByRole("switch"));
@@ -1043,7 +1043,7 @@ describe("NetworkSharingCard", () => {
       const user = userEvent.setup();
       renderWithProviders(<NetworkSharingCard />);
 
-      const toggle = await screen.findByLabelText("Allow trusted devices to change shared model");
+      const toggle = await screen.findByRole("switch", { name: "Allow trusted devices to change shared model" });
       expect(toggle).not.toBeChecked();
 
       await user.click(toggle);
@@ -1299,7 +1299,7 @@ describe("NetworkSharingCard", () => {
         expect(screen.getByText("Current model cannot be shared")).toBeInTheDocument();
       });
 
-      expect(screen.getByRole("switch")).toBeDisabled();
+      expect(screen.getByRole("switch")).toHaveAttribute("aria-disabled", "true");
       expect(
         screen.getByText(/Cloud sources cannot be shared over the network/)
       ).toBeInTheDocument();

@@ -216,6 +216,14 @@ Object.defineProperty(window, 'matchMedia', {
   })),
 });
 
+// Base UI scroll-area probes running animations; jsdom lacks the Web Animations API.
+if (typeof Element !== 'undefined' && typeof Element.prototype.getAnimations !== 'function') {
+  Object.defineProperty(Element.prototype, 'getAnimations', {
+    writable: true,
+    value: () => [],
+  });
+}
+
 // Mock IntersectionObserver
 global.IntersectionObserver = vi.fn().mockImplementation(() => ({
   observe: vi.fn(),

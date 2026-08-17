@@ -196,20 +196,22 @@ export function AdvancedSection() {
             action={
               <TooltipProvider>
                 <Tooltip>
-                  <TooltipTrigger asChild>
-                    <Button
-                      size="sm"
-                      variant="ghost"
-                      onClick={() => refresh()}
-                      disabled={isLoading}
-                      className="h-8 px-2"
-                    >
-                      {isLoading ? (
-                        <Loader2 className="h-4 w-4 animate-spin" />
-                      ) : (
-                        <RefreshCw className="h-4 w-4" />
-                      )}
-                    </Button>
+                  <TooltipTrigger
+                    render={
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        onClick={() => refresh()}
+                        disabled={isLoading}
+                        className="h-8 px-2"
+                      />
+                    }
+                  >
+                    {isLoading ? (
+                      <Loader2 className="h-4 w-4 animate-spin" />
+                    ) : (
+                      <RefreshCw className="h-4 w-4" />
+                    )}
                   </TooltipTrigger>
                   <TooltipContent>
                     <p>Refresh permission status</p>

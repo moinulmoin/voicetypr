@@ -444,7 +444,7 @@ describe("EnhancementsSection", () => {
 
     expect(
       within(providersPanel).getByRole("tab", { name: "Cloud API" }),
-    ).toHaveAttribute("data-state", "active");
+    ).toHaveAttribute("data-active");
     expect(
       within(providersPanel).getByRole("tab", { name: "Local Agents" }),
     ).toBeInTheDocument();
@@ -561,10 +561,7 @@ describe("EnhancementsSection", () => {
     const user = userEvent.setup();
     renderWithProviders();
 
-    expect(await screen.findByRole("tab", { name: "Provider" })).toHaveAttribute(
-      "data-state",
-      "active",
-    );
+    expect(await screen.findByRole("tab", { name: "Provider" })).toHaveAttribute("data-active");
     expect(
       screen.getByRole("button", {
         name: "Select a provider to enable Polish",
@@ -915,11 +912,14 @@ describe("EnhancementsSection", () => {
     await user.click(
       within(providersPanel).getByRole("tab", { name: "Local Agents" }),
     );
-    await user.click(
-      await within(providersPanel).findByRole("switch", {
-        name: "Fast mode for Claude Code",
-      }),
+    // Base UI routes the switch's accessible name through a hidden input,
+    // so query by role within the Local Agents tab (only Claude Code exposes
+    // fast mode here; pi does not).
+    const fastModeSwitch = await waitFor(
+      () => within(providersPanel).getByRole("switch"),
+      { timeout: 3000 },
     );
+    await user.click(fastModeSwitch);
 
     expect(invoke).toHaveBeenCalledWith("update_agent_cli_fast_mode", {
       provider: "claude-code",
@@ -974,7 +974,7 @@ describe("EnhancementsSection", () => {
         name: "Expand provider and model",
       });
       expect(polishSwitch).toBeChecked();
-      expect(polishSwitch).not.toBeDisabled();
+      expect(polishSwitch).not.toHaveAttribute("aria-disabled", "true");
       expect(providerSummary).toHaveTextContent("Anthropic · Claude Sonnet 4");
       expect(providerSummary).toHaveTextContent("Active");
     });
@@ -998,7 +998,7 @@ describe("EnhancementsSection", () => {
 
     await waitFor(() => {
       const polishSwitch = screen.getByRole("switch", { name: "Polish" });
-      expect(polishSwitch).not.toBeDisabled();
+      expect(polishSwitch).not.toHaveAttribute("aria-disabled", "true");
     });
   });
 
@@ -1248,10 +1248,7 @@ describe("EnhancementsSection", () => {
     const user = userEvent.setup();
     renderWithProviders();
 
-    expect(await screen.findByRole("tab", { name: "Provider" })).toHaveAttribute(
-      "data-state",
-      "active",
-    );
+    expect(await screen.findByRole("tab", { name: "Provider" })).toHaveAttribute("data-active");
     expect(
       screen.getByRole("button", {
         name: "Select a provider to enable Polish",
@@ -1284,7 +1281,7 @@ describe("EnhancementsSection", () => {
     await openPolishTab(user, "Corrections");
     expect(
       screen.getByRole("tab", { name: "Corrections" }),
-    ).toHaveAttribute("data-state", "active");
+    ).toHaveAttribute("data-active");
     await openPolishTab(user, "Snippets");
     expect(await screen.findByText("Saved text")).toBeInTheDocument();
   });

@@ -1057,11 +1057,12 @@ export function GeneralSettings() {
                               max={50}
                               step={5}
                               value={[settings.pill_indicator_offset ?? 10]}
-                              onValueChange={async ([offset]) =>
+                              onValueChange={async (value) => {
+                                const offset = Array.isArray(value) ? value[0] : value;
                                 await updateSettings({
                                   pill_indicator_offset: offset,
-                                })
-                              }
+                                });
+                              }}
                               className="w-full"
                             />
                             <div className="min-w-12 rounded-md border bg-muted/60 px-2 py-1 text-center text-[11px] font-medium text-foreground tabular-nums">

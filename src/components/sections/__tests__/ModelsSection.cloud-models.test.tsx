@@ -120,10 +120,7 @@ describe("ModelsSection cloud model labels", () => {
     const user = userEvent.setup();
     const props = renderModels();
 
-    expect(await screen.findByRole("tab", { name: "Cloud (2)" })).toHaveAttribute(
-      "data-state",
-      "active",
-    );
+    expect(await screen.findByRole("tab", { name: "Cloud (2)" })).toHaveAttribute("data-active");
     expect(screen.getByRole("tab", { name: "Local (0)" })).toBeInTheDocument();
     expect(screen.getByRole("tab", { name: "Remote (0)" })).toBeInTheDocument();
     expect(screen.queryByRole("tab", { name: /all/i })).not.toBeInTheDocument();
