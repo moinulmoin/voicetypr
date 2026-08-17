@@ -102,7 +102,7 @@ export function AppShell({ activeSection, onSectionChange }: AppShellProps) {
         }`}
       >
         <SidebarTrigger
-          className="size-7 -translate-y-2 text-muted-foreground"
+          className="size-7 -translate-y-1 text-muted-foreground"
           title="Toggle sidebar"
         />
       </header>

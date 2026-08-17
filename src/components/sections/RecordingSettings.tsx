@@ -341,7 +341,7 @@ export function RecordingSettings() {
 
   return (
     <div className="h-full min-h-0 overflow-auto">
-      <div className="mx-auto flex w-full max-w-3xl flex-col gap-3.5 px-6 pb-7 pt-4 md:px-8">
+      <div className="mx-auto flex w-full max-w-3xl flex-col gap-3.5 px-6 pb-7 pt-2 md:px-8">
         <div className="mb-1 flex flex-wrap items-start gap-3">
           <div className="min-w-0">
             <div className="flex items-center gap-2">

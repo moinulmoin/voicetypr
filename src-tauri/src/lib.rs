@@ -62,6 +62,7 @@ fn align_main_window_controls(window: &tauri::WebviewWindow) {
 
     const TITLEBAR_HEIGHT: f64 = 36.0;
     const TRAFFIC_LIGHT_LEFT: f64 = 12.0;
+    const TRAFFIC_LIGHT_VERTICAL_OFFSET: f64 = 4.0;
 
     let Ok(ns_window) = window.ns_window() else {
         log::warn!("Could not access the main NSWindow to align window controls");
@@ -95,8 +96,9 @@ fn align_main_window_controls(window: &tauri::WebviewWindow) {
         titlebar_frame.origin.y = ns_window.frame().size.height - TITLEBAR_HEIGHT;
         let _: () = msg_send![&titlebar_container, setFrame: titlebar_frame];
         let mut button_container_frame = NSView::frame(&button_container);
-        button_container_frame.origin.y =
-            (TITLEBAR_HEIGHT - button_container_frame.size.height) / 2.0;
+        button_container_frame.origin.y = (TITLEBAR_HEIGHT - button_container_frame.size.height)
+            / 2.0
+            - TRAFFIC_LIGHT_VERTICAL_OFFSET;
         button_container.setFrameOrigin(button_container_frame.origin);
 
         let horizontal_step = NSView::frame(&minimize).origin.x - close_frame.origin.x;
