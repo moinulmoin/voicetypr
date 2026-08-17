@@ -94,7 +94,7 @@ describe("AppShell tray recovery", () => {
     expect(screen.queryByText("Menu-bar icon unavailable")).not.toBeInTheDocument();
   });
 
-  it("keeps the compact draggable title bar chrome", async () => {
+  it("keeps the draggable title bar free of controls", async () => {
     getTrayStatusMock.mockResolvedValue({
       available: true,
       attempts: 0,
@@ -107,7 +107,7 @@ describe("AppShell tray recovery", () => {
     const mainSurface = screen.getByText("Active section").closest("section");
     expect(titleBar).toHaveAttribute("data-tauri-drag-region");
     expect(titleBar).toHaveClass("h-9");
-    expect(screen.getByRole("button", { name: "Toggle Sidebar" })).toBeInTheDocument();
+    expect(titleBar).toBeEmptyDOMElement();
     expect(mainSurface).toHaveClass(
       "rounded-2xl",
       "border",

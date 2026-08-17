@@ -2,7 +2,7 @@ import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { Sidebar } from "./Sidebar";
-import { SidebarProvider, SidebarTrigger } from "@/components/ui/sidebar";
+import { SidebarProvider } from "@/components/ui/sidebar";
 import { TooltipProvider } from "@/components/ui/tooltip";
 
 vi.mock("@tauri-apps/api/app", () => ({
@@ -42,7 +42,6 @@ function renderSidebar(
   render(
     <TooltipProvider>
       <SidebarProvider>
-        <SidebarTrigger />
         <Sidebar
           activeSection={activeSection}
           onSectionChange={onSectionChange}
