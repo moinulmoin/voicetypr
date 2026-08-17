@@ -1,6 +1,7 @@
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { GeneralSettings } from '../GeneralSettings';
+import { RecordingSettings } from '../RecordingSettings';
 
 const mockUpdateSettings = vi.fn().mockResolvedValue(undefined);
 
@@ -136,6 +137,10 @@ vi.mock('../NetworkSharingCard', () => ({
   NetworkSharingCard: () => <div data-testid="network-sharing-card" />,
 }));
 
+vi.mock('../TelemetrySection', () => ({
+  TelemetrySection: () => <div>Privacy &amp; diagnostics</div>,
+}));
+
 beforeEach(() => {
   invokeMock.mockReset();
   invokeMock.mockImplementation(async (command: string) => {
@@ -163,14 +168,14 @@ describe('GeneralSettings transcription acceleration — Windows', () => {
   });
 
   it('renders the Transcription performance section header', async () => {
-    render(<GeneralSettings />);
+    render(<RecordingSettings />);
     await waitFor(() => {
       expect(screen.getByText('Transcription performance')).toBeInTheDocument();
     });
   });
 
   it('renders Auto, GPU, and CPU select items', async () => {
-    render(<GeneralSettings />);
+    render(<RecordingSettings />);
     await waitFor(() => {
       expect(screen.getByTestId('select-item-auto')).toBeInTheDocument();
       expect(screen.getByTestId('select-item-gpu')).toBeInTheDocument();
@@ -179,7 +184,7 @@ describe('GeneralSettings transcription acceleration — Windows', () => {
   });
 
   it('defaults to auto when transcription_acceleration is undefined', async () => {
-    render(<GeneralSettings />);
+    render(<RecordingSettings />);
     await waitFor(() => {
       // The Select bound to acceleration should have data-value="auto"
       const selects = screen.getAllByTestId('select');
@@ -190,7 +195,7 @@ describe('GeneralSettings transcription acceleration — Windows', () => {
 
   it('reflects a stored cpu value', async () => {
     mockSettings = { ...baseSettings, transcription_acceleration: 'cpu' };
-    render(<GeneralSettings />);
+    render(<RecordingSettings />);
     await waitFor(() => {
       const selects = screen.getAllByTestId('select');
       const accelSelect = selects.find((el) => el.getAttribute('data-value') === 'cpu');
@@ -199,7 +204,7 @@ describe('GeneralSettings transcription acceleration — Windows', () => {
   });
 
   it('calls updateSettings with transcription_acceleration: "cpu" when CPU is selected', async () => {
-    render(<GeneralSettings />);
+    render(<RecordingSettings />);
 
     const cpuItem = await screen.findByTestId('select-item-cpu');
     fireEvent.click(cpuItem);
@@ -212,7 +217,7 @@ describe('GeneralSettings transcription acceleration — Windows', () => {
   });
 
   it('calls updateSettings with transcription_acceleration: "gpu" when GPU is selected', async () => {
-    render(<GeneralSettings />);
+    render(<RecordingSettings />);
 
     const gpuItem = await screen.findByTestId('select-item-gpu');
     fireEvent.click(gpuItem);
@@ -226,7 +231,7 @@ describe('GeneralSettings transcription acceleration — Windows', () => {
 
   it('calls updateSettings with transcription_acceleration: "auto" when Auto is selected', async () => {
     mockSettings = { ...baseSettings, transcription_acceleration: 'cpu' };
-    render(<GeneralSettings />);
+    render(<RecordingSettings />);
 
     const autoItem = await screen.findByTestId('select-item-auto');
     fireEvent.click(autoItem);
@@ -252,7 +257,7 @@ describe('GeneralSettings transcription acceleration — non-Windows', () => {
   it('does NOT render the acceleration section on macOS', async () => {
     platformMock.isWindows = false;
     platformMock.isMacOS = true;
-    render(<GeneralSettings />);
+    render(<RecordingSettings />);
     await waitFor(() => {
       expect(screen.queryByText('Transcription performance')).not.toBeInTheDocument();
       expect(screen.queryByTestId('select-item-gpu')).not.toBeInTheDocument();
@@ -263,7 +268,7 @@ describe('GeneralSettings transcription acceleration — non-Windows', () => {
   it('does NOT render the acceleration section on Linux', async () => {
     platformMock.isWindows = false;
     platformMock.isMacOS = false;
-    render(<GeneralSettings />);
+    render(<RecordingSettings />);
     await waitFor(() => {
       expect(screen.queryByText('Transcription performance')).not.toBeInTheDocument();
       expect(screen.queryByTestId('select-item-gpu')).not.toBeInTheDocument();
@@ -277,6 +282,14 @@ describe('GeneralSettings update distribution controls', () => {
     mockUpdateSettings.mockClear();
     platformMock.isWindows = false;
     platformMock.isMacOS = true;
+  });
+
+  it('owns global privacy and reset controls, not recording controls', async () => {
+    render(<GeneralSettings />);
+
+    expect(await screen.findByText('Privacy & diagnostics')).toBeInTheDocument();
+    expect(screen.getByText('Reset app / start over')).toBeInTheDocument();
+    expect(screen.queryByText('Recording workflow')).not.toBeInTheDocument();
   });
 
 

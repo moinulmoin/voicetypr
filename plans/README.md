@@ -50,7 +50,7 @@ Verification commands used across all plans: `pnpm typecheck`, `pnpm lint`,
 | 047  | Polish provider UX + no-input fast path | P0 | M | 044, 046 | DONE — local-agent probe storm removed; stable rows, per-agent model dialog/search, supported thinking controls, and persisted CLI defaults verified 2026-08-10; warmup hardened 2026-08-13 (custom origins validated before HEAD, OpenRouter + OpenAI legacy-fallback origins warm, agent-CLI never warms; recording start prefetches the selected provider only — HTTP HEAD or CLI capability probe); shortcut zero-count chrome removed and curated, friendly-labeled cloud STT model selection verified 2026-08-14 |
 | 048  | Expanded local-agent CLI Polish adapters | P1 | L | 044, 047 | DONE — focused frontend/backend gates, exact installed-CLI smokes, and native CUA UI exercise passed 2026-08-10; droid isolation flag corrected to documented `--restrict-tools` + real droid round-trip smoke passed 2026-08-13 |
 | 049  | Local-agent model discovery + current CLI defaults | P1 | M | 044, 048 | DONE — frontend/backend gates, Finder-style installed-CLI smoke, and native CUA model selector/default smoke passed 2026-08-10 |
-| 050  | Navigation ownership reorganization — dedicated Recording, global Settings, coherent utilities | P1 | M | 047 | IN PROGRESS — claimed Main 2026-08-17 |
+| 050  | Navigation ownership reorganization — dedicated Recording, global Settings, coherent utilities | P1 | M | 047 | NEEDS-SMOKE — code complete; frontend gates passed 2026-08-17; interactive checklist in `plans/SMOKE.md` |
 
 ## Code-done, awaiting batched manual smoke (`plans/SMOKE.md`)
 

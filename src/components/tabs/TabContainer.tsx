@@ -5,6 +5,7 @@ import { EnhancementsTab } from "./EnhancementsTab";
 import { ModelsTab } from "./ModelsTab";
 import { OverviewTab } from "./OverviewTab";
 import { RecordingsTab } from "./RecordingsTab";
+import { RecordingTab } from "./RecordingTab";
 import { SettingsTab } from "./SettingsTab";
 import { ShortcutsTab } from "./ShortcutsTab";
 import { NetworkSharingTab } from "./NetworkSharingTab";
@@ -29,6 +30,9 @@ export function TabContainer({ activeSection }: TabContainerProps) {
 
       case "audio":
         return <AudioUploadSection />;
+      case "recording":
+        return <RecordingTab />;
+
 
       case "general":
         return <SettingsTab />;

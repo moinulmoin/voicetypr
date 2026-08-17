@@ -19,9 +19,6 @@ vi.mock('@/contexts/ReadinessContext', () => ({
   }),
 }));
 
-vi.mock('../TelemetrySection', () => ({
-  TelemetrySection: () => <div data-testid="telemetry-section" />,
-}));
 
 describe('AdvancedSection', () => {
   beforeEach(() => {
@@ -41,6 +38,9 @@ describe('AdvancedSection', () => {
     expect(screen.getByRole('button', { name: /shortcut not responding/i })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /text not inserting/i })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /model download stuck/i })).toBeInTheDocument();
+    expect(
+      screen.queryByRole('heading', { name: 'Privacy & diagnostics' }),
+    ).not.toBeInTheDocument();
   });
 
   it('shows Windows-specific quick-fix solutions', async () => {

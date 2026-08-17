@@ -1,5 +1,6 @@
 import type { LucideIcon } from "lucide-react";
 import {
+  Activity,
   Bug,
   Clock,
   Cpu,
@@ -7,7 +8,7 @@ import {
   Home,
   Keyboard,
   Key,
-  Activity,
+  Mic,
   Settings2,
   Share2,
   Sparkles,
@@ -18,6 +19,7 @@ export type ScreenId =
   | "overview"
   | "recordings"
   | "audio"
+  | "recording"
   | "general"
   | "shortcuts"
   | "models"
@@ -56,6 +58,12 @@ export const primaryScreens: ScreenDefinition[] = [
     description: "Transcribe existing audio files.",
   },
   {
+    id: "recording",
+    label: "Recording",
+    icon: Mic,
+    description: "Microphone, primary shortcut, feedback, and recording behavior.",
+  },
+  {
     id: "models",
     label: "Sources",
     icon: Cpu,
@@ -65,7 +73,7 @@ export const primaryScreens: ScreenDefinition[] = [
     id: "network",
     label: "Network sharing",
     icon: Share2,
-    description: "Share this device's transcription engine over your network, or connect to one.",
+    description: "Let other devices use this device's transcription engine.",
   },
   {
     id: "formatting",
@@ -77,19 +85,19 @@ export const primaryScreens: ScreenDefinition[] = [
     id: "general",
     label: "Settings",
     icon: Settings2,
-    description: "Hotkeys, paste behavior, microphones, and app preferences.",
+    description: "Appearance, startup, privacy, updates, and reset options.",
   },
   {
     id: "shortcuts",
     label: "Shortcuts",
     icon: Keyboard,
-    description: "Recording, history, and mode shortcuts.",
+    description: "Additional shortcuts for history, Polish, and app actions.",
   },
   {
     id: "license",
-    label: "Account",
+    label: "License",
     icon: Key,
-    description: "Trial status, license activation, and account access.",
+    description: "Trial status, license activation, and purchase access.",
   },
   {
     id: "agent",
@@ -130,7 +138,7 @@ export const navScreens: ScreenDefinition[] = [
   screenById("audio"),
   screenById("models"),
   screenById("formatting"),
-  screenById("general"),
+  screenById("recording"),
   screenById("shortcuts"),
   screenById("network"),
   screenById("agent"),
@@ -138,6 +146,7 @@ export const navScreens: ScreenDefinition[] = [
 
 // Footer block is static across the app — always rendered, never mode-gated.
 export const footerNavScreens: ScreenDefinition[] = [
+  screenById("general"),
   screenById("license"),
   screenById("advanced"),
   screenById("report-problem"),

@@ -1,6 +1,6 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { GeneralSettings } from '../GeneralSettings';
+import { RecordingSettings } from '../RecordingSettings'
 import { invoke } from '@tauri-apps/api/core';
 
 const mockUpdateSettings = vi.fn().mockResolvedValue(undefined);
@@ -149,7 +149,7 @@ describe('GeneralSettings recording indicator', () => {
 
   it('hides the position selector when mode is never', async () => {
     mockSettings.pill_indicator_mode = 'never';
-    render(<GeneralSettings />);
+    render(<RecordingSettings />);
     await waitFor(() => {
       expect(
         screen.queryByText('Indicator Position')
@@ -159,7 +159,7 @@ describe('GeneralSettings recording indicator', () => {
 
   it('shows the position selector when mode is always', async () => {
     mockSettings.pill_indicator_mode = 'always';
-    render(<GeneralSettings />);
+    render(<RecordingSettings />);
     await waitFor(() => {
       expect(screen.getByText('Indicator Position')).toBeInTheDocument();
     });
@@ -167,21 +167,21 @@ describe('GeneralSettings recording indicator', () => {
 
   it('shows the position selector when mode is when_recording', async () => {
     mockSettings.pill_indicator_mode = 'when_recording';
-    render(<GeneralSettings />);
+    render(<RecordingSettings />);
     await waitFor(() => {
       expect(screen.getByText('Indicator Position')).toBeInTheDocument();
     });
   });
 
   it('displays Recording Indicator Visibility label', async () => {
-    render(<GeneralSettings />);
+    render(<RecordingSettings />);
     await waitFor(() => {
       expect(screen.getByText('Recording indicator')).toBeInTheDocument();
     });
   });
 
   it('displays all indicator mode options', async () => {
-    render(<GeneralSettings />);
+    render(<RecordingSettings />);
     await waitFor(() => {
       expect(screen.getByTestId('select-item-never')).toBeInTheDocument();
       expect(screen.getByTestId('select-item-always')).toBeInTheDocument();
@@ -190,7 +190,7 @@ describe('GeneralSettings recording indicator', () => {
   });
 
   it('offers compact and full indicator detail', async () => {
-    render(<GeneralSettings />);
+    render(<RecordingSettings />);
 
     await waitFor(() => {
       expect(screen.getByText('Indicator detail')).toBeInTheDocument();
@@ -212,7 +212,7 @@ describe('GeneralSettings recording indicator', () => {
 
   it('displays all indicator position options when mode is not never', async () => {
     mockSettings.pill_indicator_mode = 'always';
-    render(<GeneralSettings />);
+    render(<RecordingSettings />);
     await waitFor(() => {
       expect(screen.getByTestId('select-item-top-left')).toBeInTheDocument();
       expect(screen.getByTestId('select-item-top-center')).toBeInTheDocument();
@@ -225,7 +225,7 @@ describe('GeneralSettings recording indicator', () => {
 
   it('calls updateSettings when position is changed', async () => {
     mockSettings.pill_indicator_mode = 'always';
-    render(<GeneralSettings />);
+    render(<RecordingSettings />);
 
     await waitFor(() => {
       expect(screen.getByText('Indicator Position')).toBeInTheDocument();
@@ -259,7 +259,7 @@ describe('GeneralSettings audio feedback settings', () => {
   });
 
   it('describes the three exact audio feedback events', async () => {
-    render(<GeneralSettings />);
+    render(<RecordingSettings />);
 
     expect(await screen.findByText('Recording started')).toBeInTheDocument();
     expect(screen.getByText('Transcript ready')).toBeInTheDocument();
@@ -280,7 +280,7 @@ describe('GeneralSettings audio feedback settings', () => {
     ['Transcript ready', 'play_sound_on_transcription_complete'],
     ['Paste completed', 'play_sound_on_paste_success'],
   ] as const)('updates %s independently', async (label, setting) => {
-    render(<GeneralSettings />);
+    render(<RecordingSettings />);
     fireEvent.click(await screen.findByRole('switch', { name: label }));
 
     await waitFor(() => {
@@ -294,7 +294,7 @@ describe('GeneralSettings audio feedback settings', () => {
     ['Paste completed', 'play_sound_on_paste_success'],
   ] as const)('reflects disabled state for %s', async (label, setting) => {
     mockSettings = { ...baseSettings, [setting]: false };
-    render(<GeneralSettings />);
+    render(<RecordingSettings />);
 
     expect(await screen.findByRole('switch', { name: label })).toHaveAttribute(
       'aria-checked',
@@ -315,28 +315,28 @@ describe('GeneralSettings clipboard settings', () => {
   });
 
   it('displays Keep Transcript in Clipboard label', async () => {
-    render(<GeneralSettings />);
+    render(<RecordingSettings />);
     await waitFor(() => {
       expect(screen.getByText('Keep Transcript in Clipboard')).toBeInTheDocument();
     });
   });
 
   it('displays clipboard description', async () => {
-    render(<GeneralSettings />);
+    render(<RecordingSettings />);
     await waitFor(() => {
       expect(screen.getByText('Leave transcribed text available for manual pastes')).toBeInTheDocument();
     });
   });
 
   it('renders clipboard retain switch', async () => {
-    render(<GeneralSettings />);
+    render(<RecordingSettings />);
     await waitFor(() => {
       expect(screen.getByTestId('switch-clipboard-retain')).toBeInTheDocument();
     });
   });
 
   it('calls updateSettings when clipboard switch is clicked', async () => {
-    render(<GeneralSettings />);
+    render(<RecordingSettings />);
 
     await waitFor(() => {
       expect(screen.getByTestId('switch-clipboard-retain')).toBeInTheDocument();
@@ -357,29 +357,29 @@ describe('GeneralSettings clipboard settings', () => {
 // UI Structure Tests
 // ============================================================================
 
-describe('GeneralSettings UI structure', () => {
+describe('RecordingSettings UI structure', () => {
   beforeEach(() => {
     mockSettings = { ...baseSettings };
     vi.clearAllMocks();
     setupDefaultInvoke();
   });
 
-  it('renders the Settings header', async () => {
-    render(<GeneralSettings />);
+  it('renders the Recording header', async () => {
+    render(<RecordingSettings />);
     await waitFor(() => {
-      expect(screen.getByText('Settings')).toBeInTheDocument();
+      expect(screen.getByRole('heading', { name: 'Recording', level: 1 })).toBeInTheDocument();
     });
   });
 
-  it('renders the Recording section', async () => {
-    render(<GeneralSettings />);
+  it('renders the recording workflow', async () => {
+    render(<RecordingSettings />);
     await waitFor(() => {
-      expect(screen.getByText('Recording')).toBeInTheDocument();
+      expect(screen.getByText('Recording workflow')).toBeInTheDocument();
     });
   });
 
   it('shows hotkey input after clicking Edit', async () => {
-    render(<GeneralSettings />);
+    render(<RecordingSettings />);
     const editButton = await screen.findByRole('button', { name: /edit/i });
     fireEvent.click(editButton);
     await waitFor(() => {
@@ -388,21 +388,21 @@ describe('GeneralSettings UI structure', () => {
   });
 
   it('renders the microphone selection component', async () => {
-    render(<GeneralSettings />);
+    render(<RecordingSettings />);
     await waitFor(() => {
       expect(screen.getByTestId('microphone-selection')).toBeInTheDocument();
     });
   });
 
-  it('renders Launch at Startup label', async () => {
-    render(<GeneralSettings />);
+  it('does not render global startup settings', async () => {
+    render(<RecordingSettings />);
     await waitFor(() => {
-      expect(screen.getByText('Launch at Startup')).toBeInTheDocument();
+      expect(screen.queryByText('Launch at Startup')).not.toBeInTheDocument();
     });
   });
 
   it('displays ESC cancel hint', async () => {
-    render(<GeneralSettings />);
+    render(<RecordingSettings />);
     await waitFor(() => {
       expect(
         screen.getByText(
@@ -421,7 +421,7 @@ describe('GeneralSettings UI structure', () => {
 // Recording Hotkey Editor Tests
 // ============================================================================
 
-describe('GeneralSettings recording hotkey editor', () => {
+describe('RecordingSettings hotkey editor', () => {
   beforeEach(() => {
     mockSettings = { ...baseSettings };
     vi.clearAllMocks();
@@ -429,7 +429,7 @@ describe('GeneralSettings recording hotkey editor', () => {
   });
 
   it('displays the current combo hotkey in view mode', async () => {
-    render(<GeneralSettings />);
+    render(<RecordingSettings />);
     await waitFor(() => {
       // The label appears in both FieldDescription and the display box
       expect(screen.getAllByText('Ctrl+Shift+Space').length).toBeGreaterThan(0);
@@ -438,21 +438,21 @@ describe('GeneralSettings recording hotkey editor', () => {
 
   it('displays "Not set" when no hotkey is configured', async () => {
     mockSettings = { ...baseSettings, hotkey: '' };
-    render(<GeneralSettings />);
+    render(<RecordingSettings />);
     await waitFor(() => {
       expect(screen.getAllByText('Not set').length).toBeGreaterThan(0);
     });
   });
 
   it('shows the Recording Hotkey field title', async () => {
-    render(<GeneralSettings />);
+    render(<RecordingSettings />);
     await waitFor(() => {
       expect(screen.getByText('Recording Hotkey')).toBeInTheDocument();
     });
   });
 
   it('clicking Edit enters capture mode and shows HotkeyInput', async () => {
-    render(<GeneralSettings />);
+    render(<RecordingSettings />);
     const editButton = await screen.findByRole('button', { name: /edit/i });
     fireEvent.click(editButton);
     await waitFor(() => {
@@ -463,7 +463,7 @@ describe('GeneralSettings recording hotkey editor', () => {
   });
 
   it('Cancel returns to view mode without saving', async () => {
-    render(<GeneralSettings />);
+    render(<RecordingSettings />);
     const editButton = await screen.findByRole('button', { name: /edit/i });
     fireEvent.click(editButton);
     await screen.findByTestId('hotkey-input');
@@ -479,7 +479,7 @@ describe('GeneralSettings recording hotkey editor', () => {
 
   it('Save is disabled until a key is captured when no prior hotkey', async () => {
     mockSettings = { ...baseSettings, hotkey: '' };
-    render(<GeneralSettings />);
+    render(<RecordingSettings />);
     const editButton = await screen.findByRole('button', { name: /edit/i });
     fireEvent.click(editButton);
     await screen.findByTestId('hotkey-input');
@@ -489,7 +489,7 @@ describe('GeneralSettings recording hotkey editor', () => {
   });
 
   it('capturing a combo enables Save and calls set_global_shortcut + updateSettings', async () => {
-    render(<GeneralSettings />);
+    render(<RecordingSettings />);
     const editButton = await screen.findByRole('button', { name: /edit/i });
     fireEvent.click(editButton);
     await screen.findByTestId('hotkey-input');
@@ -508,7 +508,7 @@ describe('GeneralSettings recording hotkey editor', () => {
   });
 
   it('after saving a combo, view mode returns showing the new hotkey', async () => {
-    render(<GeneralSettings />);
+    render(<RecordingSettings />);
     const editButton = await screen.findByRole('button', { name: /edit/i });
     fireEvent.click(editButton);
     await screen.findByTestId('hotkey-input');
@@ -522,7 +522,7 @@ describe('GeneralSettings recording hotkey editor', () => {
   });
 
   it('capturing a bare modifier shows the Hold-to-talk switch', async () => {
-    render(<GeneralSettings />);
+    render(<RecordingSettings />);
     const editButton = await screen.findByRole('button', { name: /edit/i });
     fireEvent.click(editButton);
     await screen.findByTestId('hotkey-input');
@@ -541,7 +541,7 @@ describe('GeneralSettings recording hotkey editor', () => {
     // user switches from a combo to a bare modifier, the combo MUST be cleared
     // before update_shortcut_settings rebuilds the engine — otherwise the new
     // bare-modifier binding is disabled the instant it is saved.
-    render(<GeneralSettings />);
+    render(<RecordingSettings />);
     const editButton = await screen.findByRole('button', { name: /edit/i });
     fireEvent.click(editButton);
     await screen.findByTestId('hotkey-input');
@@ -570,7 +570,7 @@ describe('GeneralSettings recording hotkey editor', () => {
   });
 
   it('bare modifier + Hold-to-talk OFF → persists isolated_tap/toggle_recording/pressed', async () => {
-    render(<GeneralSettings />);
+    render(<RecordingSettings />);
     const editButton = await screen.findByRole('button', { name: /edit/i });
     fireEvent.click(editButton);
     await screen.findByTestId('hotkey-input');
@@ -604,7 +604,7 @@ describe('GeneralSettings recording hotkey editor', () => {
   });
 
   it('bare modifier + Hold-to-talk ON → persists modifier_hold/hold_to_record/hold', async () => {
-    render(<GeneralSettings />);
+    render(<RecordingSettings />);
     const editButton = await screen.findByRole('button', { name: /edit/i });
     fireEvent.click(editButton);
     await screen.findByTestId('hotkey-input');
@@ -654,7 +654,7 @@ describe('GeneralSettings recording hotkey editor', () => {
       return Promise.resolve(undefined);
     });
 
-    render(<GeneralSettings />);
+    render(<RecordingSettings />);
     const editButton = await screen.findByRole('button', { name: /edit/i });
     fireEvent.click(editButton);
     await screen.findByTestId('hotkey-input');
@@ -691,7 +691,7 @@ describe('GeneralSettings recording hotkey editor', () => {
       return Promise.resolve(undefined);
     });
 
-    render(<GeneralSettings />);
+    render(<RecordingSettings />);
     await waitFor(() => {
       expect(screen.getAllByText('Tap Left Control to toggle').length).toBeGreaterThan(0);
     });
@@ -716,7 +716,7 @@ describe('GeneralSettings recording hotkey editor', () => {
       return Promise.resolve(undefined);
     });
 
-    render(<GeneralSettings />);
+    render(<RecordingSettings />);
     await waitFor(() => {
       expect(screen.getAllByText('Hold Left Control to talk').length).toBeGreaterThan(0);
     });
@@ -756,7 +756,7 @@ describe('GeneralSettings null handling', () => {
     };
     mockSettings = settingsWithoutSound as typeof mockSettings;
 
-    render(<GeneralSettings />);
+    render(<RecordingSettings />);
     for (const label of [
       'Recording started',
       'Transcript ready',
@@ -783,7 +783,7 @@ describe('GeneralSettings settings values', () => {
 
   it('displays the current hotkey string in view mode', async () => {
     mockSettings.hotkey = 'CommandOrControl+Shift+Space';
-    render(<GeneralSettings />);
+    render(<RecordingSettings />);
     await waitFor(() => {
       expect(screen.getAllByText('Ctrl+Shift+Space').length).toBeGreaterThan(0);
     });
@@ -791,7 +791,7 @@ describe('GeneralSettings settings values', () => {
 
   it('displays correct pill indicator mode value', async () => {
     mockSettings.pill_indicator_mode = 'always';
-    render(<GeneralSettings />);
+    render(<RecordingSettings />);
     // The first Select should have the indicator mode
     await waitFor(() => {
       const selects = screen.getAllByTestId('select');
@@ -800,7 +800,7 @@ describe('GeneralSettings settings values', () => {
   });
 
   it('shows all three indicator visibility options', async () => {
-    render(<GeneralSettings />);
+    render(<RecordingSettings />);
     await waitFor(() => {
       expect(screen.getByText('Never')).toBeInTheDocument();
       expect(screen.getByText('Always')).toBeInTheDocument();
@@ -810,7 +810,7 @@ describe('GeneralSettings settings values', () => {
 
   it('shows all indicator position options when indicator is visible', async () => {
     mockSettings.pill_indicator_mode = 'always';
-    render(<GeneralSettings />);
+    render(<RecordingSettings />);
     await waitFor(() => {
       expect(screen.getByText('Top Left')).toBeInTheDocument();
       expect(screen.getByText('Top Center')).toBeInTheDocument();

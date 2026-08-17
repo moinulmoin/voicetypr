@@ -1,6 +1,6 @@
 import { render, screen, waitFor, fireEvent, act } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { GeneralSettings } from "../GeneralSettings";
+import { RecordingSettings } from "../RecordingSettings";
 import type { AppSettings } from "@/types";
 import type { ShortcutBinding } from "@/types/shortcuts";
 
@@ -150,7 +150,7 @@ describe("GeneralSettings combo-hotkey save", () => {
   });
 
   it("disables the existing native primary when saving a combo", async () => {
-    render(<GeneralSettings />);
+    render(<RecordingSettings />);
 
     await act(async () => {
       fireEvent.click(screen.getByRole("button", { name: "Edit" }));

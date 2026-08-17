@@ -1,6 +1,6 @@
 # Plan 050: Navigation ownership reorganization
 
-**Status:** IN PROGRESS — claimed Main 2026-08-17
+**Status:** NEEDS-SMOKE — code complete; frontend gates passed 2026-08-17
 **Priority:** P1
 **Effort:** M
 **Baseline:** `894ecffd`
@@ -44,3 +44,9 @@ Make each sidebar destination answer one clear user question without collapsing 
 - `pnpm lint`
 - `pnpm vitest run`
 - Native Tauri smoke confirms Recording and Settings render, navigation placement is correct, and moved controls remain operable.
+
+## Evidence
+
+- Focused ownership/navigation suite: 11 files, 93 tests passed.
+- Frontend gates: ESLint passed, TypeScript passed, 62 files / 662 tests passed.
+- Native development app launched and initialized, but its dashboard window remained hidden with an unresolved accessibility surface; CUA correctly refused background input. Interactive navigation smoke remains in `plans/SMOKE.md`.

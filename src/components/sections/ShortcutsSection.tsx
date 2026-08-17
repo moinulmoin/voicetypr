@@ -392,15 +392,18 @@ export function ShortcutsSection() {
     <SettingsPage>
       <SettingsHeader
         title="Shortcuts"
-        description="Keyboard shortcuts for recording, history, Polish, and the dashboard."
+        description="Additional shortcuts for history, Polish, the dashboard, and other app actions."
       />
 
       <div className="rounded-2xl border border-border bg-muted/40 p-4 text-sm text-muted-foreground">
         <div className="flex gap-2">
           <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-sage" />
-          <p>
-            Voicetypr tests global shortcuts and refuses combos already owned by macOS, Windows, or another app.
-          </p>
+          <div>
+            <p>Your primary recording shortcut is configured in Recording.</p>
+            <p className="mt-1">
+              Voicetypr tests global shortcuts and refuses combos already owned by macOS, Windows, or another app.
+            </p>
+          </div>
         </div>
         {singleKeyCount > 0 && (
           <p className="mt-1 text-xs">

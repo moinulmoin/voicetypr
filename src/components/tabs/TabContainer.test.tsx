@@ -20,6 +20,10 @@ vi.mock('./RecordingsTab', () => ({
   RecordingsTab: () => <div data-testid="recordings-tab">Recordings</div>
 }));
 
+vi.mock('./RecordingTab', () => ({
+  RecordingTab: () => <div data-testid="recording-tab">Recording</div>
+}));
+
 vi.mock('./OverviewTab', () => ({
   OverviewTab: () => <div data-testid="overview-tab">Overview</div>
 }));
@@ -57,6 +61,9 @@ describe('TabContainer', () => {
     
     rerender(<TabContainer activeSection="recordings" />);
     expect(screen.getByTestId('recordings-tab')).toBeInTheDocument();
+
+    rerender(<TabContainer activeSection="recording" />);
+    expect(screen.getByTestId('recording-tab')).toBeInTheDocument();
     
     rerender(<TabContainer activeSection="models" />);
     expect(screen.getByTestId('models-tab')).toBeInTheDocument();

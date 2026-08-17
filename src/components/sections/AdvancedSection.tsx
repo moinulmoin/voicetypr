@@ -1,5 +1,4 @@
 import { PermissionErrorBoundary } from "@/components/PermissionErrorBoundary";
-import { TelemetrySection } from "./TelemetrySection";
 import {
   SettingsCard,
   SettingsHeader,
@@ -60,8 +59,8 @@ const QUICK_FIXES: QuickFix[] = [
     issue: "Voice recording does not start from the shortcut.",
     solution: () =>
       isMacOS
-        ? "Check microphone permission in Diagnostics. Also confirm a recording device is selected in Settings."
-        : "In Windows Settings, allow desktop apps to use the microphone. Also confirm a recording device is selected in Settings.",
+        ? "Check microphone permission in Diagnostics. Also confirm a recording device is selected in Recording."
+        : "In Windows Settings, allow desktop apps to use the microphone. Also confirm a recording device is selected in Recording.",
   },
   {
     id: "hotkey",
@@ -313,7 +312,6 @@ export function AdvancedSection() {
             })}
           </div>
         </SettingsCard>
-        <TelemetrySection />
 
       </SettingsPage>
     </PermissionErrorBoundary>

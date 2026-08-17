@@ -53,19 +53,21 @@ describe("Sidebar navigation", () => {
     const sources = screen.getByRole("button", { name: "Sources" });
     const polish = screen.getByRole("button", { name: "Polish" });
     expect(sources.compareDocumentPosition(polish) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Recording" })).toBeInTheDocument();
     expect(screen.queryByText("Workspace")).not.toBeInTheDocument();
     expect(screen.queryByText("Set up")).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: /network sharing/i })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /agent & cli/i })).toBeInTheDocument();
   });
 
-  it("always shows the static footer block with account, diagnostics, and reporting", async () => {
+  it("always shows the static footer block with settings, license, diagnostics, and reporting", async () => {
     renderSidebar();
     await screen.findByText("v2.0.5");
 
     const footerGroup = screen.getByTestId("sidebar-footer-nav");
 
-    expect(footerGroup).toHaveTextContent(/account/i);
+    expect(footerGroup).toHaveTextContent(/settings/i);
+    expect(footerGroup).toHaveTextContent(/license/i);
     expect(footerGroup).toHaveTextContent(/diagnostics/i);
     expect(footerGroup).toHaveTextContent(/report a problem/i);
     expect(footerGroup).not.toHaveTextContent(/overview/i);

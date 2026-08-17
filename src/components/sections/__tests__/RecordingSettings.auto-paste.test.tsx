@@ -1,6 +1,6 @@
 import { render, screen, waitFor, fireEvent } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { GeneralSettings } from '../GeneralSettings';
+import { RecordingSettings } from '../RecordingSettings'
 import type { AppSettings } from '@/types';
 
 const mockUpdateSettings = vi.fn().mockResolvedValue(undefined);
@@ -137,7 +137,7 @@ describe('GeneralSettings auto-paste-transcription switch', () => {
 
   it('defaults to enabled when setting is missing', async () => {
     // baseSettings has no auto_paste_transcription field
-    render(<GeneralSettings />);
+    render(<RecordingSettings />);
 
     const sw = screen.getByRole('switch', {
       name: 'auto-paste-transcription',
@@ -148,7 +148,7 @@ describe('GeneralSettings auto-paste-transcription switch', () => {
   it('reflects explicit false value', async () => {
     mockSettings = { ...baseSettings, auto_paste_transcription: false };
 
-    render(<GeneralSettings />);
+    render(<RecordingSettings />);
 
     const sw = screen.getByRole('switch', {
       name: 'auto-paste-transcription',
@@ -158,7 +158,7 @@ describe('GeneralSettings auto-paste-transcription switch', () => {
 
   it('calls updateSettings with false when toggled off', async () => {
     // Missing field → defaults true → toggle sends false
-    render(<GeneralSettings />);
+    render(<RecordingSettings />);
 
     const sw = screen.getByRole('switch', {
       name: 'auto-paste-transcription',
@@ -175,7 +175,7 @@ describe('GeneralSettings auto-paste-transcription switch', () => {
   it('calls updateSettings with true when toggled on from explicit false', async () => {
     mockSettings = { ...baseSettings, auto_paste_transcription: false };
 
-    render(<GeneralSettings />);
+    render(<RecordingSettings />);
 
     const sw = screen.getByRole('switch', {
       name: 'auto-paste-transcription',

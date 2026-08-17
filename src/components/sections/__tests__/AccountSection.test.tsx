@@ -53,6 +53,8 @@ describe('AccountSection license verification', () => {
 
     expect(screen.getByText('Pro Licensed')).toBeInTheDocument();
     expect(screen.getByText('License verification still unavailable')).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'License' })).toBeInTheDocument();
+    expect(screen.queryByText('Reset app / start over')).not.toBeInTheDocument();
     expect(
       screen.getByText('Offline access remains available. Your paid license has not expired.'),
     ).toBeInTheDocument();
