@@ -717,7 +717,17 @@ export function RecentRecordings({
           </div>
           {/* Filter row */}
           <div className="flex shrink-0 items-center gap-2">
-            <Select value={sourceFilter} onValueChange={setSourceFilter}>
+            <Select
+              items={[
+                { value: "all", label: "All sources" },
+                { value: "desktop_recording", label: "This device" },
+                { value: "audio_file", label: "Upload" },
+                { value: "remote_server", label: "Remote" },
+                { value: "cli", label: "CLI" },
+              ]}
+              value={sourceFilter}
+              onValueChange={(value) => value != null && setSourceFilter(value)}
+            >
               <SelectTrigger className="h-9 w-auto gap-1.5 rounded-lg border-border bg-card text-xs">
                 <SelectValue />
               </SelectTrigger>
@@ -729,7 +739,15 @@ export function RecentRecordings({
                 <SelectItem value="cli">CLI</SelectItem>
               </SelectContent>
             </Select>
-            <Select value={dateFilter} onValueChange={setDateFilter}>
+            <Select
+              items={[
+                { value: "all", label: "All time" },
+                { value: "today", label: "Today" },
+                { value: "last7", label: "Last 7 days" },
+              ]}
+              value={dateFilter}
+              onValueChange={(value) => value != null && setDateFilter(value)}
+            >
               <SelectTrigger className="h-9 w-auto gap-1.5 rounded-lg border-border bg-card text-xs">
                 <SelectValue />
               </SelectTrigger>
@@ -740,7 +758,14 @@ export function RecentRecordings({
               </SelectContent>
             </Select>
             {distinctAppNames.length > 0 && (
-              <Select value={appFilter} onValueChange={setAppFilter}>
+              <Select
+              items={[
+                { value: "all", label: "All apps" },
+                ...distinctAppNames.map((name) => ({ value: name, label: name })),
+              ]}
+              value={appFilter}
+              onValueChange={(value) => value != null && setAppFilter(value)}
+            >
                 <SelectTrigger className="h-9 w-auto gap-1.5 rounded-lg border-border bg-card text-xs">
                   <SelectValue />
                 </SelectTrigger>

@@ -1,4 +1,5 @@
 import { render, screen, waitFor, fireEvent, act } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
 // Mock Tauri invoke
@@ -836,14 +837,11 @@ describe("RemoteServerCard", () => {
         name: "Transcription model on 192.168.1.100:47842",
       });
 
-      await act(async () => {
-        fireEvent.click(select);
-      });
+      const user = userEvent.setup();
+      await user.click(select);
 
       const nextModel = await screen.findByText("Base English");
-      await act(async () => {
-        fireEvent.click(nextModel);
-      });
+      await user.click(nextModel);
 
       await waitFor(() => {
         expect(mockInvoke).toHaveBeenCalledWith("update_remote_transcription_control", {

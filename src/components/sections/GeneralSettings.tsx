@@ -461,7 +461,8 @@ export function GeneralSettings() {
                   <FieldDescription>Light, dark, or follow your system.</FieldDescription>
                 </FieldContent>
                 <Select
-                  value={normalizeTheme(settings.theme)}
+                  items={[{ value: "system", label: "System" }, { value: "light", label: "Light" }, { value: "dark", label: "Dark" }]}
+                      value={normalizeTheme(settings.theme)}
                   onValueChange={(value) => void updateSettings({ theme: normalizeTheme(value) })}
                 >
                   <SelectTrigger className="w-full md:w-[190px]" aria-label="Theme">
@@ -523,8 +524,9 @@ export function GeneralSettings() {
                       </FieldDescription>
                     </FieldContent>
                     <Select
+                      items={[{ value: "stable", label: "Stable" }, { value: "beta", label: "Beta" }]}
                       value={settings.update_channel ?? "stable"}
-                      onValueChange={(value) => void handleUpdateChannelChange(value)}
+                      onValueChange={(value) => value != null && void handleUpdateChannelChange(value)}
                       disabled={isChangingUpdateChannel || isCheckingUpdate}
                     >
                       <SelectTrigger className="w-full md:w-[190px]" aria-label="Update channel">
@@ -886,9 +888,10 @@ export function GeneralSettings() {
                       </FieldDescription>
                     </FieldContent>
                     <Select
+                      items={[{ value: 'auto', label: 'Auto' }, { value: 'gpu', label: 'GPU' }, { value: 'cpu', label: 'CPU' }]}
                       value={settings.transcription_acceleration ?? 'auto'}
-                      onValueChange={(value: TranscriptionAcceleration) => {
-                        void handleAccelerationChange(value);
+                      onValueChange={(value) => {
+                        if (value != null) void handleAccelerationChange(value);
                       }}
                     >
                       <SelectTrigger className="w-full md:w-[190px]">
@@ -950,10 +953,12 @@ export function GeneralSettings() {
                       <FieldDescription>Show or hide the small recording status overlay.</FieldDescription>
                     </FieldContent>
                     <Select
+                      items={[{ value: "never", label: "Never" }, { value: "always", label: "Always" }, { value: "when_recording", label: "When Recording" }]}
                       value={settings.pill_indicator_mode ?? "when_recording"}
-                      onValueChange={async (value: PillIndicatorMode) => {
+                      onValueChange={async (value) => {
+                        if (value == null) return;
                         await updateSettings({
-                          pill_indicator_mode: value,
+                          pill_indicator_mode: value as PillIndicatorMode,
                         });
                       }}
                     >
@@ -977,10 +982,12 @@ export function GeneralSettings() {
                         </FieldDescription>
                       </FieldContent>
                       <Select
-                        value={settings.pill_indicator_style ?? "compact"}
-                        onValueChange={async (value: PillIndicatorStyle) => {
+                        items={[{ value: "compact", label: "Compact" }, { value: "full", label: "Full" }]}
+                      value={settings.pill_indicator_style ?? "compact"}
+                        onValueChange={async (value) => {
+                          if (value == null) return;
                           await updateSettings({
-                            pill_indicator_style: value,
+                            pill_indicator_style: value as PillIndicatorStyle,
                           });
                         }}
                       >
@@ -1005,10 +1012,19 @@ export function GeneralSettings() {
                           </FieldDescription>
                         </FieldContent>
                         <Select
-                          value={settings.pill_indicator_position ?? "bottom-center"}
-                          onValueChange={async (value: PillIndicatorPosition) => {
+                          items={[
+                          { value: "top-left", label: "Top Left" },
+                          { value: "top-center", label: "Top Center" },
+                          { value: "top-right", label: "Top Right" },
+                          { value: "bottom-left", label: "Bottom Left" },
+                          { value: "bottom-center", label: "Bottom Center" },
+                          { value: "bottom-right", label: "Bottom Right" },
+                        ]}
+                      value={settings.pill_indicator_position ?? "bottom-center"}
+                          onValueChange={async (value) => {
+                            if (value == null) return;
                             await updateSettings({
-                              pill_indicator_position: value,
+                              pill_indicator_position: value as PillIndicatorPosition,
                             });
                           }}
                         >
@@ -1069,17 +1085,25 @@ export function GeneralSettings() {
                       </FieldDescription>
                     </FieldContent>
                     <Select
+                      items={[
+                          { value: "forever", label: "Keep forever" },
+                          { value: "7", label: "7 days" },
+                          { value: "14", label: "14 days" },
+                          { value: "30", label: "30 days" },
+                          { value: "90", label: "90 days" },
+                        ]}
                       value={
                         settings.transcription_cleanup_days == null
                           ? "forever"
                           : String(settings.transcription_cleanup_days)
                       }
-                      onValueChange={async (value) =>
+                      onValueChange={async (value) => {
+                        if (value == null) return;
                         await updateSettings({
                           transcription_cleanup_days:
                             value === "forever" ? null : parseInt(value, 10),
-                        })
-                      }
+                        });
+                      }}
                     >
                       <SelectTrigger className="w-full md:w-[190px]">
                         <SelectValue />
@@ -1107,6 +1131,14 @@ export function GeneralSettings() {
                     <div className="w-full md:w-auto">
                       <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-end">
                         <Select
+                          items={[
+                            { value: "off", label: "Don't save" },
+                            { value: "forever", label: "Keep forever" },
+                            { value: "7", label: "7 days" },
+                            { value: "14", label: "14 days" },
+                            { value: "30", label: "30 days" },
+                            { value: "90", label: "90 days" },
+                          ]}
                           value={
                             !settings.save_recordings
                               ? "off"
@@ -1115,6 +1147,7 @@ export function GeneralSettings() {
                                 : String(settings.recording_retention_days ?? 30)
                           }
                           onValueChange={async (value) => {
+                            if (value == null) return;
                             if (value === "off") {
                               await updateSettings({
                                 save_recordings: false,

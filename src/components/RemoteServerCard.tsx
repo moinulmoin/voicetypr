@@ -290,9 +290,10 @@ function RemoteTranscriptionModelControl({
         </div>
         {selectableModels.length > 0 ? (
           <Select
+            items={selectableModels.map((model) => ({ value: modelOptionKey(model.id, model.engine), label: model.display_name || getModelDisplayName(model.id) || model.id }))}
             value={selectedValue}
             onValueChange={(value) => {
-              void handleModelChange(value);
+              if (value != null) void handleModelChange(value);
             }}
             disabled={updating}
           >

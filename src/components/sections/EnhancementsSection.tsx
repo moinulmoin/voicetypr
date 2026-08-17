@@ -1715,6 +1715,7 @@ export function EnhancementsSection() {
                                   value={reasoning}
                                   disabled={!agentCliReady}
                                   onValueChange={(value) =>
+                                    value != null &&
                                     void handleSelectReasoning(
                                       provider.id,
                                       value,

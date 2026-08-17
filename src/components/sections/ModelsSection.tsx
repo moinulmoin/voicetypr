@@ -677,9 +677,12 @@ export function ModelsSection({
                   onPointerDown={(event) => event.stopPropagation()}
                 >
                   <Select
+                    items={availableModels.map((option) => ({ value: option.id, label: option.display_name }))}
                     value={selectedModelId}
                     onValueChange={(modelId) => {
-                      void handleCloudModelChange(name, modelId, requiresSetup);
+                      if (modelId != null) {
+                        void handleCloudModelChange(name, modelId, requiresSetup);
+                      }
                     }}
                   >
                     <SelectTrigger
