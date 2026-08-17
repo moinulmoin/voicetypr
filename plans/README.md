@@ -82,7 +82,7 @@ Verification commands used across all plans: `pnpm typecheck`, `pnpm lint`,
 | 012  | Shared transcription contract — design doc (no code) | DONE |
 | 014  | Shared transcription contract — Stage 1 (DTOs + executor) | DONE (2026-06-13) — additive `transcription/` contract module (request/error/capability DTOs + delegating executor); `Explicit`→Whisper/Parakeet/Cloud delegate to existing helpers; `HostDefault` (Stage 4) + Remote send (Stage 5) typed-deferred; cloud_stt typed-error seam added; no callsite rewired (zero runtime change); gates green (clippy --all-targets, 919 tests). Executor engine dispatch is exercised when a later stage ports callsites. Stages 2-6 are future plans. |
 | 018  | AI provider graduation — OpenRouter, Groq, xAI | DROPPED (2026-06-13) — Groq/OpenRouter (and earlier xAI/DeepSeek/Cohere) removed per user; OpenAI-compatible providers are served by the Custom escape hatch, so there is nothing to graduate |
-| 050  | Navigation ownership reorganization — dedicated Recording, compact Settings modal, visible utility status, CLI onboarding, and Polish workflow | DONE (2026-08-17) — focused/full frontend gates and native macOS CUA smoke passed |
+| 050  | Navigation ownership reorganization — dedicated Recording, direct settings routes, compact chrome, CLI onboarding, and Polish workflow | DONE (2026-08-17) — focused/full frontend gates and native macOS CUA smoke passed |
 
 Status values: TODO | IN PROGRESS — claimed <by> <date> | DONE | NEEDS-SMOKE
 (code done, manual smoke pending) | BLOCKED (one-line reason) | REJECTED

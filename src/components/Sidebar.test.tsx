@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { Sidebar } from "./Sidebar";
@@ -16,20 +16,6 @@ vi.mock("@/contexts/LicenseContext", () => ({
   }),
 }));
 
-vi.mock("./SettingsDialog", () => ({
-  SettingsDialog: ({
-    open,
-    section,
-  }: {
-    open: boolean;
-    section: string;
-  }) =>
-    open ? (
-      <div role="dialog" aria-label="Settings modal">
-        {section}
-      </div>
-    ) : null,
-}));
 
 vi.mock("@/services/updateService", () => ({
   updateService: { checkForUpdatesManually: vi.fn() },
@@ -82,25 +68,45 @@ describe("Sidebar navigation", () => {
     expect(screen.getByRole("button", { name: "CLI" })).toBeInTheDocument();
   });
 
-  it("keeps only Settings and reporting in the utility footer", async () => {
+  it("keeps every destination in one compact list and reporting fixed below it", async () => {
     const user = userEvent.setup();
-    renderSidebar();
+    const onSectionChange = renderSidebar();
     await screen.findByText("v2.0.5");
 
+    const mainNav = screen.getByTestId("sidebar-main-nav");
+    const overview = within(mainNav).getByRole("button", { name: "Overview" });
+    const general = within(mainNav).getByRole("button", { name: "General" });
+    const history = within(mainNav).getByRole("button", { name: "History" });
     const footerGroup = screen.getByTestId("sidebar-footer-nav");
 
-    expect(footerGroup).toHaveTextContent(/settings/i);
-    expect(footerGroup).toHaveTextContent(/report a problem/i);
-    expect(footerGroup).not.toHaveTextContent(/license/i);
-    expect(footerGroup).not.toHaveTextContent(/diagnostics/i);
-
-    await user.click(screen.getByRole("button", { name: "Settings" }));
-    expect(screen.getByRole("dialog", { name: "Settings modal" })).toBeInTheDocument();
-
-    await user.click(screen.getByRole("button", { name: /Pro. Open license settings/i }));
     expect(
-      screen.getByRole("dialog", { name: "Settings modal" }),
-    ).toHaveTextContent("license");
+      overview.compareDocumentPosition(general) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+    expect(
+      general.compareDocumentPosition(history) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+    expect(within(mainNav).getByRole("button", { name: "License" })).toBeInTheDocument();
+    expect(within(mainNav).getByRole("button", { name: "Diagnostics" })).toBeInTheDocument();
+    expect(footerGroup).toHaveTextContent(/report a problem/i);
+    expect(footerGroup).not.toHaveTextContent(/general|license|diagnostics/i);
+    expect(
+      document.querySelector('[data-slot="sidebar-content"]'),
+    ).toHaveClass("overflow-hidden");
+
+    await user.click(general);
+    expect(onSectionChange).toHaveBeenLastCalledWith("general");
+
+    await user.click(screen.getByRole("button", { name: /Pro. Open License/i }));
+    expect(onSectionChange).toHaveBeenLastCalledWith("license");
+  });
+
+  it("keeps the brand row close to the native titlebar", () => {
+    renderSidebar();
+    expect(
+      document.querySelector('[data-slot="sidebar-header"]'),
+    ).toHaveClass("pt-1");
   });
 
   it("collapses to the icon rail through the sidebar control contract", async () => {

@@ -1,9 +1,5 @@
 import { Brandmark } from "@/components/Brandmark";
 import {
-  SettingsDialog,
-  type SettingsSection,
-} from "@/components/SettingsDialog";
-import {
   footerNavScreens,
   navScreens,
   type ScreenDefinition,
@@ -25,7 +21,7 @@ import {
 import { useLicense } from "@/contexts/LicenseContext";
 import type { LicenseStatus } from "@/types";
 import { cn } from "@/lib/utils";
-import { RefreshCw, Settings2 } from "lucide-react";
+import { RefreshCw } from "lucide-react";
 import { useEffect, useState } from "react";
 import { updateService } from "@/services/updateService";
 
@@ -89,17 +85,11 @@ export function Sidebar({
 }: SidebarProps) {
   const { status, isLoading } = useLicense();
   const [appVersion, setAppVersion] = useState("—");
-  const [settingsOpen, setSettingsOpen] = useState(false);
-  const [settingsSection, setSettingsSection] = useState<SettingsSection>("general");
   const licenseBadge = getLicenseBadge(status, status?.trial_days_left ?? -1);
-  const settingsNeedsAttention =
+  const licenseNeedsAttention =
     status?.status === "expired" ||
     status?.verification_state === "needs_revalidation";
 
-  const openSettings = (section: SettingsSection) => {
-    setSettingsSection(section);
-    setSettingsOpen(true);
-  };
 
   useEffect(() => {
     const loadVersion = async () => {
@@ -114,9 +104,8 @@ export function Sidebar({
 
 
   return (
-    <>
-      <SidebarPrimitive collapsible="icon" className="group-data-[side=left]:border-r-0 bg-sidebar/95 pt-9 backdrop-blur-sm">
-        <SidebarHeader className="gap-2 px-4 pb-2 pt-4 group-data-[collapsible=icon]:px-2">
+    <SidebarPrimitive collapsible="icon" className="group-data-[side=left]:border-r-0 bg-sidebar/95 pt-9 backdrop-blur-sm">
+        <SidebarHeader className="gap-2 px-4 pb-2 pt-1 group-data-[collapsible=icon]:px-2">
           <div className="flex w-full items-center gap-2 rounded-lg px-1">
             <button
               type="button"
@@ -133,13 +122,13 @@ export function Sidebar({
             {!isLoading && status ? (
               <button
                 type="button"
-                onClick={() => openSettings("license")}
-                aria-label={`${licenseBadge.label}. Open license settings`}
-                title="Open license settings"
+                onClick={() => onSectionChange("license")}
+                aria-label={`${licenseBadge.label}. Open License`}
+                title="Open License"
                 className={cn(
                   "shrink-0 rounded-full border px-2 py-0.5 text-[11px] font-semibold uppercase tracking-[0.12em] transition-shadow hover:ring-2 hover:ring-sage/20 group-data-[collapsible=icon]:hidden",
                   licenseBadge.className,
-                  settingsNeedsAttention && "ring-2 ring-amber-500/25",
+                  licenseNeedsAttention && "ring-2 ring-amber-500/25",
                 )}
               >
                 {licenseBadge.label}
@@ -148,7 +137,7 @@ export function Sidebar({
           </div>
         </SidebarHeader>
 
-        <SidebarContent className="px-2">
+        <SidebarContent className="overflow-hidden px-2">
           <SidebarNavMenu
             items={navScreens}
             activeSection={activeSection}
@@ -156,35 +145,11 @@ export function Sidebar({
           />
         </SidebarContent>
 
-        <SidebarFooter className="gap-3 px-2">
+        <SidebarFooter className="gap-1 px-2">
           <nav data-testid="sidebar-footer-nav">
-            <SidebarGroup className="py-2">
+            <SidebarGroup className="py-1">
               <SidebarGroupContent>
                 <SidebarMenu className="group-data-[collapsible=icon]:items-center">
-                  <SidebarMenuItem>
-                    <SidebarMenuButton
-                      tooltip={
-                        settingsNeedsAttention
-                          ? "Settings — license attention required."
-                          : "General preferences, license, and diagnostics."
-                      }
-                      aria-label={
-                        settingsNeedsAttention
-                          ? "Settings — license attention required"
-                          : "Settings"
-                      }
-                      onClick={() => openSettings("general")}
-                      className="rounded-xl text-sm font-medium text-muted-foreground transition-colors hover:bg-sidebar-accent/70 hover:text-foreground"
-                    >
-                      <span className="relative">
-                        <Settings2 className="size-4 text-muted-foreground" />
-                        {settingsNeedsAttention ? (
-                          <span className="absolute -right-1 -top-1 size-2 rounded-full bg-amber-500 ring-2 ring-sidebar" />
-                        ) : null}
-                      </span>
-                      <span>Settings</span>
-                    </SidebarMenuButton>
-                  </SidebarMenuItem>
                   {footerNavScreens.map((item) => (
                     <SidebarNavItem
                       key={item.id}
@@ -200,14 +165,6 @@ export function Sidebar({
           <SidebarFooterStatus appVersion={appVersion} />
         </SidebarFooter>
       </SidebarPrimitive>
-
-      <SettingsDialog
-        open={settingsOpen}
-        section={settingsSection}
-        onSectionChange={setSettingsSection}
-        onOpenChange={setSettingsOpen}
-      />
-    </>
   );
 }
 
@@ -221,20 +178,22 @@ function SidebarNavMenu({
   onSectionChange: (section: ScreenId) => void;
 }) {
   return (
-    <SidebarGroup className="py-2">
-      <SidebarGroupContent>
-        <SidebarMenu className="group-data-[collapsible=icon]:items-center">
-          {items.map((item) => (
-            <SidebarNavItem
-              key={item.id}
-              item={item}
-              isActive={activeSection === item.id}
-              onSelect={onSectionChange}
-            />
-          ))}
-        </SidebarMenu>
-      </SidebarGroupContent>
-    </SidebarGroup>
+    <nav data-testid="sidebar-main-nav">
+      <SidebarGroup className="py-1">
+        <SidebarGroupContent>
+          <SidebarMenu className="group-data-[collapsible=icon]:items-center">
+            {items.map((item) => (
+              <SidebarNavItem
+                key={item.id}
+                item={item}
+                isActive={activeSection === item.id}
+                onSelect={onSectionChange}
+              />
+            ))}
+          </SidebarMenu>
+        </SidebarGroupContent>
+      </SidebarGroup>
+    </nav>
   );
 }
 
@@ -252,6 +211,7 @@ function SidebarNavItem({
   return (
     <SidebarMenuItem>
       <SidebarMenuButton
+        size="sm"
         tooltip={item.description}
         isActive={isActive}
         onClick={() => onSelect(item.id)}

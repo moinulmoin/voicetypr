@@ -205,7 +205,7 @@ export function OverviewTab() {
 
   return (
     <div className="h-full min-h-0 overflow-auto">
-      <div className="mx-auto flex w-full max-w-4xl flex-col gap-6 px-6 py-7 md:px-8">
+      <div className="mx-auto flex w-full max-w-4xl flex-col gap-6 px-6 pb-7 pt-4 md:px-8">
         <header>
           <h1 className="text-[1.75rem] font-semibold tracking-[-0.025em] text-foreground">
             Overview

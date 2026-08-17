@@ -83,9 +83,9 @@ export const primaryScreens: ScreenDefinition[] = [
   },
   {
     id: "general",
-    label: "Settings",
+    label: "General",
     icon: Settings2,
-    description: "Appearance, startup, privacy, updates, and reset options.",
+    description: "Appearance, startup, privacy, and update options.",
   },
   {
     id: "shortcuts",
@@ -112,7 +112,7 @@ export const secondaryScreens: ScreenDefinition[] = [
     id: "advanced",
     label: "Diagnostics",
     icon: Activity,
-    description: "Permissions, recovery, and app diagnostics.",
+    description: "Permissions, troubleshooting, reset tools, and app diagnostics.",
   },
   {
     id: "report-problem",
@@ -134,6 +134,7 @@ const screenById = (id: ScreenId): ScreenDefinition =>
 // Single navigation list for the main sidebar group.
 export const navScreens: ScreenDefinition[] = [
   screenById("overview"),
+  screenById("general"),
   screenById("recordings"),
   screenById("audio"),
   screenById("models"),
@@ -142,9 +143,11 @@ export const navScreens: ScreenDefinition[] = [
   screenById("shortcuts"),
   screenById("network"),
   screenById("agent"),
+  screenById("license"),
+  screenById("advanced"),
 ];
 
-// Footer block is static across the app — always rendered, never mode-gated.
+// Report a problem remains a distinct bottom action.
 export const footerNavScreens: ScreenDefinition[] = [
   screenById("report-problem"),
 ];

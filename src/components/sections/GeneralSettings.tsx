@@ -137,16 +137,16 @@ export function GeneralSettings() {
 
   return (
     <div className="h-full min-h-0 overflow-auto">
-      <div className="mx-auto flex w-full max-w-3xl flex-col gap-3.5 px-6 py-7 md:px-8">
+      <div className="mx-auto flex w-full max-w-3xl flex-col gap-3.5 px-6 pb-7 pt-4 md:px-8">
         <div className="mb-1 flex flex-wrap items-start gap-3">
           <div className="min-w-0">
             <div className="flex items-center gap-2">
-              <h1 className="text-2xl font-semibold tracking-tight">Settings</h1>
+              <h1 className="text-2xl font-semibold tracking-tight">General</h1>
               <Dialog>
-                <DialogTrigger render={<Button type="button" variant="ghost" size="icon-sm" aria-label="Settings guide" className="size-7 rounded-full text-muted-foreground"/>}><HelpCircle className="h-4 w-4" /></DialogTrigger>
+                <DialogTrigger render={<Button type="button" variant="ghost" size="icon-sm" aria-label="General guide" className="size-7 rounded-full text-muted-foreground"/>}><HelpCircle className="h-4 w-4" /></DialogTrigger>
                 <DialogContent className="sm:max-w-lg">
                   <DialogHeader>
-                    <DialogTitle>Settings guide</DialogTitle>
+                    <DialogTitle>General guide</DialogTitle>
                     <DialogDescription>
                       Manage global appearance, startup, privacy, and update options.
                     </DialogDescription>
