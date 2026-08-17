@@ -165,11 +165,7 @@ export function AdvancedSection() {
             <span className="flex items-center gap-2">
               Diagnostics
               <Dialog>
-                <DialogTrigger asChild>
-                  <Button type="button" variant="ghost" size="icon-sm" aria-label="Diagnostics guide" className="size-7 rounded-full text-muted-foreground">
-                    <HelpCircle className="h-4 w-4" />
-                  </Button>
-                </DialogTrigger>
+                <DialogTrigger render={<Button type="button" variant="ghost" size="icon-sm" aria-label="Diagnostics guide" className="size-7 rounded-full text-muted-foreground"/>}><HelpCircle className="h-4 w-4" /></DialogTrigger>
                 <DialogContent className="sm:max-w-lg">
                   <DialogHeader>
                     <DialogTitle>Diagnostics guide</DialogTitle>

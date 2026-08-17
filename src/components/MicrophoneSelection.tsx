@@ -106,20 +106,22 @@ export function MicrophoneSelection({ value, onValueChange, className }: Microph
   
   return (
     <Popover open={open} onOpenChange={setOpen}>
-      <PopoverTrigger asChild>
-        <Button
-          variant="outline"
-          role="combobox"
-          aria-expanded={open}
-          className={cn("w-64 justify-between", className)}
-          disabled={loading}
-        >
-          <div className="flex items-center gap-2">
-            <Mic className="h-4 w-4" />
-            <span className="truncate">{displayValue}</span>
-          </div>
-          <ChevronsUpDown className="opacity-50" />
-        </Button>
+      <PopoverTrigger
+        render={
+          <Button
+            variant="outline"
+            role="combobox"
+            aria-expanded={open}
+            className={cn("w-64 justify-between", className)}
+            disabled={loading}
+          />
+        }
+      >
+        <div className="flex items-center gap-2">
+          <Mic className="h-4 w-4" />
+          <span className="truncate">{displayValue}</span>
+        </div>
+        <ChevronsUpDown className="opacity-50" />
       </PopoverTrigger>
       <PopoverContent className="w-64 p-0">
         <Command>

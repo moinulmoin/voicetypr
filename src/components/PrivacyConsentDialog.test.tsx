@@ -64,9 +64,9 @@ describe("PrivacyConsentDialog", () => {
         .map(([command]) => command)
         .filter((command) => command.startsWith("set_")),
     ).toEqual(["set_telemetry_consent", "set_product_analytics_consent"]);
-    expect(
-      screen.queryByText("Help improve Voicetypr"),
-    ).not.toBeInTheDocument();
+    await waitFor(() =>
+      expect(screen.queryByText("Help improve Voicetypr")).not.toBeInTheDocument(),
+    );
   });
 
   it("keeps the prompt pending after a partial consent save", async () => {

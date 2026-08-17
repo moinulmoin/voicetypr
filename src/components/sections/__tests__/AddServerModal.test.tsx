@@ -210,7 +210,6 @@ describe("AddServerModal", () => {
     });
 
     it("allows entering password", async () => {
-      const user = userEvent.setup();
       render(
         <AddServerModal
           open={true}
@@ -219,13 +218,13 @@ describe("AddServerModal", () => {
         />
       );
 
-      const passwordInput = screen.getByLabelText("Password (if required)");
-      await user.type(passwordInput, "secret123");
+      const passwordInput = await screen.findByLabelText("Password (if required)");
+      await waitFor(() => expect(passwordInput).not.toBeDisabled());
+      fireEvent.change(passwordInput, { target: { value: "secret123" } });
       expect(passwordInput).toHaveValue("secret123");
     });
 
     it("allows entering display name", async () => {
-      const user = userEvent.setup();
       render(
         <AddServerModal
           open={true}
@@ -234,8 +233,9 @@ describe("AddServerModal", () => {
         />
       );
 
-      const nameInput = screen.getByLabelText("Display Name (optional)");
-      await user.type(nameInput, "My Server");
+      const nameInput = await screen.findByLabelText("Display Name (optional)");
+      await waitFor(() => expect(nameInput).not.toBeDisabled());
+      fireEvent.change(nameInput, { target: { value: "My Server" } });
       expect(nameInput).toHaveValue("My Server");
     });
   });

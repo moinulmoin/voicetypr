@@ -635,11 +635,7 @@ export function RecentRecordings({
             <div className="flex items-center gap-2">
               <h1 className="text-2xl font-semibold tracking-tight">History</h1>
               <Dialog>
-                <DialogTrigger asChild>
-                  <Button type="button" variant="ghost" size="icon-sm" aria-label="History guide" className="size-7 rounded-full text-muted-foreground">
-                    <HelpCircle className="h-4 w-4" />
-                  </Button>
-                </DialogTrigger>
+                <DialogTrigger render={<Button type="button" variant="ghost" size="icon-sm" aria-label="History guide" className="size-7 rounded-full text-muted-foreground"/>}><HelpCircle className="h-4 w-4" /></DialogTrigger>
                 <DialogContent className="sm:max-w-lg">
                   <DialogHeader>
                     <DialogTitle>History guide</DialogTitle>
@@ -664,11 +660,13 @@ export function RecentRecordings({
           <div className="flex items-center gap-2">
             {history.length > 0 && (
               <DropdownMenu>
-                <DropdownMenuTrigger asChild>
-                  <Button variant="secondary" size="sm" title="Export transcripts">
-                    <Download className="h-3.5 w-3.5" />
-                    Export
-                  </Button>
+                <DropdownMenuTrigger
+                  render={
+                    <Button variant="secondary" size="sm" title="Export transcripts" />
+                  }
+                >
+                  <Download className="h-3.5 w-3.5" />
+                  Export
                 </DropdownMenuTrigger>
                 <DropdownMenuContent align="end">
                   <DropdownMenuItem onClick={handleExport}>JSON (.json)</DropdownMenuItem>

@@ -257,23 +257,25 @@ function AgentModelPickerDialog({
         }
       }}
     >
-      <DialogTrigger asChild>
-        <Button
-          type="button"
-          variant="outline"
-          disabled={disabled}
-          className="h-9 w-full justify-between gap-3 px-3 sm:w-52"
-          aria-label={`Model for ${provider.name}`}
-        >
-          <span className="min-w-0 truncate text-left">
-            {selectedItem?.label ?? AGENT_CLI_DEFAULT_LABEL}
-          </span>
-          {loading ? (
-            <Spinner className="h-3.5 w-3.5 shrink-0" />
-          ) : (
-            <ChevronDown className="h-3.5 w-3.5 shrink-0 opacity-60" />
-          )}
-        </Button>
+      <DialogTrigger
+        render={
+          <Button
+            type="button"
+            variant="outline"
+            disabled={disabled}
+            className="h-9 w-full justify-between gap-3 px-3 sm:w-52"
+            aria-label={`Model for ${provider.name}`}
+          />
+        }
+      >
+        <span className="min-w-0 truncate text-left">
+          {selectedItem?.label ?? AGENT_CLI_DEFAULT_LABEL}
+        </span>
+        {loading ? (
+          <Spinner className="h-3.5 w-3.5 shrink-0" />
+        ) : (
+          <ChevronDown className="h-3.5 w-3.5 shrink-0 opacity-60" />
+        )}
       </DialogTrigger>
       <DialogContent className="sm:max-w-2xl">
         <DialogHeader>
@@ -1998,17 +2000,13 @@ export function EnhancementsSection() {
             <div className="flex items-center gap-2">
               <h1 className="text-2xl font-semibold tracking-tight">Polish</h1>
               <Dialog>
-                <DialogTrigger asChild>
-                  <Button
+                <DialogTrigger render={<Button
                     type="button"
                     variant="secondary"
                     size="icon"
                     aria-label="Polish guide"
                     className="rounded-full"
-                  >
-                    <HelpCircle className="h-4.5 w-4.5" />
-                  </Button>
-                </DialogTrigger>
+                  />}><HelpCircle className="h-4.5 w-4.5" /></DialogTrigger>
                 <DialogContent className="sm:max-w-lg">
                   <DialogHeader>
                     <DialogTitle>Polish guide</DialogTitle>

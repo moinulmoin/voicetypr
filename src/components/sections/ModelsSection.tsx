@@ -755,11 +755,7 @@ export function ModelsSection({
           <span className="inline-flex items-center gap-2">
             Sources
             <Dialog>
-              <DialogTrigger asChild>
-                <Button type="button" variant="ghost" size="icon-sm" aria-label="Sources guide" className="size-7 rounded-full text-muted-foreground">
-                  <HelpCircle className="h-4 w-4" />
-                </Button>
-              </DialogTrigger>
+              <DialogTrigger render={<Button type="button" variant="ghost" size="icon-sm" aria-label="Sources guide" className="size-7 rounded-full text-muted-foreground"/>}><HelpCircle className="h-4 w-4" /></DialogTrigger>
               <DialogContent className="sm:max-w-lg">
                 <DialogHeader>
                   <DialogTitle>Sources guide</DialogTitle>

@@ -6,7 +6,7 @@
   "app": {
     "windows": [
       {
-        "title": "Voicetypr",
+        "title": "Voicetypr Dev",
         "hiddenTitle": true,
         "titleBarStyle": "Overlay",
         "trafficLightPosition": { "x": 12, "y": 11 },

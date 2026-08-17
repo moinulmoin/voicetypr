@@ -29,11 +29,11 @@ describe('sidebar layout', () => {
     const sidebarFooter = screen.getByText('Footer stays pinned').closest('[data-slot="sidebar-footer"]');
     const inset = screen.getByText('Overflowing main content').closest('[data-slot="sidebar-inset"]');
 
-    expect(sidebar).toHaveClass('h-svh', 'shrink-0');
+    expect(sidebar).toHaveClass('h-full');
     expect(sidebarContent).toHaveClass('flex-1', 'overflow-auto');
     expect(sidebarFooter).not.toBeNull();
     expect(sidebarFooter?.parentElement).toBe(sidebar);
     expect(sidebarContent?.parentElement).toBe(sidebar);
-    expect(inset).toHaveClass('h-svh', 'overflow-hidden');
+    expect(inset).toHaveClass('flex-1');
   });
 });

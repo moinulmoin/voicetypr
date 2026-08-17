@@ -67,4 +67,11 @@ describe("tauri dev config resolution (--config tauri.dev.conf.json)", () => {
   it("preserves the dev-only bundle identifier", () => {
     expect(macDev.identifier).toBe("com.ideaplexa.voicetypr.dev");
   });
+
+  it("labels the development window distinctly", () => {
+    for (const config of [macDev, winDev]) {
+      const windows = (config.app as Json).windows as Json[];
+      expect(windows[0]?.title).toBe("Voicetypr Dev");
+    }
+  });
 });
