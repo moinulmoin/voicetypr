@@ -20,7 +20,6 @@ import {
   SidebarMenu,
   SidebarMenuButton,
   SidebarMenuItem,
-  SidebarTrigger,
   Sidebar as SidebarPrimitive,
 } from "@/components/ui/sidebar";
 import { useLicense } from "@/contexts/LicenseContext";
@@ -285,30 +284,24 @@ function SidebarFooterStatus({ appVersion }: { appVersion: string }) {
 
   return (
     <div className="flex flex-col gap-2 px-2">
-      <div className="flex items-center justify-between gap-2 group-data-[collapsible=icon]:flex-col">
+      <div className="flex items-center justify-between gap-2 group-data-[collapsible=icon]:justify-center">
         <span className="text-xs text-muted-foreground group-data-[collapsible=icon]:hidden">
           v{appVersion}
         </span>
-        <div className="flex items-center gap-1 group-data-[collapsible=icon]:flex-col">
-          <SidebarTrigger
-            className="size-7 rounded-md text-muted-foreground"
-            title="Toggle sidebar"
+        <Button
+          type="button"
+          variant="ghost"
+          size="icon-sm"
+          className="size-7 rounded-md text-muted-foreground"
+          onClick={checkUpdates}
+          disabled={isCheckingUpdates}
+          title="Check for updates"
+        >
+          <RefreshCw
+            className={cn("size-3.5", isCheckingUpdates && "animate-spin")}
           />
-          <Button
-            type="button"
-            variant="ghost"
-            size="icon-sm"
-            className="size-7 rounded-md text-muted-foreground"
-            onClick={checkUpdates}
-            disabled={isCheckingUpdates}
-            title="Check for updates"
-          >
-            <RefreshCw
-              className={cn("size-3.5", isCheckingUpdates && "animate-spin")}
-            />
-            <span className="sr-only">Check for updates</span>
-          </Button>
-        </div>
+          <span className="sr-only">Check for updates</span>
+        </Button>
       </div>
     </div>
   );

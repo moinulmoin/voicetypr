@@ -38,7 +38,9 @@ vi.mock("@/components/ui/sidebar", () => ({
     children: ReactNode;
     className?: string;
   }) => <section className={className}>{children}</section>,
-  SidebarTrigger: () => <button type="button">Toggle Sidebar</button>,
+  SidebarTrigger: ({ className }: { className?: string }) => (
+    <button type="button" className={className}>Toggle Sidebar</button>
+  ),
 }));
 
 describe("AppShell tray recovery", () => {
@@ -94,7 +96,7 @@ describe("AppShell tray recovery", () => {
     expect(screen.queryByText("Menu-bar icon unavailable")).not.toBeInTheDocument();
   });
 
-  it("keeps the draggable title bar free of controls", async () => {
+  it("aligns the sidebar toggle with the native window controls", async () => {
     getTrayStatusMock.mockResolvedValue({
       available: true,
       attempts: 0,
@@ -104,10 +106,11 @@ describe("AppShell tray recovery", () => {
     render(<AppShell activeSection="overview" onSectionChange={vi.fn()} />);
 
     const titleBar = screen.getByRole("banner");
+    const toggle = screen.getByRole("button", { name: "Toggle Sidebar" });
     const mainSurface = screen.getByText("Active section").closest("section");
     expect(titleBar).toHaveAttribute("data-tauri-drag-region");
     expect(titleBar).toHaveClass("h-9");
-    expect(titleBar).toBeEmptyDOMElement();
+    expect(toggle).toHaveClass("-translate-y-2");
     expect(mainSurface).toHaveClass(
       "rounded-2xl",
       "border",

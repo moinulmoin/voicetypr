@@ -15,9 +15,11 @@ import { Button } from "@/components/ui/button";
 import {
   SidebarInset,
   SidebarProvider,
+  SidebarTrigger,
 } from "@/components/ui/sidebar";
 import { Spinner } from "@/components/ui/spinner";
 import { createLogger } from "@/lib/logger";
+import { isMacOS } from "@/lib/platform";
 import { getTrayStatus, retryTrayCreation, type TrayStatus } from "@/lib/tray";
 
 const log = createLogger("app-shell");
@@ -95,8 +97,15 @@ export function AppShell({ activeSection, onSectionChange }: AppShellProps) {
     >
       <header
         data-tauri-drag-region
-        className="fixed inset-x-0 top-0 z-50 h-9 bg-sidebar"
-      />
+        className={`fixed inset-x-0 top-0 z-50 flex h-9 items-center bg-sidebar pr-3 ${
+          isMacOS ? "pl-[4.75rem]" : "pl-3"
+        }`}
+      >
+        <SidebarTrigger
+          className="size-7 -translate-y-2 text-muted-foreground"
+          title="Toggle sidebar"
+        />
+      </header>
       <Sidebar
         activeSection={activeSection}
         onSectionChange={onSectionChange}
