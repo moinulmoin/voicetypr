@@ -310,9 +310,9 @@ describe("OnboardingDesktop", () => {
 
     expect(screen.getByRole("heading", { name: /choose where transcription runs/i }))
       .toBeInTheDocument();
-    expect(screen.getByRole("radio", { name: /use a local model/i })).toBeChecked();
-    expect(screen.getByRole("radio", { name: /use a cloud provider/i })).toBeInTheDocument();
-    expect(screen.getByRole("radio", { name: /use another voicetypr/i })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /use a local model/i })).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByRole("button", { name: /use a cloud provider/i })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /use another voicetypr/i })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /continue/i })).toBeEnabled();
     expect(updateSettingsMock).not.toHaveBeenCalledWith(expect.objectContaining({
       current_model: "base.en",
@@ -335,15 +335,15 @@ describe("OnboardingDesktop", () => {
 
     renderOnboarding();
     await user.click(screen.getByRole("button", { name: /start setup/i }));
-    await user.click(screen.getByRole("radio", { name: /use a cloud provider/i }));
+    await user.click(screen.getByRole("button", { name: /use a cloud provider/i }));
 
     await act(async () => {
       resolveActiveRemote("remote-1");
       await activeRemote;
     });
 
-    expect(screen.getByRole("radio", { name: /use a cloud provider/i })).toBeChecked();
-    expect(screen.getByRole("radio", { name: /use another voicetypr/i })).not.toBeChecked();
+    expect(screen.getByRole("button", { name: /use a cloud provider/i })).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByRole("button", { name: /use another voicetypr/i })).toHaveAttribute("aria-pressed", "false");
   });
 
   it("does not overwrite a selected model when remote restore resolves late", async () => {
@@ -399,7 +399,7 @@ describe("OnboardingDesktop", () => {
     renderOnboarding();
 
     await user.click(screen.getByRole("button", { name: /start setup/i }));
-    await user.click(screen.getByRole("radio", { name: /use another Voicetypr/i }));
+    await user.click(screen.getByRole("button", { name: /use another Voicetypr/i }));
     await user.click(screen.getByRole("button", { name: /continue/i }));
     await user.click(screen.getByRole("button", { name: /continue/i }));
 
@@ -454,7 +454,7 @@ describe("OnboardingDesktop", () => {
     renderOnboarding();
 
     await user.click(screen.getByRole("button", { name: /start setup/i }));
-    await user.click(screen.getByRole("radio", { name: /use another Voicetypr/i }));
+    await user.click(screen.getByRole("button", { name: /use another Voicetypr/i }));
     await user.click(screen.getByRole("button", { name: /continue/i }));
     await user.click(screen.getByRole("button", { name: /continue/i }));
 
@@ -497,7 +497,7 @@ describe("OnboardingDesktop", () => {
 
     renderOnboarding();
     await user.click(screen.getByRole("button", { name: /start setup/i }));
-    await user.click(screen.getByRole("radio", { name: /use a cloud provider/i }));
+    await user.click(screen.getByRole("button", { name: /use a cloud provider/i }));
     await user.click(screen.getByRole("button", { name: /continue/i }));
     await user.click(screen.getByRole("button", { name: /continue/i }));
 

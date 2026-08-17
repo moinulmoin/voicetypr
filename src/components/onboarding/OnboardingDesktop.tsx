@@ -794,11 +794,11 @@ export const OnboardingDesktop = function OnboardingDesktop({
             }
           >
             <ToggleGroup
-              type="single"
               variant="outline"
               spacing={3}
-              value={sourceType}
-              onValueChange={(value) => {
+              value={[sourceType]}
+              onValueChange={(group) => {
+                const value = group[0];
                 if (value === "local" || value === "cloud" || value === "remote") {
                   confirmSource(value);
                 }
@@ -809,7 +809,7 @@ export const OnboardingDesktop = function OnboardingDesktop({
               <ToggleGroupItem
                 value="local"
                 aria-label="Use a local model"
-                className="h-full min-h-44 flex-col items-start justify-start gap-3 whitespace-normal rounded-2xl p-5 text-left data-[state=on]:border-sage/60 data-[state=on]:bg-sage-bg/50 data-[state=on]:text-foreground"
+                className="h-full min-h-44 flex-col items-start justify-start gap-3 whitespace-normal rounded-2xl p-5 text-left data-pressed:border-sage/60 data-pressed:bg-sage-bg/50 data-pressed:text-foreground"
               >
                 <span className="flex size-10 items-center justify-center rounded-xl bg-sage-bg text-sage">
                   <Laptop className="size-5" />
@@ -822,7 +822,7 @@ export const OnboardingDesktop = function OnboardingDesktop({
               <ToggleGroupItem
                 value="cloud"
                 aria-label="Use a cloud provider"
-                className="h-full min-h-44 flex-col items-start justify-start gap-3 whitespace-normal rounded-2xl p-5 text-left data-[state=on]:border-sage/60 data-[state=on]:bg-sage-bg/50 data-[state=on]:text-foreground"
+                className="h-full min-h-44 flex-col items-start justify-start gap-3 whitespace-normal rounded-2xl p-5 text-left data-pressed:border-sage/60 data-pressed:bg-sage-bg/50 data-pressed:text-foreground"
               >
                 <span className="flex size-10 items-center justify-center rounded-xl bg-sage-bg text-sage">
                   <Cloud className="size-5" />
@@ -835,7 +835,7 @@ export const OnboardingDesktop = function OnboardingDesktop({
               <ToggleGroupItem
                 value="remote"
                 aria-label="Use another Voicetypr"
-                className="h-full min-h-44 flex-col items-start justify-start gap-3 whitespace-normal rounded-2xl p-5 text-left data-[state=on]:border-sage/60 data-[state=on]:bg-sage-bg/50 data-[state=on]:text-foreground"
+                className="h-full min-h-44 flex-col items-start justify-start gap-3 whitespace-normal rounded-2xl p-5 text-left data-pressed:border-sage/60 data-pressed:bg-sage-bg/50 data-pressed:text-foreground"
               >
                 <span className="flex size-10 items-center justify-center rounded-xl bg-sage-bg text-sage">
                   <Network className="size-5" />
