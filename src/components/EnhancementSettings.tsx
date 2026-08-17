@@ -46,7 +46,16 @@ import type {
   TextReplacementRule,
   WritingSettings,
 } from "@/types/writing";
-import { Globe, Plus, Trash2 } from "lucide-react";
+import {
+  BookOpen,
+  Globe,
+  Plus,
+  Replace,
+  SlidersHorizontal,
+  Sparkles,
+  TextQuote,
+  Trash2,
+} from "lucide-react";
 import type { ReactNode } from "react";
 
 interface EnhancementSettingsProps {
@@ -726,21 +735,62 @@ export function EnhancementSettings({
   return (
     <Tabs
       defaultValue="provider"
-      className={disabled ? "opacity-60" : undefined}
+      orientation="vertical"
+      className={disabled
+        ? "grid grid-cols-[11.5rem_minmax(0,1fr)] items-start gap-5 opacity-60"
+        : "grid grid-cols-[11.5rem_minmax(0,1fr)] items-start gap-5"}
     >
-      <TabsList className="h-auto w-full justify-start gap-1 overflow-x-auto rounded-xl bg-muted/60 p-1">
-        <TabsTrigger value="provider">Provider</TabsTrigger>
-        <TabsTrigger value="dictionary">Dictionary</TabsTrigger>
-        <TabsTrigger value="corrections">Corrections</TabsTrigger>
-        <TabsTrigger value="snippets">Snippets</TabsTrigger>
-        <TabsTrigger value="modes">Modes</TabsTrigger>
-      </TabsList>
+      <aside className="sticky top-0 rounded-xl border border-border/70 bg-muted/30 p-2">
+        <div className="px-3 pb-2 pt-2">
+          <p className="text-xs font-semibold uppercase tracking-[0.12em] text-muted-foreground">
+            Polish workflow
+          </p>
+        </div>
+        <TabsList variant="line" className="h-auto w-full items-stretch gap-1">
+          <TabsTrigger value="provider" aria-label="Provider" className="min-h-12 rounded-lg px-3 py-2.5">
+            <Sparkles className="size-4" />
+            <span className="flex min-w-0 flex-col items-start">
+              <span>Provider</span>
+              <span className="text-[11px] font-normal text-muted-foreground">AI connection</span>
+            </span>
+          </TabsTrigger>
+          <TabsTrigger value="dictionary" aria-label="Dictionary" className="min-h-12 rounded-lg px-3 py-2.5">
+            <BookOpen className="size-4" />
+            <span className="flex min-w-0 flex-col items-start">
+              <span>Dictionary</span>
+              <span className="text-[11px] font-normal text-muted-foreground">Words and names</span>
+            </span>
+          </TabsTrigger>
+          <TabsTrigger value="corrections" aria-label="Corrections" className="min-h-12 rounded-lg px-3 py-2.5">
+            <Replace className="size-4" />
+            <span className="flex min-w-0 flex-col items-start">
+              <span>Corrections</span>
+              <span className="text-[11px] font-normal text-muted-foreground">Exact replacements</span>
+            </span>
+          </TabsTrigger>
+          <TabsTrigger value="snippets" aria-label="Snippets" className="min-h-12 rounded-lg px-3 py-2.5">
+            <TextQuote className="size-4" />
+            <span className="flex min-w-0 flex-col items-start">
+              <span>Snippets</span>
+              <span className="text-[11px] font-normal text-muted-foreground">Text expansions</span>
+            </span>
+          </TabsTrigger>
+          <TabsTrigger value="modes" aria-label="Modes" className="min-h-12 rounded-lg px-3 py-2.5">
+            <SlidersHorizontal className="size-4" />
+            <span className="flex min-w-0 flex-col items-start">
+              <span>Modes</span>
+              <span className="text-[11px] font-normal text-muted-foreground">Writing behavior</span>
+            </span>
+          </TabsTrigger>
+        </TabsList>
+      </aside>
 
-      <TabsContent value="provider" className="mt-6">
-        {providerContent}
-      </TabsContent>
+      <div className="min-w-0 max-w-4xl">
+        <TabsContent value="provider" className="mt-0">
+          {providerContent}
+        </TabsContent>
 
-      <TabsContent value="dictionary" className="mt-6">
+        <TabsContent value="dictionary" className="mt-0">
         <CustomWordEditor
           customWords={writingSettings.custom_words}
           disabled={writingSettingsDisabled}
@@ -750,7 +800,7 @@ export function EnhancementSettings({
         />
       </TabsContent>
 
-      <TabsContent value="corrections" className="mt-6">
+        <TabsContent value="corrections" className="mt-0">
         <ReplacementEditor
           replacements={writingSettings.replacements}
           disabled={writingSettingsDisabled}
@@ -760,7 +810,7 @@ export function EnhancementSettings({
         />
       </TabsContent>
 
-      <TabsContent value="snippets" className="mt-6">
+        <TabsContent value="snippets" className="mt-0">
         <SnippetEditor
           snippets={writingSettings.snippets}
           disabled={writingSettingsDisabled}
@@ -770,7 +820,7 @@ export function EnhancementSettings({
         />
       </TabsContent>
 
-      <TabsContent value="modes" className="mt-6 flex flex-col gap-4">
+        <TabsContent value="modes" className="mt-0 flex flex-col gap-4">
         <FieldSet className="rounded-xl border border-border/60 bg-card p-4">
           <FieldLegend className="mb-1">Default mode</FieldLegend>
           <FieldDescription className="mb-3">
@@ -869,6 +919,7 @@ export function EnhancementSettings({
           }
         />
       </TabsContent>
+      </div>
     </Tabs>
   );
 }

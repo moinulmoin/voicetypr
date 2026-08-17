@@ -101,7 +101,7 @@ export const primaryScreens: ScreenDefinition[] = [
   },
   {
     id: "agent",
-    label: "Agent & CLI",
+    label: "CLI",
     icon: Terminal,
     description: "Drive Voicetypr from scripts and agents via the CLI and local API.",
   },
@@ -137,8 +137,8 @@ export const navScreens: ScreenDefinition[] = [
   screenById("recordings"),
   screenById("audio"),
   screenById("models"),
-  screenById("formatting"),
   screenById("recording"),
+  screenById("formatting"),
   screenById("shortcuts"),
   screenById("network"),
   screenById("agent"),
@@ -146,8 +146,5 @@ export const navScreens: ScreenDefinition[] = [
 
 // Footer block is static across the app — always rendered, never mode-gated.
 export const footerNavScreens: ScreenDefinition[] = [
-  screenById("general"),
-  screenById("license"),
-  screenById("advanced"),
   screenById("report-problem"),
 ];

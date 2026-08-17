@@ -2,7 +2,16 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { createLogger } from "@/lib/logger";
 import { invoke } from "@tauri-apps/api/core";
-import { CheckCircle, CircleAlert, Loader2, RefreshCw, XCircle } from "lucide-react";
+import {
+  Bot,
+  Check,
+  CheckCircle,
+  CircleAlert,
+  Copy,
+  Loader2,
+  RefreshCw,
+  XCircle,
+} from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 import { toast } from "sonner";
 
@@ -23,6 +32,13 @@ const RECIPES = [
   "voicetypr --help",
 ] as const;
 
+const AGENT_PROMPT = `Use Voicetypr for local audio transcription.
+
+When I give you an audio file, run:
+voicetypr transcribe <file> --json
+
+Read the JSON response, use the transcript for the task I requested, and report any CLI error exactly. Do not upload the audio to another service unless I explicitly ask.`;
+
 /**
  * Surfaces the `voicetypr` command-line tool: install/remove status and a
  * small recipe of example invocations. Installability is driven entirely by
@@ -33,6 +49,7 @@ export function AgentCliSection() {
   const [pending, setPending] = useState<"install" | "repair" | "uninstall" | "refresh" | null>(
     null,
   );
+  const [promptCopied, setPromptCopied] = useState(false);
 
   const refresh = useCallback(async (showError = false) => {
     setPending("refresh");
@@ -108,6 +125,18 @@ export function AgentCliSection() {
   const installed = status?.installed ?? false;
   const compatible = status?.compatible ?? false;
   const busy = pending !== null;
+
+  const copyAgentPrompt = async () => {
+    try {
+      await navigator.clipboard.writeText(AGENT_PROMPT);
+      setPromptCopied(true);
+      toast.success("Agent prompt copied");
+      window.setTimeout(() => setPromptCopied(false), 2000);
+    } catch (error) {
+      log.error("Failed to copy agent prompt:", error);
+      toast.error("Failed to copy agent prompt");
+    }
+  };
 
   return (
     <div className="space-y-4">
@@ -205,10 +234,45 @@ export function AgentCliSection() {
           </p>
         )}
 
-        <div className="space-y-1 rounded-md border bg-muted/40 p-3 font-mono text-xs">
-          {RECIPES.map((line) => (
-            <p key={line}>{line}</p>
-          ))}
+        <div className="grid gap-3 md:grid-cols-2">
+          <div className="rounded-xl border border-border/70 bg-muted/35 p-4">
+            <p className="text-xs font-semibold uppercase tracking-[0.12em] text-muted-foreground">
+              Quick commands
+            </p>
+            <div className="mt-3 space-y-1 font-mono text-xs">
+              {RECIPES.map((line) => (
+                <p key={line}>{line}</p>
+              ))}
+            </div>
+          </div>
+
+          <div className="rounded-xl border border-sage/20 bg-sage-bg/45 p-4">
+            <div className="flex items-start gap-3">
+              <div className="rounded-lg bg-background p-2 text-sage shadow-sm ring-1 ring-border/70">
+                <Bot className="size-4" />
+              </div>
+              <div className="min-w-0 flex-1">
+                <p className="text-sm font-semibold">Give Voicetypr to your agent</p>
+                <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
+                  Works as a reusable instruction for Claude Code, Codex, OpenCode,
+                  OpenClaw, and other terminal-capable agents.
+                </p>
+              </div>
+            </div>
+            <pre className="mt-3 max-h-36 overflow-auto whitespace-pre-wrap rounded-lg border border-border/70 bg-background/80 p-3 font-mono text-[11px] leading-relaxed text-muted-foreground">
+              {AGENT_PROMPT}
+            </pre>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              className="mt-3 w-full"
+              onClick={copyAgentPrompt}
+            >
+              {promptCopied ? <Check /> : <Copy />}
+              {promptCopied ? "Copied" : "Copy agent prompt"}
+            </Button>
+          </div>
         </div>
       </div>
     </div>

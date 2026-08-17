@@ -16,13 +16,28 @@ vi.mock("@/contexts/LicenseContext", () => ({
   }),
 }));
 
-
+vi.mock("./SettingsDialog", () => ({
+  SettingsDialog: ({
+    open,
+    section,
+  }: {
+    open: boolean;
+    section: string;
+  }) =>
+    open ? (
+      <div role="dialog" aria-label="Settings modal">
+        {section}
+      </div>
+    ) : null,
+}));
 
 vi.mock("@/services/updateService", () => ({
   updateService: { checkForUpdatesManually: vi.fn() },
 }));
 
-function renderSidebar(activeSection: Parameters<typeof Sidebar>[0]["activeSection"] = "overview") {
+function renderSidebar(
+  activeSection: Parameters<typeof Sidebar>[0]["activeSection"] = "overview",
+) {
   const onSectionChange = vi.fn();
   render(
     <TooltipProvider>
@@ -51,26 +66,41 @@ describe("Sidebar navigation", () => {
     ).toHaveClass("group-data-[side=left]:border-r-0");
 
     const sources = screen.getByRole("button", { name: "Sources" });
+    const recording = screen.getByRole("button", { name: "Recording" });
     const polish = screen.getByRole("button", { name: "Polish" });
-    expect(sources.compareDocumentPosition(polish) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
-    expect(screen.getByRole("button", { name: "Recording" })).toBeInTheDocument();
-    expect(screen.queryByText("Workspace")).not.toBeInTheDocument();
-    expect(screen.queryByText("Set up")).not.toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /network sharing/i })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /agent & cli/i })).toBeInTheDocument();
+    expect(
+      sources.compareDocumentPosition(recording) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+    expect(
+      recording.compareDocumentPosition(polish) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+    expect(
+      screen.getByRole("button", { name: /network sharing/i }),
+    ).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "CLI" })).toBeInTheDocument();
   });
 
-  it("always shows the static footer block with settings, license, diagnostics, and reporting", async () => {
+  it("keeps only Settings and reporting in the utility footer", async () => {
+    const user = userEvent.setup();
     renderSidebar();
     await screen.findByText("v2.0.5");
 
     const footerGroup = screen.getByTestId("sidebar-footer-nav");
 
     expect(footerGroup).toHaveTextContent(/settings/i);
-    expect(footerGroup).toHaveTextContent(/license/i);
-    expect(footerGroup).toHaveTextContent(/diagnostics/i);
     expect(footerGroup).toHaveTextContent(/report a problem/i);
-    expect(footerGroup).not.toHaveTextContent(/overview/i);
+    expect(footerGroup).not.toHaveTextContent(/license/i);
+    expect(footerGroup).not.toHaveTextContent(/diagnostics/i);
+
+    await user.click(screen.getByRole("button", { name: "Settings" }));
+    expect(screen.getByRole("dialog", { name: "Settings modal" })).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: /Pro. Open license settings/i }));
+    expect(
+      screen.getByRole("dialog", { name: "Settings modal" }),
+    ).toHaveTextContent("license");
   });
 
   it("collapses to the icon rail through the sidebar control contract", async () => {

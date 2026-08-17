@@ -1,5 +1,9 @@
 import { Brandmark } from "@/components/Brandmark";
 import {
+  SettingsDialog,
+  type SettingsSection,
+} from "@/components/SettingsDialog";
+import {
   footerNavScreens,
   navScreens,
   type ScreenDefinition,
@@ -21,7 +25,7 @@ import {
 import { useLicense } from "@/contexts/LicenseContext";
 import type { LicenseStatus } from "@/types";
 import { cn } from "@/lib/utils";
-import { RefreshCw } from "lucide-react";
+import { RefreshCw, Settings2 } from "lucide-react";
 import { useEffect, useState } from "react";
 import { updateService } from "@/services/updateService";
 
@@ -85,7 +89,17 @@ export function Sidebar({
 }: SidebarProps) {
   const { status, isLoading } = useLicense();
   const [appVersion, setAppVersion] = useState("—");
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [settingsSection, setSettingsSection] = useState<SettingsSection>("general");
   const licenseBadge = getLicenseBadge(status, status?.trial_days_left ?? -1);
+  const settingsNeedsAttention =
+    status?.status === "expired" ||
+    status?.verification_state === "needs_revalidation";
+
+  const openSettings = (section: SettingsSection) => {
+    setSettingsSection(section);
+    setSettingsOpen(true);
+  };
 
   useEffect(() => {
     const loadVersion = async () => {
@@ -103,28 +117,35 @@ export function Sidebar({
     <>
       <SidebarPrimitive collapsible="icon" className="group-data-[side=left]:border-r-0 bg-sidebar/95 pt-9 backdrop-blur-sm">
         <SidebarHeader className="gap-2 px-4 pb-2 pt-4 group-data-[collapsible=icon]:px-2">
-          <button
-            type="button"
-            onClick={() => onSectionChange("overview")}
-            aria-label="Overview"
-            title="Overview"
-            className="flex w-full items-center justify-between gap-3 rounded-lg px-3 py-2 text-left transition-colors hover:bg-sidebar-accent group-data-[collapsible=icon]:justify-center group-data-[collapsible=icon]:px-2"
-          >
-            <div className="flex min-w-0 items-center gap-2.5">
+          <div className="flex w-full items-center gap-2 rounded-lg px-1">
+            <button
+              type="button"
+              onClick={() => onSectionChange("overview")}
+              aria-label="Overview"
+              title="Overview"
+              className="flex min-w-0 flex-1 items-center gap-2.5 rounded-lg px-2 py-2 text-left transition-colors hover:bg-sidebar-accent group-data-[collapsible=icon]:justify-center"
+            >
               <Brandmark className="size-6 shrink-0 text-sage" />
-              <span className="truncate text-sm font-semibold tracking-tight group-data-[collapsible=icon]:hidden">Voicetypr</span>
-            </div>
+              <span className="truncate text-sm font-semibold tracking-tight group-data-[collapsible=icon]:hidden">
+                Voicetypr
+              </span>
+            </button>
             {!isLoading && status ? (
-              <span
+              <button
+                type="button"
+                onClick={() => openSettings("license")}
+                aria-label={`${licenseBadge.label}. Open license settings`}
+                title="Open license settings"
                 className={cn(
-                  "shrink-0 rounded-full border px-2 py-0.5 text-[11px] font-semibold uppercase tracking-[0.12em] group-data-[collapsible=icon]:hidden",
+                  "shrink-0 rounded-full border px-2 py-0.5 text-[11px] font-semibold uppercase tracking-[0.12em] transition-shadow hover:ring-2 hover:ring-sage/20 group-data-[collapsible=icon]:hidden",
                   licenseBadge.className,
+                  settingsNeedsAttention && "ring-2 ring-amber-500/25",
                 )}
               >
                 {licenseBadge.label}
-              </span>
+              </button>
             ) : null}
-          </button>
+          </div>
         </SidebarHeader>
 
         <SidebarContent className="px-2">
@@ -137,16 +158,55 @@ export function Sidebar({
 
         <SidebarFooter className="gap-3 px-2">
           <nav data-testid="sidebar-footer-nav">
-            <SidebarNavMenu
-              items={footerNavScreens}
-              activeSection={activeSection}
-              onSectionChange={onSectionChange}
-            />
+            <SidebarGroup className="py-2">
+              <SidebarGroupContent>
+                <SidebarMenu className="group-data-[collapsible=icon]:items-center">
+                  <SidebarMenuItem>
+                    <SidebarMenuButton
+                      tooltip={
+                        settingsNeedsAttention
+                          ? "Settings — license attention required."
+                          : "General preferences, license, and diagnostics."
+                      }
+                      aria-label={
+                        settingsNeedsAttention
+                          ? "Settings — license attention required"
+                          : "Settings"
+                      }
+                      onClick={() => openSettings("general")}
+                      className="rounded-xl text-sm font-medium text-muted-foreground transition-colors hover:bg-sidebar-accent/70 hover:text-foreground"
+                    >
+                      <span className="relative">
+                        <Settings2 className="size-4 text-muted-foreground" />
+                        {settingsNeedsAttention ? (
+                          <span className="absolute -right-1 -top-1 size-2 rounded-full bg-amber-500 ring-2 ring-sidebar" />
+                        ) : null}
+                      </span>
+                      <span>Settings</span>
+                    </SidebarMenuButton>
+                  </SidebarMenuItem>
+                  {footerNavScreens.map((item) => (
+                    <SidebarNavItem
+                      key={item.id}
+                      item={item}
+                      isActive={activeSection === item.id}
+                      onSelect={onSectionChange}
+                    />
+                  ))}
+                </SidebarMenu>
+              </SidebarGroupContent>
+            </SidebarGroup>
           </nav>
           <SidebarFooterStatus appVersion={appVersion} />
         </SidebarFooter>
       </SidebarPrimitive>
 
+      <SettingsDialog
+        open={settingsOpen}
+        section={settingsSection}
+        onSectionChange={setSettingsSection}
+        onOpenChange={setSettingsOpen}
+      />
     </>
   );
 }

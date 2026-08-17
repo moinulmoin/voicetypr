@@ -471,25 +471,6 @@ construction; they do not prove provider output or upgraded desktop state.
       return; existing models, AI setup, hotkeys, corrections, Saved Text, and
       App Rules remain intact.
 
-## Plan 050 — navigation ownership reorganization (NEEDS-SMOKE)
-
-Automated component coverage proves routing and ownership boundaries. Run this
-against the development app or the next signed Beta to verify the native window
-and scrolling behavior.
-
-- [ ] 050-S1 Sidebar main group shows Recording while Settings appears in the
-      utility footer; footer also labels the former Account destination License.
-- [ ] 050-S2 Open Recording → primary shortcut, microphone, transcript handling,
-      sounds, indicator, saved audio, and cleanup controls render and remain
-      operable through the full scroll range.
-- [ ] 050-S3 Open Settings → Appearance, App behavior, Privacy & diagnostics,
-      and Reset app / start over render; recording-specific controls do not.
-- [ ] 050-S4 Open License and Diagnostics → reset controls are absent from
-      License, privacy controls are absent from Diagnostics, and existing
-      license/permission/quick-fix actions remain usable.
-- [ ] 050-S5 Open Shortcuts → guidance points the primary recording shortcut to
-      Recording while additional action bindings remain editable.
-
 ## 2.0.5 Beta train — Windows issue triage
 
 Current Beta: `2.0.5-beta.7`. Stable remains `2.0.4`. This signed candidate

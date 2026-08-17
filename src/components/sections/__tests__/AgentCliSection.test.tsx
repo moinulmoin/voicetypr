@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { AgentCliSection } from '../AgentCliSection';
 
 const mockInvoke = vi.fn();
+const writeTextMock = vi.fn().mockResolvedValue(undefined);
 
 vi.mock('@tauri-apps/api/core', () => ({
   invoke: (...args: unknown[]) => mockInvoke(...args),
@@ -30,6 +31,11 @@ describe('AgentCliSection', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockInvoke.mockReset();
+    Object.defineProperty(navigator, 'clipboard', {
+      configurable: true,
+      value: { writeText: writeTextMock },
+    });
+    writeTextMock.mockClear();
   });
 
   it('installs a missing managed command', async () => {
@@ -112,7 +118,19 @@ describe('AgentCliSection', () => {
     expect(await screen.findByText(/another command already uses this path/i)).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /install command/i })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /remove command/i })).not.toBeInTheDocument();
-    expect(screen.getByText(/voicetypr transcribe/)).toBeInTheDocument();
+    expect(screen.getAllByText(/voicetypr transcribe/).length).toBeGreaterThan(0);
     expect(screen.getByText(/voicetypr --help/)).toBeInTheDocument();
+  });
+
+  it('copies a reusable prompt for terminal-capable agents', async () => {
+    mockInvoke.mockResolvedValue(healthyStatus);
+    render(<AgentCliSection />);
+
+    fireEvent.click(await screen.findByRole('button', { name: /copy agent prompt/i }));
+
+    expect(writeTextMock).toHaveBeenCalledWith(
+      expect.stringContaining('voicetypr transcribe <file> --json'),
+    );
+    expect(screen.getByText(/Claude Code, Codex, OpenCode/)).toBeInTheDocument();
   });
 });
