@@ -19,6 +19,10 @@ vi.mock('@/contexts/ReadinessContext', () => ({
   }),
 }));
 
+vi.mock('@/components/sections/ResetSection', () => ({
+  ResetSection: () => <h2>Reset app / start over</h2>,
+}));
+
 
 describe('AdvancedSection', () => {
   beforeEach(() => {
@@ -26,11 +30,12 @@ describe('AdvancedSection', () => {
     platformMock.isMacOS = false;
   });
 
-  it('shows the Quick fixes card on Diagnostics', () => {
+  it('owns quick fixes and reset controls on Diagnostics', () => {
     render(<AdvancedSection />);
 
     expect(screen.getByRole('heading', { name: /Diagnostics/ })).toBeInTheDocument();
     expect(screen.getByRole('heading', { name: 'Quick fixes' })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Reset app / start over' })).toBeInTheDocument();
     expect(
       screen.getByText('Common issues you can check yourself before reporting.'),
     ).toBeInTheDocument();

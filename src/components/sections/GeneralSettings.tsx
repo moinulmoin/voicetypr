@@ -1,4 +1,3 @@
-import { ResetSection } from "@/components/sections/ResetSection";
 import { TelemetrySection } from "@/components/sections/TelemetrySection";
 import { Button } from "@/components/ui/button";
 import {
@@ -149,14 +148,13 @@ export function GeneralSettings() {
                   <DialogHeader>
                     <DialogTitle>Settings guide</DialogTitle>
                     <DialogDescription>
-                      Manage global appearance, startup, privacy, and reset options.
+                      Manage global appearance, startup, privacy, and update options.
                     </DialogDescription>
                   </DialogHeader>
                   <div className="space-y-3 text-sm leading-6 text-muted-foreground">
                     <p><strong className="text-foreground">Appearance</strong> controls the app theme.</p>
                     <p><strong className="text-foreground">App behavior</strong> controls launch-at-login and update checks.</p>
                     <p><strong className="text-foreground">Privacy</strong> controls anonymous diagnostics and analytics.</p>
-                    <p><strong className="text-foreground">Reset</strong> lets you repeat onboarding or erase app data.</p>
                   </div>
                 </DialogContent>
               </Dialog>
@@ -311,7 +309,6 @@ export function GeneralSettings() {
           </div>
 
           <TelemetrySection />
-          <ResetSection />
 
         </div>
     </div>

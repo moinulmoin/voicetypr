@@ -1,4 +1,5 @@
 import { PermissionErrorBoundary } from "@/components/PermissionErrorBoundary";
+import { ResetSection } from "@/components/sections/ResetSection";
 import {
   SettingsCard,
   SettingsHeader,
@@ -169,17 +170,18 @@ export function AdvancedSection() {
                   <DialogHeader>
                     <DialogTitle>Diagnostics guide</DialogTitle>
                     <DialogDescription>
-                      Diagnostics covers permissions and system access checks.
+                      Diagnostics covers permissions, troubleshooting, and reset tools.
                     </DialogDescription>
                   </DialogHeader>
                   <div className="space-y-3 text-sm leading-6 text-muted-foreground">
                     <p><strong className="text-foreground">Permissions</strong> refreshes microphone and accessibility access after macOS changes.</p>
+                    <p><strong className="text-foreground">Reset</strong> lets you repeat onboarding or erase app data.</p>
                   </div>
                 </DialogContent>
               </Dialog>
             </span>
           }
-          description="Permissions and diagnostics."
+          description="Permissions, troubleshooting, and reset tools."
         />
 
         {/* Permissions Section - Only show on macOS */}
@@ -312,6 +314,8 @@ export function AdvancedSection() {
             })}
           </div>
         </SettingsCard>
+
+        <ResetSection />
 
       </SettingsPage>
     </PermissionErrorBoundary>

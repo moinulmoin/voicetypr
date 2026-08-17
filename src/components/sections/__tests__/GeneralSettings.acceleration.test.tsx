@@ -284,11 +284,11 @@ describe('GeneralSettings update distribution controls', () => {
     platformMock.isMacOS = true;
   });
 
-  it('owns global privacy and reset controls, not recording controls', async () => {
+  it('owns global privacy controls, not recording or reset controls', async () => {
     render(<GeneralSettings />);
 
     expect(await screen.findByText('Privacy & diagnostics')).toBeInTheDocument();
-    expect(screen.getByText('Reset app / start over')).toBeInTheDocument();
+    expect(screen.queryByText('Reset app / start over')).not.toBeInTheDocument();
     expect(screen.queryByText('Recording workflow')).not.toBeInTheDocument();
   });
 
