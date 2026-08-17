@@ -21,13 +21,63 @@ interface ShareStatsModalProps {
   onOpenChange: (open: boolean) => void;
   stats: {
     totalTranscriptions: number;
-    todayCount: number;
     totalWords: number;
-    avgLength: number;
     timeSavedDisplay: string;
-    currentStreak: number;
-    longestStreak: number;
   };
+}
+
+const WORDS_PER_PAGE = 250;
+const LOGO_SRC = `${import.meta.env.BASE_URL}logo.png`;
+
+export function getShareOutcome(totalWords: number): {
+  pages: number;
+  line: string;
+} {
+  if (totalWords <= 0) {
+    return { pages: 0, line: "Record a thought and start the count" };
+  }
+  const pages = Math.max(1, Math.round(totalWords / WORDS_PER_PAGE));
+  if (totalWords >= 250) {
+    return {
+      pages,
+      line: `${pages.toLocaleString()} pages I didn’t have to type`,
+    };
+  }
+  return { pages, line: "words I didn’t have to type" };
+}
+
+function getSharePlays(stats: {
+  totalWords: number;
+  totalTranscriptions: number;
+  timeSavedDisplay: string;
+}): Array<{ value: string; play: string }> {
+  const timeSaved =
+    stats.timeSavedDisplay === "0m" ? "0m" : stats.timeSavedDisplay;
+  const plays = [
+    {
+      value: stats.totalWords.toLocaleString(),
+      play: stats.totalWords === 1 ? "word I spoke" : "words I spoke",
+    },
+  ];
+  if (stats.totalWords >= 250) {
+    const pages = Math.max(1, Math.round(stats.totalWords / WORDS_PER_PAGE));
+    plays.push({
+      value: pages.toLocaleString(),
+      play: pages === 1 ? "page I didn’t type" : "pages I didn’t type",
+    });
+  }
+  plays.push({
+    value: timeSaved,
+    play: "my fingers got back",
+  });
+  plays.push({
+    value: stats.totalTranscriptions.toLocaleString(),
+    play:
+      stats.totalTranscriptions === 1
+        ? "time I skipped the keyboard"
+        : "times I skipped the keyboard",
+  });
+  return plays;
 }
 
 export function ShareStatsModal({
@@ -52,173 +102,159 @@ export function ShareStatsModal({
     setIsLoading(true);
     if (!canvas) return;
 
-    const context = canvas.getContext("2d");
-    if (!context) {
-      log.error("Could not create the share card canvas");
-      setIsLoading(false);
-      return;
-    }
+    let cancelled = false;
 
-    canvas.width = 2400;
-    canvas.height = 1260;
-    context.imageSmoothingEnabled = true;
-    context.imageSmoothingQuality = "high";
+    const drawCard = async () => {
+      const context = canvas.getContext("2d");
+      if (!context) {
+        log.error("Could not create the share card canvas");
+        setIsLoading(false);
+        return;
+      }
 
-    const fontFamily =
-      "-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif";
-    const forest = "#17352e";
-    const paper = "#f5f2e9";
-    const mint = "#98e7bd";
-    const mutedMint = "#b8d9c7";
+      const logo = await new Promise<HTMLImageElement | null>((resolve) => {
+        const image = new Image();
+        image.decoding = "async";
+        image.onload = () => resolve(image);
+        image.onerror = () => resolve(null);
+        image.src = LOGO_SRC;
+      });
+      if (cancelled) return;
 
-    context.fillStyle = forest;
-    context.fillRect(0, 0, canvas.width, canvas.height);
+      const logicalWidth = 1200;
+      const logicalHeight = 800;
+      const exportScale = 2;
+      canvas.width = logicalWidth * exportScale;
+      canvas.height = logicalHeight * exportScale;
+      context.resetTransform();
+      context.scale(exportScale, exportScale);
+      context.imageSmoothingEnabled = true;
+      context.imageSmoothingQuality = "high";
 
-    const glow = context.createRadialGradient(1880, 460, 40, 1880, 460, 880);
-    glow.addColorStop(0, "rgba(93, 189, 145, 0.22)");
-    glow.addColorStop(0.55, "rgba(74, 139, 110, 0.08)");
-    glow.addColorStop(1, "rgba(23, 53, 46, 0)");
-    context.fillStyle = glow;
-    context.fillRect(0, 0, canvas.width, canvas.height);
+      const fontFamily =
+        "'Geist Variable', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif";
+      const cream = "#fffaf2";
+      const mint = "#8ed6a3";
+      const teal = "#4fc9c7";
+      const ink = "#0f1711";
+      const plays = getSharePlays(stats);
+      const centerX = logicalWidth / 2;
 
-    context.save();
-    context.translate(2150, 90);
-    context.rotate(Math.PI / 10);
-    context.strokeStyle = "rgba(245, 242, 233, 0.06)";
-    context.lineWidth = 70;
-    context.beginPath();
-    context.arc(0, 0, 430, 0, Math.PI * 2);
-    context.stroke();
-    context.restore();
+      const background = context.createLinearGradient(
+        0,
+        0,
+        logicalWidth,
+        logicalHeight,
+      );
+      background.addColorStop(0, "#17181c");
+      background.addColorStop(1, "#101113");
+      context.fillStyle = background;
+      context.fillRect(0, 0, logicalWidth, logicalHeight);
 
-    context.textAlign = "left";
-    context.fillStyle = mint;
-    context.beginPath();
-    context.roundRect(120, 92, 58, 58, 18);
-    context.fill();
-    context.fillStyle = forest;
-    [0, 1, 2].forEach((index) => {
+      const glow = context.createRadialGradient(
+        centerX,
+        200,
+        30,
+        centerX,
+        200,
+        520,
+      );
+      glow.addColorStop(0, "rgba(79, 201, 199, 0.12)");
+      glow.addColorStop(0.5, "rgba(142, 214, 163, 0.06)");
+      glow.addColorStop(1, "rgba(79, 201, 199, 0)");
+      context.fillStyle = glow;
+      context.fillRect(0, 0, logicalWidth, logicalHeight);
+
+      const accent = (x0: number, x1: number) => {
+        const gradient = context.createLinearGradient(x0, 0, x1, 0);
+        gradient.addColorStop(0, mint);
+        gradient.addColorStop(1, teal);
+        return gradient;
+      };
+
+      if (logo) {
+        context.save();
+        [
+          { radius: 78, alpha: 0.16 },
+          { radius: 102, alpha: 0.1 },
+          { radius: 126, alpha: 0.05 },
+        ].forEach(({ radius, alpha }) => {
+          context.strokeStyle = `rgba(142, 214, 163, ${alpha})`;
+          context.lineWidth = 1.5;
+          context.beginPath();
+          context.arc(centerX, 112, radius, 0, Math.PI * 2);
+          context.stroke();
+        });
+        context.restore();
+        context.drawImage(logo, centerX - 48, 64, 96, 96);
+      }
+
+      context.textAlign = "center";
+      context.fillStyle = accent(centerX - 140, centerX + 140);
+      context.font = `560 26px ${fontFamily}`;
+      context.fillText("type with your voice.", centerX, 228);
+
+      const rowTop = 322;
+      const rowHeight = 88;
+      plays.forEach((item, index) => {
+        const y = rowTop + index * rowHeight;
+        context.font = `720 50px ${fontFamily}`;
+        const numberWidth = context.measureText(item.value).width;
+        context.font = `520 32px ${fontFamily}`;
+        const playWidth = context.measureText(item.play).width;
+        const rowWidth = numberWidth + 30 + playWidth;
+        const numberX = centerX - rowWidth / 2;
+        context.textAlign = "left";
+        context.fillStyle = cream;
+        context.font = `720 50px ${fontFamily}`;
+        context.fillText(item.value, numberX, y);
+        context.fillStyle = accent(numberX, numberX + rowWidth);
+        context.font = `520 32px ${fontFamily}`;
+        context.fillText(item.play, numberX + numberWidth + 30, y);
+      });
+
+      const ctaText = "Try Voicetypr free";
+      context.font = `640 28px ${fontFamily}`;
+      const ctaWidth = context.measureText(ctaText).width + 88;
+      const ctaX = centerX - ctaWidth / 2;
+      const ctaY = 636;
+      context.save();
+      context.shadowColor = "rgba(79, 201, 199, 0.35)";
+      context.shadowBlur = 28;
+      context.shadowOffsetY = 6;
+      context.fillStyle = accent(ctaX, ctaX + ctaWidth);
       context.beginPath();
-      context.arc(141 + index * 8, 121, 3.2, 0, Math.PI * 2);
+      context.roundRect(ctaX, ctaY, ctaWidth, 66, 33);
       context.fill();
-    });
+      context.restore();
+      context.textAlign = "center";
+      context.textBaseline = "middle";
+      context.fillStyle = ink;
+      context.font = `640 28px ${fontFamily}`;
+      context.fillText(ctaText, centerX, ctaY + 34);
+      context.textBaseline = "alphabetic";
 
-    context.font = `650 34px ${fontFamily}`;
-    context.fillStyle = paper;
-    context.fillText("VOICETYPR", 202, 132);
-    context.textAlign = "right";
-    context.font = `600 24px ${fontFamily}`;
-    context.fillStyle = "rgba(245, 242, 233, 0.52)";
-    context.fillText("MY VOICE / IN NUMBERS", 2280, 130);
+      context.fillStyle = "#b8b0a6";
+      context.font = `560 20px ${fontFamily}`;
+      context.fillText("voicetypr.com · no card required", centerX, 738);
 
-    context.textAlign = "left";
-    context.font = `500 34px ${fontFamily}`;
-    context.fillStyle = mutedMint;
-    context.fillText("I turned my voice into", 120, 302);
-    context.font = `720 196px ${fontFamily}`;
-    context.fillStyle = paper;
-    context.fillText(stats.totalWords.toLocaleString(), 110, 490);
-    context.font = `720 80px ${fontFamily}`;
-    context.fillStyle = mint;
-    context.fillText("WORDS OUT LOUD.", 120, 592);
+      try {
+        setImageDataUrl(canvas.toDataURL("image/png"));
+      } catch (error) {
+        log.error("Could not encode the share card", error);
+      } finally {
+        if (!cancelled) setIsLoading(false);
+      }
+    };
 
-    const waveformHeights = [
-      112, 190, 286, 164, 350, 494, 246, 408, 552, 318, 462, 220, 356, 176, 274,
-      128,
-    ];
-    waveformHeights.forEach((height, index) => {
-      const x = 1540 + index * 43;
-      const y = 430 - height / 2;
-      context.fillStyle = "rgba(152, 231, 189, 0.32)";
-      context.beginPath();
-      context.roundRect(x, y, 20, height, 10);
-      context.fill();
-    });
-
-    const timeSaved =
-      stats.timeSavedDisplay === "0m"
-        ? "Just getting started"
-        : stats.timeSavedDisplay;
-    context.font = `400 31px ${fontFamily}`;
-    context.fillStyle = "rgba(245, 242, 233, 0.64)";
-    context.fillText(
-      `${stats.totalTranscriptions.toLocaleString()} thoughts captured · ${timeSaved} not spent typing`,
-      120,
-      676,
-    );
-
-    context.strokeStyle = "rgba(245, 242, 233, 0.14)";
-    context.lineWidth = 2;
-    context.beginPath();
-    context.moveTo(120, 785);
-    context.lineTo(2280, 785);
-    context.stroke();
-
-    const streakValue =
-      stats.currentStreak > 0
-        ? `${stats.currentStreak} ${stats.currentStreak === 1 ? "day" : "days"}`
-        : "Start today";
-    const statItems = [
-      {
-        label: "TRANSCRIPTIONS",
-        value: stats.totalTranscriptions.toLocaleString(),
-        detail: `+${stats.todayCount.toLocaleString()} today`,
-      },
-      {
-        label: "AVERAGE TAKE",
-        value: `${stats.avgLength.toLocaleString()} words`,
-        detail: "from thought to text",
-      },
-      {
-        label: "CURRENT STREAK",
-        value: streakValue,
-        detail:
-          stats.longestStreak > 0
-            ? `${stats.longestStreak} day personal best`
-            : "your rhythm starts here",
-      },
-    ];
-
-    statItems.forEach((item, index) => {
-      const x = 120 + index * 720;
-      context.font = `650 22px ${fontFamily}`;
-      context.fillStyle = "rgba(152, 231, 189, 0.7)";
-      context.fillText(item.label, x, 876);
-      context.font = `650 50px ${fontFamily}`;
-      context.fillStyle = paper;
-      context.fillText(item.value, x, 950);
-      context.font = `400 25px ${fontFamily}`;
-      context.fillStyle = "rgba(245, 242, 233, 0.48)";
-      context.fillText(item.detail, x, 1004);
-    });
-
-    context.fillStyle = mint;
-    context.beginPath();
-    context.roundRect(120, 1102, 330, 48, 24);
-    context.fill();
-    context.font = `650 22px ${fontFamily}`;
-    context.fillStyle = forest;
-    context.fillText("SPOKEN, NOT TYPED", 143, 1135);
-    context.textAlign = "right";
-    context.font = `500 24px ${fontFamily}`;
-    context.fillStyle = "rgba(245, 242, 233, 0.48)";
-    context.fillText("voicetypr.com", 2280, 1135);
-
-    try {
-      setImageDataUrl(canvas.toDataURL("image/png"));
-    } catch (error) {
-      log.error("Could not encode the share card", error);
-    } finally {
-      setIsLoading(false);
-    }
+    void drawCard();
+    return () => {
+      cancelled = true;
+    };
   }, [
     canvas,
     open,
-    stats.avgLength,
-    stats.currentStreak,
-    stats.longestStreak,
     stats.timeSavedDisplay,
-    stats.todayCount,
     stats.totalTranscriptions,
     stats.totalWords,
   ]);
@@ -266,26 +302,26 @@ export function ShareStatsModal({
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent
-        className="overflow-hidden p-0"
-        style={{ width: "calc(100% - 4rem)", maxWidth: "38rem" }}
+        className="gap-0 overflow-hidden p-0"
+        style={{ width: "calc(100% - 2rem)", maxWidth: "34rem" }}
       >
-        <DialogHeader className="border-b border-border/70 px-5 py-4 text-left">
-          <DialogTitle className="text-lg">Share your momentum</DialogTitle>
+        <DialogHeader className="border-b border-border/70 px-5 py-3 pr-12 text-left">
+          <DialogTitle className="text-base">Share your stats</DialogTitle>
           <DialogDescription>
-            Export a private progress card. Transcript text is never included.
+            A picture of the typing you skipped. Transcript text is never included.
           </DialogDescription>
         </DialogHeader>
 
         <div className="flex min-w-0 flex-col gap-3 p-4">
           <div
-            className="relative w-full min-w-0 overflow-hidden rounded-xl bg-[#17352e] ring-1 ring-black/10"
-            style={{ aspectRatio: "40 / 21" }}
+            className="relative mx-auto w-full max-w-[26rem] overflow-hidden rounded-xl bg-[#161618] ring-1 ring-black/10"
+            style={{ aspectRatio: "3 / 2" }}
           >
             {isLoading ? (
-              <div className="absolute inset-0 z-10 flex items-center justify-center bg-[#17352e]/85 backdrop-blur-sm">
+              <div className="absolute inset-0 z-10 flex items-center justify-center bg-[#161618]/90 backdrop-blur-sm">
                 <div className="flex flex-col items-center gap-2">
-                  <Loader2 className="size-8 animate-spin text-[#98e7bd]" />
-                  <span className="text-sm text-white/70">
+                  <Loader2 className="size-8 animate-spin text-sage" />
+                  <span className="text-sm text-muted-foreground">
                     Creating your share card…
                   </span>
                 </div>
@@ -294,14 +330,14 @@ export function ShareStatsModal({
             {imageDataUrl ? (
               <img
                 src={imageDataUrl}
-                alt="Voicetypr voice statistics share card"
+                alt={`Share card showing ${stats.totalWords.toLocaleString()} words spoken, ${stats.timeSavedDisplay} saved, and ${stats.totalTranscriptions.toLocaleString()} transcriptions`}
                 className="block h-auto w-full max-w-full"
               />
             ) : null}
             <canvas
               ref={setCanvas}
               width={2400}
-              height={1260}
+              height={1600}
               className={cn(
                 "block h-auto w-full max-w-full",
                 imageDataUrl && "hidden",
@@ -309,7 +345,7 @@ export function ShareStatsModal({
             />
           </div>
 
-          <div className="flex justify-end gap-2">
+          <div className="flex justify-center gap-2">
             <Button
               onClick={copyImageToClipboard}
               disabled={isCopying || !imageDataUrl}

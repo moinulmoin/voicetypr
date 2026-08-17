@@ -110,7 +110,7 @@ export const primaryScreens: ScreenDefinition[] = [
 export const secondaryScreens: ScreenDefinition[] = [
   {
     id: "advanced",
-    label: "Diagnostics",
+    label: "Quick help",
     icon: Activity,
     description: "Permissions, troubleshooting, reset tools, and app diagnostics.",
   },
@@ -131,7 +131,7 @@ export const isScreenId = (value: string): value is ScreenId =>
 const screenById = (id: ScreenId): ScreenDefinition =>
   screens.find((screen) => screen.id === id) as ScreenDefinition;
 
-// Single navigation list for the main sidebar group.
+// Main navigation stays focused on everyday workflows.
 export const navScreens: ScreenDefinition[] = [
   screenById("overview"),
   screenById("general"),
@@ -144,10 +144,10 @@ export const navScreens: ScreenDefinition[] = [
   screenById("network"),
   screenById("agent"),
   screenById("license"),
-  screenById("advanced"),
 ];
 
-// Report a problem remains a distinct bottom action.
+// Support and troubleshooting remain fixed at the bottom.
 export const footerNavScreens: ScreenDefinition[] = [
+  screenById("advanced"),
   screenById("report-problem"),
 ];

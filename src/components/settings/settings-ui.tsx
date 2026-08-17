@@ -23,7 +23,7 @@ export function SettingsPage({
     <div className="h-full min-h-0 overflow-auto">
       <div
         className={cn(
-          "mx-auto flex w-full max-w-4xl flex-col gap-6 px-6 pb-7 pt-2 md:px-8",
+          "mx-auto flex w-full max-w-4xl flex-col gap-5 pb-4 pl-2 pr-4",
           className,
         )}
       >

@@ -1,6 +1,6 @@
 import { BareModifierSpec, HotkeyInput } from "@/components/HotkeyInput";
 import { Button } from "@/components/ui/button";
-import { SettingsCard, SettingsHeader, SettingsPage } from "@/components/settings/settings-ui";
+import { SettingsHeader, SettingsPage } from "@/components/settings/settings-ui";
 import { Spinner } from "@/components/ui/spinner";
 import { normalizeShortcutKeys, ValidationPresets } from "@/lib/keyboard-normalizer";
 import type {
@@ -12,7 +12,7 @@ import type {
   ShortcutSettings,
 } from "@/types/shortcuts";
 import { invoke } from "@tauri-apps/api/core";
-import { AlertTriangle, Check, Keyboard, Pencil, Plus, Trash2, X } from "lucide-react";
+import { AlertTriangle, Check, Pencil, Plus, Trash2, X } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import { createLogger } from "@/lib/logger";
@@ -434,162 +434,205 @@ export function ShortcutsSection() {
           No shortcut actions are available.
         </div>
       ) : (
-        groupedActions.map(([section, sectionActions]) => {
-          const sectionBindingCount = sectionActions.reduce(
-            (count, action) => count + (bindingsByAction.get(action.action)?.length ?? 0),
-            0,
-          );
+        <div className="divide-y divide-border/70 rounded-xl border border-border bg-card">
+          {groupedActions.map(([section, sectionActions]) => {
+            const sectionBindingCount = sectionActions.reduce(
+              (count, action) =>
+                count + (bindingsByAction.get(action.action)?.length ?? 0),
+              0,
+            );
 
-          return (
-            <SettingsCard
-              key={section}
-              icon={Keyboard}
-              title={section}
-              description={
-                sectionBindingCount > 0
-                  ? sectionBindingCount === 1
-                    ? "1 binding configured"
-                    : `${sectionBindingCount} bindings configured`
-                  : undefined
-              }
-            >
-              <div className="mt-4 divide-y divide-border">
-                {sectionActions.map((action) => {
-                      const bindings = bindingsByAction.get(action.action) ?? [];
+            return (
+              <section key={section} className="p-4">
+                <div className="flex items-center justify-between gap-4">
+                  <h2 className="text-sm font-semibold text-foreground">{section}</h2>
+                  {sectionBindingCount > 0 && (
+                    <span className="text-xs tabular-nums text-muted-foreground">
+                      {sectionBindingCount}{" "}
+                      {sectionBindingCount === 1 ? "shortcut" : "shortcuts"}
+                    </span>
+                  )}
+                </div>
 
-                      return (
-                        <div key={action.action} role="group" aria-label={action.label} className="space-y-3 py-4 first:pt-0 last:pb-0">
-                          <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between sm:gap-6">
-                            <div className="min-w-0">
-                              <h3 className="text-[13.5px] font-semibold text-foreground">{action.label}</h3>
-                              <p className="mt-0.5 text-[12.5px] leading-relaxed text-muted-foreground">{action.description}</p>
-                            </div>
-                            {bindings.length === 0 && (
-                              <Button
-                                type="button"
-                                variant="outline"
-                                size="sm"
-                                className="w-full shrink-0 sm:w-auto"
-                                disabled={editingDisabled || isCapturing}
-                                onClick={() => addDraftBinding(action)}
-                              >
-                                <Plus className="h-3.5 w-3.5" />
-                                Set shortcut
-                              </Button>
-                            )}
+                <div className="mt-2 divide-y divide-border/60">
+                  {sectionActions.map((action) => {
+                    const bindings = bindingsByAction.get(action.action) ?? [];
+                    const isCancelRecording = action.action === "cancel_recording";
+
+                    return (
+                      <div
+                        key={action.action}
+                        role="group"
+                        aria-label={action.label}
+                        className="py-3 first:pt-1 last:pb-0"
+                      >
+                        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between sm:gap-6">
+                          <div className="min-w-0">
+                            <h3 className="text-[13.5px] font-medium text-foreground">
+                              {action.label}
+                            </h3>
+                            <p className="mt-0.5 text-[12px] leading-relaxed text-muted-foreground">
+                              {isCancelRecording
+                                ? "Press Escape twice while recording to cancel the current take."
+                                : action.description}
+                            </p>
                           </div>
+                          {bindings.length === 0 && (
+                            <Button
+                              type="button"
+                              variant="outline"
+                              size="sm"
+                              className="w-full shrink-0 sm:w-auto"
+                              disabled={editingDisabled || isCapturing}
+                              onClick={() => addDraftBinding(action)}
+                            >
+                              <Plus className="h-3.5 w-3.5" />
+                              Set shortcut
+                            </Button>
+                          )}
+                        </div>
 
-                          {bindings.length > 0 && (
-                            <div className="space-y-3">
-                              {bindings.map((binding) => {
-                                const isEditing = editingCapture?.bindingId === binding.id;
-                                const isSaving = savingBindingId === binding.id;
-                                const showRecordingCheckbox = action.action === "toggle_recording" || action.action === "hold_to_record";
+                        {bindings.length > 0 && (
+                          <div className="mt-2 flex flex-col gap-2">
+                            {bindings.map((binding) => {
+                              const isEditing =
+                                editingCapture?.bindingId === binding.id;
+                              const isSaving = savingBindingId === binding.id;
+                              const showRecordingCheckbox =
+                                action.action === "toggle_recording" ||
+                                action.action === "hold_to_record";
 
-                                if (isEditing && editingCapture) {
-                                  // ── Edit / capture mode ──────────────────────────
-                                  return (
-                                    <div key={binding.id} className="rounded-xl border border-sage/40 bg-sage-bg/40 p-3 space-y-3">
-                                      <div className="flex items-start gap-2">
-                                        <HotkeyInput
-                                          inline
-                                          value={editingCapture.combo}
-                                          onChange={(combo) =>
-                                            setEditingCapture((prev) =>
-                                              prev && prev.combo !== combo
-                                                ? { ...prev, combo, bareModifier: null }
-                                                : prev
-                                            )
-                                          }
-                                          placeholder="Press a key or key combo"
-                                          validationRules={
-                                            action.allows_single_key
-                                              ? singleKeyValidation
-                                              : ValidationPresets.standard()
-                                          }
-                                          allowBareModifier={showRecordingCheckbox}
-                                          onBareModifier={(spec) =>
-                                            setEditingCapture((prev) =>
-                                              prev ? { ...prev, bareModifier: spec, combo: "" } : prev
-                                            )
-                                          }
-                                        />
-                                        <Button
-                                          type="button"
-                                          size="icon-sm"
-                                          aria-label="Save"
-                                          className="bg-green-600 text-white hover:bg-green-600/90"
-                                          disabled={
-                                            isSaving ||
-                                            (!editingCapture.combo && !editingCapture.bareModifier)
-                                          }
-                                          onClick={saveEdit}
-                                        >
-                                          {isSaving ? <Spinner className="h-4 w-4" /> : <Check className="h-4 w-4" />}
-                                        </Button>
-                                        <Button
-                                          type="button"
-                                          variant="ghost"
-                                          size="icon-sm"
-                                          aria-label="Cancel"
-                                          disabled={isSaving}
-                                          onClick={cancelEdit}
-                                        >
-                                          <X className="h-4 w-4" />
-                                        </Button>
-                                      </div>
-
-                                      {!editingCapture.bareModifier && (
-                                        <p className="text-xs text-muted-foreground">
-                                          Use a key combo, a function key, or a numpad/navigation key. A bare letter or number won't work — it would block typing.
-                                        </p>
-                                      )}
-                                    </div>
-                                  );
-                                }
-
-                                // ── Read mode ────────────────────────────────────
+                              if (isEditing && editingCapture) {
                                 return (
-                                  <div key={binding.id} className="flex flex-col gap-3 rounded-xl border border-border p-3 sm:flex-row sm:items-center sm:justify-between">
-                                    <span aria-label={`${action.label} shortcut`} className="font-mono text-sm">
-                                      {formatBindingDisplay(binding)}
-                                    </span>
-                                    <div className="flex items-center gap-3">
-                                      {isSaving && <Spinner className="h-4 w-4 text-muted-foreground" />}
+                                  <div
+                                    key={binding.id}
+                                    className="space-y-3 rounded-lg border border-sage/40 bg-sage-bg/40 p-3"
+                                  >
+                                    <div className="flex items-start gap-2">
+                                      <HotkeyInput
+                                        inline
+                                        value={editingCapture.combo}
+                                        onChange={(combo) =>
+                                          setEditingCapture((prev) =>
+                                            prev && prev.combo !== combo
+                                              ? {
+                                                  ...prev,
+                                                  combo,
+                                                  bareModifier: null,
+                                                }
+                                              : prev,
+                                          )
+                                        }
+                                        placeholder="Press a key or key combo"
+                                        validationRules={
+                                          action.allows_single_key
+                                            ? singleKeyValidation
+                                            : ValidationPresets.standard()
+                                        }
+                                        allowBareModifier={showRecordingCheckbox}
+                                        onBareModifier={(spec) =>
+                                          setEditingCapture((prev) =>
+                                            prev
+                                              ? {
+                                                  ...prev,
+                                                  bareModifier: spec,
+                                                  combo: "",
+                                                }
+                                              : prev,
+                                          )
+                                        }
+                                      />
                                       <Button
                                         type="button"
-                                        variant="outline"
-                                        size="sm"
-                                        disabled={editingDisabled || isCapturing}
-                                        onClick={() => startEditing(binding)}
+                                        size="icon-sm"
+                                        aria-label="Save"
+                                        className="bg-green-600 text-white hover:bg-green-600/90"
+                                        disabled={
+                                          isSaving ||
+                                          (!editingCapture.combo &&
+                                            !editingCapture.bareModifier)
+                                        }
+                                        onClick={saveEdit}
                                       >
-                                        <Pencil className="mr-1 h-3.5 w-3.5" />
-                                        Edit
+                                        {isSaving ? (
+                                          <Spinner className="h-4 w-4" />
+                                        ) : (
+                                          <Check className="h-4 w-4" />
+                                        )}
                                       </Button>
                                       <Button
                                         type="button"
                                         variant="ghost"
                                         size="icon-sm"
-                                        aria-label="Remove"
-                                        className="text-muted-foreground hover:text-destructive"
-                                        disabled={editingDisabled || isCapturing}
-                                        onClick={() => void deleteBinding(binding.id)}
+                                        aria-label="Cancel"
+                                        disabled={isSaving}
+                                        onClick={cancelEdit}
                                       >
-                                        <Trash2 className="h-4 w-4" />
+                                        <X className="h-4 w-4" />
                                       </Button>
                                     </div>
+
+                                    {!editingCapture.bareModifier && (
+                                      <p className="text-xs text-muted-foreground">
+                                        Use a key combo, a function key, or a
+                                        numpad/navigation key. A bare letter or number
+                                        won&apos;t work — it would block typing.
+                                      </p>
+                                    )}
                                   </div>
                                 );
-                              })}
-                            </div>
-                          )}
-                        </div>
-                      );
-                    })}
-              </div>
-            </SettingsCard>
-          );
-        })
+                              }
+
+                              return (
+                                <div
+                                  key={binding.id}
+                                  className="flex items-center justify-between gap-3 rounded-lg border border-border/70 bg-muted/20 px-2.5 py-2"
+                                >
+                                  <span
+                                    aria-label={`${action.label} shortcut`}
+                                    className="font-mono text-sm"
+                                  >
+                                    {formatBindingDisplay(binding)}
+                                  </span>
+                                  <div className="flex items-center gap-1">
+                                    {isSaving && (
+                                      <Spinner className="mr-1 h-4 w-4 text-muted-foreground" />
+                                    )}
+                                    <Button
+                                      type="button"
+                                      variant="ghost"
+                                      size="icon-sm"
+                                      aria-label="Edit"
+                                      disabled={editingDisabled || isCapturing}
+                                      onClick={() => startEditing(binding)}
+                                    >
+                                      <Pencil className="h-3.5 w-3.5" />
+                                    </Button>
+                                    <Button
+                                      type="button"
+                                      variant="ghost"
+                                      size="icon-sm"
+                                      aria-label="Remove"
+                                      className="text-muted-foreground hover:text-destructive"
+                                      disabled={editingDisabled || isCapturing}
+                                      onClick={() => void deleteBinding(binding.id)}
+                                    >
+                                      <Trash2 className="h-4 w-4" />
+                                    </Button>
+                                  </div>
+                                </div>
+                              );
+                            })}
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              </section>
+            );
+          })}
+        </div>
       )}
     </SettingsPage>
   );

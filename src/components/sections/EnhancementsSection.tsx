@@ -1993,8 +1993,8 @@ export function EnhancementsSection() {
   );
 
   return (
-    <div className="h-full min-h-0 flex flex-col">
-      <div className="shrink-0 px-6 py-5 md:px-8">
+    <div className="h-full min-h-0 min-w-0 flex flex-col overflow-x-hidden">
+      <div className="shrink-0 py-5 pl-2 pr-4">
         <div className="flex items-center justify-between gap-4">
           <div className="min-w-0">
             <div className="flex items-center gap-2">
@@ -2051,8 +2051,8 @@ export function EnhancementsSection() {
         </div>
       </div>
 
-      <ScrollArea className="flex-1 min-h-0">
-        <div className="p-6">
+      <ScrollArea className="flex-1 min-h-0 min-w-0 overflow-x-hidden">
+        <div className="min-w-0 max-w-full overflow-x-hidden pt-5 pb-4 pl-2 pr-4">
           <EnhancementSettings
             preset={enhancementOptions.preset}
             finalTextLanguage={effectiveFinalTextLanguage}

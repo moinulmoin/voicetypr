@@ -52,14 +52,14 @@ describe('AgentCliSection', () => {
 
     render(<AgentCliSection />);
 
-    const installButton = await screen.findByRole('button', { name: /install command/i });
+    const installButton = await screen.findByRole('button', { name: /^install$/i });
     fireEvent.click(installButton);
 
     await waitFor(() => {
       expect(mockInvoke).toHaveBeenCalledWith('install_cli_tool');
     });
     expect(await screen.findByText('Ready and compatible')).toBeInTheDocument();
-    expect(screen.getByText('Command v2.0.5')).toBeInTheDocument();
+    expect(screen.getByText('CLI v2.0.5')).toBeInTheDocument();
   });
 
   it('repairs an installed command that targets another app version', async () => {
@@ -74,7 +74,7 @@ describe('AgentCliSection', () => {
 
     render(<AgentCliSection />);
 
-    fireEvent.click(await screen.findByRole('button', { name: /update command/i }));
+    fireEvent.click(await screen.findByRole('button', { name: /^update$/i }));
 
     await waitFor(() => {
       expect(mockInvoke).toHaveBeenCalledWith('repair_cli_tool');
@@ -95,13 +95,13 @@ describe('AgentCliSection', () => {
 
     render(<AgentCliSection />);
 
-    expect(await screen.findByRole('button', { name: /repair command/i })).toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: /remove command/i }));
+    expect(await screen.findByRole('button', { name: /^repair$/i })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: /^remove$/i }));
 
     await waitFor(() => {
       expect(mockInvoke).toHaveBeenCalledWith('uninstall_cli_tool');
     });
-    expect(await screen.findByText('Command not installed')).toBeInTheDocument();
+    expect(await screen.findByText('Not installed')).toBeInTheDocument();
   });
 
   it('shows an unmanaged conflict without destructive actions', async () => {
@@ -116,10 +116,9 @@ describe('AgentCliSection', () => {
     render(<AgentCliSection />);
 
     expect(await screen.findByText(/another command already uses this path/i)).toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: /install command/i })).not.toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: /remove command/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /^install$/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /^remove$/i })).not.toBeInTheDocument();
     expect(screen.getAllByText(/voicetypr transcribe/).length).toBeGreaterThan(0);
-    expect(screen.getByText(/voicetypr --help/)).toBeInTheDocument();
   });
 
   it('copies a reusable prompt for terminal-capable agents', async () => {

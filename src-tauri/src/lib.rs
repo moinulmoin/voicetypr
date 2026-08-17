@@ -59,10 +59,9 @@ pub fn hide_dock_icon(app: &tauri::AppHandle) {
 fn align_main_window_controls(window: &tauri::WebviewWindow) {
     use objc2::msg_send;
     use objc2_app_kit::{NSView, NSWindow, NSWindowButton};
-
     const TITLEBAR_HEIGHT: f64 = 36.0;
     const TRAFFIC_LIGHT_LEFT: f64 = 12.0;
-    const TRAFFIC_LIGHT_VERTICAL_OFFSET: f64 = 4.0;
+    const TRAFFIC_LIGHT_VERTICAL_OFFSET: f64 = 2.0;
 
     let Ok(ns_window) = window.ns_window() else {
         log::warn!("Could not access the main NSWindow to align window controls");

@@ -519,10 +519,8 @@ export function AudioUploadSection() {
         </div>
       )}
 
-      <details className="group rounded-xl border border-border/70 bg-muted/20 px-4 py-3 text-sm">
-        <summary className="cursor-pointer font-medium text-foreground">
-          File and processing details
-        </summary>
+      <section className="rounded-xl border border-border/70 bg-muted/20 px-4 py-3 text-sm">
+        <h2 className="font-medium text-foreground">File and processing details</h2>
         <ul className="mt-3 grid gap-2 text-sm leading-relaxed text-muted-foreground sm:grid-cols-2">
           <li>WAV, MP3, M4A, FLAC, OGG, MP4, and WebM are supported.</li>
           <li>Video audio is extracted before transcription.</li>
@@ -532,7 +530,7 @@ export function AudioUploadSection() {
         <p className="mt-3 text-xs text-muted-foreground">
           Upload uses the source currently selected in Sources.
         </p>
-      </details>
+      </section>
 
     </SettingsPage>
   );

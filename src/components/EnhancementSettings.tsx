@@ -735,55 +735,36 @@ export function EnhancementSettings({
   return (
     <Tabs
       defaultValue="provider"
-      orientation="vertical"
-      className={disabled
-        ? "grid grid-cols-[11.5rem_minmax(0,1fr)] items-start gap-5 opacity-60"
-        : "grid grid-cols-[11.5rem_minmax(0,1fr)] items-start gap-5"}
+      className={disabled ? "flex flex-col gap-4 opacity-60" : "flex flex-col gap-4"}
     >
-      <aside className="sticky top-0 rounded-xl border border-border/70 bg-muted/30 p-2">
-        <div className="px-3 pb-2 pt-2">
-          <p className="text-xs font-semibold uppercase tracking-[0.12em] text-muted-foreground">
-            Polish workflow
-          </p>
-        </div>
-        <TabsList variant="line" className="h-auto w-full items-stretch gap-1">
-          <TabsTrigger value="provider" aria-label="Provider" className="min-h-12 rounded-lg px-3 py-2.5">
+      <div className="border-b border-border/70">
+        <TabsList
+          variant="line"
+          aria-label="Polish settings"
+          className="grid h-auto w-full min-w-0 grid-cols-5 gap-0 overflow-hidden"
+        >
+          <TabsTrigger value="provider" aria-label="Provider" className="gap-2 px-3 py-2.5">
             <Sparkles className="size-4" />
-            <span className="flex min-w-0 flex-col items-start">
-              <span>Provider</span>
-              <span className="text-[11px] font-normal text-muted-foreground">AI connection</span>
-            </span>
+            <span>Provider</span>
           </TabsTrigger>
-          <TabsTrigger value="dictionary" aria-label="Dictionary" className="min-h-12 rounded-lg px-3 py-2.5">
+          <TabsTrigger value="dictionary" aria-label="Dictionary" className="gap-2 px-3 py-2.5">
             <BookOpen className="size-4" />
-            <span className="flex min-w-0 flex-col items-start">
-              <span>Dictionary</span>
-              <span className="text-[11px] font-normal text-muted-foreground">Words and names</span>
-            </span>
+            <span>Dictionary</span>
           </TabsTrigger>
-          <TabsTrigger value="corrections" aria-label="Corrections" className="min-h-12 rounded-lg px-3 py-2.5">
+          <TabsTrigger value="corrections" aria-label="Corrections" className="gap-2 px-3 py-2.5">
             <Replace className="size-4" />
-            <span className="flex min-w-0 flex-col items-start">
-              <span>Corrections</span>
-              <span className="text-[11px] font-normal text-muted-foreground">Exact replacements</span>
-            </span>
+            <span>Corrections</span>
           </TabsTrigger>
-          <TabsTrigger value="snippets" aria-label="Snippets" className="min-h-12 rounded-lg px-3 py-2.5">
+          <TabsTrigger value="snippets" aria-label="Snippets" className="gap-2 px-3 py-2.5">
             <TextQuote className="size-4" />
-            <span className="flex min-w-0 flex-col items-start">
-              <span>Snippets</span>
-              <span className="text-[11px] font-normal text-muted-foreground">Text expansions</span>
-            </span>
+            <span>Snippets</span>
           </TabsTrigger>
-          <TabsTrigger value="modes" aria-label="Modes" className="min-h-12 rounded-lg px-3 py-2.5">
+          <TabsTrigger value="modes" aria-label="Modes" className="gap-2 px-3 py-2.5">
             <SlidersHorizontal className="size-4" />
-            <span className="flex min-w-0 flex-col items-start">
-              <span>Modes</span>
-              <span className="text-[11px] font-normal text-muted-foreground">Writing behavior</span>
-            </span>
+            <span>Modes</span>
           </TabsTrigger>
         </TabsList>
-      </aside>
+      </div>
 
       <div className="min-w-0 max-w-4xl">
         <TabsContent value="provider" className="mt-0">

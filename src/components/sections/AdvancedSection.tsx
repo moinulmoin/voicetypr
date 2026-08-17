@@ -60,7 +60,7 @@ const QUICK_FIXES: QuickFix[] = [
     issue: "Voice recording does not start from the shortcut.",
     solution: () =>
       isMacOS
-        ? "Check microphone permission in Diagnostics. Also confirm a recording device is selected in Recording."
+        ? "Check microphone permission in Quick help. Also confirm a recording device is selected in Recording."
         : "In Windows Settings, allow desktop apps to use the microphone. Also confirm a recording device is selected in Recording.",
   },
   {
@@ -70,7 +70,7 @@ const QUICK_FIXES: QuickFix[] = [
     issue: "The global shortcut does not trigger recording.",
     solution: () =>
       isMacOS
-        ? "Open Diagnostics and grant Accessibility permission so the global shortcut can work."
+        ? "Open Quick help and grant Accessibility permission so the global shortcut can work."
         : "Open Shortcuts, and choose another shortcut if the current one is reserved by another app.",
   },
   {
@@ -80,7 +80,7 @@ const QUICK_FIXES: QuickFix[] = [
     issue: "The transcript does not appear at the cursor.",
     solution: () =>
       isMacOS
-        ? "Place the cursor in an editable text field. Check Accessibility permission under Diagnostics."
+        ? "Place the cursor in an editable text field. Check Accessibility permission under Quick help."
         : "Place the cursor in an editable text field, then confirm Auto-paste after transcription is enabled in Settings.",
   },
   {
@@ -163,14 +163,14 @@ export function AdvancedSection() {
         <SettingsHeader
           title={
             <span className="flex items-center gap-2">
-              Diagnostics
+              Quick help
               <Dialog>
-                <DialogTrigger render={<Button type="button" variant="ghost" size="icon-sm" aria-label="Diagnostics guide" className="size-7 rounded-full text-muted-foreground"/>}><HelpCircle className="h-4 w-4" /></DialogTrigger>
+                <DialogTrigger render={<Button type="button" variant="ghost" size="icon-sm" aria-label="Quick help guide" className="size-7 rounded-full text-muted-foreground"/>}><HelpCircle className="h-4 w-4" /></DialogTrigger>
                 <DialogContent className="sm:max-w-lg">
                   <DialogHeader>
-                    <DialogTitle>Diagnostics guide</DialogTitle>
+                    <DialogTitle>Quick help guide</DialogTitle>
                     <DialogDescription>
-                      Diagnostics covers permissions, troubleshooting, and reset tools.
+                      Quick help covers permissions, troubleshooting, and reset tools.
                     </DialogDescription>
                   </DialogHeader>
                   <div className="space-y-3 text-sm leading-6 text-muted-foreground">

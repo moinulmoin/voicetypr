@@ -578,6 +578,7 @@ describe('application context badge', () => {
         'data:image/png;base64,aWNvbg==',
       );
     });
+    expect(badge.parentElement).toHaveTextContent('Ghostty');
     expect(screen.queryByText('other', { exact: true })).not.toBeInTheDocument();
     expect(invokeMock).toHaveBeenCalledWith('get_application_icon', {
       processPath: '/Applications/Ghostty.app',

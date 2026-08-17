@@ -68,7 +68,7 @@ describe("Sidebar navigation", () => {
     expect(screen.getByRole("button", { name: "CLI" })).toBeInTheDocument();
   });
 
-  it("keeps every destination in one compact list and reporting fixed below it", async () => {
+  it("keeps everyday destinations compact and support actions fixed below", async () => {
     const user = userEvent.setup();
     const onSectionChange = renderSidebar();
     await screen.findByText("v2.0.5");
@@ -78,6 +78,8 @@ describe("Sidebar navigation", () => {
     const general = within(mainNav).getByRole("button", { name: "General" });
     const history = within(mainNav).getByRole("button", { name: "History" });
     const footerGroup = screen.getByTestId("sidebar-footer-nav");
+    const diagnostics = within(footerGroup).getByRole("button", { name: "Quick help" });
+    const report = within(footerGroup).getByRole("button", { name: "Report a problem" });
 
     expect(
       overview.compareDocumentPosition(general) &
@@ -88,9 +90,12 @@ describe("Sidebar navigation", () => {
         Node.DOCUMENT_POSITION_FOLLOWING,
     ).toBeTruthy();
     expect(within(mainNav).getByRole("button", { name: "License" })).toBeInTheDocument();
-    expect(within(mainNav).getByRole("button", { name: "Diagnostics" })).toBeInTheDocument();
-    expect(footerGroup).toHaveTextContent(/report a problem/i);
-    expect(footerGroup).not.toHaveTextContent(/general|license|diagnostics/i);
+    expect(within(mainNav).queryByRole("button", { name: "Quick help" })).not.toBeInTheDocument();
+    expect(
+      diagnostics.compareDocumentPosition(report) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+    expect(footerGroup).not.toHaveTextContent(/general|license/i);
     expect(
       document.querySelector('[data-slot="sidebar-content"]'),
     ).toHaveClass("overflow-hidden");

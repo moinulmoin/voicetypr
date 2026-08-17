@@ -776,40 +776,39 @@ export function ModelsSection({
       />
 
       <section className="rounded-xl border border-border/80 bg-card p-5">
-        <div className="flex flex-wrap items-center gap-4">
-          <div className="min-w-0">
-            <p className="text-sm font-semibold text-foreground">Current source</p>
-            <p className="mt-0.5 truncate text-sm text-muted-foreground">
-              {currentSourceLabel}
-            </p>
-          </div>
-          <Badge variant="secondary" className="ml-auto">
-            {currentSourceType}
-          </Badge>
-        </div>
-        <div className="mt-4 border-t border-border/70 pt-4">
-          <SettingRow
-            className="!mt-0 !border-t-0 !pt-0"
-            title="Spoken language"
-            description="The language you speak. English-only models lock this to English."
-            control={
-              <div className="flex items-center gap-2">
-                {(hasDownloading || hasVerifying) && (
-                  <Badge variant="outline" className="gap-1.5 bg-primary/10 text-primary">
-                    {hasDownloading ? <Download className="size-3.5" /> : <Spinner className="size-3.5" />}
-                    {hasDownloading ? "Downloading…" : "Verifying…"}
-                  </Badge>
-                )}
-                <LanguageSelection
-                  value={languageValue}
-                  engine={currentEngine}
-                  englishOnly={isEnglishOnlyModel}
-                  onValueChange={(value) => void handleLanguageChange(value)}
-                />
-              </div>
-            }
-          />
-        </div>
+        <SettingRow
+          className="!mt-0 !border-t-0 !pt-0"
+          title="Current source"
+          description="The transcription engine used for new recordings and uploads."
+          control={
+            <div className="flex max-w-full items-center justify-end gap-2">
+              <Badge variant="secondary">{currentSourceType}</Badge>
+              <span className="max-w-64 truncate text-sm font-medium text-foreground">
+                {currentSourceLabel}
+              </span>
+            </div>
+          }
+        />
+        <SettingRow
+          title="Spoken language"
+          description="The language you speak. English-only models lock this to English."
+          control={
+            <div className="flex items-center gap-2">
+              {(hasDownloading || hasVerifying) && (
+                <Badge variant="outline" className="gap-1.5 bg-primary/10 text-primary">
+                  {hasDownloading ? <Download className="size-3.5" /> : <Spinner className="size-3.5" />}
+                  {hasDownloading ? "Downloading…" : "Verifying…"}
+                </Badge>
+              )}
+              <LanguageSelection
+                value={languageValue}
+                engine={currentEngine}
+                englishOnly={isEnglishOnlyModel}
+                onValueChange={(value) => void handleLanguageChange(value)}
+              />
+            </div>
+          }
+        />
       </section>
 
       <Tabs

@@ -48,6 +48,8 @@ fn default_agent_cli_reasoning(provider: &str) -> &'static str {
 fn normalize_agent_cli_reasoning(provider: &str, reasoning: &str) -> String {
     match reasoning {
         "off" | "low" | "medium" => reasoning.to_string(),
+        // Documented fast thinking level for pi, omp, and opencode.
+        "minimal" if matches!(provider, "pi" | "omp" | "opencode") => reasoning.to_string(),
         "high" => "medium".to_string(),
         _ => default_agent_cli_reasoning(provider).to_string(),
     }
@@ -61,7 +63,9 @@ fn validate_agent_cli_reasoning(provider: &str, reasoning: &str) -> Result<(), S
     if !agent_cli_supports_reasoning(provider) {
         return Err("Reasoning is not configurable for this local agent".to_string());
     }
-    if !matches!(reasoning, "off" | "low" | "medium") {
+    let supported = matches!(reasoning, "off" | "low" | "medium")
+        || (matches!(provider, "pi" | "omp" | "opencode") && reasoning == "minimal");
+    if !supported {
         return Err("Unsupported reasoning level".to_string());
     }
     Ok(())
@@ -1745,10 +1749,16 @@ mod tests {
         assert!(supports_fast_mode("codex"));
         assert!(!supports_fast_mode("pi"));
         assert!(!supports_fast_mode("droid"));
+        assert!(validate_agent_cli_reasoning("pi", "minimal").is_ok());
+        assert!(validate_agent_cli_reasoning("omp", "minimal").is_ok());
+        assert!(validate_agent_cli_reasoning("opencode", "minimal").is_ok());
+        assert!(validate_agent_cli_reasoning("claude-code", "minimal").is_err());
+        assert_eq!(normalize_agent_cli_reasoning("pi", "minimal"), "minimal");
+        assert_eq!(normalize_agent_cli_reasoning("omp", "minimal"), "minimal");
     }
 
     #[test]
-    fn native_origin_maps_known_providers() {
+    fn native_origins_match_provider_catalog() {
         assert_eq!(native_origin("openai"), Some("https://api.openai.com"));
         assert_eq!(
             native_origin("anthropic"),

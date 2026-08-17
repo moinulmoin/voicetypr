@@ -371,10 +371,11 @@ describe('RecordingSettings UI structure', () => {
     });
   });
 
-  it('renders the recording workflow', async () => {
+  it('separates capture controls from transcript handling', async () => {
     render(<RecordingSettings />);
     await waitFor(() => {
-      expect(screen.getByText('Recording workflow')).toBeInTheDocument();
+      expect(screen.getByText('Capture controls')).toBeInTheDocument();
+      expect(screen.getByText('Transcript handling')).toBeInTheDocument();
     });
   });
 
@@ -401,20 +402,6 @@ describe('RecordingSettings UI structure', () => {
     });
   });
 
-  it('displays ESC cancel hint', async () => {
-    render(<RecordingSettings />);
-    await waitFor(() => {
-      expect(
-        screen.getByText(
-          (_content, node) =>
-            (node?.tagName === 'P' &&
-              node.textContent?.includes(
-                'Press twice while recording to cancel the current take.'
-              )) ?? false
-        )
-      ).toBeInTheDocument();
-    });
-  });
 });
 
 // ============================================================================

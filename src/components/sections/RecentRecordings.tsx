@@ -27,7 +27,7 @@ import { useCanAutoInsert, useReadiness } from "@/contexts/ReadinessContext";
 import { useSettings } from "@/contexts/SettingsContext";
 import { invoke } from "@tauri-apps/api/core";
 import { ask, save } from "@tauri-apps/plugin-dialog";
-import { AlertCircle, AlertTriangle, AppWindow, Mic, Trash2, Search, Copy, Monitor, Globe, FileAudio, Terminal, Download, RotateCcw, Loader2, FolderOpen, HelpCircle, ShieldCheck, Sparkles, ChevronDown } from "lucide-react";
+import { AlertCircle, AlertTriangle, AppWindow, Mic, Trash2, Search, Copy, Globe, FileAudio, Terminal, Download, RotateCcw, Loader2, FolderOpen, HelpCircle, ShieldCheck, Sparkles, ChevronDown } from "lucide-react";
 import { useState, useMemo, useCallback, useEffect } from "react";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
@@ -50,7 +50,7 @@ function loadApplicationIcon(processPath: string): Promise<string | null> {
   return request;
 }
 
-function ApplicationBadge({
+function ApplicationIcon({
   appName,
   processPath,
 }: {
@@ -74,14 +74,13 @@ function ApplicationBadge({
   return (
     <span
       aria-label={`Application: ${appName}`}
-      className="inline-flex items-center gap-1 rounded-md bg-muted px-1.5 py-0.5 text-[11px] font-medium"
+      className="grid size-4 shrink-0 place-items-center"
     >
       {icon ? (
-        <img src={icon} alt="" className="size-3 rounded-[3px]" />
+        <img src={icon} alt="" className="size-4 rounded-[4px]" />
       ) : (
-        <AppWindow aria-hidden="true" className="size-3" />
+        <AppWindow aria-hidden="true" className="size-3.5" />
       )}
-      <span>{appName}</span>
     </span>
   );
 }
@@ -136,7 +135,7 @@ export function formatDurationMs(ms: number): string {
   return `${min}:${sec.toString().padStart(2, '0')}`;
 }
 
-/** Lucide icon for where a transcript came from (its source). */
+/** Lucide fallback for transcripts without a captured application icon. */
 function sourceIcon(source: string | undefined) {
   switch (source) {
     case 'audio_file':
@@ -147,7 +146,7 @@ function sourceIcon(source: string | undefined) {
     case 'cli':
       return Terminal;
     default:
-      return Monitor;
+      return Mic;
   }
 }
 
@@ -629,7 +628,7 @@ export function RecentRecordings({
   return (
     <div className="h-full flex flex-col">
       {/* Header */}
-      <div className="px-6 py-5 md:px-8">
+      <div className="py-5 pl-2 pr-4">
         <div className="flex flex-wrap items-start justify-between gap-4">
           <div className="min-w-0">
             <div className="flex items-center gap-2">
@@ -693,7 +692,7 @@ export function RecentRecordings({
 
       {/* Search + Filters */}
       {history.length > 0 && (
-        <div className="px-6 py-3 md:px-8">
+        <div className="py-3 pl-2 pr-4">
           <div className="flex items-center gap-2.5">
           <div className="relative min-w-0 flex-1">
             <Search className="absolute left-3.5 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
@@ -796,7 +795,7 @@ export function RecentRecordings({
       {history.length > 0 ? (
         filteredHistory.length > 0 ? (
           <ScrollArea className="h-full">
-            <div className="px-6 md:px-8 py-4 space-y-6">
+            <div className="py-4 pl-2 pr-4 space-y-6">
               {Object.entries(groupedHistory).map(([date, items]) => (
                 <div key={date} className="space-y-2.5">
                   <p className="px-1 text-xs font-medium text-muted-foreground">
@@ -814,6 +813,15 @@ export function RecentRecordings({
                       const displayText = item.text;
                       const wordCount = displayText.trim() ? displayText.trim().split(/\s+/).length : 0;
                       const SourceIcon = sourceIcon(item.writing?.source);
+                      const appContext = item.writing?.context_hint;
+                      const usesDesktopApp =
+                        (!item.writing?.source ||
+                          item.writing.source === "desktop_recording") &&
+                        Boolean(appContext?.app_name);
+                      const sourceDisplayName =
+                        usesDesktopApp && appContext?.app_name
+                          ? appContext.app_name
+                          : sourceLabel(item.writing?.source);
                       return (
                       <div
                         key={item.id}
@@ -823,25 +831,23 @@ export function RecentRecordings({
                         )}
                         onClick={() => !isFailed && !isInProgress && handleCopy(displayText)}
                       >
-                        <div
-                          className={cn(
-                            "mt-0.5 grid size-9 shrink-0 place-items-center rounded-xl border",
-                            isInProgress
-                              ? "border-sage/30 bg-sage-bg text-sage"
-                              : isFailed
-                              ? "border-amber-500/30 bg-amber-500/10 text-amber-500"
-                              : "border-border bg-muted text-muted-foreground",
-                          )}
-                          title={sourceLabel(item.writing?.source)}
-                        >
-                          {isInProgress ? (
-                            <Loader2 className="h-4 w-4 animate-spin" />
-                          ) : isFailed ? (
-                            <AlertTriangle className="h-4 w-4" />
-                          ) : (
-                            <SourceIcon className="h-4 w-4" />
-                          )}
-                        </div>
+                        {(isInProgress || isFailed) && (
+                          <div
+                            className={cn(
+                              "mt-0.5 grid size-9 shrink-0 place-items-center rounded-xl border",
+                              isInProgress
+                                ? "border-sage/30 bg-sage-bg text-sage"
+                                : "border-amber-500/30 bg-amber-500/10 text-amber-500",
+                            )}
+                            title={sourceDisplayName}
+                          >
+                            {isInProgress ? (
+                              <Loader2 className="h-4 w-4 animate-spin" />
+                            ) : (
+                              <AlertTriangle className="h-4 w-4" />
+                            )}
+                          </div>
+                        )}
                         <div className="min-w-0 flex-1">
                           {isInProgress && (
                             <p className="mb-1 text-xs font-medium text-sage">
@@ -885,7 +891,17 @@ export function RecentRecordings({
                           </p>
 
                           <div className="mt-1.5 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted-foreground">
-                            <span className="font-medium text-foreground/80">{sourceLabel(item.writing?.source)}</span>
+                            <span className="inline-flex items-center gap-1.5 font-medium text-foreground/80">
+                              {usesDesktopApp && appContext?.app_name ? (
+                                <ApplicationIcon
+                                  appName={appContext.app_name}
+                                  processPath={appContext.process_path}
+                                />
+                              ) : (
+                                <SourceIcon aria-hidden="true" className="size-3.5" />
+                              )}
+                              {sourceDisplayName}
+                            </span>
                             {item.model && (
                               <>
                                 <span className="text-muted-foreground/40">·</span>
@@ -921,12 +937,6 @@ export function RecentRecordings({
                             )}
                             {item.writing?.diarized && (
                               <span className="rounded-md bg-muted px-1.5 py-0.5 text-[11px] font-medium">Speakers</span>
-                            )}
-                            {item.writing?.context_hint?.app_name && (
-                              <ApplicationBadge
-                                appName={item.writing.context_hint.app_name}
-                                processPath={item.writing.context_hint.process_path}
-                              />
                             )}
                             {hasOriginal && (
                               <button
@@ -1040,7 +1050,7 @@ export function RecentRecordings({
           </div>
         )
       ) : isLoading ? (
-        <div aria-hidden className="px-6 md:px-8 py-4 space-y-2.5">
+        <div aria-hidden className="py-4 pl-2 pr-4 space-y-2.5">
           {[0, 1, 2].map((key) => (
             <div
               key={key}
@@ -1049,7 +1059,7 @@ export function RecentRecordings({
           ))}
         </div>
       ) : loadError ? (
-        <div className="px-6 md:px-8 py-4">
+        <div className="py-4 pl-2 pr-4">
           <div className="flex items-center gap-3.5 rounded-2xl border border-border bg-amber-500/[0.04] px-5 py-4">
             <div className="mt-0.5 grid size-9 shrink-0 place-items-center rounded-xl border border-amber-500/30 bg-amber-500/10 text-amber-500">
               <AlertTriangle className="h-4 w-4" />

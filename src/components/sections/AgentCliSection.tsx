@@ -27,11 +27,6 @@ interface CliToolStatus {
   detail: string | null;
 }
 
-const RECIPES = [
-  "voicetypr transcribe <file> --json",
-  "voicetypr --help",
-] as const;
-
 const AGENT_PROMPT = `Use Voicetypr for local audio transcription.
 
 When I give you an audio file, run:
@@ -57,7 +52,7 @@ export function AgentCliSection() {
       setStatus(await invoke<CliToolStatus>("cli_tool_status"));
     } catch (error) {
       log.error("Failed to read CLI tool status:", error);
-      if (showError) toast.error("Failed to refresh command health.");
+      if (showError) toast.error("Failed to refresh CLI health.");
     } finally {
       setPending(null);
     }
@@ -73,13 +68,13 @@ export function AgentCliSection() {
       const next = await invoke<CliToolStatus>("install_cli_tool");
       setStatus(next);
       if (next.installed && next.compatible) {
-        toast.success("voicetypr command installed. Open a new terminal to use it.");
+        toast.success("voicetypr CLI installed. Open a new terminal to use it.");
       } else {
-        toast.error("Could not install the voicetypr command.");
+        toast.error("Could not install the voicetypr CLI.");
       }
     } catch (error) {
       log.error("Failed to install CLI tool:", error);
-      toast.error("Failed to install the voicetypr command.");
+      toast.error("Failed to install the voicetypr CLI.");
     } finally {
       setPending(null);
     }
@@ -91,13 +86,13 @@ export function AgentCliSection() {
       const next = await invoke<CliToolStatus>("repair_cli_tool");
       setStatus(next);
       if (next.compatible) {
-        toast.success("voicetypr command now matches this app.");
+        toast.success("voicetypr CLI now matches this app.");
       } else {
-        toast.error("Could not repair the voicetypr command.");
+        toast.error("Could not repair the voicetypr CLI.");
       }
     } catch (error) {
       log.error("Failed to repair CLI tool:", error);
-      toast.error("Failed to repair the voicetypr command.");
+      toast.error("Failed to repair the voicetypr CLI.");
     } finally {
       setPending(null);
     }
@@ -109,13 +104,13 @@ export function AgentCliSection() {
       const next = await invoke<CliToolStatus>("uninstall_cli_tool");
       setStatus(next);
       if (!next.installed) {
-        toast.success("voicetypr command removed.");
+        toast.success("voicetypr CLI removed.");
       } else {
-        toast.error("Could not remove the voicetypr command.");
+        toast.error("Could not remove the voicetypr CLI.");
       }
     } catch (error) {
       log.error("Failed to uninstall CLI tool:", error);
-      toast.error("Failed to remove the voicetypr command.");
+      toast.error("Failed to remove the voicetypr CLI.");
     } finally {
       setPending(null);
     }
@@ -140,7 +135,7 @@ export function AgentCliSection() {
 
   return (
     <div className="space-y-4">
-      <h2 className="text-base font-semibold">Voicetypr command line</h2>
+      <h2 className="text-base font-semibold">CLI</h2>
 
       <div className="space-y-4 rounded-lg border border-border/50 bg-card p-4">
         <p className="text-sm text-muted-foreground">
@@ -149,7 +144,7 @@ export function AgentCliSection() {
           <code className="rounded bg-muted px-1 py-0.5 font-mono text-[0.85em]">
             voicetypr
           </code>{" "}
-          command.
+          CLI.
         </p>
 
         <div className="rounded-xl border border-border/70 bg-background/60 p-4">
@@ -167,12 +162,12 @@ export function AgentCliSection() {
               <div className="min-w-0">
                 <p className="text-sm font-medium">
                   {status === null
-                    ? "Checking command health…"
+                    ? "Checking…"
                     : compatible
                       ? "Ready and compatible"
                       : installed
-                        ? "Command needs attention"
-                        : "Command not installed"}
+                        ? "Needs attention"
+                        : "Not installed"}
                 </p>
                 {status?.path && (
                   <p className="mt-1 truncate font-mono text-xs text-muted-foreground">
@@ -192,24 +187,24 @@ export function AgentCliSection() {
                   <>
                     <Button variant="outline" size="sm" onClick={repair} disabled={busy}>
                       {pending === "repair" && <Loader2 className="animate-spin" />}
-                      {compatible ? "Repair command" : "Update command"}
+                      {compatible ? "Repair" : "Update"}
                     </Button>
                     <Button variant="ghost" size="sm" onClick={uninstall} disabled={busy}>
                       {pending === "uninstall" && <Loader2 className="animate-spin" />}
-                      Remove command
+                      Remove
                     </Button>
                   </>
                 ) : (
                   <Button size="sm" onClick={install} disabled={busy}>
                     {pending === "install" && <Loader2 className="animate-spin" />}
-                    Install command
+                    Install
                   </Button>
                 )
               )}
               <Button
                 variant="ghost"
                 size="icon-sm"
-                aria-label="Refresh command health"
+                aria-label="Refresh CLI health"
                 onClick={() => void refresh(true)}
                 disabled={busy}
               >
@@ -222,7 +217,7 @@ export function AgentCliSection() {
             <div className="mt-4 flex flex-wrap gap-2 border-t border-border/60 pt-3">
               <Badge variant="outline">App v{status.app_version}</Badge>
               <Badge variant={compatible ? "secondary" : "outline"}>
-                Command {status.command_version ? `v${status.command_version}` : "version unknown"}
+                CLI {status.command_version ? `v${status.command_version}` : "version unknown"}
               </Badge>
             </div>
           )}
@@ -230,22 +225,11 @@ export function AgentCliSection() {
 
         {status?.manageable === false && !status.detail && (
           <p className="text-xs text-muted-foreground">
-            Command management is unavailable on this platform.
+            CLI management is unavailable on this platform.
           </p>
         )}
 
-        <div className="grid gap-3 md:grid-cols-2">
-          <div className="rounded-xl border border-border/70 bg-muted/35 p-4">
-            <p className="text-xs font-semibold uppercase tracking-[0.12em] text-muted-foreground">
-              Quick commands
-            </p>
-            <div className="mt-3 space-y-1 font-mono text-xs">
-              {RECIPES.map((line) => (
-                <p key={line}>{line}</p>
-              ))}
-            </div>
-          </div>
-
+        <div className="space-y-3">
           <div className="rounded-xl border border-sage/20 bg-sage-bg/45 p-4">
             <div className="flex items-start gap-3">
               <div className="rounded-lg bg-background p-2 text-sage shadow-sm ring-1 ring-border/70">

@@ -102,7 +102,7 @@ export function AppShell({ activeSection, onSectionChange }: AppShellProps) {
         }`}
       >
         <SidebarTrigger
-          className="size-7 -translate-y-1 text-muted-foreground"
+          className="size-7 translate-y-1 text-muted-foreground"
           title="Toggle sidebar"
         />
       </header>
@@ -110,7 +110,7 @@ export function AppShell({ activeSection, onSectionChange }: AppShellProps) {
         activeSection={activeSection}
         onSectionChange={onSectionChange}
       />
-      <SidebarInset className="mb-2 mr-2 mt-9 h-[calc(100svh-2.75rem)] min-h-0 rounded-2xl border border-l-0 border-border/70 bg-background">
+      <SidebarInset className="mb-2 mr-2 mt-9 h-[calc(100svh-2.75rem)] min-h-0 min-w-0 overflow-hidden rounded-2xl bg-background">
         {trayUnavailable ? (
           <Alert variant="destructive" className="mx-4 mt-4">
             <CircleAlert />
@@ -134,8 +134,8 @@ export function AppShell({ activeSection, onSectionChange }: AppShellProps) {
             </AlertAction>
           </Alert>
         ) : null}
-        <div className="min-h-0 flex-1">
-          <TabContainer activeSection={activeSection} />
+        <div className="min-h-0 min-w-0 flex-1 overflow-hidden">
+          <TabContainer activeSection={activeSection} onNavigate={onSectionChange} />
         </div>
       </SidebarInset>
     </SidebarProvider>

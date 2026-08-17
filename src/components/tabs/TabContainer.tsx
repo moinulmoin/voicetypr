@@ -16,14 +16,18 @@ import type { ScreenId } from "@/components/navigation";
 
 interface TabContainerProps {
   activeSection: ScreenId;
+  onNavigate?: (section: ScreenId) => void;
 }
 
-export function TabContainer({ activeSection }: TabContainerProps) {
+export function TabContainer({
+  activeSection,
+  onNavigate,
+}: TabContainerProps) {
 
   const renderTabContent = () => {
     switch (activeSection) {
       case "overview":
-        return <OverviewTab />;
+        return <OverviewTab onNavigate={onNavigate} />;
 
       case "recordings":
         return <RecordingsTab />;
@@ -64,7 +68,7 @@ export function TabContainer({ activeSection }: TabContainerProps) {
 
 
       default:
-        return <OverviewTab />;
+        return <OverviewTab onNavigate={onNavigate} />;
     }
   };
 

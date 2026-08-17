@@ -8,12 +8,12 @@ import { useTranscriptionHistory } from "@/hooks/useTranscriptionHistory";
 import { useActiveTrigger } from "@/hooks/useActiveTrigger";
 import { getModelDisplayName } from "@/lib/model-display";
 import { invoke } from "@tauri-apps/api/core";
-import { Share2 } from "lucide-react";
+import { Share2, Wrench } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
+import type { ScreenId } from "@/components/navigation";
 import { createLogger } from "@/lib/logger";
 
 const log = createLogger("overview-tab");
-
 
 interface SavedConnection {
   id: string;
@@ -22,7 +22,11 @@ interface SavedConnection {
   name: string | null;
 }
 
-export function OverviewTab() {
+export function OverviewTab({
+  onNavigate,
+}: {
+  onNavigate?: (section: ScreenId) => void;
+}) {
   const readiness = useReadiness();
   const canRecord = readiness.canRecord;
   const canAutoInsert = useCanAutoInsert();
@@ -205,17 +209,28 @@ export function OverviewTab() {
 
   return (
     <div className="h-full min-h-0 overflow-auto">
-      <div className="mx-auto flex w-full max-w-4xl flex-col gap-6 px-6 pb-7 pt-2 md:px-8">
-        <header>
-          <h1 className="text-[1.75rem] font-semibold tracking-[-0.025em] text-foreground">
-            Overview
-          </h1>
-          <p className="mt-1 text-sm text-muted-foreground">
-            Your active dictation setup and usage at a glance.
-          </p>
+      <div className="mx-auto flex w-full max-w-4xl flex-col gap-5 pb-4 pl-2 pr-4">
+        <header className="flex items-start justify-between gap-4">
+          <div>
+            <h1 className="text-[1.75rem] font-semibold tracking-[-0.025em] text-foreground">
+              Overview
+            </h1>
+            <p className="mt-1 text-sm text-muted-foreground">
+              Your active dictation setup and usage at a glance.
+            </p>
+          </div>
+          <Button
+            type="button"
+            variant="outline"
+            className="shrink-0"
+            onClick={() => setShareModalOpen(true)}
+          >
+            <Share2 />
+            Share stats
+          </Button>
         </header>
 
-        <section className="rounded-xl border border-border/80 bg-card p-5">
+        <section className="rounded-xl bg-card p-5">
           <div className="flex items-start justify-between gap-4">
             <div>
               <h2 className="text-[15px] font-semibold text-foreground">
@@ -225,16 +240,29 @@ export function OverviewTab() {
                 Defaults used for your next desktop recording.
               </p>
             </div>
-            <span
-              className={cn(
-                "rounded-full px-2.5 py-1 text-xs font-medium",
-                canRecord
-                  ? "bg-sage-bg text-sage"
-                  : "bg-amber-500/10 text-amber-700 dark:text-amber-300",
-              )}
-            >
-              {canRecord ? "Ready" : "Needs attention"}
-            </span>
+            <div className="flex shrink-0 items-center gap-2">
+              {!canRecord && onNavigate ? (
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={() => onNavigate("advanced")}
+                >
+                  <Wrench />
+                  Quick help
+                </Button>
+              ) : null}
+              <span
+                className={cn(
+                  "rounded-full px-2.5 py-1 text-xs font-medium",
+                  canRecord
+                    ? "bg-sage-bg text-sage"
+                    : "bg-amber-500/10 text-amber-700 dark:text-amber-300",
+                )}
+              >
+                {canRecord ? "Ready" : "Needs attention"}
+              </span>
+            </div>
           </div>
           <dl className="mt-5 grid gap-x-8 gap-y-5 sm:grid-cols-2">
             <SetupValue label="Source" value={selectedSourceLabel} />
@@ -250,11 +278,11 @@ export function OverviewTab() {
           </dl>
         </section>
 
-        <div className="grid gap-6 lg:grid-cols-[1.08fr_0.92fr]">
-          <section
-            aria-labelledby="weekly-rhythm-title"
-            className="rounded-xl border border-border/80 bg-card p-5"
-          >
+        <section
+          aria-labelledby="weekly-rhythm-title"
+          className="rounded-xl bg-card p-5"
+        >
+          <div className="flex flex-wrap items-start justify-between gap-3">
             <div>
               <h2
                 id="weekly-rhythm-title"
@@ -266,115 +294,112 @@ export function OverviewTab() {
                 Completed transcripts by day.
               </p>
             </div>
-            {isLoading && history.length === 0 ? (
-              <div aria-hidden className="mt-5 flex h-36 items-end gap-2">
-                {[40, 70, 55].map((height) => (
-                  <div
-                    key={height}
-                    className="min-w-0 flex-1 bg-muted animate-pulse h-full rounded-md"
-                    style={{ height: `${height}%` }}
-                  />
-                ))}
-              </div>
-            ) : loadError && history.length === 0 ? (
-              <p className="mt-5 text-[13px] text-muted-foreground">
-                Couldn&apos;t load history{" "}
-                <button
-                  type="button"
-                  onClick={() => {
-                    void refreshHistory();
-                  }}
-                  className="text-[11px] text-sage hover:underline"
-                >
-                  Retry
-                </button>
-              </p>
-            ) : stats.weekCount === 0 ? (
-              <p className="mt-5 text-[13px] text-muted-foreground">
-                No transcripts this week — your daily activity will chart here.
-              </p>
-            ) : (
-              <div className="mt-5 flex h-36 items-end gap-2">
-                {stats.weekDays.map((day) => {
-                  const isPeak = day.count > 0 && day.count === stats.weekMax;
-                  const heightPct = Math.max(
-                    6,
-                    Math.round((day.count / stats.weekMax) * 100),
-                  );
-                  return (
-                    <div
-                      key={day.key}
-                      className="flex h-full min-w-0 flex-1 flex-col justify-end gap-2"
-                    >
-                      <div
-                        className={cn(
-                          "w-full rounded-md",
-                          isPeak ? "bg-sage" : "bg-sage/20",
-                        )}
-                        style={{ height: `${heightPct}%` }}
-                        title={`${day.count} on ${day.label}`}
-                      />
-                      <span className="text-center text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
-                        {day.label}
-                      </span>
-                    </div>
-                  );
-                })}
-              </div>
-            )}
-            <p className="mt-4 text-[13px] tabular-nums text-muted-foreground">
-              {stats.todayCount.toLocaleString()} today ·{" "}
-              {stats.weekCount.toLocaleString()} last 7 days
-              {stats.avgLength > 0 ? ` · ${stats.avgLength}/transcript` : ""}
-            </p>
-          </section>
-
-          <section className="relative isolate overflow-hidden rounded-xl bg-[#52674f] p-6 text-white">
-            <div
-              className="absolute -right-16 -top-20 -z-10 size-56 rounded-full border-[32px] border-white/5"
-              aria-hidden
-            />
-            <p className="text-xs font-semibold uppercase tracking-[0.16em] text-white/65">
-              Your voice, in numbers
-            </p>
-            <p className="mt-5 text-4xl font-semibold tracking-[-0.045em] tabular-nums">
-              {stats.totalWords.toLocaleString()}
-            </p>
-            <p className="mt-1 text-sm text-white/70">words captured</p>
-            <div className="mt-8 flex items-end justify-between gap-4">
-              <p className="max-w-44 text-sm leading-relaxed text-white/70">
-                {stats.totalTranscriptions.toLocaleString()} transcripts ·{" "}
-                {stats.timeSavedHours > 0
-                  ? `${stats.timeSavedHours}h ${stats.timeSavedRemMinutes}m`
-                  : `${stats.timeSavedMinutes}m`}{" "}
-                saved
-              </p>
-              <Button
-                type="button"
-                className="shrink-0 bg-white text-[#263225] hover:bg-white/90"
-                onClick={() => setShareModalOpen(true)}
-              >
-                <Share2 />
-                Share
-              </Button>
+            {stats.weekMax > 0 ? (
+              <span className="rounded-full bg-sage-bg px-2.5 py-1 text-xs font-medium text-sage">
+                Busiest{" "}
+                {
+                  stats.weekDays.find((day) => day.count === stats.weekMax)
+                    ?.label
+                }{" "}
+                · {stats.weekMax}
+              </span>
+            ) : null}
+          </div>
+          {isLoading && history.length === 0 ? (
+            <div aria-hidden className="mt-5 flex h-40 items-end gap-2">
+              {[40, 70, 55].map((height) => (
+                <div
+                  key={height}
+                  className="min-w-0 flex-1 bg-muted animate-pulse h-full rounded-md"
+                  style={{ height: `${height}%` }}
+                />
+              ))}
             </div>
-          </section>
-        </div>
+          ) : loadError && history.length === 0 ? (
+            <p className="mt-5 text-[13px] text-muted-foreground">
+              Couldn&apos;t load history{" "}
+              <button
+                type="button"
+                onClick={() => {
+                  void refreshHistory();
+                }}
+                className="text-[11px] text-sage hover:underline"
+              >
+                Retry
+              </button>
+            </p>
+          ) : stats.weekCount === 0 ? (
+            <p className="mt-5 text-[13px] text-muted-foreground">
+              No transcripts this week — your daily activity will chart here.
+            </p>
+          ) : (
+            <div className="mt-5 flex h-40 items-end gap-2">
+              {stats.weekDays.map((day) => {
+                const isPeak = day.count > 0 && day.count === stats.weekMax;
+                const heightPct = Math.max(
+                  6,
+                  Math.round((day.count / stats.weekMax) * 100),
+                );
+                return (
+                  <div
+                    key={day.key}
+                    className="flex h-full min-w-0 flex-1 flex-col justify-end gap-2"
+                  >
+                    <div
+                      className={cn(
+                        "w-full rounded-md transition-[height]",
+                        isPeak ? "bg-sage" : "bg-sage/20",
+                      )}
+                      style={{ height: `${heightPct}%` }}
+                      title={`${day.count} on ${day.label}`}
+                    />
+                    <span className="text-center text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
+                      {day.label}
+                    </span>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+          <p className="mt-4 text-[13px] tabular-nums text-muted-foreground">
+            {stats.todayCount.toLocaleString()} today ·{" "}
+            {stats.weekCount.toLocaleString()} last 7 days
+            {stats.avgLength > 0 ? ` · ${stats.avgLength}/transcript` : ""}
+          </p>
+          <dl className="mt-5 grid grid-cols-2 gap-4 border-t border-border/70 pt-4 sm:grid-cols-4">
+            <AllTimeValue
+              label="Words spoken"
+              value={stats.totalWords.toLocaleString()}
+            />
+            <AllTimeValue
+              label="Transcripts"
+              value={stats.totalTranscriptions.toLocaleString()}
+            />
+            <AllTimeValue
+              label="Time saved"
+              value={
+                stats.timeSavedHours > 0
+                  ? `${stats.timeSavedHours}h ${stats.timeSavedRemMinutes}m`
+                  : `${stats.timeSavedMinutes}m`
+              }
+            />
+            <AllTimeValue
+              label="Day streak"
+              value={stats.currentStreak.toLocaleString()}
+            />
+          </dl>
+        </section>
 
         <ShareStatsModal
           open={shareModalOpen}
           onOpenChange={setShareModalOpen}
           stats={{
             totalTranscriptions: stats.totalTranscriptions,
-            todayCount: stats.todayCount,
             totalWords: stats.totalWords,
-            avgLength: stats.avgLength,
             timeSavedDisplay:
               stats.timeSavedHours > 0
                 ? `${stats.timeSavedHours}h ${stats.timeSavedRemMinutes}m`
                 : `${stats.timeSavedMinutes}m`,
-            currentStreak: stats.currentStreak,
-            longestStreak: stats.longestStreak,
           }}
         />
       </div>
@@ -393,3 +418,13 @@ function SetupValue({ label, value }: { label: string; value: string }) {
   );
 }
 
+function AllTimeValue({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="min-w-0">
+      <dt className="text-xs font-medium text-muted-foreground">{label}</dt>
+      <dd className="mt-1 truncate text-lg font-semibold tabular-nums text-foreground">
+        {value}
+      </dd>
+    </div>
+  );
+}

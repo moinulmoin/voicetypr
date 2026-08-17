@@ -12,7 +12,7 @@ fn application_icon_data_url(process_path: &str) -> Result<Option<String>, Strin
     use objc2_foundation::{NSDictionary, NSPoint, NSRect, NSSize, NSString};
     use std::{path::Path, ptr::NonNull};
 
-    const ICON_SIZE: isize = 32;
+    const ICON_SIZE: isize = 64;
     const MAX_PNG_BYTES: usize = 1024 * 1024;
 
     let path = Path::new(process_path);
@@ -26,9 +26,8 @@ fn application_icon_data_url(process_path: &str) -> Result<Option<String>, Strin
     }
 
     let icon = NSWorkspace::sharedWorkspace().iconForFile(&NSString::from_str(process_path));
-    // Allocate only the 32×32 RGBA surface needed by the history badge. Reading
-    // an app icon's full TIFF representation can exceed 70 MB because macOS
-    // includes every Retina representation in the bundle.
+    // Render a 64×64 RGBA surface so the icon stays sharp on Retina displays
+    // while avoiding an app icon's full multi-representation TIFF payload.
     let Some(bitmap) = (unsafe {
         NSBitmapImageRep::initWithBitmapDataPlanes_pixelsWide_pixelsHigh_bitsPerSample_samplesPerPixel_hasAlpha_isPlanar_colorSpaceName_bytesPerRow_bitsPerPixel(
             NSBitmapImageRep::alloc(),

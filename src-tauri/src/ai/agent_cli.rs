@@ -405,6 +405,13 @@ fn spec_for(provider_id: &str) -> Option<&'static AgentCliSpec> {
     }
 }
 
+/// CLIs whose own `--help` documents a `minimal` thinking/variant level.
+fn supports_minimal_thinking(spec: &AgentCliSpec) -> bool {
+    matches!(
+        spec.provider_id,
+        PROVIDER_PI | PROVIDER_OMP | PROVIDER_OPENCODE
+    )
+}
 pub(crate) fn supports_fast_mode(provider_id: &str) -> bool {
     matches!(
         provider_id,
@@ -501,6 +508,7 @@ fn cold_argv_for_model_with_options(
 
     let valid_level = requested_reasoning.and_then(|level| match level {
         "off" | "low" | "medium" => Some(level),
+        "minimal" if supports_minimal_thinking(spec) => Some("minimal"),
         "high" => Some("medium"),
         _ => None,
     });
@@ -1719,14 +1727,19 @@ impl AgentCliProbe {
     }
 }
 fn supported_reasoning_levels(spec: &AgentCliSpec) -> Vec<String> {
-    let levels: &[&str] = match spec.reasoning {
-        ReasoningPolicy::Flag { default: "off", .. } => &["off", "low", "medium"],
-        ReasoningPolicy::Flag { omit_off: true, .. } => &["off", "low", "medium"],
-        ReasoningPolicy::Flag { .. }
-        | ReasoningPolicy::CodexConfig
-        | ReasoningPolicy::ClaudeEffortLowIfSupported => &["low", "medium"],
-    };
-    levels.iter().map(|level| (*level).to_string()).collect()
+    // Every CLI exposes its full documented ladder from its floor up to
+    // medium; pi, omp, and opencode also document `minimal` between
+    // off and low, so it is included wherever the contract has it.
+    let has_off = matches!(
+        spec.reasoning,
+        ReasoningPolicy::Flag { default: "off", .. } | ReasoningPolicy::Flag { omit_off: true, .. }
+    );
+    let mut levels: Vec<&str> = if has_off { vec!["off"] } else { Vec::new() };
+    if supports_minimal_thinking(spec) {
+        levels.push("minimal");
+    }
+    levels.extend(["low", "medium"]);
+    levels.into_iter().map(str::to_string).collect()
 }
 
 fn probe_for_resolution(spec: &AgentCliSpec, resolution: &BinaryResolution) -> AgentCliProbe {
@@ -3121,6 +3134,19 @@ mod tests {
     }
 
     #[test]
+    fn pi_minimal_thinking_level_is_passed_through() {
+        let argv = cold_argv_for_model_with_reasoning(
+            &PI_SPEC,
+            "prompt",
+            "openai/gpt-5.4",
+            ClaudeCapabilities::default(),
+            Some("minimal"),
+        );
+        assert!(argv
+            .windows(2)
+            .any(|pair| pair[0] == "--thinking" && pair[1] == "minimal"));
+    }
+    #[test]
     fn native_fast_mode_uses_each_supported_cli_contract() {
         let claude = cold_argv_for_model_with_options(
             &CLAUDE_CODE_SPEC,
@@ -3177,15 +3203,15 @@ mod tests {
     fn reported_reasoning_levels_are_static_provider_capabilities() {
         assert_eq!(
             supported_reasoning_levels(&PI_SPEC),
-            ["off", "low", "medium"]
+            ["off", "minimal", "low", "medium"]
         );
         assert_eq!(
-            supported_reasoning_levels(&CLAUDE_CODE_SPEC),
-            ["low", "medium"]
+            supported_reasoning_levels(&OMP_SPEC),
+            ["off", "minimal", "low", "medium"]
         );
         assert_eq!(
             supported_reasoning_levels(&OPENCODE_SPEC),
-            ["off", "low", "medium"]
+            ["off", "minimal", "low", "medium"]
         );
     }
 

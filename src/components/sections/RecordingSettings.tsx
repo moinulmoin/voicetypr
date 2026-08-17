@@ -19,7 +19,6 @@ import {
   FieldSet,
   FieldTitle,
 } from "@/components/ui/field";
-import { Kbd } from "@/components/ui/kbd";
 import {
   Select,
   SelectContent,
@@ -51,7 +50,6 @@ import {
   Edit2,
   FolderOpen,
   HelpCircle,
-  Mic,
   X,
 } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
@@ -341,7 +339,7 @@ export function RecordingSettings() {
 
   return (
     <div className="h-full min-h-0 overflow-auto">
-      <div className="mx-auto flex w-full max-w-3xl flex-col gap-3.5 px-6 pb-7 pt-2 md:px-8">
+      <div className="mx-auto flex w-full max-w-3xl flex-col gap-3.5 pb-4 pl-2 pr-4">
         <div className="mb-1 flex flex-wrap items-start gap-3">
           <div className="min-w-0">
             <div className="flex items-center gap-2">
@@ -381,22 +379,8 @@ export function RecordingSettings() {
           </div>
         </div>
 
-          <div className="rounded-2xl border border-border bg-card">
-            <div className="border-b border-border/60 px-4 py-3">
-              <div className="flex items-center gap-2">
-                <div className="rounded-md bg-sage-bg p-1.5">
-                  <Mic className="h-4 w-4 text-sage" />
-                </div>
-                <div>
-                  <h3 className="font-medium">Recording workflow</h3>
-                  <p className="text-xs text-muted-foreground">Capture, feedback, processing, and what happens afterward</p>
-                </div>
-              </div>
-            </div>
-
-            <div className="p-4">
-              <FieldGroup className="gap-7">
-                <FieldSet className="gap-4 border-t border-border/60 pt-5 first:border-t-0 first:pt-0">
+        <FieldGroup className="gap-3.5">
+                <FieldSet className="gap-4 rounded-xl border border-border bg-card p-4">
                   <FieldLegend className="mb-1 text-base font-semibold">Capture controls</FieldLegend>
 
                   <Field orientation="responsive" className="items-start gap-3">
@@ -545,7 +529,7 @@ export function RecordingSettings() {
                   </Field>
                 </FieldSet>
 
-                <FieldSet className="gap-4 border-t border-border/60 pt-5">
+                <FieldSet className="gap-4 rounded-xl border border-border bg-card p-4">
                   <FieldLegend className="mb-1 text-base font-semibold">Transcript handling</FieldLegend>
 
                   <Field orientation="responsive" className="items-center gap-3">
@@ -605,7 +589,7 @@ export function RecordingSettings() {
 
                 </FieldSet>
 
-                <FieldSet className="gap-4 border-t border-border/60 pt-5">
+                <FieldSet className="gap-4 rounded-xl border border-border bg-card p-4">
                   <FieldLegend className="mb-1 text-base font-semibold">Audio feedback</FieldLegend>
 
                   <Field orientation="responsive" className="items-center gap-3">
@@ -666,7 +650,7 @@ export function RecordingSettings() {
                 </FieldSet>
 
                 {isWindows && (
-                <FieldSet className="gap-4 border-t border-border/60 pt-5">
+                <FieldSet className="gap-4 rounded-xl border border-border bg-card p-4">
                   <FieldLegend className="mb-1 text-base font-semibold">Transcription performance</FieldLegend>
 
                   <Field orientation="responsive" className="items-center gap-3">
@@ -737,7 +721,7 @@ export function RecordingSettings() {
                 </FieldSet>
                 )}
 
-                <FieldSet className="gap-4 border-t border-border/60 pt-5">
+                <FieldSet className="gap-4 rounded-xl border border-border bg-card p-4">
                   <FieldLegend className="mb-1 text-base font-semibold">Recording indicator</FieldLegend>
 
                   <Field orientation="responsive" className="items-center gap-3">
@@ -868,7 +852,7 @@ export function RecordingSettings() {
                   )}
                 </FieldSet>
 
-                <FieldSet className="gap-4 border-t border-border/60 pt-5">
+                <FieldSet className="gap-4 rounded-xl border border-border bg-card p-4">
                   <FieldLegend className="mb-1 text-base font-semibold">Storage & cleanup</FieldLegend>
 
                   <Field orientation="responsive" className="items-center gap-3">
@@ -993,15 +977,7 @@ export function RecordingSettings() {
                   </Field>
                 </FieldSet>
 
-                <div className="flex items-center gap-2 rounded-lg border border-primary/15 bg-primary/5 p-3">
-                  <Kbd>ESC</Kbd>
-                  <p className="text-xs text-muted-foreground">
-                    Press twice while recording to cancel the current take.
-                  </p>
-                </div>
               </FieldGroup>
-            </div>
-          </div>
       </div>
     </div>
   );

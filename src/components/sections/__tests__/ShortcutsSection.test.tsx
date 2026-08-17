@@ -132,6 +132,11 @@ describe("ShortcutsSection", () => {
     expect(screen.queryByText("Toggle Recording")).not.toBeInTheDocument();
     expect(screen.queryByText("Hold to Record")).not.toBeInTheDocument();
     expect(screen.getByText("Cancel Recording")).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        "Press Escape twice while recording to cancel the current take.",
+      ),
+    ).toBeInTheDocument();
     expect(screen.getByText("Copy Last Transcription")).toBeInTheDocument();
     expect(screen.getByText("Toggle Polish")).toBeInTheDocument();
     expect(screen.getByText("Open Dashboard")).toBeInTheDocument();
