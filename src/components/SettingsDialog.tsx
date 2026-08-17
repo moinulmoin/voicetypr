@@ -48,11 +48,11 @@ export function SettingsDialog({
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent
-        className="overflow-hidden p-0 sm:max-w-none"
+        className="overflow-hidden rounded-2xl p-0 sm:max-w-none"
         style={{
-          width: "calc(100% - 3rem)",
-          maxWidth: "64rem",
-          height: "min(48rem, calc(100svh - 3rem))",
+          width: "calc(100% - 6rem)",
+          maxWidth: "56rem",
+          height: "min(40rem, calc(100svh - 7rem))",
         }}
       >
         <DialogHeader className="sr-only">
