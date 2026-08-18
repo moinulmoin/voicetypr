@@ -20,7 +20,7 @@ import { fromBackendOptions, toBackendOptions } from "@/types/ai";
 import type { WritingSettings } from "@/types/writing";
 import { defaultWritingSettings, mergeWritingSettings } from "@/types/writing";
 import { invoke } from "@tauri-apps/api/core";
-import { listen } from "@tauri-apps/api/event";
+import { useTauriEvent } from "@/hooks/useTauriEvent";
 import { HelpCircle } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
@@ -298,27 +298,21 @@ export function EnhancementsSection() {
 
   // Surface persistent Polish failures inline on the Polish card (toasts are
   // left to EnhancementsTab); a successful polish run clears the banner.
-  useEffect(() => {
-    const unlistenAuthError = listen("ai-enhancement-auth-error", (event) => {
-      if (typeof event.payload === "string") {
-        setPolishError("auth", event.payload);
-      }
-    });
+  useTauriEvent<unknown>("ai-enhancement-auth-error", (payload) => {
+    if (typeof payload === "string") {
+      setPolishError("auth", payload);
+    }
+  });
 
-    const unlistenEnhancementError = listen(
-      "ai-enhancement-error",
-      (event) => {
-        if (typeof event.payload === "string") {
-          setPolishError("generic", event.payload);
-        }
-      },
-    );
+  useTauriEvent<unknown>("ai-enhancement-error", (payload) => {
+    if (typeof payload === "string") {
+      setPolishError("generic", payload);
+    }
+  });
 
-    const unlistenEnhancementFailed = listen<{
-      category?: string;
-      message?: string;
-    } | null>("enhancing-failed", (event) => {
-      const payload = event.payload;
+  useTauriEvent<{ category?: string; message?: string } | null>(
+    "enhancing-failed",
+    (payload) => {
       if (!payload || payload.category === "canceled") return;
       const kind: PolishErrorKind =
         payload.category === "missing_api_key" ||
@@ -326,26 +320,12 @@ export function EnhancementsSection() {
           ? "auth"
           : "generic";
       setPolishError(kind, payload.message || "Polish failed");
-    });
+    },
+  );
 
-    const unlistenEnhancementCompleted = listen(
-      "enhancing-completed",
-      () => {
-        clearPolishError();
-      },
-    );
-
-    return () => {
-      Promise.all([
-        unlistenAuthError,
-        unlistenEnhancementError,
-        unlistenEnhancementFailed,
-        unlistenEnhancementCompleted,
-      ]).then((fns) => {
-        fns.forEach((fn) => fn());
-      });
-    };
-  }, [setPolishError, clearPolishError]);
+  useTauriEvent("enhancing-completed", () => {
+    clearPolishError();
+  });
 
   const isUsingCustomProvider = aiSettings.provider === "custom";
   const hasSelectedModel = Boolean(

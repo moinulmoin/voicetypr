@@ -1,3 +1,4 @@
+import { useTauriEvent } from "@/hooks/useTauriEvent";
 import { ApiKeyModal } from "@/components/ApiKeyModal";
 import { LanguageSelection } from "@/components/LanguageSelection";
 import { ModelCard } from "@/components/ModelCard";
@@ -206,9 +207,15 @@ export function ModelsSection({
         : "Remote Voicetypr")
     : getModelDisplayName(currentModel) || "No source selected";
 
-  useEffect(() => {
-    setSourceFilter(activeRemoteServer ? "remote" : selectedSourceType);
-  }, [activeRemoteServer, selectedSourceType]);
+  // Keep the tab honest when the active source changes underneath (tray or
+  // model switch) — adjust during render instead of a flashing effect. The
+  // user can still switch tabs freely until the next external change.
+  const trackedSource = activeRemoteServer ? "remote" : selectedSourceType;
+  const [lastTrackedSource, setLastTrackedSource] = useState<string | null>(null);
+  if (trackedSource !== lastTrackedSource) {
+    setLastTrackedSource(trackedSource);
+    setSourceFilter(trackedSource);
+  }
 
 
   const handleLanguageChange = useCallback(
@@ -336,22 +343,13 @@ export function ModelsSection({
   }, [fetchActiveRemoteServer, refreshRemoteServers]);
 
   // Listen for model-changed events (from tray menu selection or UI)
-  useEffect(() => {
-    const unlistenModelChanged = listen<{ model: string; engine: string }>(
-      "model-changed",
-      (event) => {
-        log.debug("[ModelsSection] model-changed event received:", event.payload);
-        // Refresh all model-related state
-        fetchActiveRemoteServer();
-        fetchRemoteServers();
-        refreshSettings();
-      }
-    );
-
-    return () => {
-      unlistenModelChanged.then((fn) => fn());
-    };
-  }, [fetchActiveRemoteServer, fetchRemoteServers, refreshSettings]);
+  useTauriEvent<{ model: string; engine: string }>("model-changed", (payload) => {
+    log.debug("[ModelsSection] model-changed event received:", payload);
+    // Refresh all model-related state
+    void fetchActiveRemoteServer();
+    void fetchRemoteServers();
+    void refreshSettings();
+  });
 
   const handleSelectRemoteServer = useCallback(
     async (serverId: string) => {

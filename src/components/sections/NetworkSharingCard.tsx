@@ -5,7 +5,7 @@ import { useSettings } from "@/contexts/SettingsContext";
 import { isMacOS, isWindows } from "@/lib/platform";
 import { getModelDisplayName } from "@/lib/model-display";
 import { invoke } from "@tauri-apps/api/core";
-import { listen } from "@tauri-apps/api/event";
+import { useTauriEvent } from "@/hooks/useTauriEvent";
 import { AlertTriangle, Check, CheckCircle, Copy, Eye, EyeOff, ExternalLink, Network, Server, Shield, XCircle } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
@@ -230,22 +230,11 @@ export function NetworkSharingCard() {
   }, [currentModel, fetchModelInfo]);
 
   // Listen for sharing status changes from backend (e.g., tray menu actions)
-  useEffect(() => {
-    const setupListener = async () => {
-      const unlisten = await listen("sharing-status-changed", () => {
-        log.debug("[NetworkSharingCard] Received sharing-status-changed event, refreshing status...");
-        fetchStatus();
-        fetchActiveRemoteServer(); // Also refresh remote server state in case it changed
-      });
-      return unlisten;
-    };
-
-    const unlistenPromise = setupListener();
-
-    return () => {
-      unlistenPromise.then((unlisten) => unlisten());
-    };
-  }, [fetchStatus, fetchActiveRemoteServer]);
+  useTauriEvent("sharing-status-changed", () => {
+    log.debug("[NetworkSharingCard] Received sharing-status-changed event, refreshing status...");
+    void fetchStatus();
+    void fetchActiveRemoteServer(); // Also refresh remote server state in case it changed
+  });
 
   // Load persisted port and password from settings
   useEffect(() => {

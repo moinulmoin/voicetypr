@@ -1,6 +1,6 @@
 import { createContext, useContext, ReactNode, useState, useEffect, useCallback, useRef } from 'react';
 import { invoke } from '@tauri-apps/api/core';
-import { listen } from '@tauri-apps/api/event';
+import { useTauriEvent } from '@/hooks/useTauriEvent';
 import { AppSettings } from '@/types';
 import { createLogger } from "@/lib/logger";
 
@@ -91,29 +91,10 @@ export function SettingsProvider({ children }: { children: ReactNode }) {
   }, [loadSettings]);
 
   // Listen for settings changes from other sources (e.g., tray menu or backend auto-selection)
-  useEffect(() => {
-    const unlistenModel = listen('model-changed', () => {
-      loadSettings();
-    });
-
-    const unlistenLanguage = listen('language-changed', () => {
-      loadSettings();
-    });
-
-    const unlistenAudioDevice = listen('audio-device-changed', () => {
-      loadSettings();
-    });
-
-    const unlistenSettings = listen('settings-changed', () => {
-      loadSettings();
-    });
-
-    return () => {
-      Promise.all([unlistenModel, unlistenLanguage, unlistenAudioDevice, unlistenSettings]).then(unsubs => {
-        unsubs.forEach(unsub => unsub());
-      });
-    };
-  }, [loadSettings]);
+  useTauriEvent("model-changed", () => void loadSettings());
+  useTauriEvent("language-changed", () => void loadSettings());
+  useTauriEvent("audio-device-changed", () => void loadSettings());
+  useTauriEvent("settings-changed", () => void loadSettings());
 
   return (
     <SettingsContext.Provider

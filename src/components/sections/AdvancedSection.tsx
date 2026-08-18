@@ -42,7 +42,7 @@ import {
   Wrench,
   type LucideIcon,
 } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useState } from "react";
 
 interface QuickFix {
   id: string;
@@ -95,7 +95,7 @@ const QUICK_FIXES: QuickFix[] = [
 
 export function AdvancedSection() {
   const [isRequestingPermission, setIsRequestingPermission] = useState<string | null>(null);
-  const [showAccessibility, setShowAccessibility] = useState(true);
+  const showAccessibility = isMacOS;
   const [openQuickFixes, setOpenQuickFixes] = useState<string[]>([]);
   const {
     hasAccessibilityPermission,
@@ -106,10 +106,6 @@ export function AdvancedSection() {
     checkAccessibilityPermission,
     checkMicrophonePermission
   } = useReadiness();
-
-  useEffect(() => {
-    setShowAccessibility(isMacOS);
-  }, []);
 
   const handleRequestPermission = async (type: "microphone" | "accessibility") => {
     setIsRequestingPermission(type);

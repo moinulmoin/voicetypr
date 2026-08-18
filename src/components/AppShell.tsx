@@ -1,6 +1,6 @@
 import { useEffect, useState, type CSSProperties } from "react";
-import { listen } from "@tauri-apps/api/event";
 import { CircleAlert } from "lucide-react";
+import { useTauriEvent } from "@/hooks/useTauriEvent";
 import { toast } from "sonner";
 import type { ScreenId } from "@/components/navigation";
 import { Sidebar } from "@/components/Sidebar";
@@ -33,32 +33,14 @@ export function AppShell({ activeSection, onSectionChange }: AppShellProps) {
   const [trayStatus, setTrayStatus] = useState<TrayStatus | null>(null);
   const [isRetryingTray, setIsRetryingTray] = useState(false);
   useEffect(() => {
-    let isMounted = true;
-    let unlisten: (() => void) | undefined;
-
     void getTrayStatus()
-      .then((status) => {
-        if (isMounted) setTrayStatus(status);
-      })
+      .then(setTrayStatus)
       .catch((error) => {
         log.warn("Failed to read tray status:", error);
       });
-
-    void listen<TrayStatus>("tray-status-changed", (event) => {
-      if (isMounted) setTrayStatus(event.payload);
-    }).then((nextUnlisten) => {
-      if (!isMounted) {
-        nextUnlisten();
-        return;
-      }
-      unlisten = nextUnlisten;
-    });
-
-    return () => {
-      isMounted = false;
-      unlisten?.();
-    };
   }, []);
+
+  useTauriEvent<TrayStatus>("tray-status-changed", setTrayStatus);
 
   const handleRetryTray = async () => {
     setIsRetryingTray(true);

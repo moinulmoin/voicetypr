@@ -5,14 +5,14 @@ import { ReactNode } from "react";
 
 // Mock Tauri invoke
 const mockInvoke = vi.fn();
-const eventListeners = new Map<string, Array<() => void>>();
+const eventListeners = new Map<string, Array<(e: { payload: unknown }) => void>>();
 vi.mock("@tauri-apps/api/core", () => ({
   invoke: (...args: unknown[]) => mockInvoke(...args),
 }));
 
 // Mock Tauri events
 vi.mock("@tauri-apps/api/event", () => ({
-  listen: vi.fn((event: string, callback: () => void) => {
+  listen: vi.fn((event: string, callback: (e: { payload: unknown }) => void) => {
     const listeners = eventListeners.get(event) ?? [];
     listeners.push(callback);
     eventListeners.set(event, listeners);
@@ -390,7 +390,7 @@ describe("NetworkSharingCard", () => {
         model_name: "base.en",
       };
       for (const listener of eventListeners.get("sharing-status-changed") ?? []) {
-        listener();
+        listener({ payload: null });
       }
 
       await waitFor(() => {
@@ -412,7 +412,7 @@ describe("NetworkSharingCard", () => {
         current_model: "base.en",
       };
       for (const listener of eventListeners.get("model-changed") ?? []) {
-        listener();
+        listener({ payload: null });
       }
 
       await waitFor(() => {
@@ -533,7 +533,7 @@ describe("NetworkSharingCard", () => {
 
       activeRemoteServer = "remote-server-1";
       for (const listener of eventListeners.get("sharing-status-changed") ?? []) {
-        listener();
+        listener({ payload: null });
       }
 
       await waitFor(() => {
