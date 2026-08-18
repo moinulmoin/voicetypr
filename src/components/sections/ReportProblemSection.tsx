@@ -94,26 +94,25 @@ export function ReportProblemSection() {
     actionIdRef.current = actionId;
     setIsSubmitting(true);
 
-    let data: ManualReportData;
     try {
-      data = await gatherManualReportData(
-        trimmedName || undefined,
-        trimmedEmail,
-        trimmedMessage,
-        currentModelLabel,
-      );
-    } catch (error) {
-      if (actionId === actionIdRef.current) {
-        log.error('Failed to gather report data:', error);
-        toast.error('Failed to gather report data');
-        setIsSubmitting(false);
+      let data: ManualReportData;
+      try {
+        data = await gatherManualReportData(
+          trimmedName || undefined,
+          trimmedEmail,
+          trimmedMessage,
+          currentModelLabel,
+        );
+      } catch (error) {
+        if (actionId === actionIdRef.current) {
+          log.error('Failed to gather report data:', error);
+          toast.error('Failed to gather report data');
+        }
+        return;
       }
-      return;
-    }
 
-    if (actionId !== actionIdRef.current) return;
+      if (actionId !== actionIdRef.current) return;
 
-    try {
       const result = await submitManualReport(data);
       if (actionId !== actionIdRef.current) return;
 

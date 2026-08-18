@@ -3,6 +3,19 @@
  * This should match the Rust key_normalizer implementation
  */
 
+const MODIFIER_KEYS: Record<string, true> = {
+  CommandOrControl: true,
+  Super: true,
+  Shift: true,
+  Alt: true,
+  Control: true,
+  Command: true,
+  Cmd: true,
+  Ctrl: true,
+  Option: true,
+  Meta: true,
+};
+
 /**
  * Normalize a complete shortcut string (e.g., "Cmd+Shift+A")
  */
@@ -120,16 +133,14 @@ export function validateKeyCombinationWithRules(
   }
 
   // Check modifier requirements
-  const modifierKeys = ['CommandOrControl', 'Super', 'Shift', 'Alt', 'Control', 'Command', 'Cmd', 'Ctrl', 'Option', 'Meta'];
-  const hasModifier = parts.some(key => modifierKeys.includes(key));
-  const isModifier = (key: string) => modifierKeys.includes(key);
+  const hasModifier = parts.some(key => MODIFIER_KEYS[key]);
 
   if (rules.requireModifier && !hasModifier) {
     return { valid: false, error: 'At least one modifier key is required' };
   }
 
   // Check that the shortcut starts with a modifier
-  if (rules.requireModifier && parts.length > 0 && !isModifier(parts[0])) {
+  if (rules.requireModifier && parts.length > 0 && !MODIFIER_KEYS[parts[0]]) {
     return { valid: false, error: 'Keyboard shortcuts must start with a modifier key (Cmd/Ctrl, Alt, or Shift)' };
   }
 
@@ -138,7 +149,7 @@ export function validateKeyCombinationWithRules(
   }
 
   // Check that at least one key is NOT a modifier (library requirement)
-  const hasNonModifier = parts.some(key => !isModifier(key));
+  const hasNonModifier = parts.some(key => !MODIFIER_KEYS[key]);
   if (!hasNonModifier) {
     return { valid: false, error: 'Hotkey must include at least one non-modifier key (e.g., a letter, number, or function key)' };
   }

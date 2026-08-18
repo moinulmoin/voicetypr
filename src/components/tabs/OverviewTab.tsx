@@ -1,6 +1,6 @@
 import { Button } from "@/components/ui/button";
 import { ShareStatsModal } from "@/components/ShareStatsModal";
-import { languages } from "@/components/LanguageSelection";
+import { languages } from "@/components/languages";
 import { useCanAutoInsert, useReadiness } from "@/contexts/ReadinessContext";
 import { useSettings } from "@/contexts/SettingsContext";
 import { cn } from "@/lib/utils";

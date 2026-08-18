@@ -56,7 +56,7 @@ import {
   TextQuote,
   Trash2,
 } from "lucide-react";
-import type { ReactNode } from "react";
+import { useState, type ReactNode } from "react";
 
 interface EnhancementSettingsProps {
   preset: EnhancementPreset;
@@ -77,6 +77,49 @@ function updateItem<T>(items: T[], index: number, next: T): T[] {
 
 function removeItem<T>(items: T[], index: number): T[] {
   return items.filter((_, itemIndex) => itemIndex !== index);
+}
+
+const EMPTY_OBJECT_LIST: readonly object[] = [];
+const EMPTY_KEY_LIST: string[] = [];
+
+function useStableRowKeys(items: readonly object[]): string[] {
+  // Stable React keys for editable rows whose item references change on every
+  // keystroke. Keys are derived from the previous list (slot-aligned reuse),
+  // adjusted during render via state — no refs, safe under concurrent React.
+  const [state, setState] = useState<{
+    prev: readonly object[];
+    keys: string[];
+    nextId: number;
+  }>({ prev: EMPTY_OBJECT_LIST, keys: EMPTY_KEY_LIST, nextId: 0 });
+
+  let keys = state.keys;
+  if (state.prev !== items) {
+    const used = new Set<object>(items);
+    const taken = new Set<string>();
+    const nextKeys: string[] = [];
+    let nextId = state.nextId;
+    for (let index = 0; index < items.length; index++) {
+      const displaced = state.prev[index];
+      const slotReusable =
+        displaced !== undefined &&
+        displaced !== items[index] &&
+        !used.has(displaced);
+      let key =
+        state.prev[index] === items[index]
+          ? state.keys[index]
+          : slotReusable
+            ? state.keys[index]
+            : undefined;
+      if (!key || taken.has(key)) {
+        key = `row-${nextId++}`;
+      }
+      taken.add(key);
+      nextKeys.push(key);
+    }
+    keys = nextKeys;
+    setState({ prev: items, keys: nextKeys, nextId });
+  }
+  return keys;
 }
 const FORMATTING_MODES = [
   { id: "PersonalDictation" },
@@ -104,6 +147,7 @@ function AppFormattingRulesEditor({
   disabled: boolean;
   aiFormattingEnabled: boolean;
 }) {
+  const rowKeys = useStableRowKeys(rules);
   const hasAiRequiredSelection =
     !aiFormattingEnabled && rules.some((rule) => presetRequiresAiFormatting(rule.preset));
 
@@ -156,7 +200,7 @@ function AppFormattingRulesEditor({
 
             return (
               <div
-                key={`app-rule-${index}`}
+                key={rowKeys[index]}
                 className="rounded-lg border border-border bg-card p-3"
               >
                 <div className="flex flex-wrap items-center gap-2">
@@ -258,6 +302,7 @@ function ReplacementEditor({
   onChange: (replacements: TextReplacementRule[]) => void;
   disabled: boolean;
 }) {
+  const rowKeys = useStableRowKeys(replacements);
   return (
     <FieldSet className="rounded-xl border border-border/60 bg-card p-4">
       <div className="flex flex-wrap items-start justify-between gap-3">
@@ -298,7 +343,7 @@ function ReplacementEditor({
         <FieldGroup className="mt-3 gap-3">
           {replacements.map((rule, index) => (
             <FieldSet
-              key={`replacement-${index}`}
+              key={rowKeys[index]}
               className="rounded-lg border border-border/60 bg-background/60 p-3"
             >
               <div className="mb-3 flex items-center justify-between gap-3">
@@ -403,6 +448,7 @@ function CustomWordEditor({
   onChange: (customWords: CustomWord[]) => void;
   disabled: boolean;
 }) {
+  const rowKeys = useStableRowKeys(customWords);
   return (
     <FieldSet className="rounded-xl border border-border/60 bg-card p-4">
       <div className="flex flex-wrap items-start justify-between gap-3">
@@ -444,7 +490,7 @@ function CustomWordEditor({
         <FieldGroup className="mt-3 gap-3">
           {customWords.map((word, index) => (
             <FieldSet
-              key={`custom-word-${index}`}
+              key={rowKeys[index]}
               className="rounded-lg border border-border/60 bg-background/60 p-3"
             >
               <div className="mb-3 flex items-center justify-between gap-3">
@@ -549,6 +595,7 @@ function SnippetEditor({
   onChange: (snippets: Snippet[]) => void;
   disabled: boolean;
 }) {
+  const rowKeys = useStableRowKeys(snippets);
   return (
     <FieldSet className="rounded-xl border border-border/60 bg-card p-4">
       <div className="flex flex-wrap items-start justify-between gap-3">
@@ -595,7 +642,7 @@ function SnippetEditor({
         <FieldGroup className="mt-3 gap-3">
           {snippets.map((snippet, index) => (
             <FieldSet
-              key={`snippet-${index}`}
+              key={rowKeys[index]}
               className="rounded-lg border border-border/60 bg-background/60 p-3"
             >
               <div className="mb-3 flex items-center justify-between gap-3">

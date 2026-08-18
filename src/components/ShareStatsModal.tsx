@@ -13,6 +13,7 @@ import { Check, Copy, Download, Loader2 } from "lucide-react";
 import { useEffect, useState } from "react";
 import { toast } from "sonner";
 import { createLogger } from "@/lib/logger";
+import { WORDS_PER_PAGE } from "./shareStats";
 
 const log = createLogger("share-stats");
 
@@ -26,41 +27,22 @@ interface ShareStatsModalProps {
   };
 }
 
-const WORDS_PER_PAGE = 250;
 const LOGO_SRC = `${import.meta.env.BASE_URL}logo.png`;
 
-export function getShareOutcome(totalWords: number): {
-  pages: number;
-  line: string;
-} {
-  if (totalWords <= 0) {
-    return { pages: 0, line: "Record a thought and start the count" };
-  }
-  const pages = Math.max(1, Math.round(totalWords / WORDS_PER_PAGE));
-  if (totalWords >= 250) {
-    return {
-      pages,
-      line: `${pages.toLocaleString()} pages I didn’t have to type`,
-    };
-  }
-  return { pages, line: "words I didn’t have to type" };
-}
-
-function getSharePlays(stats: {
-  totalWords: number;
-  totalTranscriptions: number;
-  timeSavedDisplay: string;
-}): Array<{ value: string; play: string }> {
-  const timeSaved =
-    stats.timeSavedDisplay === "0m" ? "0m" : stats.timeSavedDisplay;
+function getSharePlays(
+  totalWords: number,
+  totalTranscriptions: number,
+  timeSavedDisplay: string,
+): Array<{ value: string; play: string }> {
+  const timeSaved = timeSavedDisplay === "0m" ? "0m" : timeSavedDisplay;
   const plays = [
     {
-      value: stats.totalWords.toLocaleString(),
-      play: stats.totalWords === 1 ? "word I spoke" : "words I spoke",
+      value: totalWords.toLocaleString(),
+      play: totalWords === 1 ? "word I spoke" : "words I spoke",
     },
   ];
-  if (stats.totalWords >= 250) {
-    const pages = Math.max(1, Math.round(stats.totalWords / WORDS_PER_PAGE));
+  if (totalWords >= 250) {
+    const pages = Math.max(1, Math.round(totalWords / WORDS_PER_PAGE));
     plays.push({
       value: pages.toLocaleString(),
       play: pages === 1 ? "page I didn’t type" : "pages I didn’t type",
@@ -71,9 +53,9 @@ function getSharePlays(stats: {
     play: "my fingers got back",
   });
   plays.push({
-    value: stats.totalTranscriptions.toLocaleString(),
+    value: totalTranscriptions.toLocaleString(),
     play:
-      stats.totalTranscriptions === 1
+      totalTranscriptions === 1
         ? "time I skipped the keyboard"
         : "times I skipped the keyboard",
   });
@@ -142,7 +124,11 @@ export function ShareStatsModal({
       const mint = "#8ed6a3";
       const teal = "#4fc9c7";
       const ink = "#0f1711";
-      const plays = getSharePlays(stats);
+      const plays = getSharePlays(
+        stats.totalWords,
+        stats.totalTranscriptions,
+        stats.timeSavedDisplay,
+      );
       const centerX = logicalWidth / 2;
 
       const background = context.createLinearGradient(
@@ -243,6 +229,7 @@ export function ShareStatsModal({
       context.font = `560 20px ${fontFamily}`;
       context.fillText("voicetypr.com · no card required", centerX, 738);
 
+      if (cancelled) return;
       try {
         setImageDataUrl(canvas.toDataURL("image/png"));
       } catch (error) {

@@ -21,6 +21,15 @@ import {
 } from '@/types/distribution';
 
 const log = createLogger("about");
+async function openExternalLink(url: string) {
+  try {
+    await open(url);
+  } catch (error) {
+    log.error('Failed to open external link:', error);
+    toast.error('Failed to open link');
+  }
+}
+
 
 export function AboutSection() {
   const [appVersion, setAppVersion] = useState<string>('');
@@ -58,14 +67,6 @@ export function AboutSection() {
     setIsCheckingUpdate(false);
   };
 
-  const openExternalLink = async (url: string) => {
-    try {
-      await open(url);
-    } catch (error) {
-      log.error('Failed to open external link:', error);
-      toast.error('Failed to open link');
-    }
-  };
 
   return (
     <div className="h-full flex flex-col">

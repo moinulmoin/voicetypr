@@ -30,6 +30,26 @@ interface CrashReportDialogProps {
   onRetry?: () => void;
 }
 
+function buildCopyDetails(data: CrashReportData): string {
+  const parts = [
+    `Error: ${data.errorMessage}`,
+    `Stack: ${data.errorStack || 'N/A'}`,
+    `App Version: ${data.appVersion}`,
+    `Platform: ${data.platform} ${data.osVersion}`,
+    `Architecture: ${data.architecture}`,
+    `Model: ${getModelDisplayName(data.currentModel) || 'None'}`,
+    `Timestamp: ${data.timestamp}`,
+  ];
+
+  if (data.logContent) {
+    parts.push('', 'Latest App Log:', data.logContent);
+  } else if (data.logStatusNote) {
+    parts.push('', `Latest App Log: ${data.logStatusNote}`);
+  }
+
+  return parts.join('\n');
+}
+
 export function CrashReportDialog({
   error,
   componentStack,
@@ -70,26 +90,24 @@ export function CrashReportDialog({
     onClose();
   };
 
-  const buildCopyDetails = (data: CrashReportData): string => {
-    const parts = [
-      `Error: ${data.errorMessage}`,
-      `Stack: ${data.errorStack || 'N/A'}`,
-      `App Version: ${data.appVersion}`,
-      `Platform: ${data.platform} ${data.osVersion}`,
-      `Architecture: ${data.architecture}`,
-      `Model: ${getModelDisplayName(data.currentModel) || 'None'}`,
-      `Timestamp: ${data.timestamp}`,
-    ];
-
-    if (data.logContent) {
-      parts.push('', 'Latest App Log:', data.logContent);
-    } else if (data.logStatusNote) {
-      parts.push('', `Latest App Log: ${data.logStatusNote}`);
-    }
-
-    return parts.join('\n');
-  };
-
+  // Track the current crash session; when it changes (dialog reopened or a
+  // different error payload), reset per-session state during render rather
+  // than adjusting state from inside an effect.
+  const [prevSession, setPrevSession] = useState({
+    isOpen,
+    error,
+    componentStack,
+    currentModel,
+  });
+  if (
+    isOpen !== prevSession.isOpen ||
+    error !== prevSession.error ||
+    componentStack !== prevSession.componentStack ||
+    currentModel !== prevSession.currentModel
+  ) {
+    setPrevSession({ isOpen, error, componentStack, currentModel });
+    resetState();
+  }
 
   useEffect(() => {
     return () => clearCopyTimer();
@@ -100,7 +118,7 @@ export function CrashReportDialog({
 
     const actionId = actionIdRef.current + 1;
     actionIdRef.current = actionId;
-    resetState();
+
 
     gatherCrashReportData(error, componentStack, currentModel)
       .then((data) => {

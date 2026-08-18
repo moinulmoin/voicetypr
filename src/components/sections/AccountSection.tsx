@@ -32,6 +32,15 @@ import { toast } from 'sonner';
 import { createLogger } from "@/lib/logger";
 
 const log = createLogger("account");
+async function openExternalLink(url: string) {
+  try {
+    await open(url);
+  } catch (error) {
+    log.error('Failed to open external link:', error);
+    toast.error('Failed to open link');
+  }
+}
+
 
 export function AccountSection() {
   const {
@@ -72,14 +81,6 @@ export function AccountSection() {
   };
 
 
-  const openExternalLink = async (url: string) => {
-    try {
-      await open(url);
-    } catch (error) {
-      log.error('Failed to open external link:', error);
-      toast.error('Failed to open link');
-    }
-  };
 
 
 

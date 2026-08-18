@@ -414,19 +414,14 @@ function ProviderRow({
     qualifiedId: qualifyModelId(provider.id, model.id),
     model,
   });
+  const recommendedItems: ModelPickerItem[] = [];
+  const otherItems: ModelPickerItem[] = [];
+  for (const model of displayModels) {
+    (model.recommended ? recommendedItems : otherItems).push(toPickerItem(model));
+  }
   const modelPickerGroups: ModelPickerGroup[] = [
-    {
-      value: "Recommended",
-      items: displayModels
-        .filter((model) => model.recommended)
-        .map(toPickerItem),
-    },
-    {
-      value: "All models",
-      items: displayModels
-        .filter((model) => !model.recommended)
-        .map(toPickerItem),
-    },
+    { value: "Recommended", items: recommendedItems },
+    { value: "All models", items: otherItems },
   ].filter((group) => group.items.length > 0);
   const modelPickerItems = modelPickerGroups.flatMap((group) => group.items);
   const selectedModelItem =

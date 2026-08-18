@@ -1,4 +1,4 @@
-import { createContext, useContext, useEffect, useRef, useState, ReactNode } from 'react';
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, ReactNode } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { LicenseStatus } from '@/types';
 import { toast } from 'sonner';
@@ -21,55 +21,65 @@ interface LicenseContextValue {
 
 const LicenseContext = createContext<LicenseContextValue | undefined>(undefined);
 
+const withTimeout = async <T,>(promise: Promise<T>, timeoutMs: number): Promise<T> => {
+  let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
+  const timeoutPromise = new Promise<never>((_, reject) => {
+    timeoutHandle = setTimeout(
+      () => reject(new Error('License status check timed out')),
+      timeoutMs
+    );
+  });
+
+  try {
+    return await Promise.race([promise, timeoutPromise]);
+  } finally {
+    clearTimeout(timeoutHandle);
+  }
+};
+
+const getFriendlyLicenseError = (action: 'activate' | 'restore', rawMessage?: string) => {
+  const lower = rawMessage?.toLowerCase() ?? '';
+  const actionLabel = action === 'activate' ? 'activate license' : 'restore license';
+
+  if (lower.includes('network error') || lower.includes('error sending request')) {
+    return `Failed to ${actionLabel}. Please check your connection and try again.`;
+  }
+
+  if (lower.includes('already activated on another device')) {
+    return 'This license is already activated on another device';
+  }
+
+  if (lower.includes('maximum number of devices')) {
+    return 'This license has reached its device activation limit';
+  }
+
+  if (lower.includes('invalid license key')) {
+    return 'Invalid license key';
+  }
+
+  if (action === 'restore' && lower.includes('no license found')) {
+    return 'No license found. Please enter your license key manually.';
+  }
+
+  return rawMessage || `Failed to ${actionLabel}`;
+};
+
+const openPurchasePage = async () => {
+  try {
+    await invoke('open_purchase_page');
+  } catch (error) {
+    log.error('Failed to open purchase page:', error);
+    // Fallback to window.open
+    window.open('https://voicetypr.com/#pricing', '_blank', 'noopener,noreferrer');
+  }
+};
+
 export function LicenseProvider({ children }: { children: ReactNode }) {
   const [status, setStatus] = useState<LicenseStatus | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const latestCheckStatusId = useRef(0);
 
-  const withTimeout = async <T,>(promise: Promise<T>, timeoutMs: number): Promise<T> => {
-    let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
-    const timeoutPromise = new Promise<never>((_, reject) => {
-      timeoutHandle = setTimeout(
-        () => reject(new Error('License status check timed out')),
-        timeoutMs
-      );
-    });
-
-    try {
-      return await Promise.race([promise, timeoutPromise]);
-    } finally {
-      if (timeoutHandle) clearTimeout(timeoutHandle);
-    }
-  };
-
-  const getFriendlyLicenseError = (action: 'activate' | 'restore', rawMessage?: string) => {
-    const lower = rawMessage?.toLowerCase() ?? '';
-    const actionLabel = action === 'activate' ? 'activate license' : 'restore license';
-
-    if (lower.includes('network error') || lower.includes('error sending request')) {
-      return `Failed to ${actionLabel}. Please check your connection and try again.`;
-    }
-
-    if (lower.includes('already activated on another device')) {
-      return 'This license is already activated on another device';
-    }
-
-    if (lower.includes('maximum number of devices')) {
-      return 'This license has reached its device activation limit';
-    }
-
-    if (lower.includes('invalid license key')) {
-      return 'Invalid license key';
-    }
-
-    if (action === 'restore' && lower.includes('no license found')) {
-      return 'No license found. Please enter your license key manually.';
-    }
-
-    return rawMessage || `Failed to ${actionLabel}`;
-  };
-
-  const checkStatus = async () => {
+  const checkStatus = useCallback(async () => {
     const checkId = ++latestCheckStatusId.current;
     try {
       setIsLoading(true);
@@ -107,9 +117,9 @@ export function LicenseProvider({ children }: { children: ReactNode }) {
         setIsLoading(false);
       }
     }
-  };
+  }, []);
 
-  const revalidateLicense = async () => {
+  const revalidateLicense = useCallback(async () => {
     const checkId = ++latestCheckStatusId.current;
     try {
       setIsLoading(true);
@@ -136,9 +146,9 @@ export function LicenseProvider({ children }: { children: ReactNode }) {
         setIsLoading(false);
       }
     }
-  };
+  }, []);
 
-  const restoreLicense = async () => {
+  const restoreLicense = useCallback(async () => {
     try {
       const licenseStatus = await invoke<LicenseStatus>('restore_license');
       setStatus(licenseStatus);
@@ -148,9 +158,9 @@ export function LicenseProvider({ children }: { children: ReactNode }) {
       log.error('Failed to restore license:', error);
       toast.error(getFriendlyLicenseError('restore', message));
     }
-  };
+  }, []);
 
-  const activateLicense = async (key: string) => {
+  const activateLicense = useCallback(async (key: string) => {
     try {
       const licenseStatus = await invoke<LicenseStatus>('activate_license', { licenseKey: key });
       setStatus(licenseStatus);
@@ -160,9 +170,9 @@ export function LicenseProvider({ children }: { children: ReactNode }) {
       log.error('Failed to activate license:', error);
       toast.error(getFriendlyLicenseError('activate', message));
     }
-  };
+  }, []);
 
-  const deactivateLicense = async () => {
+  const deactivateLicense = useCallback(async () => {
     try {
       await invoke('deactivate_license');
       // Re-check status after deactivation
@@ -173,25 +183,15 @@ export function LicenseProvider({ children }: { children: ReactNode }) {
       log.error('Failed to deactivate license:', error);
       toast.error(message);
     }
-  };
-
-  const openPurchasePage = async () => {
-    try {
-      await invoke('open_purchase_page');
-    } catch (error) {
-      log.error('Failed to open purchase page:', error);
-      // Fallback to window.open
-      window.open('https://voicetypr.com/#pricing', '_blank');
-    }
-  };
+  }, [checkStatus]);
 
   // Check license status on mount
   useEffect(() => {
     log.debug('LicenseProvider mounted, checking status...');
     checkStatus();
-  }, []);
+  }, [checkStatus]);
 
-  const value: LicenseContextValue = {
+  const value = useMemo<LicenseContextValue>(() => ({
     status,
     isLoading,
     checkStatus,
@@ -200,7 +200,7 @@ export function LicenseProvider({ children }: { children: ReactNode }) {
     activateLicense,
     deactivateLicense,
     openPurchasePage,
-  };
+  }), [status, isLoading, checkStatus, revalidateLicense, restoreLicense, activateLicense, deactivateLicense]);
 
   return (
     <LicenseContext.Provider value={value}>

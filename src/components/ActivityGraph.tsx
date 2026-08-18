@@ -6,6 +6,18 @@ interface ActivityGraphProps {
   history: TranscriptionHistory[];
   weeks?: number;
 }
+const dayLabels = ['S', 'M', 'T', 'W', 'T', 'F', 'S'];
+
+function getIntensityClass(count: number, maxCount: number) {
+  if (count === 0) return "bg-gray-200 dark:bg-gray-800 hover:bg-gray-300 dark:hover:bg-gray-700"; // Very visible gray!
+
+  const intensity = maxCount > 0 ? count / maxCount : 0;
+  if (intensity > 0.75) return "bg-primary hover:bg-primary/90";
+  if (intensity > 0.5) return "bg-primary/75 hover:bg-primary/65";
+  if (intensity > 0.25) return "bg-primary/50 hover:bg-primary/40";
+  return "bg-primary/25 hover:bg-primary/20";
+}
+
 
 export function ActivityGraph({ history, weeks = 12 }: ActivityGraphProps) {
   const activityData = useMemo(() => {
@@ -57,15 +69,6 @@ export function ActivityGraph({ history, weeks = 12 }: ActivityGraphProps) {
     return { weeksData, maxCount };
   }, [history, weeks]);
   
-  const getIntensityClass = (count: number, maxCount: number) => {
-    if (count === 0) return "bg-gray-200 dark:bg-gray-800 hover:bg-gray-300 dark:hover:bg-gray-700"; // Very visible gray!
-    
-    const intensity = maxCount > 0 ? count / maxCount : 0;
-    if (intensity > 0.75) return "bg-primary hover:bg-primary/90";
-    if (intensity > 0.5) return "bg-primary/75 hover:bg-primary/65";
-    if (intensity > 0.25) return "bg-primary/50 hover:bg-primary/40";
-    return "bg-primary/25 hover:bg-primary/20";
-  };
   
   const monthLabels = useMemo(() => {
     const labels: { month: string; position: number }[] = [];
@@ -91,7 +94,6 @@ export function ActivityGraph({ history, weeks = 12 }: ActivityGraphProps) {
     return labels;
   }, [weeks]);
   
-  const dayLabels = ['S', 'M', 'T', 'W', 'T', 'F', 'S'];
   
   return (
     <div className="space-y-2">

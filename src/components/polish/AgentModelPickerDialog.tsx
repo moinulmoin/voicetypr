@@ -43,22 +43,17 @@ export function AgentModelPickerDialog({
   const normalizedQuery = query.trim().toLowerCase();
   const visibleGroups = useMemo(
     () =>
-      groups
-        .map((group) => ({
-          ...group,
-          items: group.items.filter((item) => {
-            if (!normalizedQuery) return true;
-            return [
-              item.label,
-              item.qualifiedId,
-              item.model.sourceProvider ?? "",
-            ]
-              .join(" ")
-              .toLowerCase()
-              .includes(normalizedQuery);
-          }),
-        }))
-        .filter((group) => group.items.length > 0),
+      groups.flatMap((group) => {
+        const items = normalizedQuery
+          ? group.items.filter((item) =>
+              [item.label, item.qualifiedId, item.model.sourceProvider ?? ""]
+                .join(" ")
+                .toLowerCase()
+                .includes(normalizedQuery),
+            )
+          : group.items;
+        return items.length > 0 ? [{ ...group, items }] : [];
+      }),
     [groups, normalizedQuery],
   );
 

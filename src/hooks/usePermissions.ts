@@ -103,6 +103,14 @@ export function usePermissions(options?: {
     }
   };
 
+  // checkPermissions is re-created every render; keep the latest version in a
+  // ref so the mount effect below can invoke it without re-running and without
+  // settling on a stale closure.
+  const checkPermissionsRef = useRef(checkPermissions);
+  useEffect(() => {
+    checkPermissionsRef.current = checkPermissions;
+  });
+
   const requestPermission = async (type: keyof PermissionState) => {
     setIsRequesting(type);
     setError(null);
@@ -168,12 +176,15 @@ export function usePermissions(options?: {
   useEffect(() => {
     // Check permissions on mount if enabled
     if (checkOnMount) {
-      checkPermissions();
+      checkPermissionsRef.current();
     }
 
     // Set up interval if specified
     if (checkInterval > 0) {
-      intervalRef.current = setInterval(checkPermissions, checkInterval);
+      intervalRef.current = setInterval(
+        () => checkPermissionsRef.current(),
+        checkInterval,
+      );
     }
 
     // Cleanup
@@ -185,7 +196,7 @@ export function usePermissions(options?: {
         clearTimeout(timeoutRef.current);
       }
     };
-  }, []); // Empty deps, only run on mount
+  }, [checkOnMount, checkInterval]);
 
   return {
     permissions,

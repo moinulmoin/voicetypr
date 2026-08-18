@@ -69,9 +69,13 @@ export const HotkeyInput = React.memo(function HotkeyInput({
   const [currentKeysDisplay, setCurrentKeysDisplay] = useState<string>("");
   const onChangeRef = useRef(onChange);
   const onBareModifierRef = useRef(onBareModifier);
+  const keysRef = useRef(keys);
+  const validationRulesRef = useRef(validationRules);
   useEffect(() => {
     onChangeRef.current = onChange;
     onBareModifierRef.current = onBareModifier;
+    keysRef.current = keys;
+    validationRulesRef.current = validationRules;
   });
 
   const handleCancel = useCallback(() => {
@@ -84,7 +88,10 @@ export const HotkeyInput = React.memo(function HotkeyInput({
     setCurrentKeysDisplay("");
     onEditingChange?.(false);
   }, [onEditingChange]);
-
+  const handleCancelRef = useRef(handleCancel);
+  useEffect(() => {
+    handleCancelRef.current = handleCancel;
+  });
   useEffect(() => {
     if (mode !== "edit" && !inline) return;
 
@@ -97,11 +104,11 @@ export const HotkeyInput = React.memo(function HotkeyInput({
 
       // Handle Escape to cancel
       if (key === "Escape") {
-        handleCancel();
+        handleCancelRef.current();
         return;
       }
 
-      const newKeys = new Set(keys);
+      const newKeys = new Set(keysRef.current);
 
       // Add modifier keys - handle platform differences correctly
       if (isMacOS) {
@@ -147,8 +154,8 @@ export const HotkeyInput = React.memo(function HotkeyInput({
       }
 
       // Check max keys limit
-      if (newKeys.size > validationRules.maxKeys) {
-        setValidationError(`Maximum ${validationRules.maxKeys} keys allowed`);
+      if (newKeys.size > validationRulesRef.current.maxKeys) {
+        setValidationError(`Maximum ${validationRulesRef.current.maxKeys} keys allowed`);
         return;
       }
 
@@ -213,7 +220,7 @@ export const HotkeyInput = React.memo(function HotkeyInput({
         setCurrentKeysDisplay(displayKeys.join(" + "));
 
         // Validate with rules
-        const validation = validateKeyCombinationWithRules(shortcut, validationRules);
+        const validation = validateKeyCombinationWithRules(shortcut, validationRulesRef.current);
         if (!validation.valid) {
           setValidationError(validation.error || "Invalid key combination");
           setPendingHotkey("");
@@ -249,12 +256,12 @@ export const HotkeyInput = React.memo(function HotkeyInput({
       e.preventDefault();
       e.stopPropagation();
 
-      if (keys.size > 0) {
+      if (keysRef.current.size > 0) {
         // Format the shortcut
         const modifiers: string[] = [];
         const regularKeys: string[] = [];
 
-        keys.forEach((key) => {
+        keysRef.current.forEach((key) => {
           if (["CommandOrControl", "Control", "Shift", "Alt"].includes(key)) {
             modifiers.push(key);
           } else {
@@ -278,7 +285,7 @@ export const HotkeyInput = React.memo(function HotkeyInput({
         );
         const shortcut = [...orderedModifiers, ...regularKeys].join("+");
 
-        const validation = validateKeyCombinationWithRules(shortcut, validationRules);
+        const validation = validateKeyCombinationWithRules(shortcut, validationRulesRef.current);
         if (validation.valid) {
           // Check for system conflicts
           const conflict = checkForSystemConflict(shortcut);
@@ -318,7 +325,7 @@ export const HotkeyInput = React.memo(function HotkeyInput({
       window.removeEventListener("keydown", handleKeyDown);
       window.removeEventListener("keyup", handleKeyUp);
     };
-  }, [mode, keys, allowBareModifier, inline]);
+  }, [mode, allowBareModifier, inline]);
 
 
   const handleSave = useCallback(() => {

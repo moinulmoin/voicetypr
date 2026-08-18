@@ -1,4 +1,4 @@
-import { createContext, useContext, ReactNode, useState, useEffect, useCallback, useRef } from 'react';
+import { createContext, useContext, ReactNode, useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { useTauriEvent } from '@/hooks/useTauriEvent';
 import { AppSettings } from '@/types';
@@ -96,16 +96,19 @@ export function SettingsProvider({ children }: { children: ReactNode }) {
   useTauriEvent("audio-device-changed", () => void loadSettings());
   useTauriEvent("settings-changed", () => void loadSettings());
 
+  const value = useMemo(
+    () => ({
+      settings,
+      isLoading,
+      error,
+      refreshSettings: loadSettings,
+      updateSettings,
+    }),
+    [settings, isLoading, error, loadSettings, updateSettings],
+  );
+
   return (
-    <SettingsContext.Provider
-      value={{
-        settings,
-        isLoading,
-        error,
-        refreshSettings: loadSettings,
-        updateSettings,
-      }}
-    >
+    <SettingsContext.Provider value={value}>
       {children}
     </SettingsContext.Provider>
   );

@@ -77,6 +77,10 @@ export function useTranscriptionHistory({
   const [isLoading, setIsLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
   const requestIdRef = useRef(0);
+  // Mirrors `history` synchronously so event handlers can check for duplicates
+  // without reading stale closure state or causing side effects inside a
+  // setState updater.
+  const historyRef = useRef<TranscriptionHistory[]>([]);
 
 
   const refreshHistory = useCallback(async () => {
@@ -97,8 +101,8 @@ export function useTranscriptionHistory({
       ]);
 
       if (requestIdRef.current !== requestId) return;
-
       const formattedHistory = storedHistory.map(toHistoryItem);
+      historyRef.current = formattedHistory;
       setHistory(formattedHistory);
       setTotalCount(count ?? formattedHistory.length);
       setLoadError(null);
@@ -133,15 +137,16 @@ export function useTranscriptionHistory({
       await register<TranscriptionAddedEvent>("transcription-added", (data) => {
         const newItem = fromAddedEvent(data);
         setLoadError(null);
-        setHistory((previous) => {
-          if (previous.some((item) => item.id === newItem.id)) {
-            return previous;
-          }
-          if (includeTotalCount) {
-            setTotalCount((count) => count + 1);
-          }
-          return [newItem, ...previous].slice(0, limit);
-        });
+        const previous = historyRef.current;
+        if (previous.some((item) => item.id === newItem.id)) {
+          return;
+        }
+        const next = [newItem, ...previous].slice(0, limit);
+        historyRef.current = next;
+        setHistory(next);
+        if (includeTotalCount) {
+          setTotalCount((count) => count + 1);
+        }
       });
 
       await register("history-updated", () => {

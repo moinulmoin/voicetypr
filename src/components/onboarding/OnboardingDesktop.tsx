@@ -154,6 +154,13 @@ export const OnboardingDesktop = function OnboardingDesktop({
     requestPermission: requestAccessPermission,
   } = useAccessibilityPermission({ checkOnMount: false });
 
+  const checkPermissions = useCallback(async () => {
+    await Promise.all([checkMicPermission(), checkAccessPermission()]);
+  }, [checkMicPermission, checkAccessPermission]);
+  const checkPermissionsRef = useRef(checkPermissions);
+  useEffect(() => {
+    checkPermissionsRef.current = checkPermissions;
+  });
   const {
     models,
     loadModels,
@@ -341,12 +348,12 @@ export const OnboardingDesktop = function OnboardingDesktop({
   useEffect(() => {
     if (currentStep !== "permissions") return;
     void checkPermissions();
-  }, [currentStep]);
+  }, [currentStep, checkPermissions]);
 
   useEffect(() => {
     if (currentStep !== "permissions") return;
     const handleFocus = () => {
-      void checkPermissions();
+      void checkPermissionsRef.current();
     };
 
     window.addEventListener("focus", handleFocus);
@@ -411,9 +418,6 @@ export const OnboardingDesktop = function OnboardingDesktop({
     };
   }, [settings]);
 
-  const checkPermissions = async () => {
-    await Promise.all([checkMicPermission(), checkAccessPermission()]);
-  };
 
   const confirmSource = (nextSourceType: SourceType) => {
     sourceChosenByUser.current = true;

@@ -99,7 +99,7 @@ export const loadApiKeysToCache = async (): Promise<void> => {
     return;
   }
 
-  for (const provider of providers) {
+  await Promise.all(providers.map(async (provider) => {
     try {
       const apiKey = await getApiKey(provider.id);
       if (apiKey) {
@@ -109,7 +109,7 @@ export const loadApiKeysToCache = async (): Promise<void> => {
     } catch (error) {
       log.error(`Failed to load API key for ${provider.id}:`, error);
     }
-  }
+  }));
 };
 
 // STT (Speech-to-Text) cloud provider keys

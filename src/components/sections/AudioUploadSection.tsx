@@ -36,6 +36,13 @@ import { createLogger } from "@/lib/logger";
 
 const log = createLogger("audio-upload");
 
+function formatTimestamp(milliseconds: number) {
+  const totalSeconds = Math.max(0, Math.floor(milliseconds / 1000));
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  return `${minutes}:${seconds.toString().padStart(2, "0")}`;
+}
+
 // local result type not needed; handled by store
 
 export function AudioUploadSection() {
@@ -60,13 +67,6 @@ export function AudioUploadSection() {
   const isProcessing = status === 'processing';
   const effectiveFileName = selectedFile?.name || null;
   const hasEffectiveSelection = !!selectedFile;
-  const formatTimestamp = (milliseconds: number) => {
-    const totalSeconds = Math.max(0, Math.floor(milliseconds / 1000));
-    const minutes = Math.floor(totalSeconds / 60);
-    const seconds = totalSeconds % 60;
-    return `${minutes}:${seconds.toString().padStart(2, "0")}`;
-  };
-
 
   const resolveHistoryModelName = async (remoteServerIdOverride?: string | null) => {
     const effectiveRemoteId = remoteServerIdOverride ?? activeRemoteServer;
@@ -154,10 +154,12 @@ export function AudioUploadSection() {
       return;
     }
 
-    const latestActiveRemoteServer = await invoke<string | null>('get_active_remote_server')
-      .catch(() => activeRemoteServer);
-    const latestAvailability = await invoke<{ remote_available?: boolean } | null>('get_recognition_availability_snapshot')
-      .catch(() => null);
+    const [latestActiveRemoteServer, latestAvailability] = await Promise.all([
+      invoke<string | null>('get_active_remote_server')
+        .catch(() => activeRemoteServer),
+      invoke<{ remote_available?: boolean } | null>('get_recognition_availability_snapshot')
+        .catch(() => null),
+    ]);
     const effectiveRemoteSelected = !!latestActiveRemoteServer;
     const effectiveRemoteAvailable = latestAvailability?.remote_available ?? remoteAvailable;
 
@@ -247,39 +249,33 @@ export function AudioUploadSection() {
     setCopied(false);
   };
 
-  // Handle file drop
-  const handleFileDrop = (filePath: string) => {
-    // Validate file extension
-    const supportedExtensions = ['wav', 'mp3', 'm4a', 'flac', 'ogg', 'mp4', 'webm'];
-    const fileExtension = filePath.split('.').pop()?.toLowerCase();
-
-    if (!fileExtension || !supportedExtensions.includes(fileExtension)) {
-      toast.error("Unsupported file format. Please drop an audio or video file.");
-      return;
-    }
-
-    select(filePath);
-  };
-
   // Setup drag and drop listeners
   useEffect(() => {
-    // Listen for file drop events
+    const handleFileDrop = (filePath: string) => {
+      const supportedExtensions = ['wav', 'mp3', 'm4a', 'flac', 'ogg', 'mp4', 'webm'];
+      const fileExtension = filePath.split('.').pop()?.toLowerCase();
+
+      if (!fileExtension || !supportedExtensions.includes(fileExtension)) {
+        toast.error("Unsupported file format. Please drop an audio or video file.");
+        return;
+      }
+
+      select(filePath);
+    };
+
     const unlisten = listen('tauri://drag-drop', (event) => {
       setIsDragging(false);
 
       const payload = event.payload as { paths: string[]; position: { x: number; y: number } };
       if (payload.paths && payload.paths.length > 0) {
-        // Only take the first file if multiple are dropped
         handleFileDrop(payload.paths[0]);
       }
     });
 
-    // Listen for drag over events
     const unlistenHover = listen('tauri://drag-hover', () => {
       setIsDragging(true);
     });
 
-    // Listen for drag leave events
     const unlistenLeave = listen('tauri://drag-leave', () => {
       setIsDragging(false);
     });
@@ -289,7 +285,7 @@ export function AudioUploadSection() {
       unlistenHover.then(fn => fn());
       unlistenLeave.then(fn => fn());
     };
-  }, []);
+  }, [select]);
 
   return (
     <SettingsPage>
@@ -460,9 +456,9 @@ export function AudioUploadSection() {
                           </div>
                           <ScrollArea className="h-48" aria-label="Speaker timeline segments">
                             <div className="space-y-2 pr-2">
-                              {speakerSegments.map((segment, index) => (
+                              {speakerSegments.map((segment) => (
                                 <div
-                                  key={`${segment.speaker_id}-${segment.start_ms}-${segment.end_ms}-${index}`}
+                                  key={`${segment.speaker_id}-${segment.start_ms}-${segment.end_ms}`}
                                   className="flex items-center justify-between gap-3 rounded-md bg-accent/30 px-3 py-2 text-xs"
                                 >
                                   <span className="font-medium text-foreground">

@@ -35,6 +35,11 @@ import { getModelDisplayName } from "@/lib/model-display";
 import { isCloudEngine } from "@/lib/cloudProviders";
 import { isMacOS } from "@/lib/platform";
 import { createLogger } from "@/lib/logger";
+import {
+  applyHistoryFilters,
+  formatDurationMs,
+  sourceLabel,
+} from "./recentRecordingsHelpers";
 
 const log = createLogger("recordings");
 
@@ -112,28 +117,8 @@ interface RecentRecordingsProps {
 }
 
 // ---------------------------------------------------------------------------
-// Pure helpers — exported so tests can drive them directly
+// Pure helpers
 // ---------------------------------------------------------------------------
-
-/** Map raw source values to user-facing labels. */
-export function sourceLabel(source: string | undefined): string {
-  switch (source) {
-    case 'audio_file':
-    case 'audio_bytes': return 'Upload';
-    case 'remote_server': return 'Remote';
-    case 'cli': return 'CLI';
-    case 'desktop_recording':
-    default: return 'This device';
-  }
-}
-
-/** Format milliseconds as m:ss (e.g. 90 000 ms → "1:30"). */
-export function formatDurationMs(ms: number): string {
-  const totalSec = Math.floor(ms / 1000);
-  const min = Math.floor(totalSec / 60);
-  const sec = totalSec % 60;
-  return `${min}:${sec.toString().padStart(2, '0')}`;
-}
 
 /** Lucide fallback for transcripts without a captured application icon. */
 function sourceIcon(source: string | undefined) {
@@ -172,48 +157,12 @@ function buildMarkdownHistory(items: TranscriptionHistory[]): string {
   return lines.join("\n");
 }
 
-/**
- * Structural filters for the history list (source, app, date).
- * Text search is handled separately in the component to support model display-name matching.
- * Under a specific source filter, only rows whose writing.source maps to that source pass;
- * rows with no/unknown source are excluded (they appear only under 'all').
- */
-export function applyHistoryFilters(
-  history: TranscriptionHistory[],
-  sourceFilter: string,
-  appFilter: string,
-  dateFilter: string,
-  now?: Date,
-): TranscriptionHistory[] {
-  const todayBase = now ? new Date(now) : new Date();
-  todayBase.setHours(0, 0, 0, 0);
-  const sevenDaysAgo = new Date(todayBase);
-  sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 6);
-
-  return history.filter(item => {
-    // Source filter — requires an exact match; rows with no/unknown source are excluded
-    if (sourceFilter !== 'all') {
-      const src = item.writing?.source;
-      if (sourceFilter === 'desktop_recording' && src !== 'desktop_recording') return false;
-      if (sourceFilter === 'audio_file' && src !== 'audio_file' && src !== 'audio_bytes') return false;
-      if (sourceFilter === 'remote_server' && src !== 'remote_server') return false;
-      if (sourceFilter === 'cli' && src !== 'cli') return false;
-    }
-
-    // App filter
-    if (appFilter !== 'all' && item.writing?.context_hint?.app_name !== appFilter) return false;
-
-    // Date filter
-    if (dateFilter !== 'all') {
-      const itemDate = new Date(item.timestamp);
-      itemDate.setHours(0, 0, 0, 0);
-      if (dateFilter === 'today' && itemDate.getTime() !== todayBase.getTime()) return false;
-      if (dateFilter === 'last7' && itemDate < sevenDaysAgo) return false;
-    }
-
-    return true;
-  });
+/** Copy text to the clipboard and confirm with a toast. */
+function copyTextToClipboard(text: string) {
+  navigator.clipboard.writeText(text);
+  toast.success("Copied to clipboard");
 }
+
 
 export function RecentRecordings({
   history,
@@ -300,34 +249,44 @@ export function RecentRecordings({
 
   // Verify which recordings exist on filesystem
   useEffect(() => {
+    let cancelled = false;
     const verifyRecordings = async () => {
       log.debug("[RecentRecordings] Starting verification for", history.length, "items");
-      const verified = new Set<string>();
-      const checked = new Set<string>();
-      let itemsWithRecordingFile = 0;
-      for (const item of history) {
-        if (item.recording_file) {
-          itemsWithRecordingFile++;
+      const candidates = history.filter((item) => item.recording_file);
+      // Each existence check is independent, so run them concurrently.
+      const results = await Promise.all(
+        candidates.map(async (item) => {
           log.debug("[RecentRecordings] Checking recording:", item.recording_file, "for item:", item.id);
           try {
             const exists = await invoke<boolean>("check_recording_exists", {
               filename: item.recording_file
             });
-            checked.add(item.id);
             log.debug("[RecentRecordings] Recording", item.recording_file, "exists:", exists);
-            if (exists) {
-              verified.add(item.id);
-            }
+            return { id: item.id, exists };
           } catch (error) {
             log.error(`Failed to verify recording ${item.recording_file}:`, error);
+            return null;
           }
+        }),
+      );
+      if (cancelled) return;
+      const verified = new Set<string>();
+      const checked = new Set<string>();
+      for (const result of results) {
+        if (!result) continue;
+        checked.add(result.id);
+        if (result.exists) {
+          verified.add(result.id);
         }
       }
-      log.debug("[RecentRecordings] Verification complete. Items with recording_file:", itemsWithRecordingFile, "Verified:", verified.size);
+      log.debug("[RecentRecordings] Verification complete. Items with recording_file:", candidates.length, "Verified:", verified.size);
       setCheckedRecordings(checked);
       setVerifiedRecordings(verified);
     };
-    verifyRecordings();
+    void verifyRecordings();
+    return () => {
+      cancelled = true;
+    };
   }, [history]);
 
   // Collect distinct app names from history for the app filter dropdown
@@ -510,7 +469,6 @@ export function RecentRecordings({
           year: itemDate.getFullYear() !== today.getFullYear() ? 'numeric' : undefined
         });
       }
-
       if (!groups[groupKey]) {
         groups[groupKey] = [];
       }
@@ -519,11 +477,6 @@ export function RecentRecordings({
 
     return groups;
   }, [filteredHistory, visibleCount]);
-
-  const handleCopy = (text: string) => {
-    navigator.clipboard.writeText(text);
-    toast.success("Copied to clipboard");
-  };
 
   const handleDelete = async (e: React.MouseEvent, id: string) => {
     e.stopPropagation();
@@ -699,12 +652,15 @@ export function RecentRecordings({
             <input
               type="text"
               placeholder="Search transcripts…"
+              aria-label="Search transcripts"
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
               className="h-10 w-full rounded-xl border border-border bg-card pl-10 pr-4 text-sm transition-colors focus:border-sage/50 focus:outline-none focus:ring-2 focus:ring-sage/25"
             />
             {searchQuery && (
               <button
+                type="button"
+                aria-label="Clear search"
                 onClick={() => setSearchQuery("")}
                 className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
               >
@@ -825,11 +781,18 @@ export function RecentRecordings({
                       return (
                       <div
                         key={item.id}
+                        role="button"
+                        tabIndex={0}
                         className={cn(
                           "group relative flex cursor-pointer gap-3.5 border-t border-border px-5 py-4 transition-colors first:border-t-0",
                           isFailed ? "bg-amber-500/[0.04]" : "hover:bg-muted/40",
                         )}
-                        onClick={() => !isFailed && !isInProgress && handleCopy(displayText)}
+                        onClick={() => !isFailed && !isInProgress && copyTextToClipboard(displayText)}
+                        onKeyDown={(e) => {
+                          if (e.key !== "Enter" && e.key !== " ") return;
+                          e.preventDefault();
+                          if (!isFailed && !isInProgress) copyTextToClipboard(displayText);
+                        }}
                       >
                         {(isInProgress || isFailed) && (
                           <div
@@ -966,7 +929,7 @@ export function RecentRecordings({
                                   Original · before Polish
                                 </p>
                                 <button
-                                  onClick={(e) => { e.stopPropagation(); handleCopy(originalText); }}
+                                  onClick={(e) => { e.stopPropagation(); copyTextToClipboard(originalText); }}
                                   className="text-[11px] font-medium text-sage hover:underline"
                                   title="Copy original transcript"
                                 >
@@ -983,7 +946,7 @@ export function RecentRecordings({
                         <div className="flex shrink-0 items-start gap-1 opacity-0 transition-opacity group-hover:opacity-100">
                           {!isInProgress && (
                             <button
-                              onClick={(e) => { e.stopPropagation(); handleCopy(displayText); }}
+                              onClick={(e) => { e.stopPropagation(); copyTextToClipboard(displayText); }}
                               className="grid size-7 place-items-center rounded-md border border-border bg-card text-muted-foreground transition-colors hover:text-foreground"
                               title="Copy"
                             >

@@ -154,49 +154,50 @@ export function useAiProviderSettings({
       }
 
       const keyStatus: Record<string, boolean> = {};
-      await Promise.all(
-        listedProviders
-          .filter((provider) => !isAgentCliProvider(provider.id))
-          .map(async ({ id: providerId }) => {
-            let isConfigured = await hasApiKey(providerId);
+      const keyTasks: Promise<void>[] = [];
+      for (const { id: providerId } of listedProviders) {
+        if (isAgentCliProvider(providerId)) continue;
+        keyTasks.push((async () => {
+          let isConfigured = await hasApiKey(providerId);
 
-            if (
-              (providerId === "custom" || providerId === "openai") &&
-              !isConfigured
-            ) {
-              try {
-                const providerSettings = normalizeAISettings(
-                  await invoke<AISettingsResponse>(
-                    "get_ai_settings_for_provider",
-                    {
-                      provider: providerId,
-                    },
-                  ),
-                );
-                isConfigured = providerSettings.hasApiKey;
-              } catch (error) {
-                log.error(
-                  `Failed to resolve ${providerId} provider readiness:`,
-                  error,
-                );
-              }
+          if (
+            (providerId === "custom" || providerId === "openai") &&
+            !isConfigured
+          ) {
+            try {
+              const providerSettings = normalizeAISettings(
+                await invoke<AISettingsResponse>(
+                  "get_ai_settings_for_provider",
+                  {
+                    provider: providerId,
+                  },
+                ),
+              );
+              isConfigured = providerSettings.hasApiKey;
+            } catch (error) {
+              log.error(
+                `Failed to resolve ${providerId} provider readiness:`,
+                error,
+              );
             }
+          }
 
-            keyStatus[providerId] = isConfigured;
-            if (isConfigured) {
-              try {
-                const apiKey = await getApiKey(providerId);
-                if (apiKey) {
-                  await invoke("cache_ai_api_key", {
-                    args: { provider: providerId, apiKey },
-                  });
-                }
-              } catch (error) {
-                log.error(`Failed to cache ${providerId} API key:`, error);
+          keyStatus[providerId] = isConfigured;
+          if (isConfigured) {
+            try {
+              const apiKey = await getApiKey(providerId);
+              if (apiKey) {
+                await invoke("cache_ai_api_key", {
+                  args: { provider: providerId, apiKey },
+                });
               }
+            } catch (error) {
+              log.error(`Failed to cache ${providerId} API key:`, error);
             }
-          }),
-      );
+          }
+        })());
+      }
+      await Promise.all(keyTasks);
       setProviderApiKeys((prev) => ({ ...prev, ...keyStatus }));
 
       if (
@@ -221,13 +222,10 @@ export function useAiProviderSettings({
         log.error("Failed to load custom config:", error);
       }
 
-      listedProviders
-        .filter(
-          (provider) => !provider.isCustom && !isAgentCliProvider(provider.id),
-        )
-        .forEach((provider) => {
-          void fetchModels(provider.id);
-        });
+      for (const provider of listedProviders) {
+        if (provider.isCustom || isAgentCliProvider(provider.id)) continue;
+        void fetchModels(provider.id);
+      }
 
       return loadedAISettings;
     } catch (error) {

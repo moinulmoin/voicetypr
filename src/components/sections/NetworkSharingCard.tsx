@@ -76,18 +76,18 @@ function parseSharingPort(value: string): number | null {
 }
 
 function bindingResultsFromLocalIps(localIps: string[]): BindingResult[] {
-  return localIps
-    .filter((entry) => entry && entry !== NO_NETWORK_SENTINEL)
-    .map((entry) => {
-      const match = entry.match(/^(.*?) \((.*?)\)$/);
-
-      return {
-        ip: match?.[1] ?? entry,
-        success: true,
-        error: null,
-        interface_name: match?.[2],
-      };
+  const results: BindingResult[] = [];
+  for (const entry of localIps) {
+    if (!entry || entry === NO_NETWORK_SENTINEL) continue;
+    const match = entry.match(/^(.*?) \((.*?)\)$/);
+    results.push({
+      ip: match?.[1] ?? entry,
+      success: true,
+      error: null,
+      interface_name: match?.[2],
     });
+  }
+  return results;
 }
 
 export function NetworkSharingCard() {
@@ -475,12 +475,18 @@ export function NetworkSharingCard() {
     toast.success("Address copied to clipboard");
   };
 
-  const reachableBindings = status.binding_results.filter(
-    (result) =>
-      result.success &&
-      result.ip !== "127.0.0.1" &&
-      result.ip !== NO_NETWORK_SENTINEL,
-  );
+  const reachableBindings: BindingResult[] = [];
+  const failedBindings: BindingResult[] = [];
+  for (const result of status.binding_results) {
+    if (result.ip === "127.0.0.1") continue;
+    if (result.success) {
+      if (result.ip !== NO_NETWORK_SENTINEL) {
+        reachableBindings.push(result);
+      }
+    } else {
+      failedBindings.push(result);
+    }
+  }
 
   return (
     <div className="rounded-lg border border-border/50 bg-card">
@@ -675,8 +681,8 @@ export function NetworkSharingCard() {
                 ) : (
                   <>
                     {/* Show successful bindings first (exclude localhost - can't connect to self) */}
-                    {reachableBindings.map((result, index) => (
-                        <div key={`success-${index}`} className="flex items-center gap-2">
+                    {reachableBindings.map((result) => (
+                        <div key={`ok:${result.ip}:${result.interface_name ?? ""}`} className="flex items-center gap-2">
                           <CheckCircle className="h-4 w-4 text-green-500 flex-shrink-0" />
                           <div className="flex-1 px-3 py-2 rounded-md bg-background/60 border border-border/60 font-mono text-sm">
                             <span className="font-semibold">{result.ip}:{savedPort}</span>
@@ -688,7 +694,7 @@ export function NetworkSharingCard() {
                           </div>
                           <button
                             onClick={() => copyAddress(result.ip)}
-                            className="p-2 rounded-md border border-transparent text-muted-foreground hover:bg-accent hover:text-accent-foreground hover:border-border/50 active:bg-accent/80 active:scale-95 transition-all duration-150"
+                            className="p-2 rounded-md border border-transparent text-muted-foreground hover:bg-accent hover:text-accent-foreground hover:border-border/50 active:bg-accent/80 active:scale-95 transition-[background-color,color,border-color,transform] duration-150"
                             title="Copy address"
                             aria-label={`Copy address ${result.ip}:${savedPort}`}
                           >
@@ -697,11 +703,9 @@ export function NetworkSharingCard() {
                         </div>
                       ))}
                     {/* Show failed bindings with tooltip (exclude localhost) */}
-                    {status.binding_results
-                      .filter((result) => !result.success && result.ip !== "127.0.0.1")
-                      .map((result, index) => (
+                    {failedBindings.map((result) => (
                         <div
-                          key={`failed-${index}`}
+                          key={`fail:${result.ip}:${result.interface_name ?? ""}`}
                           className="flex items-center gap-2 opacity-50"
                           title={result.error || "Could not use this address"}
                         >
@@ -725,7 +729,7 @@ export function NetworkSharingCard() {
                   Enter one of these addresses in Voicetypr on another device on the same network.
                 </p>
               )}
-              {status.binding_results.filter((r) => !r.success && r.ip !== "127.0.0.1").length > 0 && (
+              {failedBindings.length > 0 && (
                 <p className="text-xs text-amber-500">
                   Some addresses could not be used - hover for details
                 </p>
@@ -801,6 +805,7 @@ export function NetworkSharingCard() {
                       onClick={() => setShowPassword(!showPassword)}
                       className="absolute right-2 top-1/2 -translate-y-1/2 p-1 text-muted-foreground hover:text-foreground transition-colors"
                       tabIndex={-1}
+                      aria-label={showPassword ? "Hide password" : "Show password"}
                     >
                       {showPassword ? (
                         <EyeOff className="h-4 w-4" />

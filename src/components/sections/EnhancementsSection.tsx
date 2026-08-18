@@ -68,7 +68,7 @@ export function EnhancementsSection() {
   const writingSaveGeneration = useRef(0);
   const enhancementSaveGeneration = useRef(0);
   const writingSettingsRef = useRef(writingSettings);
-  const writingSaveQueueRef = useRef(Promise.resolve());
+  const writingSaveQueueRef = useRef<Promise<void> | null>(null);
   const settingsLoadStartedRef = useRef(false);
 
   useEffect(() => {
@@ -124,7 +124,8 @@ export function EnhancementsSection() {
     rollbackSettings: WritingSettings,
     generationAtEnqueue: number,
   ) => {
-    writingSaveQueueRef.current = writingSaveQueueRef.current.then(async () => {
+    const queue = writingSaveQueueRef.current ?? Promise.resolve();
+    writingSaveQueueRef.current = queue.then(async () => {
       try {
         await invoke("update_writing_settings", { settings: settingsToSave });
       } catch (error) {
@@ -173,16 +174,31 @@ export function EnhancementsSection() {
     }
   };
 
+  // Always-fresh handler refs: the callbacks passed to useAiProviderSettings
+  // keep stable identities and honest dependency arrays while still invoking
+  // the latest closures. This does not change when saves fire — the
+  // generation-counter / save-queue semantics live in the functions above.
+  const persistEnhancementOptionsRef = useRef(persistEnhancementOptions);
+  const loadEnhancementOptionsRef = useRef(loadEnhancementOptions);
+  const loadWritingSettingsRef = useRef(loadWritingSettings);
+  const handleFinalTextLanguageChangeRef = useRef(handleFinalTextLanguageChange);
+  const updateSettingsRef = useRef(updateSettings);
+  useEffect(() => {
+    persistEnhancementOptionsRef.current = persistEnhancementOptions;
+    loadEnhancementOptionsRef.current = loadEnhancementOptions;
+    loadWritingSettingsRef.current = loadWritingSettings;
+    handleFinalTextLanguageChangeRef.current = handleFinalTextLanguageChange;
+    updateSettingsRef.current = updateSettings;
+  });
+
   const handlePolishEnabled = useCallback(async () => {
     if (enhancementOptions.preset !== "CleanDictation") {
-      await persistEnhancementOptions({ preset: "CleanDictation" });
+      await persistEnhancementOptionsRef.current({ preset: "CleanDictation" });
     }
-     
   }, [enhancementOptions.preset]);
 
   const handleEnabledModelSelected = useCallback(async () => {
-    await loadEnhancementOptions(true);
-     
+    await loadEnhancementOptionsRef.current(true);
   }, []);
 
   const handlePolishToggled = useCallback(
@@ -196,21 +212,20 @@ export function EnhancementsSection() {
         settings?.final_text_language &&
         settings.final_text_language !== "same_as_transcript"
       ) {
-        await handleFinalTextLanguageChange("same_as_transcript");
+        await handleFinalTextLanguageChangeRef.current("same_as_transcript");
       }
 
       if (nextPreset !== enhancementOptions.preset) {
-        await persistEnhancementOptions({ preset: nextPreset });
+        await persistEnhancementOptionsRef.current({ preset: nextPreset });
       }
     },
-     
     [settings?.final_text_language, enhancementOptions.preset],
   );
 
   const handleActiveProviderCleared = useCallback(async () => {
     setEnhancementOptions({ preset: "PersonalDictation" });
     try {
-      await updateSettings({
+      await updateSettingsRef.current({
         final_text_language: "same_as_transcript",
         transcription_task: "transcribe",
       });
@@ -220,7 +235,6 @@ export function EnhancementsSection() {
         error,
       );
     }
-     
   }, []);
 
   const provider = useAiProviderSettings({
@@ -272,6 +286,17 @@ export function EnhancementsSection() {
     getError,
   } = provider;
 
+  // The settings load below stays the authoritative load across re-renders
+  // (loadAISettings changes identity as its own state settles); only an
+  // unmount makes its post-await state updates stale.
+  const settingsLoadMountedRef = useRef(true);
+  useEffect(() => {
+    settingsLoadMountedRef.current = true;
+    return () => {
+      settingsLoadMountedRef.current = false;
+    };
+  }, []);
+
   useEffect(() => {
     if (settingsLoaded || settingsLoadStartedRef.current) {
       return;
@@ -280,8 +305,9 @@ export function EnhancementsSection() {
     settingsLoadStartedRef.current = true;
     (async () => {
       const loadedAISettings = await loadAISettings();
-      await loadEnhancementOptions(loadedAISettings?.enabled ?? false);
-      const writingSettingsLoaded = await loadWritingSettings();
+      await loadEnhancementOptionsRef.current(loadedAISettings?.enabled ?? false);
+      const writingSettingsLoaded = await loadWritingSettingsRef.current();
+      if (!settingsLoadMountedRef.current) return;
       setSettingsLoaded(writingSettingsLoaded);
       if (!writingSettingsLoaded) {
         settingsLoadStartedRef.current = false;
@@ -290,7 +316,6 @@ export function EnhancementsSection() {
       settingsLoadStartedRef.current = false;
       log.error("Failed to load Polish settings:", error);
     });
-     
   }, [settingsLoaded, loadAISettings]);
 
   const setPolishError = useEnhancementsStore((s) => s.setPolishError);
@@ -400,17 +425,15 @@ export function EnhancementsSection() {
   );
 
   const polishSetupExpanded = showGuidedSetup || providerSetupOpen;
-
   useEffect(() => {
     if (!polishSetupExpanded || providerTab !== "local") return;
 
-    providers
-      .filter((p) => isAgentCliProvider(p.id))
-      .forEach((p) => {
-        if (!agentCliStatus[p.id]) {
-          void probeAgentCli(p.id, false);
-        }
-      });
+    for (const candidate of providers) {
+      if (!isAgentCliProvider(candidate.id)) continue;
+      if (!agentCliStatus[candidate.id]) {
+        void probeAgentCli(candidate.id, false);
+      }
+    }
   }, [agentCliStatus, polishSetupExpanded, probeAgentCli, providerTab, providers]);
 
   return (

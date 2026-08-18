@@ -352,9 +352,17 @@ async function submitBugReport(payload: BugReportPayload): Promise<ReportSubmitR
       signal: AbortSignal.timeout(BUG_REPORT_TIMEOUT_MS),
     });
 
+    if (!response.ok) {
+      const responseBody = await response.json().catch(() => null) as ApiResponseBody | null;
+      return {
+        success: false,
+        message: responseBody?.message || 'Failed to submit report.',
+      };
+    }
+
     const responseBody = await response.json().catch(() => null) as ApiResponseBody | null;
 
-    if (!response.ok || responseBody?.success === false) {
+    if (responseBody?.success === false) {
       return {
         success: false,
         message: responseBody?.message || 'Failed to submit report.',

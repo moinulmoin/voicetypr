@@ -4,7 +4,7 @@ import {
   applyHistoryFilters,
   sourceLabel,
   formatDurationMs,
-} from "./RecentRecordings";
+} from "./recentRecordingsHelpers";
 
 // ---------------------------------------------------------------------------
 // Fixtures

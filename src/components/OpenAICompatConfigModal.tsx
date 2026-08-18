@@ -35,7 +35,7 @@ export function OpenAICompatConfigModal({
   const [testing, setTesting] = useState(false);
   const [testResult, setTestResult] = useState<null | { ok: boolean; message: string }>(null);
   const [testedPayload, setTestedPayload] = useState<null | { baseUrl: string; model: string; apiKey: string }>(null);
-  const testOk = useMemo(() => testResult?.ok === true, [testResult]);
+  const testOk = testResult?.ok === true;
   const inputsMatchTest = useMemo(() => {
     if (!testedPayload) return false;
     return (

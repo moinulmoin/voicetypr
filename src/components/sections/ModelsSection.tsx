@@ -65,6 +65,28 @@ import { AddServerModal } from "./AddServerModal";
 import { createLogger } from "@/lib/logger";
 
 const log = createLogger("models");
+const modelScoreLegend = (
+  <div className="mb-3 flex flex-wrap items-center gap-x-4 gap-y-1.5 text-[11px] text-muted-foreground">
+    <span className="font-medium uppercase tracking-wide">Badges</span>
+    <span className="flex items-center gap-1.5">
+      <Zap className="size-3.5 text-emerald-600" />
+      Speed
+    </span>
+    <span className="flex items-center gap-1.5">
+      <CheckCircle className="size-3.5 text-blue-600" />
+      Accuracy
+    </span>
+    <span className="flex items-center gap-1.5">
+      <HardDrive className="size-3.5" />
+      Size
+    </span>
+    <span className="flex items-center gap-1.5">
+      <Star className="size-3.5 fill-amber-500 text-amber-500" />
+      Recommended
+    </span>
+  </div>
+);
+
 
 interface ModelsSectionProps {
   models: [string, ModelInfo][];
@@ -581,28 +603,6 @@ export function ModelsSection({
     : undefined;
   const isModalOpen = !!cloudModal && !!activeProvider;
 
-  // Subtle inline key explaining the model-card score badges.
-  const modelScoreLegend = (
-    <div className="mb-3 flex flex-wrap items-center gap-x-4 gap-y-1.5 text-[11px] text-muted-foreground">
-      <span className="font-medium uppercase tracking-wide">Badges</span>
-      <span className="flex items-center gap-1.5">
-        <Zap className="size-3.5 text-emerald-600" />
-        Speed
-      </span>
-      <span className="flex items-center gap-1.5">
-        <CheckCircle className="size-3.5 text-blue-600" />
-        Accuracy
-      </span>
-      <span className="flex items-center gap-1.5">
-        <HardDrive className="size-3.5" />
-        Size
-      </span>
-      <span className="flex items-center gap-1.5">
-        <Star className="size-3.5 fill-amber-500 text-amber-500" />
-        Recommended
-      </span>
-    </div>
-  );
 
   const renderCloudCard = useCallback(
     ([name, model]: [string, ModelInfo]) => {
