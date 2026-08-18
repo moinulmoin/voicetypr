@@ -185,6 +185,9 @@ export const HotkeyInput = React.memo(function HotkeyInput({
         setPendingHotkey("");
         setValidationError("");
         setCurrentKeysDisplay(formatBareModifierDisplay(spec));
+        if (inline) {
+          onBareModifierRef.current?.(spec);
+        }
         return;
       }
 
@@ -214,12 +217,18 @@ export const HotkeyInput = React.memo(function HotkeyInput({
         if (!validation.valid) {
           setValidationError(validation.error || "Invalid key combination");
           setPendingHotkey("");
+          if (inline) {
+            onChangeRef.current("");
+          }
         } else {
           // Check for system conflicts
           const conflict = checkForSystemConflict(shortcut);
           if (conflict) {
             setValidationError(formatConflictMessage(conflict));
             // Still show the hotkey but with warning for 'warning' severity
+            if (inline) {
+              onChangeRef.current("");
+            }
             if (conflict.severity === 'warning') {
               setPendingHotkey(shortcut);
             } else {
@@ -228,6 +237,9 @@ export const HotkeyInput = React.memo(function HotkeyInput({
           } else {
             setPendingHotkey(shortcut);
             setValidationError("");
+            if (inline) {
+              onChangeRef.current(normalizeShortcutKeys(shortcut));
+            }
           }
         }
       }
@@ -273,6 +285,9 @@ export const HotkeyInput = React.memo(function HotkeyInput({
           if (conflict) {
             setValidationError(formatConflictMessage(conflict));
             // Still allow setting it, but with warning
+            if (inline) {
+              onChangeRef.current("");
+            }
             if (conflict.severity === 'warning') {
               setPendingHotkey(shortcut);
               setKeys(new Set());
@@ -283,9 +298,15 @@ export const HotkeyInput = React.memo(function HotkeyInput({
             setKeys(new Set());
             setCurrentKeysDisplay("");
             setValidationError("");
+            if (inline) {
+              onChangeRef.current(normalizeShortcutKeys(shortcut));
+            }
           }
         } else {
           setValidationError(validation.error || "Invalid key combination");
+          if (inline) {
+            onChangeRef.current("");
+          }
         }
       }
     };
@@ -298,22 +319,6 @@ export const HotkeyInput = React.memo(function HotkeyInput({
       window.removeEventListener("keyup", handleKeyUp);
     };
   }, [mode, keys, allowBareModifier, inline]);
-
-  // Inline mode: report captured selections live; the parent persists.
-  useEffect(() => {
-    if (!inline) return;
-    if (pendingHotkey && !validationError) {
-      onChangeRef.current(normalizeShortcutKeys(pendingHotkey));
-    } else if (validationError) {
-      onChangeRef.current("");
-    }
-  }, [inline, pendingHotkey, validationError]);
-
-  useEffect(() => {
-    if (inline && pendingBareModifier) {
-      onBareModifierRef.current?.(pendingBareModifier);
-    }
-  }, [inline, pendingBareModifier]);
 
 
   const handleSave = useCallback(() => {

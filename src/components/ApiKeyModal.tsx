@@ -49,12 +49,15 @@ export function ApiKeyModal({
     onClose();
   };
 
-  // Clear input when modal closes
-  React.useEffect(() => {
+  // Clear input whenever the modal closes — adjusted during render so Esc and
+  // overlay-click closes (which bypass handleClose) reset too.
+  const [wasOpen, setWasOpen] = useState(isOpen);
+  if (wasOpen !== isOpen) {
+    setWasOpen(isOpen);
     if (!isOpen) {
       setApiKey('');
     }
-  }, [isOpen]);
+  }
 
   const getProviderDisplayName = () => {
     switch (providerName.toLowerCase()) {

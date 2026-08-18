@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import { Button } from "./ui/button";
 import {
   Dialog,
@@ -45,7 +45,15 @@ export function OpenAICompatConfigModal({
     );
   }, [testedPayload, baseUrl, model, apiKey]);
 
-  useEffect(() => {
+  // Sync form state when the dialog (re)opens or defaults change while open —
+  // adjusted during render so no post-paint flash; Base UI keeps its close
+  // animation because the component stays mounted.
+  const [appliedOpenState, setAppliedOpenState] = useState<string | null>(null);
+  const openStateKey = isOpen
+    ? `open\u0000${defaultBaseUrl}\u0000${defaultModel}`
+    : "closed";
+  if (appliedOpenState !== openStateKey) {
+    setAppliedOpenState(openStateKey);
     if (isOpen) {
       setBaseUrl(defaultBaseUrl);
       setModel(defaultModel);
@@ -58,7 +66,7 @@ export function OpenAICompatConfigModal({
       setTestResult(null);
       setTestedPayload(null);
     }
-  }, [isOpen, defaultBaseUrl, defaultModel]);
+  }
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -75,13 +83,11 @@ export function OpenAICompatConfigModal({
   const handleTest = async () => {
     setTestResult(null);
     setTesting(true);
+    const trimmedBase = baseUrl.trim();
+    const trimmedModel = model.trim();
+    const trimmedKey = apiKey.trim();
     try {
-      const trimmedBase = baseUrl.trim();
-      const trimmedModel = model.trim();
-      const trimmedKey = apiKey.trim();
       const noAuth = !trimmedKey;
-
-      // Note: Tauri's JS invoke supports camelCase keys and maps them to the Rust command args (snake_case).
       await invoke("test_openai_endpoint", {
         baseUrl: trimmedBase,
         model: trimmedModel,
@@ -90,17 +96,15 @@ export function OpenAICompatConfigModal({
       });
       setTestResult({ ok: true, message: "Connection successful" });
       setTestedPayload({ baseUrl: trimmedBase, model: trimmedModel, apiKey: trimmedKey });
-    } catch (e: any) {
+    } catch (e: unknown) {
       setTestResult({ ok: false, message: String(e) });
+      setTestedPayload({ baseUrl: trimmedBase, model: trimmedModel, apiKey: trimmedKey });
     } finally {
       setTesting(false);
     }
   };
 
-  // Reset test status when inputs change
-  useEffect(() => {
-    setTestResult(null);
-  }, [baseUrl, model, apiKey]);
+  // Test-result freshness is derived (inputsMatchTest) — no reset effect.
 
   return (
     <Dialog open={isOpen} onOpenChange={onClose}>
@@ -183,7 +187,7 @@ export function OpenAICompatConfigModal({
               )}
             </Button>
           </DialogFooter>
-          {testResult && (
+          {testResult && inputsMatchTest && (
             <div className={`mt-2 text-sm ${testResult.ok ? "text-green-600" : "text-red-600"}`}>
               {testResult.message}
             </div>

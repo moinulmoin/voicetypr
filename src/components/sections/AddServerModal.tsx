@@ -105,8 +105,18 @@ export function AddServerModal({
   const initialPasswordRequirementUnmet =
     initialServerRequiresPassword && (!password.trim() || testStatus !== "success");
 
-  // Update form when editServer or initial values change
-  React.useEffect(() => {
+  // Sync the form when the dialog opens against a different target —
+  // adjusted during render (no flash, keeps close animation).
+  const [appliedFormKey, setAppliedFormKey] = useState<string | null>(null);
+  const formKey = !open
+    ? "closed"
+    : editServer
+      ? `edit\u0000${editServer.id}`
+      : initialServer
+        ? `initial\u0000${initialServer.host}\u0000${initialServer.port}`
+        : "blank";
+  if (appliedFormKey !== formKey) {
+    setAppliedFormKey(formKey);
     if (editServer && open) {
       setHost(editServer.host);
       setPort(editServer.port.toString());
@@ -123,7 +133,7 @@ export function AddServerModal({
       setTestError(null);
       setClearSavedPassword(false);
     }
-  }, [editServer, initialServer, open]);
+  }
 
   // Fetch local machine ID for self-connection detection
   React.useEffect(() => {

@@ -50,6 +50,7 @@ Verification commands used across all plans: `pnpm typecheck`, `pnpm lint`,
 | 047  | Polish provider UX + no-input fast path | P0 | M | 044, 046 | DONE — local-agent probe storm removed; stable rows, per-agent model dialog/search, supported thinking controls, and persisted CLI defaults verified 2026-08-10; warmup hardened 2026-08-13 (custom origins validated before HEAD, OpenRouter + OpenAI legacy-fallback origins warm, agent-CLI never warms; recording start prefetches the selected provider only — HTTP HEAD or CLI capability probe); shortcut zero-count chrome removed and curated, friendly-labeled cloud STT model selection verified 2026-08-14 |
 | 048  | Expanded local-agent CLI Polish adapters | P1 | L | 044, 047 | DONE — focused frontend/backend gates, exact installed-CLI smokes, and native CUA UI exercise passed 2026-08-10; droid isolation flag corrected to documented `--restrict-tools` + real droid round-trip smoke passed 2026-08-13 |
 | 052  | Effect-safety sweep (derived state, useSyncExternalStore, useTauriEvent) | P2 | M | — | DONE — react-doctor targets cleared (AdvancedSection flicker-sync, matchMedia store, source-tab snap); 663 tests + local CUA smoke (Sources tabs, Quick help permissions) 2026-08-19 |
+| 053  | Reset-on-prop & parent-notify effect elimination | P2 | M | 052 | DONE — react-doctor 55→62 (Critical→Needs work); 663 tests + Shortcuts smoke 2026-08-19 (see `053-effect-reset-elimination.md`) |
 
 ## Code-done, awaiting batched manual smoke (`plans/SMOKE.md`)
 

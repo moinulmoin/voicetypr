@@ -91,12 +91,17 @@ export function ShareStatsModal({
   const [isLoading, setIsLoading] = useState(true);
   const [isCopying, setIsCopying] = useState(false);
 
-  useEffect(() => {
+  // Reset transient flags whenever the modal closes — adjusted during render.
+  const [wasOpen, setWasOpen] = useState(open);
+  if (wasOpen !== open) {
+    setWasOpen(open);
     if (!open) {
       setIsLoading(true);
       setCopied(false);
-      return;
     }
+  }
+  useEffect(() => {
+    if (!open) return;
 
     setImageDataUrl("");
     setIsLoading(true);
