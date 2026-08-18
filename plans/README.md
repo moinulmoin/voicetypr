@@ -49,7 +49,7 @@ Verification commands used across all plans: `pnpm typecheck`, `pnpm lint`,
 | 046  | Polish workflow alignment — natural punctuation, Saved Text, app-first mode resolution | P1 | S | 016, 027, 040 | DONE (code) — NEEDS-SMOKE 046-S1..S6; full gate and local native/browser UI smokes passed; app context now persists without Polish, and distinct listening/transcribing/polishing pill states were browser-verified 2026-08-10 |
 | 047  | Polish provider UX + no-input fast path | P0 | M | 044, 046 | DONE — local-agent probe storm removed; stable rows, per-agent model dialog/search, supported thinking controls, and persisted CLI defaults verified 2026-08-10; warmup hardened 2026-08-13 (custom origins validated before HEAD, OpenRouter + OpenAI legacy-fallback origins warm, agent-CLI never warms; recording start prefetches the selected provider only — HTTP HEAD or CLI capability probe); shortcut zero-count chrome removed and curated, friendly-labeled cloud STT model selection verified 2026-08-14 |
 | 048  | Expanded local-agent CLI Polish adapters | P1 | L | 044, 047 | DONE — focused frontend/backend gates, exact installed-CLI smokes, and native CUA UI exercise passed 2026-08-10; droid isolation flag corrected to documented `--restrict-tools` + real droid round-trip smoke passed 2026-08-13 |
-| 050  | Share-stats brand card + Overview/Quick-help/titlebar UI pass | P2 | M | — | DONE (code) — NEEDS-SMOKE 050-S1..S3 (`7c185eec`) |
+| 051  | Polish tab component split (monolith → hooks + provider card) | P2 | M | 050 | DONE — 663 frontend tests + local macOS CUA smoke (expand/collapse, Cloud/Local tabs, agent rows, API-key modal) 2026-08-18 (`676eaa3f`) |
 
 ## Code-done, awaiting batched manual smoke (`plans/SMOKE.md`)
 
