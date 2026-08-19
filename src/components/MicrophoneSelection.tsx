@@ -34,12 +34,31 @@ export function MicrophoneSelection({ value, onValueChange, className }: Microph
   const [devices, setDevices] = React.useState<string[]>([])
   const [loading, setLoading] = React.useState(false)
 
+  // Always-fresh refs so the device-list sources below can validate the
+  // selection without a parent-sync effect.
+  const valueRef = React.useRef(value)
+  const onValueChangeRef = React.useRef(onValueChange)
+  React.useEffect(() => {
+    valueRef.current = value
+    onValueChangeRef.current = onValueChange
+  })
+
+  const applyDeviceList = (audioDevices: string[]) => {
+    setDevices(audioDevices)
+    const selected = valueRef.current
+    if (selected && audioDevices.length > 0 && !audioDevices.includes(selected)) {
+      log.debug(`Selected device "${selected}" is no longer available, resetting to default`)
+      toast.info(`${selected} is no longer available, switching to default microphone`)
+      onValueChangeRef.current(undefined) // Reset to default
+    }
+  }
+
   // Fetch audio devices on mount and validate stored selection
   React.useEffect(() => {
     const initializeDevices = async () => {
       try {
         setLoading(true)
-        
+
         // First, validate that any stored microphone still exists
         // This cleans up stale selections from previously connected devices
         const wasReset = await invoke<boolean>("validate_microphone_selection")
@@ -47,11 +66,11 @@ export function MicrophoneSelection({ value, onValueChange, className }: Microph
           log.debug("Stale microphone selection was reset to default")
           toast.info("Previously selected microphone is no longer available, using default")
         }
-        
+
         // Then fetch current devices
         const audioDevices = await invoke<string[]>("get_audio_devices")
         log.debug("Fetched audio devices:", audioDevices)
-        setDevices(audioDevices)
+        applyDeviceList(audioDevices)
       } catch (error) {
         log.error("Failed to initialize audio devices:", error)
         toast.error("Failed to load audio devices")
@@ -64,7 +83,7 @@ export function MicrophoneSelection({ value, onValueChange, className }: Microph
 
     const listenerPromise = listen<string[]>("audio-devices-updated", ({ payload }) => {
       log.debug("Audio devices updated:", payload)
-      setDevices(Array.isArray(payload) ? payload : [])
+      applyDeviceList(Array.isArray(payload) ? payload : [])
     })
       .catch((error) => {
         log.warn("Failed to listen for audio device updates:", error)
@@ -80,16 +99,8 @@ export function MicrophoneSelection({ value, onValueChange, className }: Microph
           log.warn("Failed to unsubscribe from audio device updates:", error)
         })
     }
+     
   }, [])
-
-  // Check if selected device is available when devices list changes
-  React.useEffect(() => {
-    if (value && devices.length > 0 && !devices.includes(value)) {
-      log.debug(`Selected device "${value}" is no longer available, resetting to default`)
-      toast.info(`${value} is no longer available, switching to default microphone`)
-      onValueChange(undefined) // Reset to default
-    }
-  }, [devices, value, onValueChange])
 
   const handleDeviceSelect = async (deviceName: string | undefined) => {
     log.debug(`Selecting microphone: ${deviceName || 'Default'}`)

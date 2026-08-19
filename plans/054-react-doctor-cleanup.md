@@ -26,3 +26,22 @@ score demands it. Behavior-preserving; tests after each wave.
 
 Score materially raised from 62; zero regressions in the 663-test suite;
 finding-by-finding accounting (fixed / skipped-because-false-positive).
+
+## Outcome (2026-08-19)
+
+react-doctor **62 → 89 / 100 ("Great")**; 93 → 1 finding. The last finding
+(RemoteServerCard exhaustive-deps) is a verified false positive — its
+dependency arrays are complete.
+
+- Waves 1–3 (delegated): keys, refs, a11y, context stability, pure-fn hoists,
+  iteration combining, variant-export moves.
+- Wave 4 (delegated, 5 agents): 15 giant components split into ~60 focused
+  modules (largest now <280 lines; OnboardingDesktop 1515→128 orchestrator,
+  RecentRecordings 1079→89, ModelsSection 1103→246, NetworkSharingCard
+  872→73, HotkeyInput 488→63).
+- Parent pass: unconditional finally resets, MicrophoneSelection validation
+  folded into device sources, share-card stats narrowed, availability props
+  grouped, listener resubscribe churn removed.
+
+Gates: typecheck, lint, build green; 663/663 tests; live CUA click-through
+of Overview/Sources/History/Recording/Polish/Network + pixel sanity.

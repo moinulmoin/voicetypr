@@ -1,4 +1,7 @@
-import { Button } from "@/components/ui/button";
+import { useEffect, useMemo, useState } from "react";
+import { invoke } from "@tauri-apps/api/core";
+import { save } from "@tauri-apps/plugin-dialog";
+import { toast } from "sonner";
 import {
   Dialog,
   DialogContent,
@@ -6,60 +9,19 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { cn } from "@/lib/utils";
-import { invoke } from "@tauri-apps/api/core";
-import { save } from "@tauri-apps/plugin-dialog";
-import { Check, Copy, Download, Loader2 } from "lucide-react";
-import { useEffect, useState } from "react";
-import { toast } from "sonner";
 import { createLogger } from "@/lib/logger";
-import { WORDS_PER_PAGE } from "./shareStats";
+import { ShareStatsModalBody } from "./ShareStatsModalBody";
+import {
+  drawShareCard,
+  type ShareCardStats,
+} from "./shareCardRenderer";
 
 const log = createLogger("share-stats");
 
 interface ShareStatsModalProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  stats: {
-    totalTranscriptions: number;
-    totalWords: number;
-    timeSavedDisplay: string;
-  };
-}
-
-const LOGO_SRC = `${import.meta.env.BASE_URL}logo.png`;
-
-function getSharePlays(
-  totalWords: number,
-  totalTranscriptions: number,
-  timeSavedDisplay: string,
-): Array<{ value: string; play: string }> {
-  const timeSaved = timeSavedDisplay === "0m" ? "0m" : timeSavedDisplay;
-  const plays = [
-    {
-      value: totalWords.toLocaleString(),
-      play: totalWords === 1 ? "word I spoke" : "words I spoke",
-    },
-  ];
-  if (totalWords >= 250) {
-    const pages = Math.max(1, Math.round(totalWords / WORDS_PER_PAGE));
-    plays.push({
-      value: pages.toLocaleString(),
-      play: pages === 1 ? "page I didn’t type" : "pages I didn’t type",
-    });
-  }
-  plays.push({
-    value: timeSaved,
-    play: "my fingers got back",
-  });
-  plays.push({
-    value: totalTranscriptions.toLocaleString(),
-    play:
-      totalTranscriptions === 1
-        ? "time I skipped the keyboard"
-        : "times I skipped the keyboard",
-  });
-  return plays;
+  stats: ShareCardStats;
 }
 
 export function ShareStatsModal({
@@ -82,6 +44,17 @@ export function ShareStatsModal({
       setCopied(false);
     }
   }
+
+  // Exactly the fields the card renderer consumes; identity changes only when
+  // one of them does, so the draw effect doesn't redraw on unrelated churn.
+  const cardStats = useMemo(
+    () => ({
+      totalTranscriptions: stats.totalTranscriptions,
+      totalWords: stats.totalWords,
+      timeSavedDisplay: stats.timeSavedDisplay,
+    }),
+    [stats.totalTranscriptions, stats.totalWords, stats.timeSavedDisplay],
+  );
   useEffect(() => {
     if (!open) return;
 
@@ -92,164 +65,19 @@ export function ShareStatsModal({
     let cancelled = false;
 
     const drawCard = async () => {
-      const context = canvas.getContext("2d");
-      if (!context) {
-        log.error("Could not create the share card canvas");
-        setIsLoading(false);
-        return;
-      }
-
-      const logo = await new Promise<HTMLImageElement | null>((resolve) => {
-        const image = new Image();
-        image.decoding = "async";
-        image.onload = () => resolve(image);
-        image.onerror = () => resolve(null);
-        image.src = LOGO_SRC;
-      });
+      const dataUrl = await drawShareCard(canvas, cardStats, () => cancelled);
       if (cancelled) return;
-
-      const logicalWidth = 1200;
-      const logicalHeight = 800;
-      const exportScale = 2;
-      canvas.width = logicalWidth * exportScale;
-      canvas.height = logicalHeight * exportScale;
-      context.resetTransform();
-      context.scale(exportScale, exportScale);
-      context.imageSmoothingEnabled = true;
-      context.imageSmoothingQuality = "high";
-
-      const fontFamily =
-        "'Geist Variable', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif";
-      const cream = "#fffaf2";
-      const mint = "#8ed6a3";
-      const teal = "#4fc9c7";
-      const ink = "#0f1711";
-      const plays = getSharePlays(
-        stats.totalWords,
-        stats.totalTranscriptions,
-        stats.timeSavedDisplay,
-      );
-      const centerX = logicalWidth / 2;
-
-      const background = context.createLinearGradient(
-        0,
-        0,
-        logicalWidth,
-        logicalHeight,
-      );
-      background.addColorStop(0, "#17181c");
-      background.addColorStop(1, "#101113");
-      context.fillStyle = background;
-      context.fillRect(0, 0, logicalWidth, logicalHeight);
-
-      const glow = context.createRadialGradient(
-        centerX,
-        200,
-        30,
-        centerX,
-        200,
-        520,
-      );
-      glow.addColorStop(0, "rgba(79, 201, 199, 0.12)");
-      glow.addColorStop(0.5, "rgba(142, 214, 163, 0.06)");
-      glow.addColorStop(1, "rgba(79, 201, 199, 0)");
-      context.fillStyle = glow;
-      context.fillRect(0, 0, logicalWidth, logicalHeight);
-
-      const accent = (x0: number, x1: number) => {
-        const gradient = context.createLinearGradient(x0, 0, x1, 0);
-        gradient.addColorStop(0, mint);
-        gradient.addColorStop(1, teal);
-        return gradient;
-      };
-
-      if (logo) {
-        context.save();
-        [
-          { radius: 78, alpha: 0.16 },
-          { radius: 102, alpha: 0.1 },
-          { radius: 126, alpha: 0.05 },
-        ].forEach(({ radius, alpha }) => {
-          context.strokeStyle = `rgba(142, 214, 163, ${alpha})`;
-          context.lineWidth = 1.5;
-          context.beginPath();
-          context.arc(centerX, 112, radius, 0, Math.PI * 2);
-          context.stroke();
-        });
-        context.restore();
-        context.drawImage(logo, centerX - 48, 64, 96, 96);
+      if (dataUrl) {
+        setImageDataUrl(dataUrl);
       }
-
-      context.textAlign = "center";
-      context.fillStyle = accent(centerX - 140, centerX + 140);
-      context.font = `560 26px ${fontFamily}`;
-      context.fillText("type with your voice.", centerX, 228);
-
-      const rowTop = 322;
-      const rowHeight = 88;
-      plays.forEach((item, index) => {
-        const y = rowTop + index * rowHeight;
-        context.font = `720 50px ${fontFamily}`;
-        const numberWidth = context.measureText(item.value).width;
-        context.font = `520 32px ${fontFamily}`;
-        const playWidth = context.measureText(item.play).width;
-        const rowWidth = numberWidth + 30 + playWidth;
-        const numberX = centerX - rowWidth / 2;
-        context.textAlign = "left";
-        context.fillStyle = cream;
-        context.font = `720 50px ${fontFamily}`;
-        context.fillText(item.value, numberX, y);
-        context.fillStyle = accent(numberX, numberX + rowWidth);
-        context.font = `520 32px ${fontFamily}`;
-        context.fillText(item.play, numberX + numberWidth + 30, y);
-      });
-
-      const ctaText = "Try Voicetypr free";
-      context.font = `640 28px ${fontFamily}`;
-      const ctaWidth = context.measureText(ctaText).width + 88;
-      const ctaX = centerX - ctaWidth / 2;
-      const ctaY = 636;
-      context.save();
-      context.shadowColor = "rgba(79, 201, 199, 0.35)";
-      context.shadowBlur = 28;
-      context.shadowOffsetY = 6;
-      context.fillStyle = accent(ctaX, ctaX + ctaWidth);
-      context.beginPath();
-      context.roundRect(ctaX, ctaY, ctaWidth, 66, 33);
-      context.fill();
-      context.restore();
-      context.textAlign = "center";
-      context.textBaseline = "middle";
-      context.fillStyle = ink;
-      context.font = `640 28px ${fontFamily}`;
-      context.fillText(ctaText, centerX, ctaY + 34);
-      context.textBaseline = "alphabetic";
-
-      context.fillStyle = "#b8b0a6";
-      context.font = `560 20px ${fontFamily}`;
-      context.fillText("voicetypr.com · no card required", centerX, 738);
-
-      if (cancelled) return;
-      try {
-        setImageDataUrl(canvas.toDataURL("image/png"));
-      } catch (error) {
-        log.error("Could not encode the share card", error);
-      } finally {
-        if (!cancelled) setIsLoading(false);
-      }
+      setIsLoading(false);
     };
 
     void drawCard();
     return () => {
       cancelled = true;
     };
-  }, [
-    canvas,
-    open,
-    stats.timeSavedDisplay,
-    stats.totalTranscriptions,
-    stats.totalWords,
-  ]);
+  }, [canvas, open, cardStats]);
 
   const copyImageToClipboard = async () => {
     if (!imageDataUrl || isCopying) return;
@@ -304,63 +132,20 @@ export function ShareStatsModal({
           </DialogDescription>
         </DialogHeader>
 
-        <div className="flex min-w-0 flex-col gap-3 p-4">
-          <div
-            className="relative mx-auto w-full max-w-[26rem] overflow-hidden rounded-xl bg-[#161618] ring-1 ring-black/10"
-            style={{ aspectRatio: "3 / 2" }}
-          >
-            {isLoading ? (
-              <div className="absolute inset-0 z-10 flex items-center justify-center bg-[#161618]/90 backdrop-blur-sm">
-                <div className="flex flex-col items-center gap-2">
-                  <Loader2 className="size-8 animate-spin text-sage" />
-                  <span className="text-sm text-muted-foreground">
-                    Creating your share card…
-                  </span>
-                </div>
-              </div>
-            ) : null}
-            {imageDataUrl ? (
-              <img
-                src={imageDataUrl}
-                alt={`Share card showing ${stats.totalWords.toLocaleString()} words spoken, ${stats.timeSavedDisplay} saved, and ${stats.totalTranscriptions.toLocaleString()} transcriptions`}
-                className="block h-auto w-full max-w-full"
-              />
-            ) : null}
-            <canvas
-              ref={setCanvas}
-              width={2400}
-              height={1600}
-              className={cn(
-                "block h-auto w-full max-w-full",
-                imageDataUrl && "hidden",
-              )}
-            />
-          </div>
-
-          <div className="flex justify-center gap-2">
-            <Button
-              onClick={copyImageToClipboard}
-              disabled={isCopying || !imageDataUrl}
-              className={cn(
-                "min-w-32",
-                copied && "bg-sage text-sage-foreground hover:bg-sage/90",
-              )}
-            >
-              {isCopying ? (
-                <Loader2 className="animate-spin" />
-              ) : copied ? (
-                <Check />
-              ) : (
-                <Copy />
-              )}
-              {isCopying ? "Copying…" : copied ? "Copied" : "Copy image"}
-            </Button>
-            <Button onClick={downloadImage} variant="outline">
-              <Download />
-              Download
-            </Button>
-          </div>
-        </div>
+        <ShareStatsModalBody
+          isLoading={isLoading}
+          imageDataUrl={imageDataUrl}
+          stats={stats}
+          setCanvas={setCanvas}
+          copied={copied}
+          isCopying={isCopying}
+          onCopy={() => {
+            void copyImageToClipboard();
+          }}
+          onDownload={() => {
+            void downloadImage();
+          }}
+        />
       </DialogContent>
     </Dialog>
   );

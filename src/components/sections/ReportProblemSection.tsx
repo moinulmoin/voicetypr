@@ -129,9 +129,7 @@ export function ReportProblemSection() {
       setFallbackReportData(data);
       toast.error(errorMessage);
     } finally {
-      if (actionId === actionIdRef.current) {
-        setIsSubmitting(false);
-      }
+      setIsSubmitting(false);
     }
   };
 

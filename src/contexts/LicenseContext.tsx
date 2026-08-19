@@ -113,9 +113,7 @@ export function LicenseProvider({ children }: { children: ReactNode }) {
       log.error('Failed to check license status:', error);
       toast.error(message);
     } finally {
-      if (checkId === latestCheckStatusId.current) {
-        setIsLoading(false);
-      }
+      setIsLoading(false);
     }
   }, []);
 
@@ -142,9 +140,7 @@ export function LicenseProvider({ children }: { children: ReactNode }) {
       log.error('Failed to revalidate license:', error);
       toast.error(message);
     } finally {
-      if (checkId === latestCheckStatusId.current) {
-        setIsLoading(false);
-      }
+      setIsLoading(false);
     }
   }, []);
 

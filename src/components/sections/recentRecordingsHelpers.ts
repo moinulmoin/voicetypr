@@ -1,8 +1,46 @@
+import { FileAudio, Globe, Mic, Terminal } from "lucide-react";
+import { getModelDisplayName } from "@/lib/model-display";
 import type { TranscriptionHistory } from "@/types";
 
 // Pure helpers split from RecentRecordings.tsx so the component file only
 // exports components.
 
+/** Lucide fallback for transcripts without a captured application icon. */
+export function sourceIcon(source: string | undefined) {
+  switch (source) {
+    case 'audio_file':
+    case 'audio_bytes':
+      return FileAudio;
+    case 'remote_server':
+      return Globe;
+    case 'cli':
+      return Terminal;
+    default:
+      return Mic;
+  }
+}
+
+/** Build a plain-text export of transcript history. */
+export function buildPlainHistory(items: TranscriptionHistory[]): string {
+  return items
+    .map((item) => {
+      const when = new Date(item.timestamp).toLocaleString();
+      const model = getModelDisplayName(item.model) ?? item.model ?? "";
+      return `[${when}]${model ? ` ${model}` : ""}\n${item.text}\n`;
+    })
+    .join("\n");
+}
+
+/** Build a Markdown export of transcript history. */
+export function buildMarkdownHistory(items: TranscriptionHistory[]): string {
+  const lines: string[] = ["# Voicetypr transcript history", ""];
+  for (const item of items) {
+    const when = new Date(item.timestamp).toLocaleString();
+    const model = getModelDisplayName(item.model) ?? item.model ?? "";
+    lines.push(`## ${when}${model ? ` · ${model}` : ""}`, "", item.text, "");
+  }
+  return lines.join("\n");
+}
 /** Map raw source values to user-facing labels. */
 export function sourceLabel(source: string | undefined): string {
   switch (source) {

@@ -51,7 +51,7 @@ Verification commands used across all plans: `pnpm typecheck`, `pnpm lint`,
 | 048  | Expanded local-agent CLI Polish adapters | P1 | L | 044, 047 | DONE — focused frontend/backend gates, exact installed-CLI smokes, and native CUA UI exercise passed 2026-08-10; droid isolation flag corrected to documented `--restrict-tools` + real droid round-trip smoke passed 2026-08-13 |
 | 052  | Effect-safety sweep (derived state, useSyncExternalStore, useTauriEvent) | P2 | M | — | DONE — react-doctor targets cleared (AdvancedSection flicker-sync, matchMedia store, source-tab snap); 663 tests + local CUA smoke (Sources tabs, Quick help permissions) 2026-08-19 |
 | 053  | Reset-on-prop & parent-notify effect elimination | P2 | M | 052 | DONE — react-doctor 55→62 (Critical→Needs work); 663 tests + Shortcuts smoke 2026-08-19 (see `053-effect-reset-elimination.md`) |
-| 054  | react-doctor full-court cleanup | P2 | L | 052, 053 | IN PROGRESS — claimed Main 2026-08-19 (see `054-react-doctor-cleanup.md`) |
+| 054  | react-doctor full-court cleanup | P2 | L | 052, 053 | DONE — score 62→89 ("Great"), 93→1 finding (verified false positive); 15 giants split into ~60 modules; 663/663 tests + live click-through 2026-08-19 (see `054-react-doctor-cleanup.md`) |
 
 ## Code-done, awaiting batched manual smoke (`plans/SMOKE.md`)
 

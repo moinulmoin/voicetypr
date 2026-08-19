@@ -160,9 +160,7 @@ export function CrashReportDialog({
       setSubmitError(result.message || 'Failed to submit crash report. You can copy the details and send them manually.');
       toast.error(result.message || 'Failed to submit crash report. Please copy the details instead.');
     } finally {
-      if (actionId === actionIdRef.current) {
-        setIsSubmitting(false);
-      }
+      setIsSubmitting(false);
     }
   };
 
