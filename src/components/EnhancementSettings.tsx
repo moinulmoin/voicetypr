@@ -32,12 +32,6 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
-import {
-  Tabs,
-  TabsContent,
-  TabsList,
-  TabsTrigger,
-} from "@/components/ui/tabs";
 import { presetDisplayLabel, presetRequiresAiFormatting, type EnhancementPreset } from "@/types/ai";
 import type {
   AppFormattingRule,
@@ -47,13 +41,8 @@ import type {
   WritingSettings,
 } from "@/types/writing";
 import {
-  BookOpen,
   Globe,
   Plus,
-  Replace,
-  SlidersHorizontal,
-  Sparkles,
-  TextQuote,
   Trash2,
 } from "lucide-react";
 import { useState, type ReactNode } from "react";
@@ -780,75 +769,15 @@ export function EnhancementSettings({
     allowsSpecificFinalLanguage && finalTextLanguage !== "same_as_transcript";
 
   return (
-    <Tabs
-      defaultValue="provider"
-      className={disabled ? "flex flex-col gap-4 opacity-60" : "flex flex-col gap-4"}
+    <div
+      className={
+        disabled ? "flex flex-col gap-5 opacity-60" : "flex flex-col gap-5"
+      }
     >
-      <div className="border-b border-border/70">
-        <TabsList
-          variant="line"
-          aria-label="Polish settings"
-          className="grid h-auto w-full min-w-0 grid-cols-5 gap-0 overflow-hidden"
-        >
-          <TabsTrigger value="provider" aria-label="Provider" className="gap-2 px-3 py-2.5">
-            <Sparkles className="size-4" />
-            <span>Provider</span>
-          </TabsTrigger>
-          <TabsTrigger value="dictionary" aria-label="Dictionary" className="gap-2 px-3 py-2.5">
-            <BookOpen className="size-4" />
-            <span>Dictionary</span>
-          </TabsTrigger>
-          <TabsTrigger value="corrections" aria-label="Corrections" className="gap-2 px-3 py-2.5">
-            <Replace className="size-4" />
-            <span>Corrections</span>
-          </TabsTrigger>
-          <TabsTrigger value="snippets" aria-label="Snippets" className="gap-2 px-3 py-2.5">
-            <TextQuote className="size-4" />
-            <span>Snippets</span>
-          </TabsTrigger>
-          <TabsTrigger value="modes" aria-label="Modes" className="gap-2 px-3 py-2.5">
-            <SlidersHorizontal className="size-4" />
-            <span>Modes</span>
-          </TabsTrigger>
-        </TabsList>
-      </div>
+      <div className="flex min-w-0 max-w-4xl flex-col gap-5">
+        <section aria-label="Provider">{providerContent}</section>
 
-      <div className="min-w-0 max-w-4xl">
-        <TabsContent value="provider" className="mt-0">
-          {providerContent}
-        </TabsContent>
-
-        <TabsContent value="dictionary" className="mt-0">
-        <CustomWordEditor
-          customWords={writingSettings.custom_words}
-          disabled={writingSettingsDisabled}
-          onChange={(custom_words) =>
-            onWritingSettingsChange({ ...writingSettings, custom_words })
-          }
-        />
-      </TabsContent>
-
-        <TabsContent value="corrections" className="mt-0">
-        <ReplacementEditor
-          replacements={writingSettings.replacements}
-          disabled={writingSettingsDisabled}
-          onChange={(replacements) =>
-            onWritingSettingsChange({ ...writingSettings, replacements })
-          }
-        />
-      </TabsContent>
-
-        <TabsContent value="snippets" className="mt-0">
-        <SnippetEditor
-          snippets={writingSettings.snippets}
-          disabled={writingSettingsDisabled}
-          onChange={(snippets) =>
-            onWritingSettingsChange({ ...writingSettings, snippets })
-          }
-        />
-      </TabsContent>
-
-        <TabsContent value="modes" className="mt-0 flex flex-col gap-4">
+        <section aria-label="Modes" className="flex flex-col gap-5">
         <FieldSet className="rounded-xl border border-border/60 bg-card p-4">
           <FieldLegend className="mb-1">Default mode</FieldLegend>
           <FieldDescription className="mb-3">
@@ -946,8 +875,38 @@ export function EnhancementSettings({
             })
           }
         />
-      </TabsContent>
+        </section>
+
+        <section aria-label="Dictionary">
+          <CustomWordEditor
+            customWords={writingSettings.custom_words}
+            disabled={writingSettingsDisabled}
+            onChange={(custom_words) =>
+              onWritingSettingsChange({ ...writingSettings, custom_words })
+            }
+          />
+        </section>
+
+        <section aria-label="Corrections">
+          <ReplacementEditor
+            replacements={writingSettings.replacements}
+            disabled={writingSettingsDisabled}
+            onChange={(replacements) =>
+              onWritingSettingsChange({ ...writingSettings, replacements })
+            }
+          />
+        </section>
+
+        <section aria-label="Snippets">
+          <SnippetEditor
+            snippets={writingSettings.snippets}
+            disabled={writingSettingsDisabled}
+            onChange={(snippets) =>
+              onWritingSettingsChange({ ...writingSettings, snippets })
+            }
+          />
+        </section>
       </div>
-    </Tabs>
+    </div>
   );
 }

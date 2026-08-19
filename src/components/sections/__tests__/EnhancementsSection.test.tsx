@@ -331,10 +331,11 @@ function renderWithProviders() {
 }
 
 async function openPolishTab(
-  user: ReturnType<typeof userEvent.setup>,
+  _user: ReturnType<typeof userEvent.setup>,
   name: "Provider" | "Dictionary" | "Corrections" | "Snippets" | "Modes",
 ) {
-  await user.click(await screen.findByRole("tab", { name }));
+  // Sections are always rendered now — resolve the region for async settling.
+  await screen.findByRole("region", { name });
 }
 
 async function openModes(user: ReturnType<typeof userEvent.setup>) {
@@ -561,21 +562,21 @@ describe("EnhancementsSection", () => {
     });
   });
 
-  it("organizes Polish controls into task-led tabs", async () => {
+  it("organizes Polish controls into task-led sections", async () => {
     const user = userEvent.setup();
     renderWithProviders();
 
-    expect(await screen.findByRole("tab", { name: "Provider" })).toHaveAttribute("data-active");
+    expect(await screen.findByRole("region", { name: "Provider" })).toBeInTheDocument();
     expect(
       screen.getByRole("button", {
         name: "Select a provider to enable Polish",
       }),
     ).toBeInTheDocument();
-    expect(screen.getByRole("tab", { name: "Dictionary" })).toBeInTheDocument();
-    expect(screen.getByRole("tab", { name: "Corrections" })).toBeInTheDocument();
-    expect(screen.getByRole("tab", { name: "Snippets" })).toBeInTheDocument();
-    expect(screen.getByRole("tab", { name: "Modes" })).toBeInTheDocument();
-    expect(screen.queryByRole("tab", { name: "Style" })).not.toBeInTheDocument();
+    expect(screen.getByRole("region", { name: "Dictionary" })).toBeInTheDocument();
+    expect(screen.getByRole("region", { name: "Corrections" })).toBeInTheDocument();
+    expect(screen.getByRole("region", { name: "Snippets" })).toBeInTheDocument();
+    expect(screen.getByRole("region", { name: "Modes" })).toBeInTheDocument();
+    expect(screen.queryByRole("region", { name: "Style" })).not.toBeInTheDocument();
 
     await openModes(user);
     expect(await screen.findByText("Default mode")).toBeInTheDocument();
@@ -591,7 +592,7 @@ describe("EnhancementsSection", () => {
     expect(
       await screen.findByRole("combobox", { name: "Default mode" }),
     ).toBeInTheDocument();
-    expect(screen.queryByRole("tab", { name: "Style" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("region", { name: "Style" })).not.toBeInTheDocument();
   });
 
   it("shows cloud and local setup tabs when Polish is unconfigured", async () => {
@@ -1024,7 +1025,7 @@ describe("EnhancementsSection", () => {
         screen.queryByText("Connect an AI to turn on Polish"),
       ).not.toBeInTheDocument();
     });
-    expect(screen.getByRole("tab", { name: "Corrections" })).toBeInTheDocument();
+    expect(screen.getByRole("region", { name: "Corrections" })).toBeInTheDocument();
 
     const providersPanel = await getProviderSetupPanel();
     expect(
@@ -1253,7 +1254,7 @@ describe("EnhancementsSection", () => {
     const user = userEvent.setup();
     renderWithProviders();
 
-    expect(await screen.findByRole("tab", { name: "Provider" })).toHaveAttribute("data-active");
+    expect(await screen.findByRole("region", { name: "Provider" })).toBeInTheDocument();
     expect(
       screen.getByRole("button", {
         name: "Select a provider to enable Polish",
@@ -1271,7 +1272,7 @@ describe("EnhancementsSection", () => {
   it("does not render a context_policy control after the app-hint removal", async () => {
     renderWithProviders();
 
-    expect(await screen.findByRole("tab", { name: "Provider" })).toBeInTheDocument();
+    expect(await screen.findByRole("region", { name: "Provider" })).toBeInTheDocument();
     expect(
       screen.queryByRole("switch", { name: "Context-aware cleanup" }),
     ).not.toBeInTheDocument();
@@ -1285,8 +1286,8 @@ describe("EnhancementsSection", () => {
     expect(await screen.findByText("Words & names")).toBeInTheDocument();
     await openPolishTab(user, "Corrections");
     expect(
-      screen.getByRole("tab", { name: "Corrections" }),
-    ).toHaveAttribute("data-active");
+      screen.getByRole("region", { name: "Corrections" }),
+    ).toBeInTheDocument();
     await openPolishTab(user, "Snippets");
     expect(await screen.findByText("Saved text")).toBeInTheDocument();
   });
