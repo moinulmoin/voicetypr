@@ -79,8 +79,7 @@ export function useRecordingHotkey() {
             (b) =>
               b.enabled &&
               (b.action === "hold_to_record" || b.action === "toggle_recording") &&
-              (b.trigger_kind === "modifier_hold" ||
-                b.trigger_kind === "isolated_tap"),
+              (b.trigger_kind === "modifier_hold" || b.trigger_kind === "isolated_tap"),
           );
         const stableId = existingPrimary?.id ?? "onboarding-primary-hold";
         const newBinding: ShortcutBinding = holdToTalk

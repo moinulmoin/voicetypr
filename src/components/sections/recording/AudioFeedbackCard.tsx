@@ -20,9 +20,7 @@ export function AudioFeedbackCard() {
       <Field orientation="responsive" className="items-center gap-3">
         <FieldContent>
           <FieldLabel htmlFor="sound-on-recording">Recording started</FieldLabel>
-          <FieldDescription>
-            Play a sound when the microphone is ready for speech.
-          </FieldDescription>
+          <FieldDescription>Play a sound when the microphone is ready for speech.</FieldDescription>
         </FieldContent>
         <Switch
           id="sound-on-recording"
@@ -37,9 +35,7 @@ export function AudioFeedbackCard() {
 
       <Field orientation="responsive" className="items-center gap-3">
         <FieldContent>
-          <FieldLabel htmlFor="sound-on-transcription-complete">
-            Transcript ready
-          </FieldLabel>
+          <FieldLabel htmlFor="sound-on-transcription-complete">Transcript ready</FieldLabel>
           <FieldDescription>
             Play a sound after transcription and optional AI formatting finish.
           </FieldDescription>

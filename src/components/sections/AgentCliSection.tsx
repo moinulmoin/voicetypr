@@ -139,11 +139,9 @@ export function AgentCliSection() {
 
       <div className="space-y-4 rounded-lg border border-border/50 bg-card p-4">
         <p className="text-sm text-muted-foreground">
-          Run transcription from your terminal and let AI agents or scripts use the same
-          Voicetypr engine with the{" "}
-          <code className="rounded bg-muted px-1 py-0.5 font-mono text-[0.85em]">
-            voicetypr
-          </code>{" "}
+          Run transcription from your terminal and let AI agents or scripts use the same Voicetypr
+          engine with the{" "}
+          <code className="rounded bg-muted px-1 py-0.5 font-mono text-[0.85em]">voicetypr</code>{" "}
           CLI.
         </p>
 
@@ -182,8 +180,8 @@ export function AgentCliSection() {
               </div>
             </div>
             <div className="flex shrink-0 flex-wrap items-center justify-end gap-2">
-              {manageable && (
-                installed ? (
+              {manageable &&
+                (installed ? (
                   <>
                     <Button variant="outline" size="sm" onClick={repair} disabled={busy}>
                       {pending === "repair" && <Loader2 className="animate-spin" />}
@@ -199,8 +197,7 @@ export function AgentCliSection() {
                     {pending === "install" && <Loader2 className="animate-spin" />}
                     Install
                   </Button>
-                )
-              )}
+                ))}
               <Button
                 variant="ghost"
                 size="icon-sm"
@@ -238,8 +235,8 @@ export function AgentCliSection() {
               <div className="min-w-0 flex-1">
                 <p className="text-sm font-semibold">Give Voicetypr to your agent</p>
                 <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
-                  Works as a reusable instruction for Claude Code, Codex, OpenCode,
-                  OpenClaw, and other terminal-capable agents.
+                  Works as a reusable instruction for Claude Code, Codex, OpenCode, OpenClaw, and
+                  other terminal-capable agents.
                 </p>
               </div>
             </div>

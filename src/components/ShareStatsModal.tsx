@@ -11,10 +11,7 @@ import {
 } from "@/components/ui/dialog";
 import { createLogger } from "@/lib/logger";
 import { ShareStatsModalBody } from "./ShareStatsModalBody";
-import {
-  drawShareCard,
-  type ShareCardStats,
-} from "./shareCardRenderer";
+import { drawShareCard, type ShareCardStats } from "./shareCardRenderer";
 
 const log = createLogger("share-stats");
 
@@ -24,11 +21,7 @@ interface ShareStatsModalProps {
   stats: ShareCardStats;
 }
 
-export function ShareStatsModal({
-  open,
-  onOpenChange,
-  stats,
-}: ShareStatsModalProps) {
+export function ShareStatsModal({ open, onOpenChange, stats }: ShareStatsModalProps) {
   const [canvas, setCanvas] = useState<HTMLCanvasElement | null>(null);
   const [copied, setCopied] = useState(false);
   const [imageDataUrl, setImageDataUrl] = useState("");

@@ -74,11 +74,7 @@ export function CaptureControlsCard() {
               />
               {pendingBareModifier && (
                 <label className="flex cursor-pointer items-center gap-2 text-sm select-none">
-                  <Switch
-                    checked={holdToTalk}
-                    onCheckedChange={setHoldToTalk}
-                    id="hold-to-talk"
-                  />
+                  <Switch checked={holdToTalk} onCheckedChange={setHoldToTalk} id="hold-to-talk" />
                   <span>Hold to talk (push-to-talk)</span>
                 </label>
               )}
@@ -92,12 +88,7 @@ export function CaptureControlsCard() {
                   <Check className="h-3.5 w-3.5" />
                   Save
                 </Button>
-                <Button
-                  type="button"
-                  size="sm"
-                  variant="outline"
-                  onClick={handleCancelHotkey}
-                >
+                <Button type="button" size="sm" variant="outline" onClick={handleCancelHotkey}>
                   <X className="h-3.5 w-3.5" />
                   Cancel
                 </Button>
@@ -108,12 +99,7 @@ export function CaptureControlsCard() {
               <div className="flex min-h-9 items-center rounded-md border border-input bg-muted/30 px-3 text-sm">
                 {formatPrimaryHotkeyLabel(nativeBinding, settings.hotkey)}
               </div>
-              <Button
-                type="button"
-                size="sm"
-                variant="outline"
-                onClick={startEditing}
-              >
+              <Button type="button" size="sm" variant="outline" onClick={startEditing}>
                 <Edit2 className="h-3.5 w-3.5" />
                 Edit
               </Button>
@@ -155,9 +141,7 @@ export function CaptureControlsCard() {
                     await invoke("open_accessibility_settings");
                   } catch (error) {
                     log.error("Failed to open accessibility settings:", error);
-                    toast.error(
-                      "Could not open settings. Please open System Settings manually.",
-                    );
+                    toast.error("Could not open settings. Please open System Settings manually.");
                   }
                 }}
               >

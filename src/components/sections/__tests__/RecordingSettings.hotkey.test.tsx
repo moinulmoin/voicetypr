@@ -38,9 +38,7 @@ vi.mock("@/components/HotkeyInput", () => ({
   },
 }));
 
-const mockInvoke = vi.fn<
-  (cmd: string, args?: Record<string, unknown>) => Promise<unknown>
->();
+const mockInvoke = vi.fn<(cmd: string, args?: Record<string, unknown>) => Promise<unknown>>();
 
 vi.mock("@tauri-apps/api/core", () => ({
   invoke: (cmd: string, args?: Record<string, unknown>) => mockInvoke(cmd, args),

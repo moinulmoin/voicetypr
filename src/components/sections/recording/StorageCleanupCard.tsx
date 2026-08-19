@@ -39,12 +39,12 @@ export function StorageCleanupCard() {
         </FieldContent>
         <Select
           items={[
-              { value: "forever", label: "Keep forever" },
-              { value: "7", label: "7 days" },
-              { value: "14", label: "14 days" },
-              { value: "30", label: "30 days" },
-              { value: "90", label: "90 days" },
-            ]}
+            { value: "forever", label: "Keep forever" },
+            { value: "7", label: "7 days" },
+            { value: "14", label: "14 days" },
+            { value: "30", label: "30 days" },
+            { value: "90", label: "90 days" },
+          ]}
           value={
             settings.transcription_cleanup_days == null
               ? "forever"
@@ -53,8 +53,7 @@ export function StorageCleanupCard() {
           onValueChange={async (value) => {
             if (value == null) return;
             await updateSettings({
-              transcription_cleanup_days:
-                value === "forever" ? null : parseInt(value, 10),
+              transcription_cleanup_days: value === "forever" ? null : parseInt(value, 10),
             });
           }}
         >
@@ -78,7 +77,9 @@ export function StorageCleanupCard() {
         <FieldContent>
           <FieldTitle>Save recording audio</FieldTitle>
           <FieldDescription>
-            Keeps the original audio for re-transcription — including retrying a failed transcription from History — then automatically deletes it after your chosen period. With this off, failed recordings can't be retried.
+            Keeps the original audio for re-transcription — including retrying a failed
+            transcription from History — then automatically deletes it after your chosen period.
+            With this off, failed recordings can't be retried.
           </FieldDescription>
         </FieldContent>
         <div className="w-full md:w-auto">

@@ -33,9 +33,18 @@ export function RecordingGuideDialog() {
           </DialogDescription>
         </DialogHeader>
         <div className="flex flex-col gap-3 text-sm leading-6 text-muted-foreground">
-          <p><strong className="text-foreground">Capture</strong> controls the primary shortcut and microphone.</p>
-          <p><strong className="text-foreground">Feedback</strong> controls sounds and the recording indicator.</p>
-          <p><strong className="text-foreground">After recording</strong> controls insertion, saved audio, and cleanup.</p>
+          <p>
+            <strong className="text-foreground">Capture</strong> controls the primary shortcut and
+            microphone.
+          </p>
+          <p>
+            <strong className="text-foreground">Feedback</strong> controls sounds and the recording
+            indicator.
+          </p>
+          <p>
+            <strong className="text-foreground">After recording</strong> controls insertion, saved
+            audio, and cleanup.
+          </p>
         </div>
       </DialogContent>
     </Dialog>

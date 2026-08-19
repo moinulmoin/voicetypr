@@ -5,18 +5,9 @@ import { toast } from "sonner";
 import type { ScreenId } from "@/components/navigation";
 import { Sidebar } from "@/components/Sidebar";
 import { TabContainer } from "@/components/tabs/TabContainer";
-import {
-  Alert,
-  AlertAction,
-  AlertDescription,
-  AlertTitle,
-} from "@/components/ui/alert";
+import { Alert, AlertAction, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
-import {
-  SidebarInset,
-  SidebarProvider,
-  SidebarTrigger,
-} from "@/components/ui/sidebar";
+import { SidebarInset, SidebarProvider, SidebarTrigger } from "@/components/ui/sidebar";
 import { Spinner } from "@/components/ui/spinner";
 import { createLogger } from "@/lib/logger";
 import { isMacOS } from "@/lib/platform";
@@ -56,16 +47,13 @@ export function AppShell({ activeSection, onSectionChange }: AppShellProps) {
       }
     } catch (error) {
       log.error("Failed to retry tray creation:", error);
-      toast.error(
-        "Could not retry the menu-bar icon. Keep this window open and report the issue.",
-      );
+      toast.error("Could not retry the menu-bar icon. Keep this window open and report the issue.");
     } finally {
       setIsRetryingTray(false);
     }
   };
 
-  const trayUnavailable =
-    trayStatus !== null && !trayStatus.available && trayStatus.attempts > 0;
+  const trayUnavailable = trayStatus !== null && !trayStatus.available && trayStatus.attempts > 0;
 
   return (
     <SidebarProvider
@@ -88,19 +76,15 @@ export function AppShell({ activeSection, onSectionChange }: AppShellProps) {
           title="Toggle sidebar"
         />
       </header>
-      <Sidebar
-        activeSection={activeSection}
-        onSectionChange={onSectionChange}
-      />
+      <Sidebar activeSection={activeSection} onSectionChange={onSectionChange} />
       <SidebarInset className="mb-2 mr-2 mt-9 h-[calc(100svh-2.75rem)] min-h-0 min-w-0 overflow-hidden rounded-2xl bg-background">
         {trayUnavailable ? (
           <Alert variant="destructive" className="mx-4 mt-4">
             <CircleAlert />
             <AlertTitle>Menu-bar icon unavailable</AlertTitle>
             <AlertDescription>
-              Voicetypr could not create its menu-bar icon after{" "}
-              {trayStatus.attempts} attempts. Keep this window open, then retry
-              or submit a bug report with the included diagnostic.
+              Voicetypr could not create its menu-bar icon after {trayStatus.attempts} attempts.
+              Keep this window open, then retry or submit a bug report with the included diagnostic.
             </AlertDescription>
             <AlertAction>
               <Button

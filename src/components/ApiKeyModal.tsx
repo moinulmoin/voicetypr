@@ -1,6 +1,6 @@
-import { ExternalLink, Loader2 } from 'lucide-react';
-import React, { useState } from 'react';
-import { Button } from './ui/button';
+import { ExternalLink, Loader2 } from "lucide-react";
+import React, { useState } from "react";
+import { Button } from "./ui/button";
 import {
   Dialog,
   DialogContent,
@@ -8,9 +8,9 @@ import {
   DialogFooter,
   DialogHeader,
   DialogTitle,
-} from './ui/dialog';
-import { Input } from './ui/input';
-import { Label } from './ui/label';
+} from "./ui/dialog";
+import { Input } from "./ui/input";
+import { Label } from "./ui/label";
 
 interface ApiKeyModalProps {
   isOpen: boolean;
@@ -32,10 +32,10 @@ export function ApiKeyModal({
   isLoading = false,
   title,
   description,
-  submitLabel = 'Save API Key',
+  submitLabel = "Save API Key",
   docsUrl,
 }: ApiKeyModalProps) {
-  const [apiKey, setApiKey] = useState('');
+  const [apiKey, setApiKey] = useState("");
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -45,7 +45,7 @@ export function ApiKeyModal({
   };
 
   const handleClose = () => {
-    setApiKey('');
+    setApiKey("");
     onClose();
   };
 
@@ -55,20 +55,20 @@ export function ApiKeyModal({
   if (wasOpen !== isOpen) {
     setWasOpen(isOpen);
     if (!isOpen) {
-      setApiKey('');
+      setApiKey("");
     }
   }
 
   const getProviderDisplayName = () => {
     switch (providerName.toLowerCase()) {
-      case 'gemini':
-        return 'Gemini';
-      case 'openai':
-        return 'OpenAI';
-      case 'anthropic':
-        return 'Anthropic';
-      case 'soniox':
-        return 'Soniox';
+      case "gemini":
+        return "Gemini";
+      case "openai":
+        return "OpenAI";
+      case "anthropic":
+        return "Anthropic";
+      case "soniox":
+        return "Soniox";
       default:
         return providerName;
     }
@@ -76,16 +76,16 @@ export function ApiKeyModal({
 
   const getProviderUrl = () => {
     switch (providerName.toLowerCase()) {
-      case 'gemini':
-        return 'https://aistudio.google.com/apikey';
-      case 'openai':
-        return 'https://platform.openai.com/api-keys';
-      case 'anthropic':
-        return 'https://console.anthropic.com/settings/keys';
-      case 'soniox':
-        return 'https://soniox.com/docs/stt/get-started';
+      case "gemini":
+        return "https://aistudio.google.com/apikey";
+      case "openai":
+        return "https://platform.openai.com/api-keys";
+      case "anthropic":
+        return "https://console.anthropic.com/settings/keys";
+      case "soniox":
+        return "https://soniox.com/docs/stt/get-started";
       default:
-        return '';
+        return "";
     }
   };
 
@@ -102,9 +102,7 @@ export function ApiKeyModal({
         <form onSubmit={handleSubmit}>
           <DialogHeader>
             <DialogTitle>{resolvedTitle}</DialogTitle>
-            <DialogDescription>
-              {resolvedDescription}
-            </DialogDescription>
+            <DialogDescription>{resolvedDescription}</DialogDescription>
           </DialogHeader>
 
           <div className="grid gap-4 py-4">
@@ -137,18 +135,10 @@ export function ApiKeyModal({
           </div>
 
           <DialogFooter>
-            <Button
-              type="button"
-              variant="outline"
-              onClick={handleClose}
-              disabled={isLoading}
-            >
+            <Button type="button" variant="outline" onClick={handleClose} disabled={isLoading}>
               Cancel
             </Button>
-            <Button
-              type="submit"
-              disabled={!apiKey.trim() || isLoading}
-            >
+            <Button type="submit" disabled={!apiKey.trim() || isLoading}>
               {isLoading ? (
                 <>
                   <Loader2 className="h-4 w-4 animate-spin" />

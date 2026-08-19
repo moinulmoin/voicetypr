@@ -38,19 +38,14 @@ export function computeOverviewStats(
 
   const startOfWeek = new Date(now);
   startOfWeek.setDate(startOfWeek.getDate() - 7);
-  const todayCount = history.filter(
-    (item) => new Date(item.timestamp) >= startOfToday,
-  ).length;
-  const weekCount = history.filter(
-    (item) => new Date(item.timestamp) >= startOfWeek,
-  ).length;
+  const todayCount = history.filter((item) => new Date(item.timestamp) >= startOfToday).length;
+  const weekCount = history.filter((item) => new Date(item.timestamp) >= startOfWeek).length;
 
   const totalWords = history.reduce(
     (acc, item) => acc + item.text.split(/\s+/).filter(Boolean).length,
     0,
   );
-  const avgLength =
-    history.length > 0 ? Math.round(totalWords / history.length) : 0;
+  const avgLength = history.length > 0 ? Math.round(totalWords / history.length) : 0;
 
   const avgTypingSpeed = 40;
   const timeSavedMinutes = Math.round(totalWords / avgTypingSpeed);
@@ -68,9 +63,7 @@ export function computeOverviewStats(
     }).length;
     return {
       key: dayStart.getTime(),
-      label: dayStart
-        .toLocaleDateString(undefined, { weekday: "short" })
-        .slice(0, 3),
+      label: dayStart.toLocaleDateString(undefined, { weekday: "short" }).slice(0, 3),
       count,
     };
   });
@@ -96,10 +89,7 @@ export function computeOverviewStats(
       yesterday.setDate(yesterday.getDate() - 1);
 
       const mostRecentDay = sortedDays[0];
-      if (
-        mostRecentDay === today.getTime() ||
-        mostRecentDay === yesterday.getTime()
-      ) {
+      if (mostRecentDay === today.getTime() || mostRecentDay === yesterday.getTime()) {
         currentStreak = 1;
         for (let index = 1; index < sortedDays.length; index += 1) {
           const expectedDate = new Date(sortedDays[index - 1]);
@@ -147,8 +137,5 @@ export function useOverviewStats(
   history: TranscriptionHistory[],
   totalCount: number,
 ): OverviewStats {
-  return useMemo(
-    () => computeOverviewStats(history, totalCount),
-    [history, totalCount],
-  );
+  return useMemo(() => computeOverviewStats(history, totalCount), [history, totalCount]);
 }

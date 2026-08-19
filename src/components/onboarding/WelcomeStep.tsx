@@ -10,8 +10,8 @@ export function WelcomeStep({ onNext }: { onNext: () => void | Promise<void> }) 
             Welcome to Voicetypr
           </h1>
           <p className="mx-auto max-w-2xl text-base leading-7 text-muted-foreground">
-            Choose where transcription runs, confirm system access, and keep or change your
-            current recording hotkey.
+            Choose where transcription runs, confirm system access, and keep or change your current
+            recording hotkey.
           </p>
           <p className="text-sm text-muted-foreground">
             By continuing, you agree to our Terms and Privacy Policy.

@@ -1,7 +1,5 @@
 import { ApiKeyModal } from "@/components/ApiKeyModal";
-import {
-  SettingsCard,
-} from "@/components/settings/settings-ui";
+import { SettingsCard } from "@/components/settings/settings-ui";
 import { Cloud } from "lucide-react";
 import { CloudModelCard } from "./CloudModelCard";
 import type { CloudProvidersApi } from "./useCloudProviders";
@@ -51,10 +49,7 @@ interface CloudProvidersBlockProps extends CloudCardBindings {
   readyCloudModels: ModelEntry[];
 }
 
-export function CloudProvidersBlock({
-  readyCloudModels,
-  ...bindings
-}: CloudProvidersBlockProps) {
+export function CloudProvidersBlock({ readyCloudModels, ...bindings }: CloudProvidersBlockProps) {
   if (readyCloudModels.length === 0) return null;
 
   return (
@@ -87,10 +82,7 @@ interface CloudSetupGridProps extends CloudCardBindings {
   setupCloudModels: ModelEntry[];
 }
 
-export function CloudSetupGrid({
-  setupCloudModels,
-  ...bindings
-}: CloudSetupGridProps) {
+export function CloudSetupGrid({ setupCloudModels, ...bindings }: CloudSetupGridProps) {
   if (setupCloudModels.length === 0) return null;
   return <CloudModelGrid models={setupCloudModels} {...bindings} />;
 }
@@ -115,9 +107,7 @@ export function CloudApiKeyModal({ cloud }: { cloud: CloudProvidersApi }) {
           ? `Update your ${cloud.activeProvider.providerName} API key to keep cloud transcription running smoothly.`
           : `Enter your ${cloud.activeProvider.providerName} API key to enable cloud transcription. Your key is stored securely in the system keychain.`
       }
-      submitLabel={
-        cloud.cloudModal?.mode === "update" ? "Update API Key" : "Save API Key"
-      }
+      submitLabel={cloud.cloudModal?.mode === "update" ? "Update API Key" : "Save API Key"}
       docsUrl={cloud.activeProvider.docsUrl}
     />
   );

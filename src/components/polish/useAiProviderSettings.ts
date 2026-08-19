@@ -11,12 +11,7 @@ import type {
 } from "@/types/providers";
 import { toProviderConfig } from "@/types/providers";
 import { useAllProviderModels } from "@/hooks/useProviderModels";
-import {
-  getApiKey,
-  hasApiKey,
-  removeApiKey,
-  saveApiKey,
-} from "@/utils/keyring";
+import { getApiKey, hasApiKey, removeApiKey, saveApiKey } from "@/utils/keyring";
 import { getErrorMessage } from "@/utils/error";
 import { createLogger } from "@/lib/logger";
 import {
@@ -76,35 +71,22 @@ export function useAiProviderSettings({
   });
   const [aiModelNeedsReselection, setAiModelNeedsReselection] = useState(false);
   const [providers, setProviders] = useState<AIProviderConfig[]>([]);
-  const [providerApiKeys, setProviderApiKeys] = useState<
-    Record<string, boolean>
-  >({});
+  const [providerApiKeys, setProviderApiKeys] = useState<Record<string, boolean>>({});
   // Per-provider executable-resolution result for local agent CLIs.
-  const [agentCliStatus, setAgentCliStatus] = useState<
-    Record<string, AgentCliProbe>
-  >({});
-  const [agentCliProbing, setAgentCliProbing] = useState<
-    Record<string, boolean>
-  >({});
+  const [agentCliStatus, setAgentCliStatus] = useState<Record<string, AgentCliProbe>>({});
+  const [agentCliProbing, setAgentCliProbing] = useState<Record<string, boolean>>({});
   const agentCliProbingRef = useRef<Set<string>>(new Set());
 
   const [showApiKeyModal, setShowApiKeyModal] = useState(false);
   const [showOpenAIConfig, setShowOpenAIConfig] = useState(false);
-  const [openAIDefaultBaseUrl, setOpenAIDefaultBaseUrl] = useState(
-    "https://api.openai.com/v1",
-  );
+  const [openAIDefaultBaseUrl, setOpenAIDefaultBaseUrl] = useState("https://api.openai.com/v1");
   const [customModelName, setCustomModelName] = useState<string>("");
   const [selectedProvider, setSelectedProvider] = useState<string>("");
-  const [guidedSetupProvider, setGuidedSetupProvider] = useState<string | null>(
-    null,
-  );
+  const [guidedSetupProvider, setGuidedSetupProvider] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
 
   const probeAgentCli = useCallback(
-    async (
-      providerId: string,
-      refresh: boolean,
-    ): Promise<AgentCliProbe | null> => {
+    async (providerId: string, refresh: boolean): Promise<AgentCliProbe | null> => {
       if (agentCliProbingRef.current.has(providerId)) return null;
       agentCliProbingRef.current.add(providerId);
       setAgentCliProbing((prev) => ({ ...prev, [providerId]: true }));
@@ -130,13 +112,12 @@ export function useAiProviderSettings({
 
   const loadAISettings = useCallback(async () => {
     try {
-      const listedProviders = (
-        await invoke<AiProvider[]>("list_ai_providers")
-      ).map(toProviderConfig);
+      const listedProviders = (await invoke<AiProvider[]>("list_ai_providers")).map(
+        toProviderConfig,
+      );
       setProviders(listedProviders);
 
-      const loadedAISettingsResponse =
-        await invoke<AISettingsResponse>("get_ai_settings");
+      const loadedAISettingsResponse = await invoke<AISettingsResponse>("get_ai_settings");
       const loadedAISettings = normalizeAISettings(loadedAISettingsResponse);
       const customModel =
         loadedAISettings.modelsByProvider.custom ||
@@ -144,9 +125,7 @@ export function useAiProviderSettings({
       if (customModel) {
         setCustomModelName(customModel);
       }
-      setAiModelNeedsReselection(
-        Boolean(loadedAISettingsResponse.aiModelNeedsReselection),
-      );
+      setAiModelNeedsReselection(Boolean(loadedAISettingsResponse.aiModelNeedsReselection));
       setAISettings(loadedAISettings);
 
       if (isAgentCliProvider(loadedAISettings.provider)) {
@@ -157,45 +136,38 @@ export function useAiProviderSettings({
       const keyTasks: Promise<void>[] = [];
       for (const { id: providerId } of listedProviders) {
         if (isAgentCliProvider(providerId)) continue;
-        keyTasks.push((async () => {
-          let isConfigured = await hasApiKey(providerId);
+        keyTasks.push(
+          (async () => {
+            let isConfigured = await hasApiKey(providerId);
 
-          if (
-            (providerId === "custom" || providerId === "openai") &&
-            !isConfigured
-          ) {
-            try {
-              const providerSettings = normalizeAISettings(
-                await invoke<AISettingsResponse>(
-                  "get_ai_settings_for_provider",
-                  {
+            if ((providerId === "custom" || providerId === "openai") && !isConfigured) {
+              try {
+                const providerSettings = normalizeAISettings(
+                  await invoke<AISettingsResponse>("get_ai_settings_for_provider", {
                     provider: providerId,
-                  },
-                ),
-              );
-              isConfigured = providerSettings.hasApiKey;
-            } catch (error) {
-              log.error(
-                `Failed to resolve ${providerId} provider readiness:`,
-                error,
-              );
-            }
-          }
-
-          keyStatus[providerId] = isConfigured;
-          if (isConfigured) {
-            try {
-              const apiKey = await getApiKey(providerId);
-              if (apiKey) {
-                await invoke("cache_ai_api_key", {
-                  args: { provider: providerId, apiKey },
-                });
+                  }),
+                );
+                isConfigured = providerSettings.hasApiKey;
+              } catch (error) {
+                log.error(`Failed to resolve ${providerId} provider readiness:`, error);
               }
-            } catch (error) {
-              log.error(`Failed to cache ${providerId} API key:`, error);
             }
-          }
-        })());
+
+            keyStatus[providerId] = isConfigured;
+            if (isConfigured) {
+              try {
+                const apiKey = await getApiKey(providerId);
+                if (apiKey) {
+                  await invoke("cache_ai_api_key", {
+                    args: { provider: providerId, apiKey },
+                  });
+                }
+              } catch (error) {
+                log.error(`Failed to cache ${providerId} API key:`, error);
+              }
+            }
+          })(),
+        );
       }
       await Promise.all(keyTasks);
       setProviderApiKeys((prev) => ({ ...prev, ...keyStatus }));
@@ -212,12 +184,8 @@ export function useAiProviderSettings({
       }
 
       try {
-        const customConfig = await invoke<{ baseUrl: string }>(
-          "get_openai_config",
-        );
-        setOpenAIDefaultBaseUrl(
-          customConfig.baseUrl || "https://api.openai.com/v1",
-        );
+        const customConfig = await invoke<{ baseUrl: string }>("get_openai_config");
+        setOpenAIDefaultBaseUrl(customConfig.baseUrl || "https://api.openai.com/v1");
       } catch (error) {
         log.error("Failed to load custom config:", error);
       }
@@ -238,9 +206,7 @@ export function useAiProviderSettings({
     async (provider: AIProviderConfig) => {
       const probe = await probeAgentCli(provider.id, true);
       if (!probe) {
-        toast.info(
-          `${provider.name}: status refresh failed. Your previous selection was kept.`,
-        );
+        toast.info(`${provider.name}: status refresh failed. Your previous selection was kept.`);
         return;
       }
 
@@ -269,10 +235,7 @@ export function useAiProviderSettings({
         await invoke<AISettingsResponse>("get_ai_settings"),
       );
       setAISettings(loadedAISettings);
-      if (
-        loadedAISettings.provider &&
-        !isAgentCliProvider(loadedAISettings.provider)
-      ) {
+      if (loadedAISettings.provider && !isAgentCliProvider(loadedAISettings.provider)) {
         setProviderApiKeys((prev) => ({
           ...prev,
           [loadedAISettings.provider]: true,
@@ -288,8 +251,7 @@ export function useAiProviderSettings({
       if (!provider || provider === loadedAISettings.provider) {
         setAISettings(loadedAISettings);
       } else {
-        const rememberedModel =
-          loadedAISettings.modelsByProvider[provider] || "";
+        const rememberedModel = loadedAISettings.modelsByProvider[provider] || "";
         setAISettings({
           ...loadedAISettings,
           provider,
@@ -304,74 +266,64 @@ export function useAiProviderSettings({
       }
     });
 
-    const unlistenApiKeyRemoved = listen<{ provider: string }>(
-      "api-key-removed",
-      async (event) => {
-        let providerStillConfigured = false;
+    const unlistenApiKeyRemoved = listen<{ provider: string }>("api-key-removed", async (event) => {
+      let providerStillConfigured = false;
 
-        if (
-          event.payload.provider === "custom" ||
-          event.payload.provider === "openai"
-        ) {
-          try {
-            const providerSettings = normalizeAISettings(
-              await invoke<AISettingsResponse>("get_ai_settings_for_provider", {
-                provider: event.payload.provider,
-              }),
-            );
-            providerStillConfigured = providerSettings.hasApiKey;
-            setProviderApiKeys((prev) => ({
-              ...prev,
-              [event.payload.provider]: providerStillConfigured,
-            }));
-          } catch (error) {
-            log.error(
-              `Failed to refresh ${event.payload.provider} provider readiness after key removal:`,
-              error,
-            );
-            setProviderApiKeys((prev) => ({
-              ...prev,
-              [event.payload.provider]: false,
-            }));
-          }
-        } else {
+      if (event.payload.provider === "custom" || event.payload.provider === "openai") {
+        try {
+          const providerSettings = normalizeAISettings(
+            await invoke<AISettingsResponse>("get_ai_settings_for_provider", {
+              provider: event.payload.provider,
+            }),
+          );
+          providerStillConfigured = providerSettings.hasApiKey;
+          setProviderApiKeys((prev) => ({
+            ...prev,
+            [event.payload.provider]: providerStillConfigured,
+          }));
+        } catch (error) {
+          log.error(
+            `Failed to refresh ${event.payload.provider} provider readiness after key removal:`,
+            error,
+          );
           setProviderApiKeys((prev) => ({
             ...prev,
             [event.payload.provider]: false,
           }));
         }
+      } else {
+        setProviderApiKeys((prev) => ({
+          ...prev,
+          [event.payload.provider]: false,
+        }));
+      }
 
-        clearModels(event.payload.provider);
+      clearModels(event.payload.provider);
 
-        const isCurrentProviderRemoved =
-          aiSettings.provider === event.payload.provider &&
-          !providerStillConfigured;
+      const isCurrentProviderRemoved =
+        aiSettings.provider === event.payload.provider && !providerStillConfigured;
 
-        if (isCurrentProviderRemoved) {
-          setAISettings((prev) => ({
-            ...prev,
-            enabled: false,
-            provider: "",
-            model: "",
-            hasApiKey: false,
-          }));
+      if (isCurrentProviderRemoved) {
+        setAISettings((prev) => ({
+          ...prev,
+          enabled: false,
+          provider: "",
+          model: "",
+          hasApiKey: false,
+        }));
 
-          await invoke("update_ai_settings", {
-            enabled: false,
-            provider: "",
-            model: "",
-          });
-          await onActiveProviderCleared();
-        }
-      },
-    );
+        await invoke("update_ai_settings", {
+          enabled: false,
+          provider: "",
+          model: "",
+        });
+        await onActiveProviderCleared();
+      }
+    });
 
-    const unlistenAiEnabledChanged = listen<boolean>(
-      "ai-enabled-changed",
-      (event) => {
-        setAISettings((prev) => ({ ...prev, enabled: event.payload }));
-      },
-    );
+    const unlistenAiEnabledChanged = listen<boolean>("ai-enabled-changed", (event) => {
+      setAISettings((prev) => ({ ...prev, enabled: event.payload }));
+    });
 
     return () => {
       Promise.all([
@@ -383,12 +335,7 @@ export function useAiProviderSettings({
         fns.forEach((fn) => fn());
       });
     };
-  }, [
-    settingsLoaded,
-    aiSettings.provider,
-    clearModels,
-    onActiveProviderCleared,
-  ]);
+  }, [settingsLoaded, aiSettings.provider, clearModels, onActiveProviderCleared]);
 
   const getDisplayModels = useCallback(
     (providerId: string): AIProviderModel[] => {
@@ -412,16 +359,10 @@ export function useAiProviderSettings({
 
     if (!cachedModels.some((model) => model.recommended)) {
       const fetchedModels = await fetchModels(providerId);
-      models =
-        fetchedModels?.length > 0
-          ? fetchedModels
-          : getDisplayModels(providerId);
+      models = fetchedModels?.length > 0 ? fetchedModels : getDisplayModels(providerId);
     }
     if (isAgentCliProvider(providerId)) {
-      return (
-        models.find((model) => model.cliDefault) ??
-        fallbackAgentCliDefault(providerId)
-      );
+      return models.find((model) => model.cliDefault) ?? fallbackAgentCliDefault(providerId);
     }
 
     return models.find((model) => model.recommended) ?? null;
@@ -474,11 +415,7 @@ export function useAiProviderSettings({
       return false;
     }
 
-    await enablePolishForProviderModel(
-      providerId,
-      recommendedModel.id,
-      modelsByProvider,
-    );
+    await enablePolishForProviderModel(providerId, recommendedModel.id, modelsByProvider);
     toast.success("Polish on");
     return true;
   };
@@ -488,8 +425,7 @@ export function useAiProviderSettings({
 
     if (
       enabled &&
-      (!hasActiveProviderKey ||
-        (!aiSettings.model && !isAgentCliProvider(aiSettings.provider)))
+      (!hasActiveProviderKey || (!aiSettings.model && !isAgentCliProvider(aiSettings.provider)))
     ) {
       toast.error("Polish is not set up yet. Connect an AI to turn it on.");
       return;
@@ -525,9 +461,7 @@ export function useAiProviderSettings({
           }),
         ]);
         const providerSettings = normalizeAISettings(providerSettingsResponse);
-        setOpenAIDefaultBaseUrl(
-          savedConfig.baseUrl || "https://api.openai.com/v1",
-        );
+        setOpenAIDefaultBaseUrl(savedConfig.baseUrl || "https://api.openai.com/v1");
         if (providerSettings.model) {
           setCustomModelName(providerSettings.model);
         }
@@ -560,10 +494,7 @@ export function useAiProviderSettings({
       setProviderApiKeys((prev) => ({ ...prev, [selectedProvider]: true }));
 
       if (shouldAutoEnable) {
-        const didEnable = await enableGuidedProvider(
-          selectedProvider,
-          modelsByProvider,
-        );
+        const didEnable = await enableGuidedProvider(selectedProvider, modelsByProvider);
         if (!didEnable) {
           setAISettings((prev) => ({
             ...prev,
@@ -654,10 +585,7 @@ export function useAiProviderSettings({
     }
   };
 
-  const handleSelectReasoning = async (
-    providerId: string,
-    reasoning: string,
-  ) => {
+  const handleSelectReasoning = async (providerId: string, reasoning: string) => {
     try {
       await invoke("update_agent_cli_reasoning", {
         provider: providerId,
@@ -676,10 +604,7 @@ export function useAiProviderSettings({
     }
   };
 
-  const handleToggleFastMode = async (
-    providerId: string,
-    enabled: boolean,
-  ) => {
+  const handleToggleFastMode = async (providerId: string, enabled: boolean) => {
     try {
       await invoke("update_agent_cli_fast_mode", {
         provider: providerId,

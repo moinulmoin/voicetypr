@@ -41,10 +41,15 @@ export function useRecentRecordings({
       const candidates = history.filter((item) => item.recording_file);
       const results = await Promise.all(
         candidates.map(async (item) => {
-          log.debug("[RecentRecordings] Checking recording:", item.recording_file, "for item:", item.id);
+          log.debug(
+            "[RecentRecordings] Checking recording:",
+            item.recording_file,
+            "for item:",
+            item.id,
+          );
           try {
             const exists = await invoke<boolean>("check_recording_exists", {
-              filename: item.recording_file
+              filename: item.recording_file,
             });
             log.debug("[RecentRecordings] Recording", item.recording_file, "exists:", exists);
             return { id: item.id, exists };
@@ -64,7 +69,12 @@ export function useRecentRecordings({
           verified.add(result.id);
         }
       }
-      log.debug("[RecentRecordings] Verification complete. Items with recording_file:", candidates.length, "Verified:", verified.size);
+      log.debug(
+        "[RecentRecordings] Verification complete. Items with recording_file:",
+        candidates.length,
+        "Verified:",
+        verified.size,
+      );
       setCheckedRecordings(checked);
       setVerifiedRecordings(verified);
     };
@@ -87,10 +97,11 @@ export function useRecentRecordings({
     const structural = applyHistoryFilters(history, sourceFilter, appFilter, dateFilter);
     if (!searchQuery.trim()) return structural;
     const q = searchQuery.trim().toLowerCase();
-    return structural.filter(item =>
-      item.text.toLowerCase().includes(q) ||
-      (item.model && item.model.toLowerCase().includes(q)) ||
-      (item.model && (getModelDisplayName(item.model) ?? '').toLowerCase().includes(q)),
+    return structural.filter(
+      (item) =>
+        item.text.toLowerCase().includes(q) ||
+        (item.model && item.model.toLowerCase().includes(q)) ||
+        (item.model && (getModelDisplayName(item.model) ?? "").toLowerCase().includes(q)),
     );
   }, [history, searchQuery, sourceFilter, appFilter, dateFilter]);
 
@@ -101,7 +112,7 @@ export function useRecentRecordings({
     const yesterday = new Date(today);
     yesterday.setDate(yesterday.getDate() - 1);
 
-    filteredHistory.slice(0, visibleCount).forEach(item => {
+    filteredHistory.slice(0, visibleCount).forEach((item) => {
       const itemDate = new Date(item.timestamp);
       itemDate.setHours(0, 0, 0, 0);
 
@@ -111,11 +122,11 @@ export function useRecentRecordings({
       } else if (itemDate.getTime() === yesterday.getTime()) {
         groupKey = "Yesterday";
       } else {
-        groupKey = itemDate.toLocaleDateString('en-US', {
-          weekday: 'long',
-          month: 'short',
-          day: 'numeric',
-          year: itemDate.getFullYear() !== today.getFullYear() ? 'numeric' : undefined
+        groupKey = itemDate.toLocaleDateString("en-US", {
+          weekday: "long",
+          month: "short",
+          day: "numeric",
+          year: itemDate.getFullYear() !== today.getFullYear() ? "numeric" : undefined,
         });
       }
       if (!groups[groupKey]) {
@@ -128,9 +139,13 @@ export function useRecentRecordings({
   }, [filteredHistory, visibleCount]);
 
   const toggleShowOriginal = useCallback((id: string) => {
-    setShowOriginalIds(prev => {
+    setShowOriginalIds((prev) => {
       const next = new Set(prev);
-      if (next.has(id)) { next.delete(id); } else { next.add(id); }
+      if (next.has(id)) {
+        next.delete(id);
+      } else {
+        next.add(id);
+      }
       return next;
     });
   }, []);

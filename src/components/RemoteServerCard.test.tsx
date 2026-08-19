@@ -34,7 +34,6 @@ function createMockServer(overrides: Partial<SavedConnection> = {}): SavedConnec
   };
 }
 
-
 function createMockRemoteControl(overrides: Record<string, unknown> = {}) {
   return {
     current: {
@@ -109,7 +108,7 @@ describe("RemoteServerCard", () => {
             onSelect={mockOnSelect}
             onRemove={mockOnRemove}
             onEdit={mockOnEdit}
-          />
+          />,
         );
       });
 
@@ -128,7 +127,7 @@ describe("RemoteServerCard", () => {
             onSelect={mockOnSelect}
             onRemove={mockOnRemove}
             onEdit={mockOnEdit}
-          />
+          />,
         );
       });
 
@@ -146,12 +145,14 @@ describe("RemoteServerCard", () => {
             onSelect={mockOnSelect}
             onRemove={mockOnRemove}
             onEdit={mockOnEdit}
-          />
+          />,
         );
       });
 
       expect(screen.getByRole("button", { name: "Edit 192.168.1.100:47842" })).toBeInTheDocument();
-      expect(screen.getByRole("button", { name: "Remove 192.168.1.100:47842" })).toBeInTheDocument();
+      expect(
+        screen.getByRole("button", { name: "Remove 192.168.1.100:47842" }),
+      ).toBeInTheDocument();
     });
   });
 
@@ -171,7 +172,7 @@ describe("RemoteServerCard", () => {
             onSelect={mockOnSelect}
             onRemove={mockOnRemove}
             onEdit={mockOnEdit}
-          />
+          />,
         );
       });
 
@@ -191,7 +192,7 @@ describe("RemoteServerCard", () => {
             onSelect={mockOnSelect}
             onRemove={mockOnRemove}
             onEdit={mockOnEdit}
-          />
+          />,
         );
       });
 
@@ -212,7 +213,7 @@ describe("RemoteServerCard", () => {
             onSelect={mockOnSelect}
             onRemove={mockOnRemove}
             onEdit={mockOnEdit}
-          />
+          />,
         );
       });
 
@@ -232,7 +233,7 @@ describe("RemoteServerCard", () => {
             onSelect={mockOnSelect}
             onRemove={mockOnRemove}
             onEdit={mockOnEdit}
-          />
+          />,
         );
       });
 
@@ -252,7 +253,7 @@ describe("RemoteServerCard", () => {
             onSelect={mockOnSelect}
             onRemove={mockOnRemove}
             onEdit={mockOnEdit}
-          />
+          />,
         );
       });
 
@@ -281,7 +282,7 @@ describe("RemoteServerCard", () => {
             onSelect={mockOnSelect}
             onRemove={mockOnRemove}
             onEdit={mockOnEdit}
-          />
+          />,
         );
       });
 
@@ -302,7 +303,7 @@ describe("RemoteServerCard", () => {
             onDeselect={mockOnDeselect}
             onRemove={mockOnRemove}
             onEdit={mockOnEdit}
-          />
+          />,
         );
       });
 
@@ -321,7 +322,7 @@ describe("RemoteServerCard", () => {
             onSelect={mockOnSelect}
             onRemove={mockOnRemove}
             onEdit={mockOnEdit}
-          />
+          />,
         );
       });
 
@@ -349,7 +350,7 @@ describe("RemoteServerCard", () => {
             onSelect={mockOnSelect}
             onRemove={mockOnRemove}
             onEdit={mockOnEdit}
-          />
+          />,
         );
       });
 
@@ -376,7 +377,7 @@ describe("RemoteServerCard", () => {
             onSelect={mockOnSelect}
             onRemove={mockOnRemove}
             onEdit={mockOnEdit}
-          />
+          />,
         );
       });
 
@@ -404,7 +405,7 @@ describe("RemoteServerCard", () => {
             onDeselect={mockOnDeselect}
             onRemove={mockOnRemove}
             onEdit={mockOnEdit}
-          />
+          />,
         );
       });
 
@@ -429,7 +430,7 @@ describe("RemoteServerCard", () => {
             onDeselect={mockOnDeselect}
             onRemove={mockOnRemove}
             onEdit={mockOnEdit}
-          />
+          />,
         );
       });
 
@@ -452,7 +453,7 @@ describe("RemoteServerCard", () => {
             onSelect={mockOnSelect}
             onRemove={mockOnRemove}
             onEdit={mockOnEdit}
-          />
+          />,
         );
       });
 
@@ -477,7 +478,7 @@ describe("RemoteServerCard", () => {
             onSelect={mockOnSelect}
             onRemove={mockOnRemove}
             onEdit={mockOnEdit}
-          />
+          />,
         );
       });
 
@@ -500,7 +501,7 @@ describe("RemoteServerCard", () => {
             onSelect={mockOnSelect}
             onRemove={mockOnRemove}
             onEdit={mockOnEdit}
-          />
+          />,
         );
       });
 
@@ -530,7 +531,7 @@ describe("RemoteServerCard", () => {
             onSelect={mockOnSelect}
             onRemove={mockOnRemove}
             onEdit={mockOnEdit}
-          />
+          />,
         );
       });
 
@@ -564,7 +565,7 @@ describe("RemoteServerCard", () => {
             onSelect={mockOnSelect}
             onRemove={mockOnRemove}
             onEdit={mockOnEdit}
-          />
+          />,
         );
       });
 
@@ -597,7 +598,7 @@ describe("RemoteServerCard", () => {
             onSelect={mockOnSelect}
             onRemove={mockOnRemove}
             onEdit={mockOnEdit}
-          />
+          />,
         );
       });
 
@@ -615,7 +616,7 @@ describe("RemoteServerCard", () => {
             onSelect={mockOnSelect}
             onRemove={mockOnRemove}
             onEdit={mockOnEdit}
-          />
+          />,
         );
       });
 
@@ -657,7 +658,7 @@ describe("RemoteServerCard", () => {
             onRemove={mockOnRemove}
             onEdit={mockOnEdit}
             onServerUpdated={mockOnServerUpdated}
-          />
+          />,
         );
       });
 
@@ -669,7 +670,9 @@ describe("RemoteServerCard", () => {
 
       expect(screen.getByText("Transcription model on 192.168.1.100:47842")).toBeInTheDocument();
       expect(
-        screen.getByText("Changes the host's shared transcription model, not this device's local model."),
+        screen.getByText(
+          "Changes the host's shared transcription model, not this device's local model.",
+        ),
       ).toBeInTheDocument();
       expect(
         screen.getByRole("combobox", { name: "Transcription model on 192.168.1.100:47842" }),
@@ -696,7 +699,7 @@ describe("RemoteServerCard", () => {
             onSelect={mockOnSelect}
             onRemove={mockOnRemove}
             onEdit={mockOnEdit}
-          />
+          />,
         );
       });
 
@@ -709,13 +712,10 @@ describe("RemoteServerCard", () => {
       });
     });
 
-
     it("shows quiet unavailable copy when host disabled remote model control", async () => {
       mockInvoke.mockImplementation((command: string) => {
         if (command === "get_remote_transcription_control") {
-          return Promise.reject(
-            new Error("Remote model control is disabled on this device."),
-          );
+          return Promise.reject(new Error("Remote model control is disabled on this device."));
         }
         return Promise.reject(new Error(`Unknown command: ${command}`));
       });
@@ -730,7 +730,7 @@ describe("RemoteServerCard", () => {
             onSelect={mockOnSelect}
             onRemove={mockOnRemove}
             onEdit={mockOnEdit}
-          />
+          />,
         );
       });
 
@@ -759,7 +759,7 @@ describe("RemoteServerCard", () => {
             onSelect={mockOnSelect}
             onRemove={mockOnRemove}
             onEdit={mockOnEdit}
-          />
+          />,
         );
       });
 
@@ -782,7 +782,7 @@ describe("RemoteServerCard", () => {
             onSelect={mockOnSelect}
             onRemove={mockOnRemove}
             onEdit={mockOnEdit}
-          />
+          />,
         );
       });
 
@@ -801,13 +801,15 @@ describe("RemoteServerCard", () => {
           return Promise.resolve(createMockRemoteControl());
         }
         if (command === "update_remote_transcription_control") {
-          return Promise.resolve(createMockRemoteControl({
-            current: {
-              id: "base.en",
-              display_name: "Base English",
-              engine: "whisper",
-            },
-          }));
+          return Promise.resolve(
+            createMockRemoteControl({
+              current: {
+                id: "base.en",
+                display_name: "Base English",
+                engine: "whisper",
+              },
+            }),
+          );
         }
         return Promise.reject(new Error(`Unknown command: ${command}`));
       });
@@ -823,7 +825,7 @@ describe("RemoteServerCard", () => {
             onRemove={mockOnRemove}
             onEdit={mockOnEdit}
             onServerUpdated={mockOnServerUpdated}
-          />
+          />,
         );
       });
 
@@ -866,7 +868,7 @@ describe("RemoteServerCard", () => {
             onSelect={mockOnSelect}
             onRemove={mockOnRemove}
             onEdit={mockOnEdit}
-          />
+          />,
         );
       });
 
@@ -879,5 +881,4 @@ describe("RemoteServerCard", () => {
       expect(mockOnEdit).toHaveBeenCalledWith(server);
     });
   });
-
 });

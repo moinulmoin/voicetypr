@@ -32,15 +32,12 @@ const log = createLogger("recording-settings");
 
 export function TranscriptionPerformanceCard() {
   const { settings, updateSettings } = useSettings();
-  const [accelerationStatus, setAccelerationStatus] =
-    useState<AccelerationStatus | null>(null);
+  const [accelerationStatus, setAccelerationStatus] = useState<AccelerationStatus | null>(null);
   const [testingAcceleration, setTestingAcceleration] = useState(false);
 
   const loadAccelerationStatus = useCallback(async () => {
     try {
-      const status = await invoke<AccelerationStatus>(
-        "get_transcription_acceleration_status",
-      );
+      const status = await invoke<AccelerationStatus>("get_transcription_acceleration_status");
       if (isAccelerationStatus(status)) {
         setAccelerationStatus(status);
       }
@@ -70,9 +67,7 @@ export function TranscriptionPerformanceCard() {
   const handleTestAcceleration = async () => {
     setTestingAcceleration(true);
     try {
-      const status = await invoke<AccelerationStatus>(
-        "test_transcription_acceleration",
-      );
+      const status = await invoke<AccelerationStatus>("test_transcription_acceleration");
       if (isAccelerationStatus(status)) {
         setAccelerationStatus(status);
         if (status.gpu_available === true) {
@@ -102,16 +97,20 @@ export function TranscriptionPerformanceCard() {
         <FieldContent>
           <FieldTitle>Acceleration</FieldTitle>
           <FieldDescription>
-            {(settings.transcription_acceleration ?? 'auto') === 'auto'
-              ? 'Use GPU when available, fall back to CPU (recommended)'
-              : (settings.transcription_acceleration ?? 'auto') === 'gpu'
-                ? 'Always use the GPU'
-                : 'Always use the CPU'}
+            {(settings.transcription_acceleration ?? "auto") === "auto"
+              ? "Use GPU when available, fall back to CPU (recommended)"
+              : (settings.transcription_acceleration ?? "auto") === "gpu"
+                ? "Always use the GPU"
+                : "Always use the CPU"}
           </FieldDescription>
         </FieldContent>
         <Select
-          items={[{ value: 'auto', label: 'Auto' }, { value: 'gpu', label: 'GPU' }, { value: 'cpu', label: 'CPU' }]}
-          value={settings.transcription_acceleration ?? 'auto'}
+          items={[
+            { value: "auto", label: "Auto" },
+            { value: "gpu", label: "GPU" },
+            { value: "cpu", label: "CPU" },
+          ]}
+          value={settings.transcription_acceleration ?? "auto"}
           onValueChange={(value) => {
             if (value != null) void handleAccelerationChange(value);
           }}
@@ -139,8 +138,7 @@ export function TranscriptionPerformanceCard() {
                   : "Acceleration status"}
           </p>
           <p className="text-xs text-muted-foreground">
-            {accelerationStatus?.message ??
-              "Voicetypr will test GPU acceleration when needed."}
+            {accelerationStatus?.message ?? "Voicetypr will test GPU acceleration when needed."}
           </p>
           {accelerationStatus?.diagnostic_code !== "ready" && (
             <p className="text-xs text-muted-foreground">

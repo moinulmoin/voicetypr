@@ -60,9 +60,7 @@ const soniox: CloudModelInfo = {
   kind: "cloud",
   requires_setup: false,
   underlying_model: "stt-async-v5",
-  available_models: [
-    { id: "stt-async-v5", display_name: "Soniox v5" },
-  ],
+  available_models: [{ id: "stt-async-v5", display_name: "Soniox v5" }],
 };
 
 function renderModels(overrides: Partial<Parameters<typeof ModelsSection>[0]> = {}) {
@@ -91,10 +89,7 @@ describe("ModelsSection cloud model labels", () => {
     vi.clearAllMocks();
     vi.mocked(listen).mockResolvedValue(vi.fn());
     vi.mocked(invoke).mockImplementation((command) => {
-      if (
-        command === "list_remote_servers" ||
-        command === "discover_remote_servers"
-      ) {
+      if (command === "list_remote_servers" || command === "discover_remote_servers") {
         return Promise.resolve([]);
       }
       if (command === "get_active_remote_server") return Promise.resolve(null);
@@ -127,9 +122,7 @@ describe("ModelsSection cloud model labels", () => {
     expect(screen.getAllByText("Spoken language")).toHaveLength(1);
 
     await user.click(screen.getByRole("tab", { name: "Remote (0)" }));
-    expect(
-      await screen.findByText("No remote Voicetyprs configured"),
-    ).toBeInTheDocument();
+    expect(await screen.findByText("No remote Voicetyprs configured")).toBeInTheDocument();
     await user.click(screen.getByRole("tab", { name: "Local (0)" }));
 
     expect(props.onSelect).not.toHaveBeenCalled();

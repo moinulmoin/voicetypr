@@ -27,11 +27,7 @@ export function ActivateLicenseCard({
     >
       <div className="mt-4 space-y-4">
         <div className="flex gap-2">
-          <Button
-            onClick={onPurchase}
-            className="flex-1"
-            size="sm"
-          >
+          <Button onClick={onPurchase} className="flex-1" size="sm">
             <Crown className="mr-1.5 h-3.5 w-3.5" />
             Buy License
           </Button>
@@ -53,18 +49,14 @@ export function ActivateLicenseCard({
               value={licenseKey}
               onChange={(e) => onLicenseKeyChange(e.target.value)}
               onKeyDown={(e) => {
-                if (e.key === 'Enter') {
+                if (e.key === "Enter") {
                   onActivate();
                 }
               }}
               className="flex-1 text-sm"
             />
-            <Button
-              onClick={onActivate}
-              disabled={!licenseKey.trim() || isActivating}
-              size="sm"
-            >
-              {isActivating ? 'Activating...' : 'Activate'}
+            <Button onClick={onActivate} disabled={!licenseKey.trim() || isActivating} size="sm">
+              {isActivating ? "Activating..." : "Activate"}
             </Button>
           </div>
           <p className="text-xs text-muted-foreground">

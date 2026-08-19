@@ -31,13 +31,7 @@ type ListeningStyle = CSSProperties & {
   "--listening-max": string;
 };
 
-function ListeningWave({
-  active,
-  audioLevel,
-}: {
-  active: boolean;
-  audioLevel: number;
-}) {
+function ListeningWave({ active, audioLevel }: { active: boolean; audioLevel: number }) {
   return (
     <div
       className="flex items-center justify-center"
@@ -116,10 +110,7 @@ function PolishingSparkles() {
   );
 }
 
-export function PillActivityIndicator({
-  state,
-  audioLevel = 0,
-}: PillActivityIndicatorProps) {
+export function PillActivityIndicator({ state, audioLevel = 0 }: PillActivityIndicatorProps) {
   const level = Math.max(0, Math.min(1, audioLevel));
   let visual: ReactNode;
 
@@ -128,9 +119,7 @@ export function PillActivityIndicator({
   } else if (state === "formatting") {
     visual = <PolishingSparkles />;
   } else {
-    visual = (
-      <ListeningWave active={state === "listening"} audioLevel={level} />
-    );
+    visual = <ListeningWave active={state === "listening"} audioLevel={level} />;
   }
 
   return (

@@ -9,19 +9,12 @@ import { Input } from "@/components/ui/input";
 import { Spinner } from "@/components/ui/spinner";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import type { AISettings } from "@/types/ai";
-import type {
-  AIProviderConfig,
-  AIProviderModel,
-  AgentCliProbe,
-} from "@/types/providers";
+import type { AIProviderConfig, AIProviderModel, AgentCliProbe } from "@/types/providers";
 import { Search } from "lucide-react";
 import { isAgentCliProvider, modelMatchesQuery } from "./agentCli";
 import { AgentProviderRow } from "./AgentProviderRow";
 import { CloudProviderRow } from "./CloudProviderRow";
-import {
-  buildProviderRowViewModel,
-  type ProviderRowProps,
-} from "./providerRowShared";
+import { buildProviderRowViewModel, type ProviderRowProps } from "./providerRowShared";
 import type { ProviderTab } from "./useAiProviderSettings";
 
 export interface ProviderSetupDialogProps {
@@ -79,8 +72,8 @@ export function ProviderSetupDialog(props: ProviderSetupDialogProps) {
     fetchModels,
     getError,
     getDisplayModels,
-  showGuidedSetup,
-  showAiModelReselectionNotice,
+    showGuidedSetup,
+    showAiModelReselectionNotice,
     providerTab,
     setProviderTab,
     providerSearch,
@@ -96,25 +89,18 @@ export function ProviderSetupDialog(props: ProviderSetupDialogProps) {
   const providerQuery = providerSearch.trim().toLowerCase();
   const filteredProviders = providers.filter((provider) => {
     const matchesTab =
-      providerTab === "local"
-        ? isAgentCliProvider(provider.id)
-        : !isAgentCliProvider(provider.id);
+      providerTab === "local" ? isAgentCliProvider(provider.id) : !isAgentCliProvider(provider.id);
     if (!matchesTab) return false;
     if (providerTab === "local" || !providerQuery) return true;
 
     return (
       provider.name.toLowerCase().includes(providerQuery) ||
-      (provider.isCustom &&
-        customModelName.toLowerCase().includes(providerQuery)) ||
-      getDisplayModels(provider.id).some((model) =>
-        modelMatchesQuery(model, providerQuery),
-      )
+      (provider.isCustom && customModelName.toLowerCase().includes(providerQuery)) ||
+      getDisplayModels(provider.id).some((model) => modelMatchesQuery(model, providerQuery))
     );
   });
 
-  const hasLoadingProviders = providers.some((provider) =>
-    isModelsLoading(provider.id),
-  );
+  const hasLoadingProviders = providers.some((provider) => isModelsLoading(provider.id));
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -125,15 +111,13 @@ export function ProviderSetupDialog(props: ProviderSetupDialogProps) {
         <DialogHeader>
           <DialogTitle>Choose provider &amp; model</DialogTitle>
           <DialogDescription id="provider-setup-description">
-            Use your own cloud API key or an agent already installed on this
-            Mac.
+            Use your own cloud API key or an agent already installed on this Mac.
           </DialogDescription>
         </DialogHeader>
 
         {showAiModelReselectionNotice && (
           <div className="rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-700 dark:text-amber-300">
-            Your previous model is unavailable. Choose another model to
-            continue.
+            Your previous model is unavailable. Choose another model to continue.
           </div>
         )}
         <Tabs
@@ -163,7 +147,6 @@ export function ProviderSetupDialog(props: ProviderSetupDialogProps) {
             )}
           </div>
 
-
           <div className="max-h-[min(52svh,24rem)] min-h-0 flex-1 overflow-y-auto overscroll-contain rounded-md pr-1">
             <TabsContent value={providerTab} className="mt-0 space-y-2">
               {providerTab === "cloud" && hasLoadingProviders && (
@@ -182,13 +165,33 @@ export function ProviderSetupDialog(props: ProviderSetupDialogProps) {
                 <ProviderRow
                   key={provider.id}
                   provider={provider}
-                  {...{ aiSettings, providerApiKeys, agentCliStatus, agentCliProbing, customModelName, guidedSetupProvider, setGuidedSetupProvider, isModelsLoading, getModels, fetchModels, getError, getDisplayModels, providerQuery, showGuidedSetup, onSelectModel, onSelectReasoning, onToggleFastMode, onRefreshAgentCli, onSetupApiKey, onRemoveApiKey }}
+                  {...{
+                    aiSettings,
+                    providerApiKeys,
+                    agentCliStatus,
+                    agentCliProbing,
+                    customModelName,
+                    guidedSetupProvider,
+                    setGuidedSetupProvider,
+                    isModelsLoading,
+                    getModels,
+                    fetchModels,
+                    getError,
+                    getDisplayModels,
+                    providerQuery,
+                    showGuidedSetup,
+                    onSelectModel,
+                    onSelectReasoning,
+                    onToggleFastMode,
+                    onRefreshAgentCli,
+                    onSetupApiKey,
+                    onRemoveApiKey,
+                  }}
                 />
               ))}
             </TabsContent>
           </div>
         </Tabs>
-
       </DialogContent>
     </Dialog>
   );

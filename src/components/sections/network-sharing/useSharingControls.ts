@@ -2,11 +2,7 @@ import { invoke } from "@tauri-apps/api/core";
 import type { Dispatch, SetStateAction } from "react";
 import { toast } from "sonner";
 import { createLogger } from "@/lib/logger";
-import {
-  MAX_SHARING_PORT,
-  MIN_SHARING_PORT,
-  parseSharingPort,
-} from "./sharingUtils";
+import { MAX_SHARING_PORT, MIN_SHARING_PORT, parseSharingPort } from "./sharingUtils";
 import type { SharingStatus } from "./types";
 import type { AppSettings } from "@/types";
 
@@ -57,9 +53,7 @@ export function useSharingControls({
       await invoke("update_remote_model_control_enabled", { enabled: checked });
       setStatus((current) => ({ ...current, allow_model_control: checked }));
       toast.success(
-        checked
-          ? "Host model changes enabled for trusted devices"
-          : "Host model changes disabled",
+        checked ? "Host model changes enabled for trusted devices" : "Host model changes disabled",
       );
     } catch (error) {
       log.error("Failed to update remote model control setting:", error);
@@ -95,8 +89,7 @@ export function useSharingControls({
       await fetchStatus();
     } catch (error) {
       log.error("Failed to toggle sharing:", error);
-      const errorMessage =
-        error instanceof Error ? error.message : String(error);
+      const errorMessage = error instanceof Error ? error.message : String(error);
       toast.error(errorMessage || "Failed to toggle remote transcription");
       await fetchStatus();
     } finally {

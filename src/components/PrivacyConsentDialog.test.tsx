@@ -1,10 +1,4 @@
-import {
-  act,
-  fireEvent,
-  render,
-  screen,
-  waitFor,
-} from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { PrivacyConsentDialog } from "./PrivacyConsentDialog";
 
@@ -39,9 +33,7 @@ describe("PrivacyConsentDialog", () => {
   it("requires one acknowledgement and persists both independent choices", async () => {
     render(<PrivacyConsentDialog />);
 
-    expect(
-      await screen.findByText("Help improve Voicetypr"),
-    ).toBeInTheDocument();
+    expect(await screen.findByText("Help improve Voicetypr")).toBeInTheDocument();
     const analytics = screen.getByRole("switch", {
       name: "Enable usage analytics",
     });
@@ -110,9 +102,7 @@ describe("PrivacyConsentDialog", () => {
     });
 
     await waitFor(() => {
-      expect(mockInvoke).toHaveBeenCalledWith(
-        "defer_privacy_consent_for_session",
-      );
+      expect(mockInvoke).toHaveBeenCalledWith("defer_privacy_consent_for_session");
     });
   });
 
@@ -136,8 +126,6 @@ describe("PrivacyConsentDialog", () => {
     await waitFor(() => {
       expect(mockInvoke).toHaveBeenCalledWith("get_product_analytics_status");
     });
-    expect(
-      screen.queryByText("Help improve Voicetypr"),
-    ).not.toBeInTheDocument();
+    expect(screen.queryByText("Help improve Voicetypr")).not.toBeInTheDocument();
   });
 });

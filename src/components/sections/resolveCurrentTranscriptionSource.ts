@@ -14,7 +14,7 @@ interface SavedConnection {
 }
 
 export interface CurrentTranscriptionSource {
-  type: 'local' | 'cloud' | 'remote';
+  type: "local" | "cloud" | "remote";
   displayName: string;
   historyModelName: string;
   modelName?: string;
@@ -26,10 +26,12 @@ export async function resolveCurrentTranscriptionSource(
   currentModel?: string,
   currentModelEngine?: string,
 ): Promise<CurrentTranscriptionSource | null> {
-  const activeRemoteServerId = await invoke<string | null>("get_active_remote_server").catch((error) => {
-    log.error("Failed to resolve active remote Voicetypr:", error);
-    return null;
-  });
+  const activeRemoteServerId = await invoke<string | null>("get_active_remote_server").catch(
+    (error) => {
+      log.error("Failed to resolve active remote Voicetypr:", error);
+      return null;
+    },
+  );
 
   if (activeRemoteServerId) {
     let displayBase = "Remote Voicetypr";
@@ -48,7 +50,7 @@ export async function resolveCurrentTranscriptionSource(
 
     const modelDisplayName = getModelDisplayName(remoteModel) ?? remoteModel;
     return {
-      type: 'remote',
+      type: "remote",
       serverId: activeRemoteServerId,
       displayName: modelDisplayName ? `${displayBase} - ${modelDisplayName}` : displayBase,
       historyModelName: `Remote: ${displayBase}`,
@@ -60,12 +62,12 @@ export async function resolveCurrentTranscriptionSource(
     return null;
   }
 
-  const modelEngine = currentModelEngine ?? 'whisper';
+  const modelEngine = currentModelEngine ?? "whisper";
   const isCloud = isCloudEngine(modelEngine);
   const displayName = getModelDisplayName(modelName) ?? modelName;
 
   return {
-    type: isCloud ? 'cloud' : 'local',
+    type: isCloud ? "cloud" : "local",
     modelName,
     modelEngine,
     displayName,

@@ -5,10 +5,7 @@ import { ask, save } from "@tauri-apps/plugin-dialog";
 import { useState, useCallback } from "react";
 import { toast } from "sonner";
 import { createLogger } from "@/lib/logger";
-import {
-  buildMarkdownHistory,
-  buildPlainHistory,
-} from "./recentRecordingsHelpers";
+import { buildMarkdownHistory, buildPlainHistory } from "./recentRecordingsHelpers";
 import { resolveCurrentTranscriptionSource } from "./resolveCurrentTranscriptionSource";
 
 const log = createLogger("recordings");
@@ -24,14 +21,12 @@ export function useRecentRecordingsActions({
   const [reTranscribingModels, setReTranscribingModels] = useState<Map<string, string>>(new Map());
   const { settings } = useSettings();
 
-
-
   const handleShowInFolder = useCallback(async (item: TranscriptionHistory) => {
     if (!item.recording_file) return;
 
     try {
       const fullPath = await invoke<string>("get_recording_path", {
-        filename: item.recording_file
+        filename: item.recording_file,
       });
       await invoke("show_in_folder", { path: fullPath });
     } catch (error) {
@@ -57,16 +52,16 @@ export function useRecentRecordingsActions({
       return;
     }
 
-    setReTranscribingIds(prev => new Set(prev).add(item.id));
-    setReTranscribingModels(prev => new Map(prev).set(item.id, currentSource.displayName));
+    setReTranscribingIds((prev) => new Set(prev).add(item.id));
+    setReTranscribingModels((prev) => new Map(prev).set(item.id, currentSource.displayName));
 
     const cleanup = () => {
-      setReTranscribingIds(prev => {
+      setReTranscribingIds((prev) => {
         const next = new Set(prev);
         next.delete(item.id);
         return next;
       });
-      setReTranscribingModels(prev => {
+      setReTranscribingModels((prev) => {
         const next = new Map(prev);
         next.delete(item.id);
         return next;
@@ -78,25 +73,25 @@ export function useRecentRecordingsActions({
 
     try {
       const recordingsDir = await invoke<string>("get_recordings_directory");
-      const separator = recordingsDir.includes('\\') ? '\\' : '/';
+      const separator = recordingsDir.includes("\\") ? "\\" : "/";
       const fullPath = `${recordingsDir}${separator}${item.recording_file}`;
       retryTimestamp = await invoke<string>("save_retranscription", {
         text: "In progress...",
         model: pendingModelName,
         recordingFile: item.recording_file,
         sourceRecordingId: item.id,
-        status: 'in_progress',
+        status: "in_progress",
       });
 
       let result: string;
       let modelName: string;
 
-      if (currentSource.type === 'remote') {
+      if (currentSource.type === "remote") {
         if (!currentSource.serverId) {
           throw new Error("No active remote Voicetypr source selected");
         }
 
-        result = await invoke<string>('transcribe_remote', {
+        result = await invoke<string>("transcribe_remote", {
           serverId: currentSource.serverId,
           audioPath: fullPath,
         });
@@ -106,19 +101,31 @@ export function useRecentRecordingsActions({
           throw new Error("No local or cloud transcription model selected");
         }
 
-        result = (await invoke<{ text: string; words: Array<{ text: string; start_ms?: number; end_ms?: number; speaker_id?: string; confidence?: number }> | null }>('transcribe_audio_file', {
-          filePath: fullPath,
-          modelName: currentSource.modelName,
-          modelEngine: currentSource.modelEngine ?? null,
-        })).text;
-        modelName = currentSource.type === 'cloud' ? currentSource.displayName : currentSource.modelName;
+        result = (
+          await invoke<{
+            text: string;
+            words: Array<{
+              text: string;
+              start_ms?: number;
+              end_ms?: number;
+              speaker_id?: string;
+              confidence?: number;
+            }> | null;
+          }>("transcribe_audio_file", {
+            filePath: fullPath,
+            modelName: currentSource.modelName,
+            modelEngine: currentSource.modelEngine ?? null,
+          })
+        ).text;
+        modelName =
+          currentSource.type === "cloud" ? currentSource.displayName : currentSource.modelName;
       }
 
       await invoke("update_transcription", {
         timestamp: retryTimestamp,
         text: result,
         model: modelName,
-        status: 'completed',
+        status: "completed",
       });
 
       cleanup();
@@ -137,13 +144,13 @@ export function useRecentRecordingsActions({
           timestamp: retryTimestamp,
           text: failureMessage,
           model: pendingModelName,
-          status: 'failed',
+          status: "failed",
         });
       } catch (updateError) {
         log.error("Failed to persist retranscription error state:", updateError);
       }
       toast.error("Re-transcription failed", {
-        description: String(error)
+        description: String(error),
       });
       cleanup();
       if (onHistoryUpdate) {
@@ -158,7 +165,7 @@ export function useRecentRecordingsActions({
     try {
       const confirmed = await ask("Are you sure you want to delete this transcription?", {
         title: "Delete Transcription",
-        kind: "warning"
+        kind: "warning",
       });
 
       if (!confirmed) return;
@@ -180,10 +187,13 @@ export function useRecentRecordingsActions({
     if (history.length === 0) return;
 
     try {
-      const confirmed = await ask(`Are you sure you want to delete all ${history.length} transcriptions? This action cannot be undone.`, {
-        title: "Clear All Transcriptions",
-        kind: "warning"
-      });
+      const confirmed = await ask(
+        `Are you sure you want to delete all ${history.length} transcriptions? This action cannot be undone.`,
+        {
+          title: "Clear All Transcriptions",
+          kind: "warning",
+        },
+      );
 
       if (!confirmed) return;
 
@@ -224,11 +234,11 @@ export function useRecentRecordingsActions({
 
     try {
       const confirmed = await ask(
-        `Export ${history.length} transcription${history.length !== 1 ? 's' : ''} to JSON?\n\nThe file will be saved to your Downloads folder.`,
+        `Export ${history.length} transcription${history.length !== 1 ? "s" : ""} to JSON?\n\nThe file will be saved to your Downloads folder.`,
         {
           title: "Export Transcriptions",
-          kind: "info"
-        }
+          kind: "info",
+        },
       );
 
       if (!confirmed) return;
@@ -236,7 +246,7 @@ export function useRecentRecordingsActions({
       await invoke<string>("export_transcriptions");
 
       toast.success(`Exported ${history.length} transcriptions`, {
-        description: `Saved to Downloads folder`
+        description: `Saved to Downloads folder`,
       });
     } catch (error) {
       log.error("Failed to export transcriptions:", error);

@@ -79,14 +79,18 @@ export function ReadinessLocalPanel({
               <LoadingState label="Loading local models" />
             ) : null}
             {!isLoading && localModelNames.length === 0 ? (
-              <EmptyState title="No local models available" description="Choose Cloud or Remote Voicetypr to continue without a local model." />
+              <EmptyState
+                title="No local models available"
+                description="Choose Cloud or Remote Voicetypr to continue without a local model."
+              />
             ) : null}
             {hasDownloadedLocalModel && !localReady ? (
               <Alert>
                 <Info className="size-4" />
                 <AlertTitle>Select a downloaded model</AlertTitle>
                 <AlertDescription>
-                  Downloaded models are ready to use, but onboarding needs one selected before continuing.
+                  Downloaded models are ready to use, but onboarding needs one selected before
+                  continuing.
                 </AlertDescription>
               </Alert>
             ) : null}
@@ -97,10 +101,12 @@ export function ReadinessLocalPanel({
         <div className="flex items-center justify-between gap-3 rounded-2xl border border-border bg-card px-4 py-3 shadow-sm">
           <div>
             <p className="text-sm font-medium">Use GPU acceleration</p>
-            <p className="text-xs text-muted-foreground">Recommended — uses your graphics card for faster transcription.</p>
+            <p className="text-xs text-muted-foreground">
+              Recommended — uses your graphics card for faster transcription.
+            </p>
           </div>
           <Switch
-            checked={(transcriptionAcceleration ?? 'auto') !== 'cpu'}
+            checked={(transcriptionAcceleration ?? "auto") !== "cpu"}
             onCheckedChange={(checked) => void onGpuToggle(checked)}
             aria-label="Use GPU acceleration"
           />

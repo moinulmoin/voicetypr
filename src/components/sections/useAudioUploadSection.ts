@@ -29,25 +29,29 @@ export function useAudioUploadSection() {
     select,
     clearSelection,
     start,
-    reset
+    reset,
   } = useUploadStore();
-  const isProcessing = status === 'processing';
+  const isProcessing = status === "processing";
   const effectiveFileName = selectedFile?.name || null;
   const hasEffectiveSelection = !!selectedFile;
 
   const resolveHistoryModelName = async (remoteServerIdOverride?: string | null) => {
     const effectiveRemoteId = remoteServerIdOverride ?? activeRemoteServer;
     if (!effectiveRemoteId) {
-      return isCloudEngine(settings?.current_model_engine ?? 'whisper') ? getModelDisplayName(settings?.current_model) || '' : (getModelDisplayName(settings?.current_model) || '');
+      return isCloudEngine(settings?.current_model_engine ?? "whisper")
+        ? getModelDisplayName(settings?.current_model) || ""
+        : getModelDisplayName(settings?.current_model) || "";
     }
 
     try {
-      const servers = await invoke<Array<{
-        id: string;
-        name?: string;
-        host: string;
-        port: number;
-      }>>('list_remote_servers');
+      const servers = await invoke<
+        Array<{
+          id: string;
+          name?: string;
+          host: string;
+          port: number;
+        }>
+      >("list_remote_servers");
       if (!Array.isArray(servers)) {
         return `Remote: ${effectiveRemoteId}`;
       }
@@ -61,7 +65,7 @@ export function useAudioUploadSection() {
       const displayName = activeServer.name || `${activeServer.host}:${activeServer.port}`;
       return `Remote: ${displayName}`;
     } catch (error) {
-      log.error('Failed to resolve active remote server name:', error);
+      log.error("Failed to resolve active remote server name:", error);
       return `Remote: ${effectiveRemoteId}`;
     }
   };
@@ -69,18 +73,18 @@ export function useAudioUploadSection() {
   useEffect(() => {
     const loadActiveRemoteServer = async () => {
       try {
-        const activeId = await invoke<string | null>('get_active_remote_server');
+        const activeId = await invoke<string | null>("get_active_remote_server");
         setActiveRemoteServer(activeId);
       } catch (error) {
-        log.error('Failed to get active remote server:', error);
+        log.error("Failed to get active remote server:", error);
         setActiveRemoteServer(null);
       }
     };
 
     loadActiveRemoteServer();
 
-    const unlistenModelChanged = listen('model-changed', loadActiveRemoteServer);
-    const unlistenSharingChanged = listen('sharing-status-changed', loadActiveRemoteServer);
+    const unlistenModelChanged = listen("model-changed", loadActiveRemoteServer);
+    const unlistenSharingChanged = listen("sharing-status-changed", loadActiveRemoteServer);
 
     return () => {
       unlistenModelChanged.then((fn) => fn());
@@ -90,7 +94,7 @@ export function useAudioUploadSection() {
 
   const activeSourceLabel = activeRemoteServer
     ? "Remote Voicetypr"
-    : isCloudEngine(settings?.current_model_engine ?? 'whisper')
+    : isCloudEngine(settings?.current_model_engine ?? "whisper")
       ? getModelDisplayName(settings?.current_model) || "No source selected"
       : getModelDisplayName(settings?.current_model) || "No source selected";
 
@@ -101,12 +105,12 @@ export function useAudioUploadSection() {
         filters: [
           {
             name: "Audio/Video Files",
-            extensions: ["wav", "mp3", "m4a", "flac", "ogg", "mp4", "webm"]
-          }
-        ]
+            extensions: ["wav", "mp3", "m4a", "flac", "ogg", "mp4", "webm"],
+          },
+        ],
       });
 
-      if (selected && typeof selected === 'string') {
+      if (selected && typeof selected === "string") {
         select(selected);
       }
     } catch (error) {
@@ -122,30 +126,30 @@ export function useAudioUploadSection() {
     }
 
     const [latestActiveRemoteServer, latestAvailability] = await Promise.all([
-      invoke<string | null>('get_active_remote_server')
-        .catch(() => activeRemoteServer),
-      invoke<{ remote_available?: boolean } | null>('get_recognition_availability_snapshot')
-        .catch(() => null),
+      invoke<string | null>("get_active_remote_server").catch(() => activeRemoteServer),
+      invoke<{ remote_available?: boolean } | null>("get_recognition_availability_snapshot").catch(
+        () => null,
+      ),
     ]);
     const effectiveRemoteSelected = !!latestActiveRemoteServer;
     const effectiveRemoteAvailable = latestAvailability?.remote_available ?? remoteAvailable;
 
     if (effectiveRemoteSelected && !effectiveRemoteAvailable) {
-      toast.error('Selected remote unavailable. Reconnect or choose another source.');
+      toast.error("Selected remote unavailable. Reconnect or choose another source.");
       return;
     }
 
     if (!settings?.current_model && !effectiveRemoteAvailable) {
-      toast.error('Select a speech model in Models before transcribing.');
+      toast.error("Select a speech model in Models before transcribing.");
       return;
     }
 
     if (!effectiveRemoteSelected && selectedModelAvailable === false) {
-      const engine = settings?.current_model_engine || 'whisper';
+      const engine = settings?.current_model_engine || "whisper";
       toast.error(
         isCloudEngine(engine)
-          ? 'Connect your cloud provider before transcribing audio.'
-          : 'Download the selected model before transcribing audio.'
+          ? "Connect your cloud provider before transcribing audio."
+          : "Download the selected model before transcribing audio.",
       );
       return;
     }
@@ -156,15 +160,15 @@ export function useAudioUploadSection() {
     }
 
     const result = await start(
-      settings?.current_model || '',
-      effectiveRemoteSelected ? null : (settings?.current_model_engine || 'whisper'),
-      await resolveHistoryModelName(latestActiveRemoteServer)
+      settings?.current_model || "",
+      effectiveRemoteSelected ? null : settings?.current_model_engine || "whisper",
+      await resolveHistoryModelName(latestActiveRemoteServer),
     );
 
     try {
-      if (result?.outcome === 'error') {
+      if (result?.outcome === "error") {
         toast.error(result.message);
-      } else if (result?.outcome === 'success') {
+      } else if (result?.outcome === "success") {
         toast.success("Transcription completed and saved to history!");
       }
     } catch (error) {
@@ -218,8 +222,8 @@ export function useAudioUploadSection() {
 
   useEffect(() => {
     const handleFileDrop = (filePath: string) => {
-      const supportedExtensions = ['wav', 'mp3', 'm4a', 'flac', 'ogg', 'mp4', 'webm'];
-      const fileExtension = filePath.split('.').pop()?.toLowerCase();
+      const supportedExtensions = ["wav", "mp3", "m4a", "flac", "ogg", "mp4", "webm"];
+      const fileExtension = filePath.split(".").pop()?.toLowerCase();
 
       if (!fileExtension || !supportedExtensions.includes(fileExtension)) {
         toast.error("Unsupported file format. Please drop an audio or video file.");
@@ -229,7 +233,7 @@ export function useAudioUploadSection() {
       select(filePath);
     };
 
-    const unlisten = listen('tauri://drag-drop', (event) => {
+    const unlisten = listen("tauri://drag-drop", (event) => {
       setIsDragging(false);
 
       const payload = event.payload as { paths: string[]; position: { x: number; y: number } };
@@ -238,18 +242,18 @@ export function useAudioUploadSection() {
       }
     });
 
-    const unlistenHover = listen('tauri://drag-hover', () => {
+    const unlistenHover = listen("tauri://drag-hover", () => {
       setIsDragging(true);
     });
 
-    const unlistenLeave = listen('tauri://drag-leave', () => {
+    const unlistenLeave = listen("tauri://drag-leave", () => {
       setIsDragging(false);
     });
 
     return () => {
-      unlisten.then(fn => fn());
-      unlistenHover.then(fn => fn());
-      unlistenLeave.then(fn => fn());
+      unlisten.then((fn) => fn());
+      unlistenHover.then((fn) => fn());
+      unlistenLeave.then((fn) => fn());
     };
   }, [select]);
 

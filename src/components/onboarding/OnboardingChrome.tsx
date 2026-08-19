@@ -52,12 +52,8 @@ export function OnboardingPanel({
   return (
     <section className="flex w-full flex-col gap-7 animate-fade-in">
       <div className="mx-auto flex max-w-3xl flex-col items-center gap-2.5 text-center">
-        <h2 className="text-3xl font-semibold tracking-tight text-balance sm:text-4xl">
-          {title}
-        </h2>
-        <p className="max-w-2xl text-sm leading-6 text-muted-foreground">
-          {description}
-        </p>
+        <h2 className="text-3xl font-semibold tracking-tight text-balance sm:text-4xl">{title}</h2>
+        <p className="max-w-2xl text-sm leading-6 text-muted-foreground">{description}</p>
       </div>
       <div>{children}</div>
       {footer}

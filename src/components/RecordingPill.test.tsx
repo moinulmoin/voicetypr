@@ -3,18 +3,16 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { emitMockEvent } from "@/test/setup";
 import { RecordingPill } from "./RecordingPill";
 
-const { activityIndicatorMock, mockRecording, mockSettings } = vi.hoisted(
-  () => ({
-    activityIndicatorMock: vi.fn(),
-    mockRecording: { state: "idle" },
-    mockSettings: {
-      pill_indicator_mode: "when_recording",
-      pill_indicator_style: "compact",
-      pill_indicator_position: "bottom-center",
-      pill_indicator_offset: 10,
-    } as Record<string, unknown>,
-  }),
-);
+const { activityIndicatorMock, mockRecording, mockSettings } = vi.hoisted(() => ({
+  activityIndicatorMock: vi.fn(),
+  mockRecording: { state: "idle" },
+  mockSettings: {
+    pill_indicator_mode: "when_recording",
+    pill_indicator_style: "compact",
+    pill_indicator_position: "bottom-center",
+    pill_indicator_offset: 10,
+  } as Record<string, unknown>,
+}));
 
 vi.mock("@/components/PillActivityIndicator", () => ({
   PillActivityIndicator: (props: { audioLevel?: number; state: string }) => {
@@ -63,10 +61,7 @@ describe("RecordingPill", () => {
     mockSettings.pill_indicator_mode = "when_recording";
     mockRecording.state = "recording";
     render(<RecordingPill />);
-    expect(screen.getByTestId("pill-activity")).toHaveAttribute(
-      "data-state",
-      "listening",
-    );
+    expect(screen.getByTestId("pill-activity")).toHaveAttribute("data-state", "listening");
     expect(screen.queryByText("Listening")).not.toBeInTheDocument();
     expect(screen.queryByText("0:00")).not.toBeInTheDocument();
   });
@@ -76,9 +71,10 @@ describe("RecordingPill", () => {
     mockSettings.pill_indicator_position = "top-left";
     render(<RecordingPill />);
 
-    expect(
-      document.querySelector('[data-pill-position="top-left"]'),
-    ).toHaveClass("items-start", "justify-start");
+    expect(document.querySelector('[data-pill-position="top-left"]')).toHaveClass(
+      "items-start",
+      "justify-start",
+    );
   });
 
   it("adds an elapsed timer only in the full listening style", () => {
@@ -114,10 +110,7 @@ describe("RecordingPill", () => {
     mockSettings.pill_indicator_mode = "always";
     mockRecording.state = "idle";
     render(<RecordingPill />);
-    expect(screen.getByTestId("pill-activity")).toHaveAttribute(
-      "data-state",
-      "idle",
-    );
+    expect(screen.getByTestId("pill-activity")).toHaveAttribute("data-state", "idle");
     expect(screen.queryByRole("status")).not.toBeInTheDocument();
   });
 
@@ -126,18 +119,12 @@ describe("RecordingPill", () => {
     mockSettings.pill_indicator_style = "full";
     mockRecording.state = "transcribing";
     const { rerender } = render(<RecordingPill />);
-    expect(screen.getByTestId("pill-activity")).toHaveAttribute(
-      "data-state",
-      "transcribing",
-    );
+    expect(screen.getByTestId("pill-activity")).toHaveAttribute("data-state", "transcribing");
     expect(screen.getByText("Transcribing...")).toBeInTheDocument();
 
     mockRecording.state = "stopping";
     rerender(<RecordingPill />);
-    expect(screen.getByTestId("pill-activity")).toHaveAttribute(
-      "data-state",
-      "transcribing",
-    );
+    expect(screen.getByTestId("pill-activity")).toHaveAttribute("data-state", "transcribing");
     expect(screen.getByText("Transcribing...")).toBeInTheDocument();
   });
 
@@ -150,27 +137,18 @@ describe("RecordingPill", () => {
     act(() => {
       emitMockEvent("enhancing-started", undefined);
     });
-    expect(screen.getByTestId("pill-activity")).toHaveAttribute(
-      "data-state",
-      "formatting",
-    );
+    expect(screen.getByTestId("pill-activity")).toHaveAttribute("data-state", "formatting");
     expect(screen.getByRole("status")).toHaveTextContent("Polishing...");
 
     mockRecording.state = "transcribing";
     rerender(<RecordingPill />);
-    expect(screen.getByTestId("pill-activity")).toHaveAttribute(
-      "data-state",
-      "formatting",
-    );
+    expect(screen.getByTestId("pill-activity")).toHaveAttribute("data-state", "formatting");
     expect(screen.getByRole("status")).toHaveTextContent("Polishing...");
 
     act(() => {
       emitMockEvent("enhancing-completed", undefined);
     });
-    expect(screen.getByTestId("pill-activity")).toHaveAttribute(
-      "data-state",
-      "transcribing",
-    );
+    expect(screen.getByTestId("pill-activity")).toHaveAttribute("data-state", "transcribing");
     expect(screen.getByRole("status")).toHaveTextContent("Transcribing...");
   });
   it("clears Polishing and returns to the transcribing state when enhancing fails", () => {
@@ -182,10 +160,7 @@ describe("RecordingPill", () => {
     act(() => {
       emitMockEvent("enhancing-started", undefined);
     });
-    expect(screen.getByTestId("pill-activity")).toHaveAttribute(
-      "data-state",
-      "formatting",
-    );
+    expect(screen.getByTestId("pill-activity")).toHaveAttribute("data-state", "formatting");
     expect(screen.getByRole("status")).toHaveTextContent("Polishing...");
 
     act(() => {
@@ -194,10 +169,7 @@ describe("RecordingPill", () => {
     // A failed enhancement must clear the formatting flag so the pill falls
     // back to the controller-derived prior state (transcribing), not stay
     // stuck showing Polishing.
-    expect(screen.getByTestId("pill-activity")).toHaveAttribute(
-      "data-state",
-      "transcribing",
-    );
+    expect(screen.getByTestId("pill-activity")).toHaveAttribute("data-state", "transcribing");
     expect(screen.getByRole("status")).toHaveTextContent("Transcribing...");
   });
 
@@ -209,9 +181,6 @@ describe("RecordingPill", () => {
       emitMockEvent("audio-level", 0.42);
     });
 
-    expect(screen.getByTestId("pill-activity")).toHaveAttribute(
-      "data-audio-level",
-      "0.42",
-    );
+    expect(screen.getByTestId("pill-activity")).toHaveAttribute("data-audio-level", "0.42");
   });
 });

@@ -29,7 +29,8 @@ export function ShortcutBindingRow({
   isSaving,
   editingDisabled,
   isCapturing,
-  showRecordingCheckbox = action.action === "toggle_recording" || action.action === "hold_to_record",
+  showRecordingCheckbox = action.action === "toggle_recording" ||
+    action.action === "hold_to_record",
   startEditing,
   saveEdit,
   cancelEdit,
@@ -61,9 +62,7 @@ export function ShortcutBindingRow({
             }
             placeholder="Press a key or key combo"
             validationRules={
-              action.allows_single_key
-                ? singleKeyValidation
-                : ValidationPresets.standard()
+              action.allows_single_key ? singleKeyValidation : ValidationPresets.standard()
             }
             allowBareModifier={showRecordingCheckbox}
             onBareModifier={(spec) =>
@@ -83,18 +82,10 @@ export function ShortcutBindingRow({
             size="icon-sm"
             aria-label="Save"
             className="bg-green-600 text-white hover:bg-green-600/90"
-            disabled={
-              isSaving ||
-              (!editingCapture.combo &&
-                !editingCapture.bareModifier)
-            }
+            disabled={isSaving || (!editingCapture.combo && !editingCapture.bareModifier)}
             onClick={saveEdit}
           >
-            {isSaving ? (
-              <Spinner className="h-4 w-4" />
-            ) : (
-              <Check className="h-4 w-4" />
-            )}
+            {isSaving ? <Spinner className="h-4 w-4" /> : <Check className="h-4 w-4" />}
           </Button>
           <Button
             type="button"
@@ -110,8 +101,7 @@ export function ShortcutBindingRow({
 
         {!editingCapture.bareModifier && (
           <p className="text-xs text-muted-foreground">
-            Use a key combo, a function key, or a
-            numpad/navigation key. A bare letter or number
+            Use a key combo, a function key, or a numpad/navigation key. A bare letter or number
             won&apos;t work — it would block typing.
           </p>
         )}
@@ -124,16 +114,11 @@ export function ShortcutBindingRow({
       key={binding.id}
       className="flex items-center justify-between gap-3 rounded-lg border border-border/70 bg-muted/20 px-2.5 py-2"
     >
-      <span
-        aria-label={`${action.label} shortcut`}
-        className="font-mono text-sm"
-      >
+      <span aria-label={`${action.label} shortcut`} className="font-mono text-sm">
         {formatBindingDisplay(binding)}
       </span>
       <div className="flex items-center gap-1">
-        {isSaving && (
-          <Spinner className="mr-1 h-4 w-4 text-muted-foreground" />
-        )}
+        {isSaving && <Spinner className="mr-1 h-4 w-4 text-muted-foreground" />}
         <Button
           type="button"
           variant="ghost"

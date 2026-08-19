@@ -2,7 +2,10 @@ import { isMacOS } from "@/lib/platform";
 import type { BareModifierSpec } from "./types";
 
 const BARE_MOD_ICONS: Record<string, string> = {
-  alt: "⌥", meta: "⌘", control: "⌃", shift: "⇧",
+  alt: "⌥",
+  meta: "⌘",
+  control: "⌃",
+  shift: "⇧",
 };
 
 export function formatBareModifierDisplay(spec: BareModifierSpec): string {

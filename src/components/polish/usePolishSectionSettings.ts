@@ -25,9 +25,7 @@ export function usePolishSectionSettings({
   }>({
     preset: "PersonalDictation",
   });
-  const [writingSettings, setWritingSettings] = useState<WritingSettings>(
-    defaultWritingSettings,
-  );
+  const [writingSettings, setWritingSettings] = useState<WritingSettings>(defaultWritingSettings);
   const [settingsLoaded, setSettingsLoaded] = useState(false);
   const writingSaveGeneration = useRef(0);
   const enhancementSaveGeneration = useRef(0);
@@ -40,9 +38,7 @@ export function usePolishSectionSettings({
 
   const loadEnhancementOptions = async (aiEnabled: boolean) => {
     try {
-      const options = await invoke<EnhancementOptions>(
-        "get_enhancement_options",
-      );
+      const options = await invoke<EnhancementOptions>("get_enhancement_options");
       setEnhancementOptions(fromBackendOptions(options, aiEnabled));
     } catch (error) {
       log.error("Failed to load Polish options:", error);
@@ -51,9 +47,7 @@ export function usePolishSectionSettings({
 
   const loadWritingSettings = async () => {
     try {
-      const nextSettings = await invoke<Partial<WritingSettings>>(
-        "get_writing_settings",
-      );
+      const nextSettings = await invoke<Partial<WritingSettings>>("get_writing_settings");
       setWritingSettings(mergeWritingSettings(nextSettings));
       return true;
     } catch (error) {
@@ -62,9 +56,7 @@ export function usePolishSectionSettings({
     }
   };
 
-  const persistEnhancementOptions = async (nextOptions: {
-    preset: EnhancementPreset;
-  }) => {
+  const persistEnhancementOptions = async (nextOptions: { preset: EnhancementPreset }) => {
     const rollbackOptions = enhancementOptions;
     const generationAtEnqueue = enhancementSaveGeneration.current + 1;
     enhancementSaveGeneration.current = generationAtEnqueue;
@@ -95,10 +87,7 @@ export function usePolishSectionSettings({
         if (writingSaveGeneration.current === generationAtEnqueue) {
           setWritingSettings(rollbackSettings);
           writingSettingsRef.current = rollbackSettings;
-          const message = getErrorMessage(
-            error,
-            "Failed to save writing settings",
-          );
+          const message = getErrorMessage(error, "Failed to save writing settings");
           toast.error(message);
         }
       }
@@ -112,11 +101,7 @@ export function usePolishSectionSettings({
     setWritingSettings(nextSettings);
     writingSettingsRef.current = nextSettings;
     if (settingsLoaded) {
-      enqueueWritingSettingsSave(
-        nextSettings,
-        rollbackSettings,
-        generationAtEnqueue,
-      );
+      enqueueWritingSettingsSave(nextSettings, rollbackSettings, generationAtEnqueue);
     }
   };
 
@@ -129,10 +114,7 @@ export function usePolishSectionSettings({
         transcription_task: nextTask,
       });
     } catch (error) {
-      const message = getErrorMessage(
-        error,
-        "Failed to save final text language",
-      );
+      const message = getErrorMessage(error, "Failed to save final text language");
       toast.error(message);
     }
   };
@@ -162,9 +144,7 @@ export function usePolishSectionSettings({
 
   const handlePolishToggled = useCallback(
     async (enabled: boolean) => {
-      const nextPreset: EnhancementPreset = enabled
-        ? "CleanDictation"
-        : "PersonalDictation";
+      const nextPreset: EnhancementPreset = enabled ? "CleanDictation" : "PersonalDictation";
 
       if (
         nextPreset === "PersonalDictation" &&
@@ -189,10 +169,7 @@ export function usePolishSectionSettings({
         transcription_task: "transcribe",
       });
     } catch (error) {
-      log.error(
-        "Failed to refresh language settings after API key removal:",
-        error,
-      );
+      log.error("Failed to refresh language settings after API key removal:", error);
     }
   }, []);
 

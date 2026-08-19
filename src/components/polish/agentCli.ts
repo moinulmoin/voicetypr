@@ -16,9 +16,7 @@ export type AISettingsResponse = Omit<
   aiModelNeedsReselection?: boolean;
 };
 
-export const normalizeAISettings = (
-  settings: AISettingsResponse,
-): AISettings => ({
+export const normalizeAISettings = (settings: AISettingsResponse): AISettings => ({
   ...settings,
   modelsByProvider: settings.modelsByProvider ?? {},
   reasoningByProvider: settings.reasoningByProvider ?? {},
@@ -130,9 +128,7 @@ export const shortModelName = (modelId: string, fallbackName?: string) => {
   if (fallbackName && !fallbackName.includes("/")) {
     return fallbackName;
   }
-  const shortId = modelId.includes("/")
-    ? modelId.slice(modelId.lastIndexOf("/") + 1)
-    : modelId;
+  const shortId = modelId.includes("/") ? modelId.slice(modelId.lastIndexOf("/") + 1) : modelId;
   return humanizeModelId(shortId || modelId);
 };
 
@@ -140,16 +136,13 @@ export const defaultAgentCliReasoning = (providerId: string) =>
   providerId === "pi" || providerId === "omp" ? "off" : "low";
 
 export const formatAgentCliReasoning = (providerId: string, reasoning: string) =>
-  providerId === "claude-code"
-    ? `Effort ${reasoning}`
-    : `Thinking ${reasoning}`;
+  providerId === "claude-code" ? `Effort ${reasoning}` : `Thinking ${reasoning}`;
 
 export const formatReasoningLevel = (reasoning: string) =>
   reasoning.charAt(0).toUpperCase() + reasoning.slice(1);
 
-export const getAgentCliProbeState = (
-  probe?: AgentCliProbe,
-): AgentCliProbeState => probe?.state ?? "missing";
+export const getAgentCliProbeState = (probe?: AgentCliProbe): AgentCliProbeState =>
+  probe?.state ?? "missing";
 
 export const isAgentCliReady = (probe?: AgentCliProbe): boolean =>
   getAgentCliProbeState(probe) === "ready";

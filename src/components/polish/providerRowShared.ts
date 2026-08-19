@@ -1,10 +1,6 @@
 import { humanizeModelId } from "@/lib/model-display";
 import type { AISettings } from "@/types/ai";
-import type {
-  AIProviderConfig,
-  AIProviderModel,
-  AgentCliProbe,
-} from "@/types/providers";
+import type { AIProviderConfig, AIProviderModel, AgentCliProbe } from "@/types/providers";
 import {
   AGENT_CLI_DEFAULT_LABEL,
   CLI_DEFAULT_MODEL_VALUE,
@@ -69,10 +65,7 @@ export interface ProviderRowViewModel {
   fastModeEnabled: boolean;
 }
 
-export function toPickerItem(
-  providerId: string,
-  model: AIProviderModel,
-): ModelPickerItem {
+export function toPickerItem(providerId: string, model: AIProviderModel): ModelPickerItem {
   return {
     value: toModelSelectValue(model.id),
     label: isDefaultAgentCliModel(model)
@@ -90,9 +83,7 @@ export function buildModelPickerGroups(
   const recommendedItems = EMPTY_RECOMMENDED_ITEMS.slice();
   const otherItems = EMPTY_OTHER_ITEMS.slice();
   for (const model of displayModels) {
-    (model.recommended ? recommendedItems : otherItems).push(
-      toPickerItem(providerId, model),
-    );
+    (model.recommended ? recommendedItems : otherItems).push(toPickerItem(providerId, model));
   }
   return [
     { value: RECOMMENDED_GROUP_LABEL, items: recommendedItems },
@@ -100,9 +91,7 @@ export function buildModelPickerGroups(
   ].filter((group) => group.items.length > 0);
 }
 
-export function buildProviderRowViewModel(
-  props: ProviderRowProps,
-): ProviderRowViewModel {
+export function buildProviderRowViewModel(props: ProviderRowProps): ProviderRowViewModel {
   const {
     provider,
     aiSettings,
@@ -117,34 +106,23 @@ export function buildProviderRowViewModel(
   const agentCli = isAgentCliProvider(provider.id);
   const agentProbe = agentCli ? agentCliStatus[provider.id] : undefined;
   const agentCliState = agentProbe ? getAgentCliProbeState(agentProbe) : null;
-  const agentCliChecking =
-    agentCli && !agentProbe && agentCliProbing[provider.id];
-  const agentCliRefreshing =
-    agentCli && Boolean(agentProbe) && agentCliProbing[provider.id];
+  const agentCliChecking = agentCli && !agentProbe && agentCliProbing[provider.id];
+  const agentCliRefreshing = agentCli && Boolean(agentProbe) && agentCliProbing[provider.id];
   const agentCliReady = agentCliState === "ready";
-  const hasKey = agentCli
-    ? agentCliReady
-    : Boolean(providerApiKeys[provider.id]);
+  const hasKey = agentCli ? agentCliReady : Boolean(providerApiKeys[provider.id]);
   const isSelected = aiSettings.provider === provider.id;
   const hasSelectedProviderModel =
-    Object.prototype.hasOwnProperty.call(
-      aiSettings.modelsByProvider,
-      provider.id,
-    ) || isSelected;
+    Object.prototype.hasOwnProperty.call(aiSettings.modelsByProvider, provider.id) || isSelected;
   const selectedModel = provider.isCustom
     ? aiSettings.modelsByProvider.custom || customModelName
-    : Object.prototype.hasOwnProperty.call(
-          aiSettings.modelsByProvider,
-          provider.id,
-        )
+    : Object.prototype.hasOwnProperty.call(aiSettings.modelsByProvider, provider.id)
       ? aiSettings.modelsByProvider[provider.id]
       : aiSettings.provider === provider.id
         ? aiSettings.model
         : "";
   const discoveredModels = getDisplayModels(provider.id);
   const defaultAgentCliModel = agentCli
-    ? (discoveredModels.find(isDefaultAgentCliModel) ??
-      fallbackAgentCliDefault(provider.id))
+    ? (discoveredModels.find(isDefaultAgentCliModel) ?? fallbackAgentCliDefault(provider.id))
     : undefined;
   const models =
     defaultAgentCliModel && !discoveredModels.some(isDefaultAgentCliModel)
@@ -155,17 +133,12 @@ export function buildProviderRowViewModel(
     : defaultAgentCliModel
       ? CLI_DEFAULT_MODEL_VALUE
       : undefined;
-  const providerMatches = provider.name
-    .toLowerCase()
-    .includes(providerQuery);
+  const providerMatches = provider.name.toLowerCase().includes(providerQuery);
   const displayModels =
     providerQuery && !providerMatches
       ? models.filter((model) => modelMatchesQuery(model, providerQuery))
       : models;
-  const modelPickerGroups = buildModelPickerGroups(
-    displayModels,
-    provider.id,
-  );
+  const modelPickerGroups = buildModelPickerGroups(displayModels, provider.id);
   const modelPickerItems = modelPickerGroups.flatMap((group) => group.items);
   const selectedModelItem =
     modelPickerItems.find((item) => item.value === modelSelectValue) ??
@@ -209,9 +182,7 @@ export function buildProviderRowViewModel(
     modelPickerGroups,
     selectedModelItem,
     statusCopy,
-    reasoning:
-      aiSettings.reasoningByProvider[provider.id] ??
-      defaultAgentCliReasoning(provider.id),
+    reasoning: aiSettings.reasoningByProvider[provider.id] ?? defaultAgentCliReasoning(provider.id),
     reasoningLevels: agentProbe?.reasoningLevels ?? [],
     fastModeEnabled: aiSettings.fastModeByProvider[provider.id] ?? false,
   };
@@ -222,9 +193,5 @@ export function providerRowShellClass(isSelected: boolean, clickable: boolean) {
     clickable
       ? "cursor-pointer hover:border-sage/40 hover:bg-muted/30 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
       : ""
-  } ${
-    isSelected
-      ? "border-sage/50 bg-sage-bg/40"
-      : "border-border/60 bg-background"
-  }`;
+  } ${isSelected ? "border-sage/50 bg-sage-bg/40" : "border-border/60 bg-background"}`;
 }

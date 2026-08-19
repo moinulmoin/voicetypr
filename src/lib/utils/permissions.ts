@@ -1,5 +1,5 @@
-import { invoke } from '@tauri-apps/api/core';
-import { open } from '@tauri-apps/plugin-shell';
+import { invoke } from "@tauri-apps/api/core";
+import { open } from "@tauri-apps/plugin-shell";
 import { createLogger } from "@/lib/logger";
 
 const log = createLogger("permissions");
@@ -17,7 +17,7 @@ export async function checkAllPermissions(): Promise<PermissionStatus> {
     checkMicrophonePermission(),
     checkAccessibilityPermission(),
   ]);
-  
+
   return { microphone, accessibility };
 }
 
@@ -26,9 +26,9 @@ export async function checkAllPermissions(): Promise<PermissionStatus> {
  */
 export async function checkMicrophonePermission(): Promise<boolean> {
   try {
-    return await invoke<boolean>('check_microphone_permission');
+    return await invoke<boolean>("check_microphone_permission");
   } catch (error) {
-    log.error('Failed to check microphone permission:', error);
+    log.error("Failed to check microphone permission:", error);
     return false;
   }
 }
@@ -38,9 +38,9 @@ export async function checkMicrophonePermission(): Promise<boolean> {
  */
 export async function checkAccessibilityPermission(): Promise<boolean> {
   try {
-    return await invoke<boolean>('check_accessibility_permission');
+    return await invoke<boolean>("check_accessibility_permission");
   } catch (error) {
-    log.error('Failed to check accessibility permission:', error);
+    log.error("Failed to check accessibility permission:", error);
     return false;
   }
 }
@@ -50,9 +50,9 @@ export async function checkAccessibilityPermission(): Promise<boolean> {
  */
 export async function requestMicrophonePermission(): Promise<boolean> {
   try {
-    return await invoke<boolean>('request_microphone_permission');
+    return await invoke<boolean>("request_microphone_permission");
   } catch (error) {
-    log.error('Failed to request microphone permission:', error);
+    log.error("Failed to request microphone permission:", error);
     return false;
   }
 }
@@ -62,23 +62,22 @@ export async function requestMicrophonePermission(): Promise<boolean> {
  */
 export async function openAccessibilitySettings(): Promise<void> {
   try {
-    await open('x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility');
+    await open("x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility");
   } catch (error) {
-    log.error('Failed to open accessibility settings:', error);
+    log.error("Failed to open accessibility settings:", error);
   }
 }
-
 
 /**
  * Get human-readable permission descriptions
  */
 export function getPermissionDescription(permission: keyof PermissionStatus): string {
   const descriptions = {
-    microphone: 'Required to record your voice for transcription',
-    accessibility: 'Required to monitor keyboard shortcuts and insert text',
+    microphone: "Required to record your voice for transcription",
+    accessibility: "Required to monitor keyboard shortcuts and insert text",
   };
-  
-  return descriptions[permission] || 'Required for app functionality';
+
+  return descriptions[permission] || "Required for app functionality";
 }
 
 /**
@@ -86,9 +85,10 @@ export function getPermissionDescription(permission: keyof PermissionStatus): st
  */
 export function getPermissionInstructions(permission: keyof PermissionStatus): string {
   const instructions = {
-    microphone: 'Go to System Settings → Privacy & Security → Microphone and enable Voicetypr',
-    accessibility: 'Go to System Settings → Privacy & Security → Accessibility and enable Voicetypr',
+    microphone: "Go to System Settings → Privacy & Security → Microphone and enable Voicetypr",
+    accessibility:
+      "Go to System Settings → Privacy & Security → Accessibility and enable Voicetypr",
   };
-  
-  return instructions[permission] || 'Check System Settings → Privacy & Security';
+
+  return instructions[permission] || "Check System Settings → Privacy & Security";
 }

@@ -31,15 +31,13 @@ vi.mock("@/components/tabs/TabContainer", () => ({
 
 vi.mock("@/components/ui/sidebar", () => ({
   SidebarProvider: ({ children }: { children: ReactNode }) => <>{children}</>,
-  SidebarInset: ({
-    children,
-    className,
-  }: {
-    children: ReactNode;
-    className?: string;
-  }) => <section className={className}>{children}</section>,
+  SidebarInset: ({ children, className }: { children: ReactNode; className?: string }) => (
+    <section className={className}>{children}</section>
+  ),
   SidebarTrigger: ({ className }: { className?: string }) => (
-    <button type="button" className={className}>Toggle Sidebar</button>
+    <button type="button" className={className}>
+      Toggle Sidebar
+    </button>
   ),
 }));
 

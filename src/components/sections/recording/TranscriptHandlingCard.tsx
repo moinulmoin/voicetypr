@@ -20,9 +20,7 @@ export function TranscriptHandlingCard() {
       <Field orientation="responsive" className="items-center gap-3">
         <FieldContent>
           <FieldTitle>Keep Transcript in Clipboard</FieldTitle>
-          <FieldDescription>
-            Leave transcribed text available for manual pastes
-          </FieldDescription>
+          <FieldDescription>Leave transcribed text available for manual pastes</FieldDescription>
         </FieldContent>
         <Switch
           id="clipboard-retain"
@@ -53,7 +51,6 @@ export function TranscriptHandlingCard() {
         />
       </Field>
 
-
       <Field orientation="responsive" className="items-center gap-3">
         <FieldContent>
           <FieldTitle>Pause media during recording</FieldTitle>
@@ -71,7 +68,6 @@ export function TranscriptHandlingCard() {
           }
         />
       </Field>
-
     </FieldSet>
   );
 }

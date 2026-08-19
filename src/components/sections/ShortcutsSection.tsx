@@ -38,7 +38,8 @@ export function ShortcutsSection() {
           <div>
             <p>Your primary recording shortcut is configured in Recording.</p>
             <p className="mt-1">
-              Voicetypr tests global shortcuts and refuses combos already owned by macOS, Windows, or another app.
+              Voicetypr tests global shortcuts and refuses combos already owned by macOS, Windows,
+              or another app.
             </p>
           </div>
         </div>
@@ -50,14 +51,22 @@ export function ShortcutsSection() {
       </div>
 
       {actionLoadError && (
-        <div role="alert" className="rounded-2xl border border-destructive/30 bg-destructive/10 p-3 text-sm text-destructive">
-          Shortcut actions could not be loaded: {actionLoadError}. You can still review saved shortcuts once the app reconnects.
+        <div
+          role="alert"
+          className="rounded-2xl border border-destructive/30 bg-destructive/10 p-3 text-sm text-destructive"
+        >
+          Shortcut actions could not be loaded: {actionLoadError}. You can still review saved
+          shortcuts once the app reconnects.
         </div>
       )}
 
       {settingsLoadError && (
-        <div role="alert" className="rounded-2xl border border-destructive/30 bg-destructive/10 p-3 text-sm text-destructive">
-          Shortcut settings could not be loaded: {settingsLoadError}. Reload shortcut settings before editing; controls are read-only to avoid overwriting existing shortcuts.
+        <div
+          role="alert"
+          className="rounded-2xl border border-destructive/30 bg-destructive/10 p-3 text-sm text-destructive"
+        >
+          Shortcut settings could not be loaded: {settingsLoadError}. Reload shortcut settings
+          before editing; controls are read-only to avoid overwriting existing shortcuts.
         </div>
       )}
 

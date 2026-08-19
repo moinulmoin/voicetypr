@@ -18,8 +18,7 @@ export function AppContainer() {
   const [activeSection, setActiveSection] = useState<ScreenId>("overview");
   const [forceShowOnboarding, setForceShowOnboarding] = useState(false);
   const { settings, refreshSettings } = useSettings();
-  const { checkAccessibilityPermission, checkMicrophonePermission } =
-    useReadiness();
+  const { checkAccessibilityPermission, checkMicrophonePermission } = useReadiness();
   const modelAvailability = useModelAvailabilityContext();
 
   // Use the model management context for onboarding
@@ -33,8 +32,7 @@ export function AppContainer() {
   const hasCompletedOnboardingRef = useRef(false);
   const forceOnboardingNeedsFreshAvailabilityRef = useRef(false);
 
-  const { justUpdatedVersion, setJustUpdatedVersion } =
-    useAppBootstrap(settings);
+  const { justUpdatedVersion, setJustUpdatedVersion } = useAppBootstrap(settings);
 
   useAppEvents({
     checkModels: modelAvailability.checkModels,
@@ -45,8 +43,8 @@ export function AppContainer() {
 
   const showOnboarding = Boolean(
     settings?.onboarding_completed === false ||
-      forceShowOnboarding ||
-      modelAvailability.hasModels === false,
+    forceShowOnboarding ||
+    modelAvailability.hasModels === false,
   );
 
   useOnboardingRecovery({
@@ -89,10 +87,7 @@ export function AppContainer() {
   // Main App Layout
   return (
     <>
-      <AppShell
-        activeSection={activeSection}
-        onSectionChange={setActiveSection}
-      />
+      <AppShell activeSection={activeSection} onSectionChange={setActiveSection} />
       <PrivacyConsentDialog />
       <UpdateAnnouncementDialog
         version={justUpdatedVersion}

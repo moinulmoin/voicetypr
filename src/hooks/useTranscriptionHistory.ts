@@ -82,23 +82,18 @@ export function useTranscriptionHistory({
   // setState updater.
   const historyRef = useRef<TranscriptionHistory[]>([]);
 
-
   const refreshHistory = useCallback(async () => {
     const requestId = requestIdRef.current + 1;
     requestIdRef.current = requestId;
     try {
-      const historyPromise = invoke<RawTranscriptionHistoryItem[]>(
-        "get_transcription_history",
-        { limit },
-      );
+      const historyPromise = invoke<RawTranscriptionHistoryItem[]>("get_transcription_history", {
+        limit,
+      });
       const countPromise = includeTotalCount
         ? invoke<number>("get_transcription_count")
         : Promise.resolve<number | null>(null);
 
-      const [storedHistory, count] = await Promise.all([
-        historyPromise,
-        countPromise,
-      ]);
+      const [storedHistory, count] = await Promise.all([historyPromise, countPromise]);
 
       if (requestIdRef.current !== requestId) return;
       const formattedHistory = storedHistory.map(toHistoryItem);
@@ -121,7 +116,10 @@ export function useTranscriptionHistory({
     let isMounted = true;
     const unlisteners: Array<() => void> = [];
 
-    const register = async <T,>(eventName: string, handler: (payload: T) => void | Promise<void>) => {
+    const register = async <T>(
+      eventName: string,
+      handler: (payload: T) => void | Promise<void>,
+    ) => {
       const unlisten = await registerEvent<T>(eventName, handler);
       if (typeof unlisten !== "function") return;
       if (!isMounted) {

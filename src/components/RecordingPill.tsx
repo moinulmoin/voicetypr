@@ -2,15 +2,8 @@ import { PillShell, PillStatus } from "@/components/pill/PillShell";
 import { usePillController } from "@/components/pill/usePillController";
 
 export function RecordingPill() {
-  const {
-    audioLevel,
-    elapsedSeconds,
-    isActive,
-    isVisible,
-    pillPosition,
-    pillState,
-    pillStyle,
-  } = usePillController();
+  const { audioLevel, elapsedSeconds, isActive, isVisible, pillPosition, pillState, pillStyle } =
+    usePillController();
 
   if (!isVisible) {
     return null;

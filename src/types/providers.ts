@@ -17,10 +17,7 @@ export interface AIProviderModel {
   costOutput?: number | null;
 }
 
-export type AgentCliProbeState =
-  | "ready"
-  | "missing"
-  | "unsafe_launcher";
+export type AgentCliProbeState = "ready" | "missing" | "unsafe_launcher";
 
 export interface AgentCliProbe {
   state: AgentCliProbeState;
@@ -111,8 +108,7 @@ export function toProviderConfig(provider: AiProvider): AIProviderConfig {
     apiKeyUrl: "",
     installHint: "",
   };
-  const supportsBaseUrl =
-    provider.supports_base_url ?? provider.supportsBaseUrl ?? false;
+  const supportsBaseUrl = provider.supports_base_url ?? provider.supportsBaseUrl ?? false;
 
   return {
     ...provider,

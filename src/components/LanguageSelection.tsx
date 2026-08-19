@@ -1,5 +1,5 @@
-"use client"
-import { Button } from "@/components/ui/button"
+"use client";
+import { Button } from "@/components/ui/button";
 import {
   Command,
   CommandEmpty,
@@ -7,61 +7,158 @@ import {
   CommandInput,
   CommandItem,
   CommandList,
-} from "@/components/ui/command"
-import {
-  Popover,
-  PopoverContent,
-  PopoverTrigger,
-} from "@/components/ui/popover"
-import type { SpeechModelEngine } from "@/types"
-import { cn } from "@/lib/utils"
-import { Check, ChevronsUpDown } from "lucide-react"
-import * as React from "react"
-import { languages } from "./languages"
-
+} from "@/components/ui/command";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import type { SpeechModelEngine } from "@/types";
+import { cn } from "@/lib/utils";
+import { Check, ChevronsUpDown } from "lucide-react";
+import * as React from "react";
+import { languages } from "./languages";
 
 interface LanguageSelectionProps {
-  value: string
-  onValueChange: (value: string) => void
-  className?: string
-  engine?: SpeechModelEngine
-  englishOnly?: boolean
+  value: string;
+  onValueChange: (value: string) => void;
+  className?: string;
+  engine?: SpeechModelEngine;
+  englishOnly?: boolean;
 }
 
-export function LanguageSelection({ value, onValueChange, className, engine = 'whisper', englishOnly = false }: LanguageSelectionProps) {
-  const [open, setOpen] = React.useState(false)
+export function LanguageSelection({
+  value,
+  onValueChange,
+  className,
+  engine = "whisper",
+  englishOnly = false,
+}: LanguageSelectionProps) {
+  const [open, setOpen] = React.useState(false);
 
   // Parakeet v3 supports 25 European languages
-  const parakeetAllowed = React.useMemo(() => new Set([
-    'bg','cs','da','de','el','en','es','et','fi','fr','hr','hu','it','lt','lv','mt','nl','pl','pt','ro','ru','sk','sl','sv','uk'
-  ]), [])
+  const parakeetAllowed = React.useMemo(
+    () =>
+      new Set([
+        "bg",
+        "cs",
+        "da",
+        "de",
+        "el",
+        "en",
+        "es",
+        "et",
+        "fi",
+        "fr",
+        "hr",
+        "hu",
+        "it",
+        "lt",
+        "lv",
+        "mt",
+        "nl",
+        "pl",
+        "pt",
+        "ro",
+        "ru",
+        "sk",
+        "sl",
+        "sv",
+        "uk",
+      ]),
+    [],
+  );
 
   // Soniox supported languages (static list per docs). Keep in sync with codes in `languages` above.
-  const sonioxAllowed = React.useMemo(() => new Set<string>([
-    'en','es','fr','de','it','pt','nl','ru','zh','ja','ko','ar','hi','tr','pl','sv','no','da','fi','el','cs','ro','hu','sk','uk','he','id','vi','th','ms','tl','fa','ur','bn','ta','te','gu','pa','bg','hr','sr','sl','lv','lt','et','is','ca','gl'
-  ]), [])
+  const sonioxAllowed = React.useMemo(
+    () =>
+      new Set<string>([
+        "en",
+        "es",
+        "fr",
+        "de",
+        "it",
+        "pt",
+        "nl",
+        "ru",
+        "zh",
+        "ja",
+        "ko",
+        "ar",
+        "hi",
+        "tr",
+        "pl",
+        "sv",
+        "no",
+        "da",
+        "fi",
+        "el",
+        "cs",
+        "ro",
+        "hu",
+        "sk",
+        "uk",
+        "he",
+        "id",
+        "vi",
+        "th",
+        "ms",
+        "tl",
+        "fa",
+        "ur",
+        "bn",
+        "ta",
+        "te",
+        "gu",
+        "pa",
+        "bg",
+        "hr",
+        "sr",
+        "sl",
+        "lv",
+        "lt",
+        "et",
+        "is",
+        "ca",
+        "gl",
+      ]),
+    [],
+  );
 
   // Cohere Transcribe supports 14 languages and does not auto-detect unsupported languages.
-  const cohereAllowed = React.useMemo(() => new Set<string>([
-    'en','de','fr','it','es','pt','el','nl','pl','vi','zh','ar','ja','ko'
-  ]), [])
+  const cohereAllowed = React.useMemo(
+    () =>
+      new Set<string>([
+        "en",
+        "de",
+        "fr",
+        "it",
+        "es",
+        "pt",
+        "el",
+        "nl",
+        "pl",
+        "vi",
+        "zh",
+        "ar",
+        "ja",
+        "ko",
+      ]),
+    [],
+  );
 
   const displayed = React.useMemo(() => {
     if (englishOnly) {
-      return languages.filter(l => l.value === 'en')
+      return languages.filter((l) => l.value === "en");
     }
-    if (engine === 'parakeet') {
-      return languages.filter(l => parakeetAllowed.has(l.value))
+    if (engine === "parakeet") {
+      return languages.filter((l) => parakeetAllowed.has(l.value));
     }
-    if (engine === 'soniox') {
-      return languages.filter(l => sonioxAllowed.has(l.value))
+    if (engine === "soniox") {
+      return languages.filter((l) => sonioxAllowed.has(l.value));
     }
-    if (engine === 'cohere') {
-      return languages.filter(l => cohereAllowed.has(l.value))
+    if (engine === "cohere") {
+      return languages.filter((l) => cohereAllowed.has(l.value));
     }
-    return languages
-  }, [engine, parakeetAllowed, sonioxAllowed, cohereAllowed, englishOnly])
-  
+    return languages;
+  }, [engine, parakeetAllowed, sonioxAllowed, cohereAllowed, englishOnly]);
+
   return (
     <Popover open={open} onOpenChange={setOpen}>
       <PopoverTrigger
@@ -95,15 +192,15 @@ export function LanguageSelection({ value, onValueChange, className, engine = 'w
                   value={language.label}
                   onSelect={() => {
                     // Pass the actual language code (value) when selected
-                    onValueChange(language.value)
-                    setOpen(false)
+                    onValueChange(language.value);
+                    setOpen(false);
                   }}
                 >
                   {language.label}
                   <Check
                     className={cn(
                       "ml-auto",
-                      value === language.value ? "opacity-100" : "opacity-0"
+                      value === language.value ? "opacity-100" : "opacity-0",
                     )}
                   />
                 </CommandItem>
@@ -113,5 +210,5 @@ export function LanguageSelection({ value, onValueChange, className, engine = 'w
         </Command>
       </PopoverContent>
     </Popover>
-  )
+  );
 }

@@ -18,7 +18,12 @@ import { findActivePrimaryBinding } from "@/lib/shortcut-display";
 import { invoke } from "@tauri-apps/api/core";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
-import type { ModifierKind, ModifierSide, ShortcutBinding, ShortcutSettings } from "@/types/shortcuts";
+import type {
+  ModifierKind,
+  ModifierSide,
+  ShortcutBinding,
+  ShortcutSettings,
+} from "@/types/shortcuts";
 import { isCloudModel, isLocalModel, type ModelInfo } from "@/types";
 
 const log = createLogger("onboarding");
@@ -72,20 +77,17 @@ export function useOnboardingDesktop({
   const [hotkey, setHotkey] = useState(settings?.hotkey || "");
   const [isEditingHotkey, setIsEditingHotkey] = useState(false);
   const [capturedBareModifier, setCapturedBareModifier] = useState<BareModifierSpec | null>(null);
-  const [isRequestingPermission, setIsRequestingPermission] = useState<
-    string | null
-  >(null);
-  const [checkingPermissions, setCheckingPermissions] = useState<Set<string>>(
-    new Set(),
-  );
+  const [isRequestingPermission, setIsRequestingPermission] = useState<string | null>(null);
+  const [checkingPermissions, setCheckingPermissions] = useState<Set<string>>(new Set());
   const [remoteServers, setRemoteServers] = useState<SavedConnection[]>([]);
-  const [activeRemoteServerId, setActiveRemoteServerId] = useState<
-    string | null
-  >(null);
+  const [activeRemoteServerId, setActiveRemoteServerId] = useState<string | null>(null);
   const [isLoadingRemoteServers, setIsLoadingRemoteServers] = useState(false);
   const [showAddRemoteModal, setShowAddRemoteModal] = useState(false);
-  const [discoveredRemoteServers, setDiscoveredRemoteServers] = useState<DiscoveredRemoteServer[]>([]);
-  const [selectedDiscoveredServer, setSelectedDiscoveredServer] = useState<DiscoveredRemoteServer | null>(null);
+  const [discoveredRemoteServers, setDiscoveredRemoteServers] = useState<DiscoveredRemoteServer[]>(
+    [],
+  );
+  const [selectedDiscoveredServer, setSelectedDiscoveredServer] =
+    useState<DiscoveredRemoteServer | null>(null);
   const [isSavingCompletion, setIsSavingCompletion] = useState(false);
   const [holdToTalk, setHoldToTalk] = useState(false);
   const [cloudModelSetup, setCloudModelSetup] = useState<string | null>(null);
@@ -93,44 +95,21 @@ export function useOnboardingDesktop({
   const hotkeyHydrated = useRef(false);
   const sourceChosenByUser = useRef(false);
 
-
   const permissions = {
     microphone: {
-      status:
-        hasMicPermission === null
-          ? "checking"
-          : hasMicPermission
-            ? "granted"
-            : "denied",
+      status: hasMicPermission === null ? "checking" : hasMicPermission ? "granted" : "denied",
     } as PermissionState,
     accessibility: {
       status:
-        hasAccessPermission === null
-          ? "checking"
-          : hasAccessPermission
-            ? "granted"
-            : "denied",
+        hasAccessPermission === null ? "checking" : hasAccessPermission ? "granted" : "denied",
     } as PermissionState,
   };
 
   const steps = useMemo(
     () =>
       isMacOS
-        ? [
-            "welcome",
-            "source",
-            "permissions",
-            "readiness",
-            "hotkey",
-            "success",
-          ] satisfies Step[]
-        : [
-            "welcome",
-            "source",
-            "readiness",
-            "hotkey",
-            "success",
-          ] satisfies Step[],
+        ? (["welcome", "source", "permissions", "readiness", "hotkey", "success"] satisfies Step[])
+        : (["welcome", "source", "readiness", "hotkey", "success"] satisfies Step[]),
     [],
   );
 
@@ -167,17 +146,17 @@ export function useOnboardingDesktop({
   );
   const localReady = Boolean(
     sourceType === "local" &&
-      selectedModelName &&
-      selectedModel &&
-      isLocalModel(selectedModel) &&
-      isModelReady(selectedModelName),
+    selectedModelName &&
+    selectedModel &&
+    isLocalModel(selectedModel) &&
+    isModelReady(selectedModelName),
   );
   const cloudReady = Boolean(
     sourceType === "cloud" &&
-      selectedModelName &&
-      selectedModel &&
-      isCloudModel(selectedModel) &&
-      isModelReady(selectedModelName),
+    selectedModelName &&
+    selectedModel &&
+    isCloudModel(selectedModel) &&
+    isModelReady(selectedModelName),
   );
   const hasDownloadedLocalModel = localModelNames.some((name) => isModelReady(name));
   const remoteReady = sourceType === "remote" && isRemoteServerOnline(activeRemoteServer);
@@ -215,10 +194,7 @@ export function useOnboardingDesktop({
               serverId: server.id,
             });
           } catch (error) {
-            log.error(
-              `[OnboardingDesktop] Failed to refresh remote server ${server.id}:`,
-              error,
-            );
+            log.error(`[OnboardingDesktop] Failed to refresh remote server ${server.id}:`, error);
             return server;
           }
         }),
@@ -304,7 +280,6 @@ export function useOnboardingDesktop({
       cancelled = true;
     };
   }, [settings]);
-
 
   const confirmSource = (nextSourceType: SourceType) => {
     sourceChosenByUser.current = true;
@@ -417,7 +392,9 @@ export function useOnboardingDesktop({
       return [...prev, server];
     });
     setDiscoveredRemoteServers((prev) =>
-      prev.filter((candidate) => !(candidate.host === server.host && candidate.port === server.port)),
+      prev.filter(
+        (candidate) => !(candidate.host === server.host && candidate.port === server.port),
+      ),
     );
     setActiveRemoteServerId(server.id);
     void invoke("set_active_remote_server", { serverId: server.id }).catch((error) => {
@@ -449,7 +426,6 @@ export function useOnboardingDesktop({
       toast.error(error instanceof Error ? error.message : "Failed to add remote Voicetypr");
     }
   };
-
 
   // Stable id for the onboarding-created HoldToRecord modifier_hold binding.
   // Using a fixed id means repeated saves replace the same entry instead of
@@ -541,7 +517,7 @@ export function useOnboardingDesktop({
   };
 
   const handleGpuToggle = async (checked: boolean) => {
-    await updateSettings({ transcription_acceleration: checked ? 'auto' : 'cpu' });
+    await updateSettings({ transcription_acceleration: checked ? "auto" : "cpu" });
   };
 
   const completeOnboarding = async () => {

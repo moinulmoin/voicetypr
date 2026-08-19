@@ -111,11 +111,7 @@ export function ConnectionSettingsPanel({
               tabIndex={-1}
               aria-label={showPassword ? "Hide password" : "Show password"}
             >
-              {showPassword ? (
-                <EyeOff className="h-4 w-4" />
-              ) : (
-                <Eye className="h-4 w-4" />
-              )}
+              {showPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
             </button>
           </div>
           {enabled && password !== savedPassword && (
@@ -148,7 +144,8 @@ export function ConnectionSettingsPanel({
               Allow trusted devices to change shared model
             </Label>
             <p className="text-xs text-muted-foreground">
-              Requires a sharing password so only trusted devices can change the model this device shares.
+              Requires a sharing password so only trusted devices can change the model this device
+              shares.
             </p>
           </div>
           <Switch

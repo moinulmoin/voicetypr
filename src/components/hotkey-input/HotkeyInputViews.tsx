@@ -36,9 +36,7 @@ export function HotkeyInlineView({
           <span className="text-muted-foreground">{placeholder || "Press keys…"}</span>
         )}
       </div>
-      {validationError && (
-        <p className="mt-1 text-xs text-destructive">{validationError}</p>
-      )}
+      {validationError && <p className="mt-1 text-xs text-destructive">{validationError}</p>}
     </div>
   );
 }
@@ -122,12 +120,7 @@ export function HotkeyEditView({
         >
           <Check className="w-4 h-4" />
         </Button>
-        <Button
-          size="icon"
-          variant="outline"
-          onClick={onCancel}
-          title="Cancel"
-        >
+        <Button size="icon" variant="outline" onClick={onCancel} title="Cancel">
           <X className="w-4 h-4" />
         </Button>
       </div>

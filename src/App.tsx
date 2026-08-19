@@ -24,32 +24,32 @@ export default function App() {
           <ModelAvailabilityProvider>
             <ReadinessProvider>
               <ModelManagementProvider>
-              <TooltipProvider>
-                <AppContainer />
-                <Toaster
-                  position="top-center"
-                  closeButton
-                  expand
-                  visibleToasts={4}
-                  toastOptions={{
-                    duration: 5_000,
-                    classNames: {
-                      toast:
-                        "border-border bg-popover text-popover-foreground shadow-2xl shadow-black/20 ring-1 ring-black/5",
-                      title: "text-sm font-semibold",
-                      description: "text-sm leading-relaxed text-muted-foreground",
-                      closeButton:
-                        "border-border bg-background text-muted-foreground shadow-sm hover:bg-accent hover:text-accent-foreground",
-                      success: "border-sage/50",
-                      error: "border-destructive/50",
-                      warning: "border-amber-500/50",
-                      info: "border-sky-500/50",
-                    },
-                  }}
-                />
-              </TooltipProvider>
-            </ModelManagementProvider>
-          </ReadinessProvider>
+                <TooltipProvider>
+                  <AppContainer />
+                  <Toaster
+                    position="top-center"
+                    closeButton
+                    expand
+                    visibleToasts={4}
+                    toastOptions={{
+                      duration: 5_000,
+                      classNames: {
+                        toast:
+                          "border-border bg-popover text-popover-foreground shadow-2xl shadow-black/20 ring-1 ring-black/5",
+                        title: "text-sm font-semibold",
+                        description: "text-sm leading-relaxed text-muted-foreground",
+                        closeButton:
+                          "border-border bg-background text-muted-foreground shadow-sm hover:bg-accent hover:text-accent-foreground",
+                        success: "border-sage/50",
+                        error: "border-destructive/50",
+                        warning: "border-amber-500/50",
+                        info: "border-sky-500/50",
+                      },
+                    }}
+                  />
+                </TooltipProvider>
+              </ModelManagementProvider>
+            </ReadinessProvider>
           </ModelAvailabilityProvider>
         </SettingsProvider>
       </LicenseProvider>

@@ -8,10 +8,7 @@ import {
   DialogTitle,
   DialogTrigger,
 } from "@/components/ui/dialog";
-import {
-  SettingRow,
-  SettingsHeader,
-} from "@/components/settings/settings-ui";
+import { SettingRow, SettingsHeader } from "@/components/settings/settings-ui";
 import { HelpCircle } from "lucide-react";
 import type { ReactNode } from "react";
 
@@ -33,7 +30,19 @@ export function ModelsSourcesHeader({
           <span className="inline-flex items-center gap-2">
             Sources
             <Dialog>
-              <DialogTrigger render={<Button type="button" variant="ghost" size="icon-sm" aria-label="Sources guide" className="size-7 rounded-full text-muted-foreground"/>}><HelpCircle className="h-4 w-4" /></DialogTrigger>
+              <DialogTrigger
+                render={
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="icon-sm"
+                    aria-label="Sources guide"
+                    className="size-7 rounded-full text-muted-foreground"
+                  />
+                }
+              >
+                <HelpCircle className="h-4 w-4" />
+              </DialogTrigger>
               <DialogContent className="sm:max-w-lg">
                 <DialogHeader>
                   <DialogTitle>Sources guide</DialogTitle>
@@ -42,9 +51,18 @@ export function ModelsSourcesHeader({
                   </DialogDescription>
                 </DialogHeader>
                 <div className="space-y-3 text-sm leading-6 text-muted-foreground">
-                  <p><strong className="text-foreground">Local</strong> models run on this machine and keep raw audio local.</p>
-                  <p><strong className="text-foreground">Cloud</strong> sources use a connected provider when you choose one.</p>
-                  <p><strong className="text-foreground">Remote Voicetypr</strong> uses another device on your network when that server is online.</p>
+                  <p>
+                    <strong className="text-foreground">Local</strong> models run on this machine
+                    and keep raw audio local.
+                  </p>
+                  <p>
+                    <strong className="text-foreground">Cloud</strong> sources use a connected
+                    provider when you choose one.
+                  </p>
+                  <p>
+                    <strong className="text-foreground">Remote Voicetypr</strong> uses another
+                    device on your network when that server is online.
+                  </p>
                 </div>
               </DialogContent>
             </Dialog>

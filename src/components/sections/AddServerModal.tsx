@@ -93,7 +93,9 @@ export function AddServerModal({
             testError={modal.testError}
             isSelfConnection={modal.isSelfConnection}
             testRequiresReplacementPassword={modal.testRequiresReplacementPassword}
-            onTestConnection={() => { void modal.handleTestConnection(); }}
+            onTestConnection={() => {
+              void modal.handleTestConnection();
+            }}
           />
         </FieldGroup>
 
@@ -102,8 +104,15 @@ export function AddServerModal({
             Cancel
           </Button>
           <Button
-            onClick={() => { void modal.handleSaveServer(); }}
-            disabled={!modal.host.trim() || modal.saving || modal.isSelfConnection || modal.initialPasswordRequirementUnmet}
+            onClick={() => {
+              void modal.handleSaveServer();
+            }}
+            disabled={
+              !modal.host.trim() ||
+              modal.saving ||
+              modal.isSelfConnection ||
+              modal.initialPasswordRequirementUnmet
+            }
           >
             {modal.saving ? (
               <>

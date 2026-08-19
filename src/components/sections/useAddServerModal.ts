@@ -164,7 +164,9 @@ export function useAddServerModal({
 
     const validatedPort = parseRemoteServerPort(port);
     if (!validatedPort) {
-      toast.error(`Enter a valid port between ${MIN_REMOTE_SERVER_PORT} and ${MAX_REMOTE_SERVER_PORT}`);
+      toast.error(
+        `Enter a valid port between ${MIN_REMOTE_SERVER_PORT} and ${MAX_REMOTE_SERVER_PORT}`,
+      );
       setTestStatus("idle");
       return;
     }
@@ -231,7 +233,9 @@ export function useAddServerModal({
 
     const validatedPort = parseRemoteServerPort(port);
     if (!validatedPort) {
-      toast.error(`Enter a valid port between ${MIN_REMOTE_SERVER_PORT} and ${MAX_REMOTE_SERVER_PORT}`);
+      toast.error(
+        `Enter a valid port between ${MIN_REMOTE_SERVER_PORT} and ${MAX_REMOTE_SERVER_PORT}`,
+      );
       return;
     }
 
@@ -264,7 +268,9 @@ export function useAddServerModal({
     } catch (error) {
       log.error(`Failed to ${isEditMode ? "update" : "add"} server:`, error);
       const errorMessage =
-        error instanceof Error ? error.message : `Failed to ${isEditMode ? "update" : "add"} server`;
+        error instanceof Error
+          ? error.message
+          : `Failed to ${isEditMode ? "update" : "add"} server`;
       toast.error(errorMessage);
     } finally {
       setSaving(false);

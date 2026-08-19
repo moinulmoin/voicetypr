@@ -19,11 +19,7 @@ interface TabContainerProps {
   onNavigate?: (section: ScreenId) => void;
 }
 
-export function TabContainer({
-  activeSection,
-  onNavigate,
-}: TabContainerProps) {
-
+export function TabContainer({ activeSection, onNavigate }: TabContainerProps) {
   const renderTabContent = () => {
     switch (activeSection) {
       case "overview":
@@ -36,7 +32,6 @@ export function TabContainer({
         return <AudioUploadSection />;
       case "recording":
         return <RecordingTab />;
-
 
       case "general":
         return <SettingsTab />;
@@ -62,10 +57,8 @@ export function TabContainer({
       case "license":
         return <AccountTab />;
 
-
       case "report-problem":
         return <ReportProblemSection />;
-
 
       default:
         return <OverviewTab onNavigate={onNavigate} />;

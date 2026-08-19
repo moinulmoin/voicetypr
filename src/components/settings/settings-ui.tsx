@@ -12,21 +12,10 @@ interface IconProps {
  * a stack of titled cards, and label/description + control rows inside each card.
  */
 
-export function SettingsPage({
-  children,
-  className,
-}: {
-  children: ReactNode;
-  className?: string;
-}) {
+export function SettingsPage({ children, className }: { children: ReactNode; className?: string }) {
   return (
     <div className="h-full min-h-0 overflow-auto">
-      <div
-        className={cn(
-          "mx-auto flex w-full max-w-4xl flex-col gap-5 pb-4 pl-2 pr-4",
-          className,
-        )}
-      >
+      <div className={cn("mx-auto flex w-full max-w-4xl flex-col gap-5 pb-4 pl-2 pr-4", className)}>
         {children}
       </div>
     </div>
@@ -54,9 +43,7 @@ export function SettingsHeader({
           </p>
         ) : null}
       </div>
-      {actions ? (
-        <div className="ml-auto flex flex-wrap items-center gap-2">{actions}</div>
-      ) : null}
+      {actions ? <div className="ml-auto flex flex-wrap items-center gap-2">{actions}</div> : null}
     </header>
   );
 }
@@ -77,12 +64,7 @@ export function SettingsCard({
   className?: string;
 }) {
   return (
-    <section
-      className={cn(
-        "rounded-xl border border-border/80 bg-card p-5",
-        className,
-      )}
-    >
+    <section className={cn("rounded-xl border border-border/80 bg-card p-5", className)}>
       <div className="flex items-start gap-3">
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-2.5">
@@ -90,7 +72,12 @@ export function SettingsCard({
             <h2 className="text-base font-semibold text-foreground">{title}</h2>
           </div>
           {description ? (
-            <p className={cn("mt-1 text-sm leading-relaxed text-muted-foreground", Icon && "ml-[26px]")}>
+            <p
+              className={cn(
+                "mt-1 text-sm leading-relaxed text-muted-foreground",
+                Icon && "ml-[26px]",
+              )}
+            >
               {description}
             </p>
           ) : null}
@@ -133,7 +120,9 @@ export function SettingRow({
           <p className="text-[13.5px] font-semibold text-foreground">{title}</p>
         )}
         {description ? (
-          <p className="mt-0.5 text-[12.5px] leading-relaxed text-muted-foreground">{description}</p>
+          <p className="mt-0.5 text-[12.5px] leading-relaxed text-muted-foreground">
+            {description}
+          </p>
         ) : null}
       </div>
       <div className="flex w-full items-center gap-2 sm:ml-auto sm:w-auto sm:shrink-0">

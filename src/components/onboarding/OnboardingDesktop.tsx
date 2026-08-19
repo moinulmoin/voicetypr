@@ -5,10 +5,7 @@ import { ReadinessStep } from "@/components/onboarding/ReadinessStep";
 import { SourceStep } from "@/components/onboarding/SourceStep";
 import { SuccessStep } from "@/components/onboarding/SuccessStep";
 import { WelcomeStep } from "@/components/onboarding/WelcomeStep";
-import {
-  sourceLabel,
-  type OnboardingDesktopProps,
-} from "@/components/onboarding/onboardingTypes";
+import { sourceLabel, type OnboardingDesktopProps } from "@/components/onboarding/onboardingTypes";
 import { useOnboardingDesktop } from "@/components/onboarding/useOnboardingDesktop";
 
 export const OnboardingDesktop = function OnboardingDesktop(props: OnboardingDesktopProps) {

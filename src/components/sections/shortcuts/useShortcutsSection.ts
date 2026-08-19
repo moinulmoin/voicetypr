@@ -98,101 +98,131 @@ export function useShortcutsSection() {
   const editingDisabled = isMutating || settingsLoadError !== null;
   const isCapturing = editingCapture !== null;
 
-  const beginMutation = useCallback((bindingId: string) => {
-    if (savingBindingIdRef.current !== null || settingsLoadError !== null) {
-      return false;
-    }
+  const beginMutation = useCallback(
+    (bindingId: string) => {
+      if (savingBindingIdRef.current !== null || settingsLoadError !== null) {
+        return false;
+      }
 
-    savingBindingIdRef.current = bindingId;
-    setSavingBindingId(bindingId);
-    return true;
-  }, [settingsLoadError]);
+      savingBindingIdRef.current = bindingId;
+      setSavingBindingId(bindingId);
+      return true;
+    },
+    [settingsLoadError],
+  );
 
   const endMutation = useCallback(() => {
     savingBindingIdRef.current = null;
     setSavingBindingId(null);
   }, []);
 
-  const persistSettings = useCallback(async (nextSettings: ShortcutSettings, successMessage: string) => {
-    const savedSettings = await invoke<ShortcutSettings>("update_shortcut_settings", { settings: nextSettings });
-    setSettings(normalizeSettings(savedSettings));
-    toast.success(successMessage);
-  }, []);
-
-  const updateBinding = useCallback(async (nextBinding: ShortcutBinding) => {
-    const duplicateBinding = findConflictingBinding(nextBinding, settings.bindings, draftBindings);
-    if (duplicateBinding) {
-      toast.error("Shortcut already assigned", {
-        description: `${nextBinding.shortcut.trim()} is already assigned to ${actionLabels.get(duplicateBinding.action) ?? duplicateBinding.action}.`,
+  const persistSettings = useCallback(
+    async (nextSettings: ShortcutSettings, successMessage: string) => {
+      const savedSettings = await invoke<ShortcutSettings>("update_shortcut_settings", {
+        settings: nextSettings,
       });
-      return;
-    }
+      setSettings(normalizeSettings(savedSettings));
+      toast.success(successMessage);
+    },
+    [],
+  );
 
-    if (!beginMutation(nextBinding.id)) {
-      return;
-    }
-
-    const isDraft = draftBindings.some((binding) => binding.id === nextBinding.id);
-    const nextSettings = {
-      bindings: isDraft
-        ? [...settings.bindings, nextBinding]
-        : settings.bindings.map((binding) =>
-          binding.id === nextBinding.id ? nextBinding : binding,
-        ),
-    };
-
-    try {
-      await persistSettings(nextSettings, "Shortcut saved.");
-      if (isDraft) {
-        setDraftBindings((bindings) => bindings.filter((binding) => binding.id !== nextBinding.id));
+  const updateBinding = useCallback(
+    async (nextBinding: ShortcutBinding) => {
+      const duplicateBinding = findConflictingBinding(
+        nextBinding,
+        settings.bindings,
+        draftBindings,
+      );
+      if (duplicateBinding) {
+        toast.error("Shortcut already assigned", {
+          description: `${nextBinding.shortcut.trim()} is already assigned to ${actionLabels.get(duplicateBinding.action) ?? duplicateBinding.action}.`,
+        });
+        return;
       }
-    } catch (error) {
-      log.error("Failed to save shortcut:", error);
-      toast.error("Could not save shortcut", {
-        description: formatError(error),
+
+      if (!beginMutation(nextBinding.id)) {
+        return;
+      }
+
+      const isDraft = draftBindings.some((binding) => binding.id === nextBinding.id);
+      const nextSettings = {
+        bindings: isDraft
+          ? [...settings.bindings, nextBinding]
+          : settings.bindings.map((binding) =>
+              binding.id === nextBinding.id ? nextBinding : binding,
+            ),
+      };
+
+      try {
+        await persistSettings(nextSettings, "Shortcut saved.");
+        if (isDraft) {
+          setDraftBindings((bindings) =>
+            bindings.filter((binding) => binding.id !== nextBinding.id),
+          );
+        }
+      } catch (error) {
+        log.error("Failed to save shortcut:", error);
+        toast.error("Could not save shortcut", {
+          description: formatError(error),
+        });
+      } finally {
+        endMutation();
+      }
+    },
+    [actionLabels, beginMutation, draftBindings, endMutation, persistSettings, settings.bindings],
+  );
+
+  const deleteBinding = useCallback(
+    async (bindingId: string) => {
+      if (editingDisabled || savingBindingIdRef.current !== null) {
+        return;
+      }
+
+      if (draftBindings.some((binding) => binding.id === bindingId)) {
+        setDraftBindings((bindings) => bindings.filter((binding) => binding.id !== bindingId));
+        return;
+      }
+
+      if (!beginMutation(bindingId)) {
+        return;
+      }
+
+      const nextSettings = {
+        bindings: settings.bindings.filter((binding) => binding.id !== bindingId),
+      };
+
+      try {
+        await persistSettings(nextSettings, "Shortcut removed.");
+      } catch (error) {
+        log.error("Failed to remove shortcut:", error);
+        toast.error("Could not remove shortcut", { description: formatError(error) });
+      } finally {
+        endMutation();
+      }
+    },
+    [
+      beginMutation,
+      draftBindings,
+      editingDisabled,
+      endMutation,
+      persistSettings,
+      settings.bindings,
+    ],
+  );
+
+  const startEditing = useCallback(
+    (binding: ShortcutBinding) => {
+      if (editingDisabled || savingBindingIdRef.current !== null) return;
+      setEditingCapture({
+        bindingId: binding.id,
+        combo: binding.shortcut || "",
+        bareModifier: null,
+        allowRiskyCombo: binding.allow_risky_combo,
       });
-    } finally {
-      endMutation();
-    }
-  }, [actionLabels, beginMutation, draftBindings, endMutation, persistSettings, settings.bindings]);
-
-  const deleteBinding = useCallback(async (bindingId: string) => {
-    if (editingDisabled || savingBindingIdRef.current !== null) {
-      return;
-    }
-
-    if (draftBindings.some((binding) => binding.id === bindingId)) {
-      setDraftBindings((bindings) => bindings.filter((binding) => binding.id !== bindingId));
-      return;
-    }
-
-    if (!beginMutation(bindingId)) {
-      return;
-    }
-
-    const nextSettings = {
-      bindings: settings.bindings.filter((binding) => binding.id !== bindingId),
-    };
-
-    try {
-      await persistSettings(nextSettings, "Shortcut removed.");
-    } catch (error) {
-      log.error("Failed to remove shortcut:", error);
-      toast.error("Could not remove shortcut", { description: formatError(error) });
-    } finally {
-      endMutation();
-    }
-  }, [beginMutation, draftBindings, editingDisabled, endMutation, persistSettings, settings.bindings]);
-
-  const startEditing = useCallback((binding: ShortcutBinding) => {
-    if (editingDisabled || savingBindingIdRef.current !== null) return;
-    setEditingCapture({
-      bindingId: binding.id,
-      combo: binding.shortcut || "",
-      bareModifier: null,
-      allowRiskyCombo: binding.allow_risky_combo,
-    });
-  }, [editingDisabled]);
+    },
+    [editingDisabled],
+  );
 
   const cancelEdit = useCallback(() => {
     if (!editingCapture) return;
@@ -216,23 +246,28 @@ export function useShortcutsSection() {
       actions.find((a) => a.action === originalBinding.action)?.recommended_trigger ?? "pressed";
 
     setEditingCapture(null);
-    await updateBinding(bindingFromEditingCapture(originalBinding, editingCapture, recommendedTrigger));
+    await updateBinding(
+      bindingFromEditingCapture(originalBinding, editingCapture, recommendedTrigger),
+    );
   }, [actions, draftBindings, editingCapture, settings.bindings, updateBinding]);
 
-  const addDraftBinding = useCallback((action: ShortcutActionDefinition) => {
-    if (editingDisabled || savingBindingIdRef.current !== null || isCapturing) {
-      return;
-    }
+  const addDraftBinding = useCallback(
+    (action: ShortcutActionDefinition) => {
+      if (editingDisabled || savingBindingIdRef.current !== null || isCapturing) {
+        return;
+      }
 
-    const newBinding = createBinding(action);
-    setDraftBindings((bindings) => [...bindings, newBinding]);
-    setEditingCapture({
-      bindingId: newBinding.id,
-      combo: "",
-      bareModifier: null,
-      allowRiskyCombo: false,
-    });
-  }, [editingDisabled, isCapturing]);
+      const newBinding = createBinding(action);
+      setDraftBindings((bindings) => [...bindings, newBinding]);
+      setEditingCapture({
+        bindingId: newBinding.id,
+        combo: "",
+        bareModifier: null,
+        allowRiskyCombo: false,
+      });
+    },
+    [editingDisabled, isCapturing],
+  );
 
   return {
     groupedActions,

@@ -1,7 +1,16 @@
-import { createContext, useContext, ReactNode, useState, useEffect, useCallback, useMemo, useRef } from 'react';
-import { invoke } from '@tauri-apps/api/core';
-import { useTauriEvent } from '@/hooks/useTauriEvent';
-import { AppSettings } from '@/types';
+import {
+  createContext,
+  useContext,
+  ReactNode,
+  useState,
+  useEffect,
+  useCallback,
+  useMemo,
+  useRef,
+} from "react";
+import { invoke } from "@tauri-apps/api/core";
+import { useTauriEvent } from "@/hooks/useTauriEvent";
+import { AppSettings } from "@/types";
 import { createLogger } from "@/lib/logger";
 
 const log = createLogger("settings");
@@ -28,13 +37,13 @@ export function SettingsProvider({ children }: { children: ReactNode }) {
     try {
       setIsLoading(true);
       setError(null);
-      const appSettings = await invoke<AppSettings>('get_settings');
+      const appSettings = await invoke<AppSettings>("get_settings");
       setSettings(appSettings);
       settingsRef.current = appSettings;
     } catch (err) {
-      const error = err instanceof Error ? err : new Error('Failed to load settings');
+      const error = err instanceof Error ? err : new Error("Failed to load settings");
       setError(error);
-      log.error('[SettingsContext] Failed to load settings:', error);
+      log.error("[SettingsContext] Failed to load settings:", error);
     } finally {
       setIsLoading(false);
     }
@@ -58,9 +67,9 @@ export function SettingsProvider({ children }: { children: ReactNode }) {
     setSettings(nextSettings);
 
     try {
-      await invoke('save_settings', {
+      await invoke("save_settings", {
         settings: nextSettings,
-        ...(Object.prototype.hasOwnProperty.call(updates, 'update_channel')
+        ...(Object.prototype.hasOwnProperty.call(updates, "update_channel")
           ? { updateChannelExplicit: true }
           : {}),
       });
@@ -80,7 +89,7 @@ export function SettingsProvider({ children }: { children: ReactNode }) {
       const restored = reverted as unknown as AppSettings;
       settingsRef.current = restored;
       setSettings(restored);
-      log.error('[SettingsContext] Failed to update settings:', err);
+      log.error("[SettingsContext] Failed to update settings:", err);
       throw err;
     }
   }, []);
@@ -107,25 +116,19 @@ export function SettingsProvider({ children }: { children: ReactNode }) {
     [settings, isLoading, error, loadSettings, updateSettings],
   );
 
-  return (
-    <SettingsContext.Provider value={value}>
-      {children}
-    </SettingsContext.Provider>
-  );
+  return <SettingsContext.Provider value={value}>{children}</SettingsContext.Provider>;
 }
 
 export function useSettings() {
   const context = useContext(SettingsContext);
   if (!context) {
-    throw new Error('useSettings must be used within a SettingsProvider');
+    throw new Error("useSettings must be used within a SettingsProvider");
   }
   return context;
 }
 
 // Helper hook for components that only need specific settings
-export function useSetting<K extends keyof AppSettings>(
-  key: K
-): AppSettings[K] | undefined {
+export function useSetting<K extends keyof AppSettings>(key: K): AppSettings[K] | undefined {
   const { settings } = useSettings();
   return settings?.[key];
 }

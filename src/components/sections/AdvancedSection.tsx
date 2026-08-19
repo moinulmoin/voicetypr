@@ -15,17 +15,8 @@ import {
   DialogTitle,
   DialogTrigger,
 } from "@/components/ui/dialog";
-import {
-  Collapsible,
-  CollapsibleContent,
-  CollapsibleTrigger,
-} from "@/components/ui/collapsible";
-import {
-  Tooltip,
-  TooltipContent,
-  TooltipProvider,
-  TooltipTrigger,
-} from "@/components/ui/tooltip";
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { useReadiness } from "@/contexts/ReadinessContext";
 import { isMacOS } from "@/lib/platform";
 import {
@@ -104,7 +95,7 @@ export function AdvancedSection() {
     requestAccessibilityPermission,
     requestMicrophonePermission,
     checkAccessibilityPermission,
-    checkMicrophonePermission
+    checkMicrophonePermission,
   } = useReadiness();
 
   const handleRequestPermission = async (type: "microphone" | "accessibility") => {
@@ -121,10 +112,7 @@ export function AdvancedSection() {
   };
 
   const refresh = async () => {
-    await Promise.all([
-      checkAccessibilityPermission(),
-      checkMicrophonePermission()
-    ]);
+    await Promise.all([checkAccessibilityPermission(), checkMicrophonePermission()]);
   };
 
   const permissionData = [
@@ -133,15 +121,19 @@ export function AdvancedSection() {
       icon: Mic,
       title: "Microphone",
       description: "To record your voice for transcription",
-      status: hasMicrophonePermission ? "granted" : isLoading ? "checking" : "denied"
+      status: hasMicrophonePermission ? "granted" : isLoading ? "checking" : "denied",
     },
-    ...(showAccessibility ? [{
-      type: "accessibility" as const,
-      icon: Keyboard,
-      title: "Accessibility",
-      description: "For global hotkeys to trigger recording",
-      status: hasAccessibilityPermission ? "granted" : isLoading ? "checking" : "denied"
-    }] : [])
+    ...(showAccessibility
+      ? [
+          {
+            type: "accessibility" as const,
+            icon: Keyboard,
+            title: "Accessibility",
+            description: "For global hotkeys to trigger recording",
+            status: hasAccessibilityPermission ? "granted" : isLoading ? "checking" : "denied",
+          },
+        ]
+      : []),
     // Automation permission removed for now
     // Can be re-enabled later if needed:
     // {
@@ -161,7 +153,19 @@ export function AdvancedSection() {
             <span className="flex items-center gap-2">
               Quick help
               <Dialog>
-                <DialogTrigger render={<Button type="button" variant="ghost" size="icon-sm" aria-label="Quick help guide" className="size-7 rounded-full text-muted-foreground"/>}><HelpCircle className="h-4 w-4" /></DialogTrigger>
+                <DialogTrigger
+                  render={
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="icon-sm"
+                      aria-label="Quick help guide"
+                      className="size-7 rounded-full text-muted-foreground"
+                    />
+                  }
+                >
+                  <HelpCircle className="h-4 w-4" />
+                </DialogTrigger>
                 <DialogContent className="sm:max-w-lg">
                   <DialogHeader>
                     <DialogTitle>Quick help guide</DialogTitle>
@@ -170,8 +174,14 @@ export function AdvancedSection() {
                     </DialogDescription>
                   </DialogHeader>
                   <div className="space-y-3 text-sm leading-6 text-muted-foreground">
-                    <p><strong className="text-foreground">Permissions</strong> refreshes microphone and accessibility access after macOS changes.</p>
-                    <p><strong className="text-foreground">Reset</strong> lets you repeat onboarding or erase app data.</p>
+                    <p>
+                      <strong className="text-foreground">Permissions</strong> refreshes microphone
+                      and accessibility access after macOS changes.
+                    </p>
+                    <p>
+                      <strong className="text-foreground">Reset</strong> lets you repeat onboarding
+                      or erase app data.
+                    </p>
                   </div>
                 </DialogContent>
               </Dialog>
@@ -248,12 +258,17 @@ export function AdvancedSection() {
               </SettingRow>
             ))}
 
-            {(hasMicrophonePermission === false || (showAccessibility && hasAccessibilityPermission === false)) && (
+            {(hasMicrophonePermission === false ||
+              (showAccessibility && hasAccessibilityPermission === false)) && (
               <div className="mt-4 border-t border-border pt-4 text-xs text-muted-foreground space-y-1">
                 <p className="font-medium">Missing permissions:</p>
                 <ul className="list-disc list-inside space-y-0.5 ml-2">
-                  {hasMicrophonePermission === false && <li>Microphone: Required for voice recording</li>}
-                  {showAccessibility && hasAccessibilityPermission === false && <li>Accessibility: Required for global hotkeys</li>}
+                  {hasMicrophonePermission === false && (
+                    <li>Microphone: Required for voice recording</li>
+                  )}
+                  {showAccessibility && hasAccessibilityPermission === false && (
+                    <li>Accessibility: Required for global hotkeys</li>
+                  )}
                 </ul>
               </div>
             )}
@@ -312,7 +327,6 @@ export function AdvancedSection() {
         </SettingsCard>
 
         <ResetSection />
-
       </SettingsPage>
     </PermissionErrorBoundary>
   );

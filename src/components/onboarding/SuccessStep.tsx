@@ -32,18 +32,26 @@ export function SuccessStep({
         <ShieldCheck className="size-8" />
       </div>
       <div className="flex flex-col gap-3">
-        <h1 className="text-4xl font-semibold tracking-[-0.04em]">
-          You're all set
-        </h1>
+        <h1 className="text-4xl font-semibold tracking-[-0.04em]">You're all set</h1>
         <p className="text-muted-foreground">
           Voicetypr is ready to use.{" "}
-          {capturedBareModifier
-            ? holdToTalk
-              ? <>Hold {formatBareModifierLabel(capturedBareModifier)} anywhere to start recording; release to stop.</>
-              : <>Tap {formatBareModifierLabel(capturedBareModifier)} anywhere to start or stop recording.</>
-            : holdToTalk
-              ? <>Hold {formatHotkey(hotkey)} anywhere to start recording; release to stop.</>
-              : <>Press {formatHotkey(hotkey)} anywhere to start recording.</>}
+          {capturedBareModifier ? (
+            holdToTalk ? (
+              <>
+                Hold {formatBareModifierLabel(capturedBareModifier)} anywhere to start recording;
+                release to stop.
+              </>
+            ) : (
+              <>
+                Tap {formatBareModifierLabel(capturedBareModifier)} anywhere to start or stop
+                recording.
+              </>
+            )
+          ) : holdToTalk ? (
+            <>Hold {formatHotkey(hotkey)} anywhere to start recording; release to stop.</>
+          ) : (
+            <>Press {formatHotkey(hotkey)} anywhere to start recording.</>
+          )}
         </p>
       </div>
 
@@ -63,8 +71,8 @@ export function SuccessStep({
             <strong className="block font-medium text-foreground">
               Crash &amp; error reporting
             </strong>
-            Anonymous crash details go to GlitchTip. No audio, transcripts,
-            clipboard contents, or prompts.
+            Anonymous crash details go to GlitchTip. No audio, transcripts, clipboard contents, or
+            prompts.
           </span>
         </label>
 
@@ -76,20 +84,14 @@ export function SuccessStep({
             className="mt-0.5 size-4 shrink-0 accent-[var(--sage)]"
           />
           <span className="text-muted-foreground">
-            <strong className="block font-medium text-foreground">
-              Usage analytics
-            </strong>
-            Anonymous feature usage, outcomes, and performance buckets with
-            PostHog. No session replay.
+            <strong className="block font-medium text-foreground">Usage analytics</strong>
+            Anonymous feature usage, outcomes, and performance buckets with PostHog. No session
+            replay.
           </span>
         </label>
       </div>
 
-      <Button
-        size="lg"
-        disabled={isSavingCompletion}
-        onClick={() => void onComplete()}
-      >
+      <Button size="lg" disabled={isSavingCompletion} onClick={() => void onComplete()}>
         {isSavingCompletion ? <Spinner /> : null}
         Start using Voicetypr
       </Button>

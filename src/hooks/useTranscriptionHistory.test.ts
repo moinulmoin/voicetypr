@@ -5,12 +5,10 @@ import { useTranscriptionHistory } from "./useTranscriptionHistory";
 
 const eventHarness = vi.hoisted(() => {
   const callbacks = new Map<string, (payload?: unknown) => void>();
-  const registerEvent = vi.fn(
-    (event: string, callback: (payload?: unknown) => void) => {
-      callbacks.set(event, callback);
-      return vi.fn();
-    },
-  );
+  const registerEvent = vi.fn((event: string, callback: (payload?: unknown) => void) => {
+    callbacks.set(event, callback);
+    return vi.fn();
+  });
 
   return { callbacks, registerEvent };
 });

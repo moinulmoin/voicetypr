@@ -9,9 +9,7 @@ const DARK_QUERY = "(prefers-color-scheme: dark)";
  * Normalize a stored theme value to the known set. Unknown or missing
  * values fall back to "system" (the backend default).
  */
-export function normalizeTheme(
-  value: string | null | undefined,
-): ThemePreference {
+export function normalizeTheme(value: string | null | undefined): ThemePreference {
   return value === "dark" || value === "light" ? value : "system";
 }
 

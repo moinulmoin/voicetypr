@@ -35,8 +35,7 @@ export function ShortcutSectionGroup({
   setEditingCapture,
 }: ShortcutSectionGroupProps) {
   const sectionBindingCount = sectionActions.reduce(
-    (count, action) =>
-      count + (bindingsByAction.get(action.action)?.length ?? 0),
+    (count, action) => count + (bindingsByAction.get(action.action)?.length ?? 0),
     0,
   );
 
@@ -46,8 +45,7 @@ export function ShortcutSectionGroup({
         <h2 className="text-sm font-semibold text-foreground">{section}</h2>
         {sectionBindingCount > 0 && (
           <span className="text-xs tabular-nums text-muted-foreground">
-            {sectionBindingCount}{" "}
-            {sectionBindingCount === 1 ? "shortcut" : "shortcuts"}
+            {sectionBindingCount} {sectionBindingCount === 1 ? "shortcut" : "shortcuts"}
           </span>
         )}
       </div>

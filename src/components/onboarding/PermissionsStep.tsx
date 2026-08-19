@@ -2,13 +2,7 @@ import { OnboardingPanel, StepFooter } from "@/components/onboarding/OnboardingC
 import type { PermissionState } from "@/components/onboarding/onboardingTypes";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import {
-  Card,
-  CardDescription,
-  CardFooter,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card";
+import { Card, CardDescription, CardFooter, CardHeader, CardTitle } from "@/components/ui/card";
 import { Spinner } from "@/components/ui/spinner";
 import { cn } from "@/lib/utils";
 import { CircleCheck, Keyboard, Mic } from "lucide-react";

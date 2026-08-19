@@ -3,10 +3,7 @@ import { useSettings } from "@/contexts/SettingsContext";
 import { EnhancementsHeader } from "@/components/polish/EnhancementsHeader";
 import { EnhancementSettingsPanel } from "@/components/polish/EnhancementSettingsPanel";
 import { EnhancementsProviderModals } from "@/components/polish/EnhancementsProviderModals";
-import {
-  useAiProviderSettings,
-  type ProviderTab,
-} from "@/components/polish/useAiProviderSettings";
+import { useAiProviderSettings, type ProviderTab } from "@/components/polish/useAiProviderSettings";
 import { usePolishSectionSettings } from "@/components/polish/usePolishSectionSettings";
 import { usePolishErrorEvents } from "@/components/polish/usePolishErrorEvents";
 import { usePolishSettingsLoad } from "@/components/polish/usePolishSettingsLoad";
@@ -120,10 +117,8 @@ export function EnhancementsSection() {
       ? AGENT_CLI_DEFAULT_LABEL
       : shortModelName(aiSettings.model, selectedDisplayModel?.name);
   const activeProviderName =
-    providers.find((p) => p.id === aiSettings.provider)?.name ||
-    aiSettings.provider;
-  const activeReasoningLevels =
-    agentCliStatus[aiSettings.provider]?.reasoningLevels ?? [];
+    providers.find((p) => p.id === aiSettings.provider)?.name || aiSettings.provider;
+  const activeReasoningLevels = agentCliStatus[aiSettings.provider]?.reasoningLevels ?? [];
   const activeReasoningName =
     isAgentCliProvider(aiSettings.provider) && activeReasoningLevels.length > 0
       ? formatAgentCliReasoning(
@@ -170,9 +165,7 @@ export function EnhancementsSection() {
             writingSettings={writingSettings}
             aiFormattingEnabled={aiSettings.enabled}
             writingSettingsDisabled={!settingsLoaded}
-            onPresetChange={(preset) =>
-              void persistEnhancementOptions({ preset })
-            }
+            onPresetChange={(preset) => void persistEnhancementOptions({ preset })}
             onFinalTextLanguageChange={handleFinalTextLanguageChange}
             onWritingSettingsChange={handleWritingSettingsChange}
             providerSetup={{

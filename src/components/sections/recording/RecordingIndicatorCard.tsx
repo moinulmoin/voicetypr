@@ -15,11 +15,7 @@ import {
 } from "@/components/ui/select";
 import { Slider } from "@/components/ui/slider";
 import { useSettings } from "@/contexts/SettingsContext";
-import type {
-  PillIndicatorMode,
-  PillIndicatorPosition,
-  PillIndicatorStyle,
-} from "@/types";
+import type { PillIndicatorMode, PillIndicatorPosition, PillIndicatorStyle } from "@/types";
 
 export function RecordingIndicatorCard() {
   const { settings, updateSettings } = useSettings();
@@ -35,7 +31,11 @@ export function RecordingIndicatorCard() {
           <FieldDescription>Show or hide the small recording status overlay.</FieldDescription>
         </FieldContent>
         <Select
-          items={[{ value: "never", label: "Never" }, { value: "always", label: "Always" }, { value: "when_recording", label: "When Recording" }]}
+          items={[
+            { value: "never", label: "Never" },
+            { value: "always", label: "Always" },
+            { value: "when_recording", label: "When Recording" },
+          ]}
           value={settings.pill_indicator_mode ?? "when_recording"}
           onValueChange={async (value) => {
             if (value == null) return;
@@ -64,8 +64,11 @@ export function RecordingIndicatorCard() {
             </FieldDescription>
           </FieldContent>
           <Select
-            items={[{ value: "compact", label: "Compact" }, { value: "full", label: "Full" }]}
-          value={settings.pill_indicator_style ?? "compact"}
+            items={[
+              { value: "compact", label: "Compact" },
+              { value: "full", label: "Full" },
+            ]}
+            value={settings.pill_indicator_style ?? "compact"}
             onValueChange={async (value) => {
               if (value == null) return;
               await updateSettings({
@@ -95,14 +98,14 @@ export function RecordingIndicatorCard() {
             </FieldContent>
             <Select
               items={[
-              { value: "top-left", label: "Top Left" },
-              { value: "top-center", label: "Top Center" },
-              { value: "top-right", label: "Top Right" },
-              { value: "bottom-left", label: "Bottom Left" },
-              { value: "bottom-center", label: "Bottom Center" },
-              { value: "bottom-right", label: "Bottom Right" },
-            ]}
-          value={settings.pill_indicator_position ?? "bottom-center"}
+                { value: "top-left", label: "Top Left" },
+                { value: "top-center", label: "Top Center" },
+                { value: "top-right", label: "Top Right" },
+                { value: "bottom-left", label: "Bottom Left" },
+                { value: "bottom-center", label: "Bottom Center" },
+                { value: "bottom-right", label: "Bottom Right" },
+              ]}
+              value={settings.pill_indicator_position ?? "bottom-center"}
               onValueChange={async (value) => {
                 if (value == null) return;
                 await updateSettings({
@@ -127,9 +130,7 @@ export function RecordingIndicatorCard() {
           <Field orientation="responsive" className="items-center gap-3">
             <FieldContent>
               <FieldTitle>Edge offset</FieldTitle>
-              <FieldDescription>
-                Distance from screen edge.
-              </FieldDescription>
+              <FieldDescription>Distance from screen edge.</FieldDescription>
             </FieldContent>
             <div className="w-full min-w-0 md:flex-1">
               <div className="flex items-center gap-3">

@@ -72,10 +72,7 @@ export function AgentProviderRow({
       onKeyDown={(event) => {
         if (!hasKey) return;
         if (event.key !== "Enter" && event.key !== " ") return;
-        if (
-          event.target instanceof Element &&
-          event.target !== event.currentTarget
-        ) {
+        if (event.target instanceof Element && event.target !== event.currentTarget) {
           return;
         }
         event.preventDefault();
@@ -85,9 +82,7 @@ export function AgentProviderRow({
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
         <div className="min-w-0 flex-1">
           <div className="flex flex-wrap items-center gap-2">
-            <h3
-              className={`pointer-events-none text-sm font-semibold ${provider.color}`}
-            >
+            <h3 className={`pointer-events-none text-sm font-semibold ${provider.color}`}>
               {provider.name}
             </h3>
             {isSelected && (
@@ -95,14 +90,8 @@ export function AgentProviderRow({
                 Active
               </Badge>
             )}
-            {provider.status === "experimental" && (
-              <Badge variant="outline">Experimental</Badge>
-            )}
-            {statusCopy && (
-              <span className="text-xs text-muted-foreground">
-                {statusCopy}
-              </span>
-            )}
+            {provider.status === "experimental" && <Badge variant="outline">Experimental</Badge>}
+            {statusCopy && <span className="text-xs text-muted-foreground">{statusCopy}</span>}
           </div>
         </div>
 
@@ -124,9 +113,7 @@ export function AgentProviderRow({
             <Select
               value={reasoning}
               disabled={!agentCliReady}
-              onValueChange={(value) =>
-                value != null && void onSelectReasoning(provider.id, value)
-              }
+              onValueChange={(value) => value != null && void onSelectReasoning(provider.id, value)}
             >
               <SelectTrigger
                 className="h-9 w-full justify-between gap-2 px-2.5 sm:w-24"
@@ -161,9 +148,7 @@ export function AgentProviderRow({
                 aria-label={`Fast mode for ${provider.name}`}
                 checked={fastModeEnabled}
                 disabled={!agentCliReady}
-                onCheckedChange={(enabled) =>
-                  void onToggleFastMode(provider.id, enabled)
-                }
+                onCheckedChange={(enabled) => void onToggleFastMode(provider.id, enabled)}
               />
             </label>
           )}
@@ -177,9 +162,7 @@ export function AgentProviderRow({
             disabled={agentCliProbing[provider.id]}
           >
             <RefreshCw
-              className={`h-3.5 w-3.5 ${
-                agentCliProbing[provider.id] ? "animate-spin" : ""
-              }`}
+              className={`h-3.5 w-3.5 ${agentCliProbing[provider.id] ? "animate-spin" : ""}`}
             />
           </Button>
         </div>

@@ -60,13 +60,15 @@ export function ReadinessRemotePanel({
           </p>
         </div>
         <div className="flex gap-2">
-          <Button variant="outline" onClick={() => void onLoadRemoteServers()} disabled={isLoadingRemoteServers}>
+          <Button
+            variant="outline"
+            onClick={() => void onLoadRemoteServers()}
+            disabled={isLoadingRemoteServers}
+          >
             {isLoadingRemoteServers ? <Spinner /> : null}
             Refresh
           </Button>
-          <Button onClick={onOpenAddServer}>
-            Add server
-          </Button>
+          <Button onClick={onOpenAddServer}>Add server</Button>
         </div>
       </div>
 
@@ -132,7 +134,10 @@ export function ReadinessRemotePanel({
                 >
                   <CardHeader>
                     <CardAction>
-                      <Badge variant={online ? "secondary" : "outline"} className={cn(online && "bg-sage-bg text-sage")}>
+                      <Badge
+                        variant={online ? "secondary" : "outline"}
+                        className={cn(online && "bg-sage-bg text-sage")}
+                      >
                         {online ? "Online" : server.status || "Unknown"}
                       </Badge>
                     </CardAction>
@@ -143,7 +148,8 @@ export function ReadinessRemotePanel({
                       <div>
                         <CardTitle>{server.name || `${server.host}:${server.port}`}</CardTitle>
                         <CardDescription>
-                          {server.host}:{server.port}{server.model ? ` · ${getModelDisplayName(server.model)}` : ""}
+                          {server.host}:{server.port}
+                          {server.model ? ` · ${getModelDisplayName(server.model)}` : ""}
                         </CardDescription>
                       </div>
                     </div>

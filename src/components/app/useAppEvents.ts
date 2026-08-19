@@ -44,7 +44,7 @@ export function useAppEvents({
     let isMounted = true;
     const unlisteners: Array<() => void> = [];
 
-    const register = async <T,>(
+    const register = async <T>(
       eventName: string,
       handler: (payload: T) => void | Promise<void>,
     ) => {
@@ -98,8 +98,7 @@ export function useAppEvents({
         }) => {
           const title = data.title?.trim() || "Remote Server Unreachable";
           const message =
-            data.message?.trim() ||
-            "The remote server could not complete this recording.";
+            data.message?.trim() || "The remote server could not complete this recording.";
           const historyGuidance = data.can_retry_from_history
             ? "Go to History to re-transcribe this recording, or select a different model."
             : "";
@@ -145,17 +144,12 @@ export function useAppEvents({
         await register<{ title: string; message: string; action?: string }>(
           "license-required",
           (data) => {
-            log.debug(
-              "License required event received in AppContainer:",
-              data,
-            );
+            log.debug("License required event received in AppContainer:", data);
             // Navigate to License section to show license management
             setActiveSection("license");
             // Show a toast to inform the user
             toast.error(data.title || "License Required", {
-              description:
-                data.message ||
-                "Please purchase or restore a license to continue",
+              description: data.message || "Please purchase or restore a license to continue",
               duration: 5000,
             });
           },
@@ -210,20 +204,17 @@ export function useAppEvents({
   useEffect(() => {
     let isMounted = true;
     let unlisten: UnlistenFn | undefined;
-    void listen<{ category?: string; message?: string } | null>(
-      "enhancing-failed",
-      (event) => {
-        if (!isMounted) return;
-        const message = event.payload?.message;
-        if (
-          event.payload?.category === "cli_error" &&
-          typeof message === "string" &&
-          message.trim()
-        ) {
-          toast.error(message);
-        }
-      },
-    ).then((nextUnlisten) => {
+    void listen<{ category?: string; message?: string } | null>("enhancing-failed", (event) => {
+      if (!isMounted) return;
+      const message = event.payload?.message;
+      if (
+        event.payload?.category === "cli_error" &&
+        typeof message === "string" &&
+        message.trim()
+      ) {
+        toast.error(message);
+      }
+    }).then((nextUnlisten) => {
       if (!isMounted) {
         nextUnlisten();
         return;

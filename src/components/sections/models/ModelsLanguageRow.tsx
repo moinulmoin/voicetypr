@@ -1,8 +1,6 @@
 import { LanguageSelection } from "@/components/LanguageSelection";
 import { Badge } from "@/components/ui/badge";
-import {
-  SettingRow,
-} from "@/components/settings/settings-ui";
+import { SettingRow } from "@/components/settings/settings-ui";
 import { Spinner } from "@/components/ui/spinner";
 import type { SpeechModelEngine } from "@/types";
 import { Download } from "lucide-react";
@@ -32,7 +30,11 @@ export function ModelsLanguageRow({
         <div className="flex items-center gap-2">
           {(hasDownloading || hasVerifying) && (
             <Badge variant="outline" className="gap-1.5 bg-primary/10 text-primary">
-              {hasDownloading ? <Download className="size-3.5" /> : <Spinner className="size-3.5" />}
+              {hasDownloading ? (
+                <Download className="size-3.5" />
+              ) : (
+                <Spinner className="size-3.5" />
+              )}
               {hasDownloading ? "Downloading…" : "Verifying…"}
             </Badge>
           )}

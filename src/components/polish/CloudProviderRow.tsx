@@ -44,22 +44,14 @@ export function CloudProviderRow({
     onSetupApiKey,
     onRemoveApiKey,
   } = props;
-  const {
-    hasKey,
-    isSelected,
-    modelPickerGroups,
-    selectedModelItem,
-    statusCopy,
-  } = model;
+  const { hasKey, isSelected, modelPickerGroups, selectedModelItem, statusCopy } = model;
 
   return (
     <div className={providerRowShellClass(isSelected, false)}>
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
         <div className="min-w-0 flex-1">
           <div className="flex flex-wrap items-center gap-2">
-            <h3
-              className={`pointer-events-none text-sm font-semibold ${provider.color}`}
-            >
+            <h3 className={`pointer-events-none text-sm font-semibold ${provider.color}`}>
               {provider.name}
             </h3>
             {isSelected && (
@@ -67,14 +59,8 @@ export function CloudProviderRow({
                 Active
               </Badge>
             )}
-            {provider.status === "experimental" && (
-              <Badge variant="outline">Experimental</Badge>
-            )}
-            {statusCopy && (
-              <span className="text-xs text-muted-foreground">
-                {statusCopy}
-              </span>
-            )}
+            {provider.status === "experimental" && <Badge variant="outline">Experimental</Badge>}
+            {statusCopy && <span className="text-xs text-muted-foreground">{statusCopy}</span>}
           </div>
         </div>
 
@@ -85,21 +71,14 @@ export function CloudProviderRow({
               value={selectedModelItem}
               onValueChange={(item) => {
                 if (item) {
-                  void onSelectModel(
-                    provider.id,
-                    fromModelSelectValue(item.value),
-                  );
+                  void onSelectModel(provider.id, fromModelSelectValue(item.value));
                 }
               }}
               itemToStringLabel={(item) => item.label}
               itemToStringValue={(item) => item.value}
               isItemEqualToValue={(item, value) => item.value === value.value}
               filter={(item, query) => {
-                const searchable = [
-                  item.label,
-                  item.qualifiedId,
-                  item.model.sourceProvider ?? "",
-                ]
+                const searchable = [item.label, item.qualifiedId, item.model.sourceProvider ?? ""]
                   .join(" ")
                   .toLowerCase();
                 return searchable.includes(query.trim().toLowerCase());
@@ -115,17 +94,13 @@ export function CloudProviderRow({
                 <ComboboxEmpty>No models found.</ComboboxEmpty>
                 <ComboboxList>
                   {(group: ModelPickerGroup) => (
-                    <ComboboxGroup
-                      key={`${provider.id}-${group.value}`}
-                      items={group.items}
-                    >
+                    <ComboboxGroup key={`${provider.id}-${group.value}`} items={group.items}>
                       <ComboboxLabel>{group.value}</ComboboxLabel>
                       <ComboboxCollection>
                         {(item: ModelPickerItem) => {
                           const cost = formatModelCost(item.model);
                           const detail = [
-                            item.model.reasoning ||
-                            providerSupportsReasoning(provider)
+                            item.model.reasoning || providerSupportsReasoning(provider)
                               ? "reasoning"
                               : "",
                             cost,
@@ -185,9 +160,7 @@ export function CloudProviderRow({
                       ? `Remove configuration for ${provider.name}?`
                       : `Remove API key for ${provider.name}?`,
                     {
-                      title: provider.isCustom
-                        ? "Remove Configuration"
-                        : "Remove API Key",
+                      title: provider.isCustom ? "Remove Configuration" : "Remove API Key",
                       kind: "warning",
                     },
                   );
@@ -215,9 +188,7 @@ export function CloudProviderRow({
                 variant="outline"
                 size="sm"
                 aria-label={
-                  provider.isCustom
-                    ? `Configure ${provider.name}`
-                    : `Add ${provider.name} API key`
+                  provider.isCustom ? `Configure ${provider.name}` : `Add ${provider.name} API key`
                 }
                 onClick={() => {
                   if (showGuidedSetup) setGuidedSetupProvider(provider.id);

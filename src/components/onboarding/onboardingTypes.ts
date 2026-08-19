@@ -11,13 +11,7 @@ export interface OnboardingDesktopProps {
   modelManagement: ReturnType<typeof useModelManagement>;
 }
 
-export type Step =
-  | "welcome"
-  | "source"
-  | "permissions"
-  | "readiness"
-  | "hotkey"
-  | "success";
+export type Step = "welcome" | "source" | "permissions" | "readiness" | "hotkey" | "success";
 
 export type SourceType = "local" | "cloud" | "remote";
 export type PermissionStatus = "checking" | "granted" | "denied" | "error";
@@ -55,11 +49,7 @@ export const isRemoteServerOnline = (server?: SavedConnection | null) =>
   server?.status === "Online";
 
 export const sourceLabel = (sourceType: SourceType) =>
-  sourceType === "local"
-    ? "Local setup"
-    : sourceType === "cloud"
-      ? "Cloud setup"
-      : "Remote setup";
+  sourceType === "local" ? "Local setup" : sourceType === "cloud" ? "Cloud setup" : "Remote setup";
 
 export const ONBOARDING_HOTKEY_VALIDATION = ValidationPresets.custom({
   minKeys: 1,
@@ -71,7 +61,10 @@ export const ONBOARDING_HOTKEY_VALIDATION = ValidationPresets.custom({
 export function formatBareModifierLabel({ modifier, side }: BareModifierSpec): string {
   const sideStr = side === "right" ? "Right " : side === "left" ? "Left " : "";
   const macIcons: Record<string, string> = {
-    alt: "⌥", meta: "⌘", control: "⌃", shift: "⇧",
+    alt: "⌥",
+    meta: "⌘",
+    control: "⌃",
+    shift: "⇧",
   };
   const modStr = isMacOS
     ? (macIcons[modifier] ?? modifier)

@@ -13,11 +13,7 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { Spinner } from "@/components/ui/spinner";
 import { Check, ChevronDown, Search } from "lucide-react";
 import type { AIProviderConfig } from "@/types/providers";
-import {
-  AGENT_CLI_DEFAULT_LABEL,
-  fromModelSelectValue,
-  type ModelPickerGroup,
-} from "./agentCli";
+import { AGENT_CLI_DEFAULT_LABEL, fromModelSelectValue, type ModelPickerGroup } from "./agentCli";
 
 export interface AgentModelPickerDialogProps {
   provider: AIProviderConfig;
@@ -93,8 +89,7 @@ export function AgentModelPickerDialog({
         <DialogHeader>
           <DialogTitle>Choose a {provider.name} model</DialogTitle>
           <DialogDescription>
-            Search models reported by your installed CLI. The selection is saved
-            for this agent.
+            Search models reported by your installed CLI. The selection is saved for this agent.
           </DialogDescription>
         </DialogHeader>
         <div className="relative">
@@ -116,10 +111,7 @@ export function AgentModelPickerDialog({
               </p>
             ) : (
               visibleGroups.map((group) => (
-                <section
-                  key={`${provider.id}-${group.value}`}
-                  className="space-y-2"
-                >
+                <section key={`${provider.id}-${group.value}`} className="space-y-2">
                   <h3 className="px-1 text-xs font-medium uppercase tracking-wide text-muted-foreground">
                     {group.value}
                   </h3>
@@ -150,9 +142,7 @@ export function AgentModelPickerDialog({
                           }}
                         >
                           <span className="min-w-0 flex-1">
-                            <span className="block truncate text-sm font-medium">
-                              {item.label}
-                            </span>
+                            <span className="block truncate text-sm font-medium">{item.label}</span>
                             <span className="mt-0.5 block truncate font-mono text-[11px] text-muted-foreground">
                               {item.qualifiedId}
                               {detail ? ` · ${detail}` : ""}

@@ -12,16 +12,9 @@ import type { ScreenId } from "@/components/navigation";
 import { CurrentSetupCard } from "./overview/CurrentSetupCard";
 import { WeeklyRhythmCard } from "./overview/WeeklyRhythmCard";
 import { useActiveRemoteLabel } from "./overview/useActiveRemoteLabel";
-import {
-  formatTimeSaved,
-  useOverviewStats,
-} from "./overview/useOverviewStats";
+import { formatTimeSaved, useOverviewStats } from "./overview/useOverviewStats";
 
-export function OverviewTab({
-  onNavigate,
-}: {
-  onNavigate?: (section: ScreenId) => void;
-}) {
+export function OverviewTab({ onNavigate }: { onNavigate?: (section: ScreenId) => void }) {
   const readiness = useReadiness();
   const canRecord = readiness.canRecord;
   const canAutoInsert = useCanAutoInsert();
@@ -33,18 +26,17 @@ export function OverviewTab({
     ? (activeRemoteLabel ?? "Remote Voicetypr")
     : (getModelDisplayName(settings?.current_model) ?? "No source selected");
 
-  const { history, totalCount, isLoading, loadError, refreshHistory } =
-    useTranscriptionHistory({
-      limit: 500,
-      includeTotalCount: true,
-    });
+  const { history, totalCount, isLoading, loadError, refreshHistory } = useTranscriptionHistory({
+    limit: 500,
+    includeTotalCount: true,
+  });
 
   const stats = useOverviewStats(history, totalCount);
 
   const spokenLanguage =
-    languages.find(
-      (language) => language.value === (settings?.speech_language ?? "en"),
-    )?.label ?? settings?.speech_language ?? "English";
+    languages.find((language) => language.value === (settings?.speech_language ?? "en"))?.label ??
+    settings?.speech_language ??
+    "English";
 
   return (
     <div className="h-full min-h-0 overflow-auto">

@@ -37,7 +37,6 @@ export interface ScreenDefinition {
   description: string;
 }
 
-
 export const primaryScreens: ScreenDefinition[] = [
   {
     id: "overview",
@@ -121,7 +120,6 @@ export const secondaryScreens: ScreenDefinition[] = [
     description: "Send an issue with diagnostic logs.",
   },
 ];
-
 
 export const screens = [...primaryScreens, ...secondaryScreens] as const;
 

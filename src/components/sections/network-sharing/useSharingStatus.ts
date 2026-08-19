@@ -14,11 +14,7 @@ import {
   isShareableModel,
   parseSharingPort,
 } from "./sharingUtils";
-import type {
-  FirewallStatus,
-  ModelStatusResponse,
-  SharingStatus,
-} from "./types";
+import type { FirewallStatus, ModelStatusResponse, SharingStatus } from "./types";
 
 const log = createLogger("network");
 
@@ -79,7 +75,9 @@ export function useSharingAutoRestart({
     if (previousSelection.model !== currentModel && statusModelName === currentModel) return;
 
     const autoRestartSharing = async () => {
-      log.debug(`[Remote Transcription] Local model changed to ${currentModel}, restarting sharing...`);
+      log.debug(
+        `[Remote Transcription] Local model changed to ${currentModel}, restarting sharing...`,
+      );
 
       const validatedPort = parseSharingPort(port);
       if (!validatedPort) {
@@ -97,7 +95,9 @@ export function useSharingAutoRestart({
           serverName: null,
         });
         await fetchStatus();
-        toast.success(`Remote transcription now uses ${modelDisplayName ?? getModelDisplayName(currentModel) ?? currentModel}`);
+        toast.success(
+          `Remote transcription now uses ${modelDisplayName ?? getModelDisplayName(currentModel) ?? currentModel}`,
+        );
       } catch (error) {
         log.error("Failed to restart remote transcription with new model:", error);
         toast.error("Failed to switch remote transcription model");
@@ -106,7 +106,16 @@ export function useSharingAutoRestart({
     };
 
     autoRestartSharing();
-  }, [settings, currentModel, currentEngine, statusEnabled, statusModelName, port, fetchStatus, modelDisplayName]);
+  }, [
+    settings,
+    currentModel,
+    currentEngine,
+    statusEnabled,
+    statusModelName,
+    port,
+    fetchStatus,
+    modelDisplayName,
+  ]);
 }
 
 export function useSharingStatus() {
@@ -193,9 +202,7 @@ export function useSharingStatus() {
       const shareableModels = models.filter(isShareableModel);
       setHasShareableModel(shareableModels.length > 0);
 
-      const selectedModel = currentModel
-        ? models.find((m) => m.name === currentModel)
-        : null;
+      const selectedModel = currentModel ? models.find((m) => m.name === currentModel) : null;
       const selectionShareable = selectedModel
         ? isShareableModel(selectedModel)
         : isShareableEngine(currentEngine) && shareableModels.length > 0;

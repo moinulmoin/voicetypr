@@ -9,8 +9,7 @@ function loadApplicationIcon(processPath: string): Promise<string | null> {
   const cached = appIconRequests.get(processPath);
   if (cached) return cached;
 
-  const request = invoke<string | null>("get_application_icon", { processPath })
-    .catch(() => null);
+  const request = invoke<string | null>("get_application_icon", { processPath }).catch(() => null);
   appIconRequests.set(processPath, request);
   return request;
 }

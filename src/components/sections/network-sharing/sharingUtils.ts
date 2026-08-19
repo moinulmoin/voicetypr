@@ -9,11 +9,7 @@ export function isShareableEngine(engine?: string | null): boolean {
 }
 
 export function isShareableModel(model: SharingModelInfo): boolean {
-  return (
-    model.downloaded &&
-    model.kind !== "cloud" &&
-    isShareableEngine(model.engine)
-  );
+  return model.downloaded && model.kind !== "cloud" && isShareableEngine(model.engine);
 }
 
 export function parseSharingPort(value: string): number | null {

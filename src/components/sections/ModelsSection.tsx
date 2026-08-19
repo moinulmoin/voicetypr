@@ -1,8 +1,5 @@
 import { useTauriEvent } from "@/hooks/useTauriEvent";
-import {
-  SettingsCard,
-  SettingsPage,
-} from "@/components/settings/settings-ui";
+import { SettingsCard, SettingsPage } from "@/components/settings/settings-ui";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useSettings } from "@/contexts/SettingsContext";
 import { getModelDisplayName } from "@/lib/model-display";
@@ -10,7 +7,11 @@ import { isCloudModel, isLocalModel } from "@/types";
 import { Download } from "lucide-react";
 import { useMemo, useState } from "react";
 import { createLogger } from "@/lib/logger";
-import { CloudApiKeyModal, CloudProvidersBlock, CloudSetupGrid } from "./models/CloudProvidersBlock";
+import {
+  CloudApiKeyModal,
+  CloudProvidersBlock,
+  CloudSetupGrid,
+} from "./models/CloudProvidersBlock";
 import { LocalModelsList, LocalSetupGrid } from "./models/LocalModelsList";
 import { ModelsEmptyStates } from "./models/ModelsEmptyStates";
 import { ModelsLanguageRow } from "./models/ModelsLanguageRow";
@@ -73,10 +74,8 @@ export function ModelsSection({
     return { availableToUse: useList, availableToSetup: setupList };
   }, [models]);
 
-  const prioritizeCurrent = (
-    [left]: (typeof models)[number],
-    [right]: (typeof models)[number],
-  ) => Number(right === currentModel) - Number(left === currentModel);
+  const prioritizeCurrent = ([left]: (typeof models)[number], [right]: (typeof models)[number]) =>
+    Number(right === currentModel) - Number(left === currentModel);
   const readyLocalModels = availableToUse
     .filter(([, model]) => isLocalModel(model))
     .sort(prioritizeCurrent);
@@ -94,8 +93,7 @@ export function ModelsSection({
   const showRemote = sourceFilter === "remote";
 
   const selectedModel = models.find(([name]) => name === currentModel)?.[1];
-  const selectedSourceType =
-    selectedModel && isCloudModel(selectedModel) ? "cloud" : "local";
+  const selectedSourceType = selectedModel && isCloudModel(selectedModel) ? "cloud" : "local";
   const activeRemote = remotes.remoteServers.find(
     (server) => server.id === remotes.activeRemoteServer,
   );
@@ -106,9 +104,7 @@ export function ModelsSection({
       : "Local";
   const currentSourceLabel = remotes.activeRemoteServer
     ? activeRemote?.name ||
-      (activeRemote
-        ? `${activeRemote.host}:${activeRemote.port}`
-        : "Remote Voicetypr")
+      (activeRemote ? `${activeRemote.host}:${activeRemote.port}` : "Remote Voicetypr")
     : getModelDisplayName(currentModel) || "No source selected";
 
   // Keep the tab honest when the active source changes underneath (tray or
@@ -161,83 +157,67 @@ export function ModelsSection({
   return (
     <>
       <SettingsPage>
-      <ModelsSourcesHeader
-        currentSourceType={currentSourceType}
-        currentSourceLabel={currentSourceLabel}
-      >
-        <ModelsLanguageRow
-          languageValue={language.languageValue}
-          currentEngine={language.currentEngine}
-          isEnglishOnlyModel={language.isEnglishOnlyModel}
-          hasDownloading={hasDownloading}
-          hasVerifying={hasVerifying}
-          onLanguageChange={language.handleLanguageChange}
-        />
-      </ModelsSourcesHeader>
-
-      <Tabs
-        value={sourceFilter}
-        onValueChange={(value) =>
-          setSourceFilter(value as typeof sourceFilter)
-        }
-      >
-        <TabsList aria-label="Transcription source type">
-          <TabsTrigger value="local">Local ({localCount})</TabsTrigger>
-          <TabsTrigger value="cloud">Cloud ({cloudCount})</TabsTrigger>
-          <TabsTrigger value="remote">Remote ({remoteCount})</TabsTrigger>
-        </TabsList>
-        {showLocal && localCount > 0 && (
-          <p className="mt-1.5 text-xs text-muted-foreground">
-            {localCount} available · {readyLocalModels.length} downloaded
-          </p>
-        )}
-      </Tabs>
-
-      {showLocal && (
-        <LocalModelsList
-          readyLocalModels={readyLocalModels}
-          {...localActions}
-        />
-      )}
-
-      {showCloud && (
-        <CloudProvidersBlock
-          readyCloudModels={readyCloudModels}
-          {...cloudBindings}
-        />
-      )}
-
-      {((showLocal && setupLocalModels.length > 0) ||
-        (showCloud && setupCloudModels.length > 0)) && (
-        <SettingsCard
-          icon={Download}
-          title="Set up sources"
-          description="Download local models or connect cloud providers before selecting them."
+        <ModelsSourcesHeader
+          currentSourceType={currentSourceType}
+          currentSourceLabel={currentSourceLabel}
         >
-          <div className="mt-4 space-y-3">
-            {showLocal && setupLocalModels.length > 0 && (
-              <LocalSetupGrid
-                setupLocalModels={setupLocalModels}
-                {...localActions}
-              />
-            )}
-            {showCloud && setupCloudModels.length > 0 && (
-              <CloudSetupGrid
-                setupCloudModels={setupCloudModels}
-                {...cloudBindings}
-              />
-            )}
-          </div>
-        </SettingsCard>
-      )}
+          <ModelsLanguageRow
+            languageValue={language.languageValue}
+            currentEngine={language.currentEngine}
+            isEnglishOnlyModel={language.isEnglishOnlyModel}
+            hasDownloading={hasDownloading}
+            hasVerifying={hasVerifying}
+            onLanguageChange={language.handleLanguageChange}
+          />
+        </ModelsSourcesHeader>
 
-      <RemoteServersBlock remotes={remotes} visible={showRemote} />
+        <Tabs
+          value={sourceFilter}
+          onValueChange={(value) => setSourceFilter(value as typeof sourceFilter)}
+        >
+          <TabsList aria-label="Transcription source type">
+            <TabsTrigger value="local">Local ({localCount})</TabsTrigger>
+            <TabsTrigger value="cloud">Cloud ({cloudCount})</TabsTrigger>
+            <TabsTrigger value="remote">Remote ({remoteCount})</TabsTrigger>
+          </TabsList>
+          {showLocal && localCount > 0 && (
+            <p className="mt-1.5 text-xs text-muted-foreground">
+              {localCount} available · {readyLocalModels.length} downloaded
+            </p>
+          )}
+        </Tabs>
 
-      <ModelsEmptyStates
-        isLoading={isLoading}
-        hasModels={availableToUse.length > 0 || availableToSetup.length > 0}
-        hasRemoteServers={remotes.remoteServers.length > 0}
-      />
+        {showLocal && <LocalModelsList readyLocalModels={readyLocalModels} {...localActions} />}
+
+        {showCloud && (
+          <CloudProvidersBlock readyCloudModels={readyCloudModels} {...cloudBindings} />
+        )}
+
+        {((showLocal && setupLocalModels.length > 0) ||
+          (showCloud && setupCloudModels.length > 0)) && (
+          <SettingsCard
+            icon={Download}
+            title="Set up sources"
+            description="Download local models or connect cloud providers before selecting them."
+          >
+            <div className="mt-4 space-y-3">
+              {showLocal && setupLocalModels.length > 0 && (
+                <LocalSetupGrid setupLocalModels={setupLocalModels} {...localActions} />
+              )}
+              {showCloud && setupCloudModels.length > 0 && (
+                <CloudSetupGrid setupCloudModels={setupCloudModels} {...cloudBindings} />
+              )}
+            </div>
+          </SettingsCard>
+        )}
+
+        <RemoteServersBlock remotes={remotes} visible={showRemote} />
+
+        <ModelsEmptyStates
+          isLoading={isLoading}
+          hasModels={availableToUse.length > 0 || availableToSetup.length > 0}
+          hasRemoteServers={remotes.remoteServers.length > 0}
+        />
       </SettingsPage>
 
       <CloudApiKeyModal cloud={cloud} />

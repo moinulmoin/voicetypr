@@ -7,9 +7,7 @@ function SetupValue({ label, value }: { label: string; value: string }) {
   return (
     <div className="min-w-0 border-t border-border/70 pt-4 first:border-t-0 first:pt-0 sm:border-t-0 sm:pt-0">
       <dt className="text-xs font-medium text-muted-foreground">{label}</dt>
-      <dd className="mt-1 truncate text-sm font-semibold text-foreground">
-        {value}
-      </dd>
+      <dd className="mt-1 truncate text-sm font-semibold text-foreground">{value}</dd>
     </div>
   );
 }
@@ -33,9 +31,7 @@ export function CurrentSetupCard({
     <section className="rounded-xl bg-card p-5">
       <div className="flex items-start justify-between gap-4">
         <div>
-          <h2 className="text-[15px] font-semibold text-foreground">
-            Current setup
-          </h2>
+          <h2 className="text-[15px] font-semibold text-foreground">Current setup</h2>
           <p className="mt-1 text-[13px] text-muted-foreground">
             Defaults used for your next desktop recording.
           </p>

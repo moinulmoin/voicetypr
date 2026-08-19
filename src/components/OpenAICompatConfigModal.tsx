@@ -34,7 +34,11 @@ export function OpenAICompatConfigModal({
   const [submitting, setSubmitting] = useState(false);
   const [testing, setTesting] = useState(false);
   const [testResult, setTestResult] = useState<null | { ok: boolean; message: string }>(null);
-  const [testedPayload, setTestedPayload] = useState<null | { baseUrl: string; model: string; apiKey: string }>(null);
+  const [testedPayload, setTestedPayload] = useState<null | {
+    baseUrl: string;
+    model: string;
+    apiKey: string;
+  }>(null);
   const testOk = testResult?.ok === true;
   const inputsMatchTest = useMemo(() => {
     if (!testedPayload) return false;
@@ -49,9 +53,7 @@ export function OpenAICompatConfigModal({
   // adjusted during render so no post-paint flash; Base UI keeps its close
   // animation because the component stays mounted.
   const [appliedOpenState, setAppliedOpenState] = useState<string | null>(null);
-  const openStateKey = isOpen
-    ? `open\u0000${defaultBaseUrl}\u0000${defaultModel}`
-    : "closed";
+  const openStateKey = isOpen ? `open\u0000${defaultBaseUrl}\u0000${defaultModel}` : "closed";
   if (appliedOpenState !== openStateKey) {
     setAppliedOpenState(openStateKey);
     if (isOpen) {
@@ -73,7 +75,11 @@ export function OpenAICompatConfigModal({
     if (!baseUrl.trim() || !model.trim()) return;
     try {
       setSubmitting(true);
-      onSubmit({ baseUrl: baseUrl.trim(), model: model.trim(), apiKey: apiKey.trim() || undefined });
+      onSubmit({
+        baseUrl: baseUrl.trim(),
+        model: model.trim(),
+        apiKey: apiKey.trim() || undefined,
+      });
     } finally {
       // Keep spinner controlled by parent isLoading if needed; here we reset
       setSubmitting(false);
@@ -113,7 +119,8 @@ export function OpenAICompatConfigModal({
           <DialogHeader>
             <DialogTitle>Configure OpenAI-Compatible Provider</DialogTitle>
             <DialogDescription>
-              Set the API base URL, model ID, and optional API key for any OpenAI-compatible endpoint.
+              Set the API base URL, model ID, and optional API key for any OpenAI-compatible
+              endpoint.
             </DialogDescription>
           </DialogHeader>
 
@@ -154,7 +161,12 @@ export function OpenAICompatConfigModal({
           </div>
 
           <DialogFooter>
-            <Button type="button" variant="outline" onClick={onClose} disabled={submitting || testing}>
+            <Button
+              type="button"
+              variant="outline"
+              onClick={onClose}
+              disabled={submitting || testing}
+            >
               Cancel
             </Button>
             <Button
@@ -174,7 +186,9 @@ export function OpenAICompatConfigModal({
             </Button>
             <Button
               type="submit"
-              disabled={!baseUrl.trim() || !model.trim() || submitting || !testOk || !inputsMatchTest}
+              disabled={
+                !baseUrl.trim() || !model.trim() || submitting || !testOk || !inputsMatchTest
+              }
               title={!testOk || !inputsMatchTest ? "Run Test and pass before saving" : undefined}
             >
               {submitting ? (

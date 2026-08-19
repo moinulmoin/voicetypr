@@ -24,15 +24,27 @@ export function isSingleKeyShortcut(shortcut: string): boolean {
   const normalized = normalizeShortcutKeys(shortcut);
   const parts = normalized.split("+").filter(Boolean);
   if (parts.length !== 1) return false;
-  const modifiers = ["CommandOrControl", "Super", "Shift", "Alt", "Control", "Command", "Cmd", "Ctrl", "Option", "Meta"];
+  const modifiers = [
+    "CommandOrControl",
+    "Super",
+    "Shift",
+    "Alt",
+    "Control",
+    "Command",
+    "Cmd",
+    "Ctrl",
+    "Option",
+    "Meta",
+  ];
   return !modifiers.includes(parts[0]);
 }
 
 export function createBinding(action: ShortcutActionDefinition): ShortcutBinding {
   return {
-    id: typeof crypto !== "undefined" && "randomUUID" in crypto
-      ? crypto.randomUUID()
-      : `${action.action}-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+    id:
+      typeof crypto !== "undefined" && "randomUUID" in crypto
+        ? crypto.randomUUID()
+        : `${action.action}-${Date.now()}-${Math.random().toString(36).slice(2)}`,
     action: action.action,
     shortcut: "",
     trigger: action.recommended_trigger,
@@ -134,7 +146,7 @@ export function countEnabledSingleKeyBindings(
   draftBindings: ShortcutBinding[],
 ) {
   return [...settingsBindings, ...draftBindings].filter(
-    (b) => b.enabled && b.shortcut && isSingleKeyShortcut(b.shortcut)
+    (b) => b.enabled && b.shortcut && isSingleKeyShortcut(b.shortcut),
   ).length;
 }
 
@@ -146,11 +158,12 @@ export function findConflictingBinding(
   const nextShortcut = nextBinding.shortcut.trim();
   if (!nextShortcut) return undefined;
   const nextShortcutKey = shortcutComparisonKey(nextShortcut);
-  return [...settingsBindings, ...draftBindings].find((binding) =>
-    binding.id !== nextBinding.id
-    && binding.enabled
-    && binding.shortcut
-    && shortcutComparisonKey(binding.shortcut) === nextShortcutKey,
+  return [...settingsBindings, ...draftBindings].find(
+    (binding) =>
+      binding.id !== nextBinding.id &&
+      binding.enabled &&
+      binding.shortcut &&
+      shortcutComparisonKey(binding.shortcut) === nextShortcutKey,
   );
 }
 

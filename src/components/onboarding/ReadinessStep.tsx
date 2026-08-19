@@ -45,17 +45,11 @@ export function ReadinessStep({
         />
       }
     >
-      {sourceType === "local" ? (
-        <ReadinessLocalPanel {...local} />
-      ) : null}
+      {sourceType === "local" ? <ReadinessLocalPanel {...local} /> : null}
 
-      {sourceType === "cloud" ? (
-        <ReadinessCloudPanel {...cloud} />
-      ) : null}
+      {sourceType === "cloud" ? <ReadinessCloudPanel {...cloud} /> : null}
 
-      {sourceType === "remote" ? (
-        <ReadinessRemotePanel {...remote} />
-      ) : null}
+      {sourceType === "remote" ? <ReadinessRemotePanel {...remote} /> : null}
     </OnboardingPanel>
   );
 }

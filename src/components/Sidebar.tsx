@@ -30,7 +30,6 @@ interface SidebarProps {
   onSectionChange: (section: ScreenId) => void;
 }
 
-
 function getLicenseBadge(status: LicenseStatus | null, daysLeft: number) {
   if (!status || status.status === "none") {
     return {
@@ -50,21 +49,21 @@ function getLicenseBadge(status: LicenseStatus | null, daysLeft: number) {
     if (daysLeft > 1) {
       return {
         label: `Trial · ${daysLeft} days left`,
-      className: "border-green-500/25 bg-green-500/10 text-green-800 dark:text-green-400",
+        className: "border-green-500/25 bg-green-500/10 text-green-800 dark:text-green-400",
       };
     }
 
     if (daysLeft === 1) {
       return {
         label: "Trial · 1 day left",
-      className: "border-amber-500/25 bg-amber-500/10 text-amber-800 dark:text-amber-400",
+        className: "border-amber-500/25 bg-amber-500/10 text-amber-800 dark:text-amber-400",
       };
     }
 
     if (daysLeft === 0) {
       return {
         label: "Trial expires today",
-      className: "border-amber-500/25 bg-amber-500/10 text-amber-800 dark:text-amber-400",
+        className: "border-amber-500/25 bg-amber-500/10 text-amber-800 dark:text-amber-400",
       };
     }
 
@@ -79,17 +78,12 @@ function getLicenseBadge(status: LicenseStatus | null, daysLeft: number) {
     className: "border-red-500/25 bg-red-500/10 text-red-800 dark:text-red-400",
   };
 }
-export function Sidebar({
-  activeSection,
-  onSectionChange,
-}: SidebarProps) {
+export function Sidebar({ activeSection, onSectionChange }: SidebarProps) {
   const { status, isLoading } = useLicense();
   const [appVersion, setAppVersion] = useState("—");
   const licenseBadge = getLicenseBadge(status, status?.trial_days_left ?? -1);
   const licenseNeedsAttention =
-    status?.status === "expired" ||
-    status?.verification_state === "needs_revalidation";
-
+    status?.status === "expired" || status?.verification_state === "needs_revalidation";
 
   useEffect(() => {
     const loadVersion = async () => {
@@ -102,69 +96,71 @@ export function Sidebar({
     void loadVersion();
   }, []);
 
-
   return (
-    <SidebarPrimitive collapsible="icon" className="group-data-[side=left]:border-r-0 bg-sidebar/95 pt-9 backdrop-blur-sm">
-        <SidebarHeader className="gap-2 px-4 pb-2 pt-1 group-data-[collapsible=icon]:px-2">
-          <div className="flex w-full items-center gap-2 rounded-lg px-1">
+    <SidebarPrimitive
+      collapsible="icon"
+      className="group-data-[side=left]:border-r-0 bg-sidebar/95 pt-9 backdrop-blur-sm"
+    >
+      <SidebarHeader className="gap-2 px-4 pb-2 pt-1 group-data-[collapsible=icon]:px-2">
+        <div className="flex w-full items-center gap-2 rounded-lg px-1">
+          <button
+            type="button"
+            onClick={() => onSectionChange("overview")}
+            aria-label="Overview"
+            title="Overview"
+            className="flex min-w-0 flex-1 items-center gap-2.5 rounded-lg px-2 py-2 text-left transition-colors hover:bg-sidebar-accent group-data-[collapsible=icon]:justify-center"
+          >
+            <Brandmark className="size-6 shrink-0 text-sage" />
+            <span className="truncate text-sm font-semibold tracking-tight group-data-[collapsible=icon]:hidden">
+              Voicetypr
+            </span>
+          </button>
+          {!isLoading && status ? (
             <button
               type="button"
-              onClick={() => onSectionChange("overview")}
-              aria-label="Overview"
-              title="Overview"
-              className="flex min-w-0 flex-1 items-center gap-2.5 rounded-lg px-2 py-2 text-left transition-colors hover:bg-sidebar-accent group-data-[collapsible=icon]:justify-center"
+              onClick={() => onSectionChange("license")}
+              aria-label={`${licenseBadge.label}. Open License`}
+              title="Open License"
+              className={cn(
+                "shrink-0 rounded-full border px-2 py-0.5 text-[11px] font-semibold uppercase tracking-[0.12em] transition-shadow hover:ring-2 hover:ring-sage/20 group-data-[collapsible=icon]:hidden",
+                licenseBadge.className,
+                licenseNeedsAttention && "ring-2 ring-amber-500/25",
+              )}
             >
-              <Brandmark className="size-6 shrink-0 text-sage" />
-              <span className="truncate text-sm font-semibold tracking-tight group-data-[collapsible=icon]:hidden">
-                Voicetypr
-              </span>
+              {licenseBadge.label}
             </button>
-            {!isLoading && status ? (
-              <button
-                type="button"
-                onClick={() => onSectionChange("license")}
-                aria-label={`${licenseBadge.label}. Open License`}
-                title="Open License"
-                className={cn(
-                  "shrink-0 rounded-full border px-2 py-0.5 text-[11px] font-semibold uppercase tracking-[0.12em] transition-shadow hover:ring-2 hover:ring-sage/20 group-data-[collapsible=icon]:hidden",
-                  licenseBadge.className,
-                  licenseNeedsAttention && "ring-2 ring-amber-500/25",
-                )}
-              >
-                {licenseBadge.label}
-              </button>
-            ) : null}
-          </div>
-        </SidebarHeader>
+          ) : null}
+        </div>
+      </SidebarHeader>
 
-        <SidebarContent className="overflow-hidden px-2">
-          <SidebarNavMenu
-            items={navScreens}
-            activeSection={activeSection}
-            onSectionChange={onSectionChange}
-          />
-        </SidebarContent>
+      <SidebarContent className="overflow-hidden px-2">
+        <SidebarNavMenu
+          items={navScreens}
+          activeSection={activeSection}
+          onSectionChange={onSectionChange}
+        />
+      </SidebarContent>
 
-        <SidebarFooter className="gap-1 px-2">
-          <nav data-testid="sidebar-footer-nav">
-            <SidebarGroup className="py-1">
-              <SidebarGroupContent>
-                <SidebarMenu className="group-data-[collapsible=icon]:items-center">
-                  {footerNavScreens.map((item) => (
-                    <SidebarNavItem
-                      key={item.id}
-                      item={item}
-                      isActive={activeSection === item.id}
-                      onSelect={onSectionChange}
-                    />
-                  ))}
-                </SidebarMenu>
-              </SidebarGroupContent>
-            </SidebarGroup>
-          </nav>
-          <SidebarFooterStatus appVersion={appVersion} />
-        </SidebarFooter>
-      </SidebarPrimitive>
+      <SidebarFooter className="gap-1 px-2">
+        <nav data-testid="sidebar-footer-nav">
+          <SidebarGroup className="py-1">
+            <SidebarGroupContent>
+              <SidebarMenu className="group-data-[collapsible=icon]:items-center">
+                {footerNavScreens.map((item) => (
+                  <SidebarNavItem
+                    key={item.id}
+                    item={item}
+                    isActive={activeSection === item.id}
+                    onSelect={onSectionChange}
+                  />
+                ))}
+              </SidebarMenu>
+            </SidebarGroupContent>
+          </SidebarGroup>
+        </nav>
+        <SidebarFooterStatus appVersion={appVersion} />
+      </SidebarFooter>
+    </SidebarPrimitive>
   );
 }
 
@@ -229,7 +225,6 @@ function SidebarNavItem({
   );
 }
 
-
 function SidebarFooterStatus({ appVersion }: { appVersion: string }) {
   const [isCheckingUpdates, setIsCheckingUpdates] = useState(false);
 
@@ -257,9 +252,7 @@ function SidebarFooterStatus({ appVersion }: { appVersion: string }) {
           disabled={isCheckingUpdates}
           title="Check for updates"
         >
-          <RefreshCw
-            className={cn("size-3.5", isCheckingUpdates && "animate-spin")}
-          />
+          <RefreshCw className={cn("size-3.5", isCheckingUpdates && "animate-spin")} />
           <span className="sr-only">Check for updates</span>
         </Button>
       </div>

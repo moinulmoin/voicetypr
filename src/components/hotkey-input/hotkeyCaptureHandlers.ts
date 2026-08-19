@@ -29,16 +29,47 @@ export interface HotkeyCaptureHandlerContext {
 function addMappedKey(newKeys: Set<string>, mappedKey: string) {
   if (mappedKey === "Enter") {
     newKeys.add("Return"); // Tauri expects "Return" not "Enter"
-  } else if (mappedKey === "Up" || mappedKey === "Down" || mappedKey === "Left" || mappedKey === "Right") {
+  } else if (
+    mappedKey === "Up" ||
+    mappedKey === "Down" ||
+    mappedKey === "Left" ||
+    mappedKey === "Right"
+  ) {
     newKeys.add(mappedKey); // Arrow keys
   } else if (mappedKey.startsWith("F") && mappedKey.length <= 3) {
     newKeys.add(mappedKey); // Function keys
-  } else if (["PageUp", "PageDown", "Home", "End", "Insert", "Delete", "Backspace", "Tab", "Space", "Escape"].includes(mappedKey)) {
+  } else if (
+    [
+      "PageUp",
+      "PageDown",
+      "Home",
+      "End",
+      "Insert",
+      "Delete",
+      "Backspace",
+      "Tab",
+      "Space",
+      "Escape",
+    ].includes(mappedKey)
+  ) {
     newKeys.add(mappedKey); // Special keys
   } else if (mappedKey.startsWith("Numpad")) {
     newKeys.add(mappedKey); // Numpad keys
-  } else if (["Comma", "Period", "Semicolon", "Quote", "BracketLeft", "BracketRight",
-              "Backslash", "Slash", "Equal", "Minus", "Backquote"].includes(mappedKey)) {
+  } else if (
+    [
+      "Comma",
+      "Period",
+      "Semicolon",
+      "Quote",
+      "BracketLeft",
+      "BracketRight",
+      "Backslash",
+      "Slash",
+      "Equal",
+      "Minus",
+      "Backquote",
+    ].includes(mappedKey)
+  ) {
     // Punctuation keys - use the physical position name
     newKeys.add(mappedKey);
   } else if (mappedKey.length === 1) {
@@ -116,11 +147,16 @@ export function handleHotkeyKeyDown(e: KeyboardEvent, ctx: HotkeyCaptureHandlerC
   // modifier key pressed alone is a valid selection.  We read the
   // physical side from e.code (AltRight/AltLeft etc.).
   if (ctx.allowBareModifier && modifiers.length === 1 && regularKeys.length === 0) {
-    const side: string = code.endsWith("Right") ? "right"
-      : code.endsWith("Left") ? "left"
-      : "either";
+    const side: string = code.endsWith("Right")
+      ? "right"
+      : code.endsWith("Left")
+        ? "left"
+        : "either";
     const modMap: Record<string, string> = {
-      Alt: "alt", Control: "control", Meta: "meta", Shift: "shift",
+      Alt: "alt",
+      Control: "control",
+      Meta: "meta",
+      Shift: "shift",
     };
     // key is the modifier being pressed here (already checked regularKeys.length===0)
     const modifierKind = modMap[key] ?? "alt";
@@ -141,7 +177,7 @@ export function handleHotkeyKeyDown(e: KeyboardEvent, ctx: HotkeyCaptureHandlerC
   // ─────────────────────────────────────────────────────────────────────
 
   const orderedModifiers = ["CommandOrControl", "Control", "Alt", "Shift"].filter((mod) =>
-    modifiers.includes(mod)
+    modifiers.includes(mod),
   );
   const shortcut = [...orderedModifiers, ...regularKeys].join("+");
   if (shortcut) {
@@ -149,11 +185,10 @@ export function handleHotkeyKeyDown(e: KeyboardEvent, ctx: HotkeyCaptureHandlerC
     const displayKeys = [];
     if (modifiers.includes("CommandOrControl"))
       displayKeys.push(formatKeyForDisplay("CommandOrControl", isMacOS));
-    if (modifiers.includes("Control"))
-      displayKeys.push(formatKeyForDisplay("Control", isMacOS));
+    if (modifiers.includes("Control")) displayKeys.push(formatKeyForDisplay("Control", isMacOS));
     if (modifiers.includes("Alt")) displayKeys.push(formatKeyForDisplay("Alt", isMacOS));
     if (modifiers.includes("Shift")) displayKeys.push(formatKeyForDisplay("Shift", isMacOS));
-    displayKeys.push(...regularKeys.map(k => formatKeyForDisplay(k, isMacOS)));
+    displayKeys.push(...regularKeys.map((k) => formatKeyForDisplay(k, isMacOS)));
     ctx.setCurrentKeysDisplay(displayKeys.join(" + "));
 
     // Validate with rules
@@ -173,7 +208,7 @@ export function handleHotkeyKeyDown(e: KeyboardEvent, ctx: HotkeyCaptureHandlerC
         if (ctx.inline) {
           ctx.onChangeRef.current("");
         }
-        if (conflict.severity === 'warning') {
+        if (conflict.severity === "warning") {
           ctx.setPendingHotkey(shortcut);
         } else {
           ctx.setPendingHotkey("");
@@ -209,7 +244,7 @@ export function handleHotkeyKeyUp(e: KeyboardEvent, ctx: HotkeyCaptureHandlerCon
 
     // Standard order: CommandOrControl+Control+Alt+Shift+Key
     const orderedModifiers = ["CommandOrControl", "Control", "Alt", "Shift"].filter((mod) =>
-      modifiers.includes(mod)
+      modifiers.includes(mod),
     );
     const shortcut = [...orderedModifiers, ...regularKeys].join("+");
 
@@ -223,7 +258,7 @@ export function handleHotkeyKeyUp(e: KeyboardEvent, ctx: HotkeyCaptureHandlerCon
         if (ctx.inline) {
           ctx.onChangeRef.current("");
         }
-        if (conflict.severity === 'warning') {
+        if (conflict.severity === "warning") {
           ctx.setPendingHotkey(shortcut);
           ctx.setKeys(new Set());
           ctx.setCurrentKeysDisplay("");

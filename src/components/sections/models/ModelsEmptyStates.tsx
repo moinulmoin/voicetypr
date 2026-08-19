@@ -27,9 +27,7 @@ export function ModelsEmptyStates({
             <Spinner className="size-5" />
           </EmptyMedia>
           <EmptyTitle>Loading models</EmptyTitle>
-          <EmptyDescription>
-            Checking available transcription sources.
-          </EmptyDescription>
+          <EmptyDescription>Checking available transcription sources.</EmptyDescription>
         </EmptyHeader>
       </Empty>
     );
@@ -43,9 +41,7 @@ export function ModelsEmptyStates({
             <Bot className="size-5" />
           </EmptyMedia>
           <EmptyTitle>No models available</EmptyTitle>
-          <EmptyDescription>
-            Models will appear here when they become available.
-          </EmptyDescription>
+          <EmptyDescription>Models will appear here when they become available.</EmptyDescription>
         </EmptyHeader>
       </Empty>
     );

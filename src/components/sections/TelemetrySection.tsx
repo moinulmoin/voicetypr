@@ -21,9 +21,7 @@ interface AnalyticsStatus {
 type PendingControl = "diagnostics" | "analytics" | null;
 
 export function TelemetrySection() {
-  const [diagnostics, setDiagnostics] = useState<DiagnosticsStatus | null>(
-    null,
-  );
+  const [diagnostics, setDiagnostics] = useState<DiagnosticsStatus | null>(null);
   const [analytics, setAnalytics] = useState<AnalyticsStatus | null>(null);
   const [pending, setPending] = useState<PendingControl>(null);
 
@@ -51,12 +49,8 @@ export function TelemetrySection() {
     setPending("diagnostics");
     try {
       await invoke("set_telemetry_consent", { enabled });
-      setDiagnostics((current) =>
-        current ? { ...current, enabled } : current,
-      );
-      toast.success(
-        enabled ? "Crash reporting turned on." : "Crash reporting turned off.",
-      );
+      setDiagnostics((current) => (current ? { ...current, enabled } : current));
+      toast.success(enabled ? "Crash reporting turned on." : "Crash reporting turned off.");
     } catch (error) {
       log.error("Failed to update crash reporting:", error);
       toast.error("Could not update crash reporting.");
@@ -72,9 +66,7 @@ export function TelemetrySection() {
       setAnalytics((current) =>
         current ? { ...current, enabled, consent_required: false } : current,
       );
-      toast.success(
-        enabled ? "Usage analytics turned on." : "Usage analytics turned off.",
-      );
+      toast.success(enabled ? "Usage analytics turned on." : "Usage analytics turned off.");
     } catch (error) {
       log.error("Failed to update usage analytics:", error);
       toast.error("Could not update usage analytics.");
@@ -126,9 +118,7 @@ export function TelemetrySection() {
             className="shrink-0"
             checked={analytics?.enabled ?? true}
             disabled={
-              pending !== null ||
-              analytics === null ||
-              (!analytics.available && !analytics.enabled)
+              pending !== null || analytics === null || (!analytics.available && !analytics.enabled)
             }
             onCheckedChange={updateAnalytics}
             aria-label="Enable usage analytics"

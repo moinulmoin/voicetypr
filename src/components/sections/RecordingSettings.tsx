@@ -29,13 +29,13 @@ export function RecordingSettings() {
         </div>
 
         <FieldGroup className="gap-3.5">
-                <CaptureControlsCard />
-                <TranscriptHandlingCard />
-                <AudioFeedbackCard />
-                <TranscriptionPerformanceCard />
-                <RecordingIndicatorCard />
-                <StorageCleanupCard />
-              </FieldGroup>
+          <CaptureControlsCard />
+          <TranscriptHandlingCard />
+          <AudioFeedbackCard />
+          <TranscriptionPerformanceCard />
+          <RecordingIndicatorCard />
+          <StorageCleanupCard />
+        </FieldGroup>
       </div>
     </div>
   );

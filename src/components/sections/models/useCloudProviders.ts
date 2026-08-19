@@ -23,12 +23,9 @@ export function useCloudProviders({
   const [cloudModal, setCloudModal] = useState<CloudModalState | null>(null);
   const [cloudModalLoading, setCloudModalLoading] = useState(false);
 
-  const openCloudModal = useCallback(
-    (providerId: string, mode: CloudModalMode) => {
-      setCloudModal({ providerId, mode });
-    },
-    [],
-  );
+  const openCloudModal = useCallback((providerId: string, mode: CloudModalMode) => {
+    setCloudModal({ providerId, mode });
+  }, []);
 
   const closeCloudModal = useCallback(() => {
     if (cloudModalLoading) return;
@@ -49,9 +46,7 @@ export function useCloudProviders({
         await provider.addKey(apiKey);
         await refreshModels();
         toast.success(
-          `${provider.providerName} key ${
-            cloudModal.mode === "update" ? "updated" : "saved"
-          }`,
+          `${provider.providerName} key ${cloudModal.mode === "update" ? "updated" : "saved"}`,
         );
         setCloudModal(null);
         if (cloudModal.mode === "connect") {
@@ -88,15 +83,13 @@ export function useCloudProviders({
         await refreshModels();
         // Ensure tray menu reflects removal immediately even if selection unchanged
         try {
-          await invoke('update_tray_menu');
+          await invoke("update_tray_menu");
         } catch (e) {
-          log.warn('[ModelsSection] Failed to refresh tray menu after disconnect:', e);
+          log.warn("[ModelsSection] Failed to refresh tray menu after disconnect:", e);
         }
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
-        toast.error(
-          `Failed to disconnect ${provider.providerName}: ${message}`,
-        );
+        toast.error(`Failed to disconnect ${provider.providerName}: ${message}`);
       }
     },
     [refreshModels, settings?.current_model, updateSettings],
@@ -118,9 +111,7 @@ export function useCloudProviders({
     [clearActiveRemote, onSelect, refreshModels],
   );
 
-  const activeProvider = cloudModal
-    ? getCloudProviderByModel(cloudModal.providerId)
-    : undefined;
+  const activeProvider = cloudModal ? getCloudProviderByModel(cloudModal.providerId) : undefined;
   const isModalOpen = !!cloudModal && !!activeProvider;
 
   return {
@@ -143,7 +134,11 @@ export interface CloudProvidersApi {
   closeCloudModal: () => void;
   handleCloudKeySubmit: (apiKey: string) => Promise<void>;
   handleCloudDisconnect: (modelName: string) => Promise<void>;
-  handleCloudModelChange: (providerId: string, modelId: string, requiresSetup: boolean) => Promise<void>;
+  handleCloudModelChange: (
+    providerId: string,
+    modelId: string,
+    requiresSetup: boolean,
+  ) => Promise<void>;
   activeProvider: CloudProviderDefinition | undefined;
   isModalOpen: boolean;
 }

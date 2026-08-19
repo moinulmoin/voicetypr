@@ -9,9 +9,7 @@ import { createLogger } from "@/lib/logger";
 const log = createLogger("app");
 
 export function useAppBootstrap(settings: AppSettings | null) {
-  const [justUpdatedVersion, setJustUpdatedVersion] = useState<string | null>(
-    null,
-  );
+  const [justUpdatedVersion, setJustUpdatedVersion] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;

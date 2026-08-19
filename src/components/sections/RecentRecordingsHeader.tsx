@@ -36,18 +36,41 @@ export function RecentRecordingsHeader({
           <div className="flex items-center gap-2">
             <h1 className="text-2xl font-semibold tracking-tight">History</h1>
             <Dialog>
-              <DialogTrigger render={<Button type="button" variant="ghost" size="icon-sm" aria-label="History guide" className="size-7 rounded-full text-muted-foreground"/>}><HelpCircle className="h-4 w-4" /></DialogTrigger>
+              <DialogTrigger
+                render={
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="icon-sm"
+                    aria-label="History guide"
+                    className="size-7 rounded-full text-muted-foreground"
+                  />
+                }
+              >
+                <HelpCircle className="h-4 w-4" />
+              </DialogTrigger>
               <DialogContent className="sm:max-w-lg">
                 <DialogHeader>
                   <DialogTitle>History guide</DialogTitle>
                   <DialogDescription>
-                    History stores completed transcripts so you can reuse, export, delete, or re-transcribe them.
+                    History stores completed transcripts so you can reuse, export, delete, or
+                    re-transcribe them.
                   </DialogDescription>
                 </DialogHeader>
                 <div className="space-y-3 text-sm leading-6 text-muted-foreground">
-                  <p><strong className="text-foreground">Search</strong> filters saved transcripts by text and source metadata.</p>
-                  <p><strong className="text-foreground">Re-transcribe</strong> reruns a saved audio take with your current transcription source. It only appears when the original audio file was saved.</p>
-                  <p><strong className="text-foreground">Export</strong> saves transcript history as JSON for backup or review.</p>
+                  <p>
+                    <strong className="text-foreground">Search</strong> filters saved transcripts by
+                    text and source metadata.
+                  </p>
+                  <p>
+                    <strong className="text-foreground">Re-transcribe</strong> reruns a saved audio
+                    take with your current transcription source. It only appears when the original
+                    audio file was saved.
+                  </p>
+                  <p>
+                    <strong className="text-foreground">Export</strong> saves transcript history as
+                    JSON for backup or review.
+                  </p>
                 </div>
               </DialogContent>
             </Dialog>
@@ -62,17 +85,19 @@ export function RecentRecordingsHeader({
           {historyLength > 0 && (
             <DropdownMenu>
               <DropdownMenuTrigger
-                render={
-                  <Button variant="secondary" size="sm" title="Export transcripts" />
-                }
+                render={<Button variant="secondary" size="sm" title="Export transcripts" />}
               >
                 <Download className="h-3.5 w-3.5" />
                 Export
               </DropdownMenuTrigger>
               <DropdownMenuContent align="end">
                 <DropdownMenuItem onClick={onExport}>JSON (.json)</DropdownMenuItem>
-                <DropdownMenuItem onClick={() => onExportText("txt")}>Plain text (.txt)</DropdownMenuItem>
-                <DropdownMenuItem onClick={() => onExportText("md")}>Markdown (.md)</DropdownMenuItem>
+                <DropdownMenuItem onClick={() => onExportText("txt")}>
+                  Plain text (.txt)
+                </DropdownMenuItem>
+                <DropdownMenuItem onClick={() => onExportText("md")}>
+                  Markdown (.md)
+                </DropdownMenuItem>
               </DropdownMenuContent>
             </DropdownMenu>
           )}

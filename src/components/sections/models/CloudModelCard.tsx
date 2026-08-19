@@ -12,10 +12,7 @@ import { getCloudProviderByModel, resolveCloudModelLabel } from "@/lib/cloudProv
 import { getModelDisplayName } from "@/lib/model-display";
 import { cn } from "@/lib/utils";
 import { ModelInfo, isCloudModel } from "@/types";
-import {
-  CheckCircle,
-  Zap,
-} from "lucide-react";
+import { CheckCircle, Zap } from "lucide-react";
 
 export interface CloudModelCardProps {
   name: string;
@@ -42,8 +39,7 @@ export function CloudModelCard({
 }: CloudModelCardProps) {
   if (!isCloudModel(model)) return null;
 
-  const provider =
-    getCloudProviderByModel(name) ?? getCloudProviderByModel(model.engine);
+  const provider = getCloudProviderByModel(name) ?? getCloudProviderByModel(model.engine);
   const requiresSetup = model.requires_setup;
   const isActive = currentModel === name && !activeRemoteServer;
   const availableModels = model.available_models ?? [];
@@ -66,9 +62,7 @@ export function CloudModelCard({
       className={cn(
         "group rounded-xl border border-border bg-card p-4 transition-colors",
         requiresSetup ? "" : "cursor-pointer",
-        isActive
-          ? "border-sage/50 bg-sage-bg/40"
-          : "hover:border-sage/40 hover:bg-muted/30",
+        isActive ? "border-sage/50 bg-sage-bg/40" : "hover:border-sage/40 hover:bg-muted/30",
       )}
       onClick={async () => {
         if (requiresSetup) {
@@ -82,7 +76,12 @@ export function CloudModelCard({
       <div className="flex items-center justify-between gap-4">
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-2">
-            <h3 className={cn("truncate text-sm font-semibold tracking-tight", isActive && "text-sage")}>
+            <h3
+              className={cn(
+                "truncate text-sm font-semibold tracking-tight",
+                isActive && "text-sage",
+              )}
+            >
               {modelDisplayName}
             </h3>
             {providerDisplayName && (
@@ -109,7 +108,10 @@ export function CloudModelCard({
               onPointerDown={(event) => event.stopPropagation()}
             >
               <Select
-                items={availableModels.map((option) => ({ value: option.id, label: option.display_name }))}
+                items={availableModels.map((option) => ({
+                  value: option.id,
+                  label: option.display_name,
+                }))}
                 value={selectedModelId}
                 onValueChange={(modelId) => {
                   if (modelId != null) {
@@ -142,7 +144,8 @@ export function CloudModelCard({
             </span>
             <span className="inline-flex items-center gap-1.5">
               <CheckCircle className="size-3.5 text-sage" />
-              Accuracy <span className="font-medium text-foreground">{model.accuracy_score ?? "—"}</span>
+              Accuracy{" "}
+              <span className="font-medium text-foreground">{model.accuracy_score ?? "—"}</span>
             </span>
           </div>
         </div>

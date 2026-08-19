@@ -1,38 +1,29 @@
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
-import { open } from '@tauri-apps/plugin-shell';
-import { getVersion } from '@tauri-apps/api/app';
-import { invoke } from '@tauri-apps/api/core';
-import { 
-  ExternalLink,
-  Globe,
-  Info,
-  RefreshCw
-} from "lucide-react";
+import { open } from "@tauri-apps/plugin-shell";
+import { getVersion } from "@tauri-apps/api/app";
+import { invoke } from "@tauri-apps/api/core";
+import { ExternalLink, Globe, Info, RefreshCw } from "lucide-react";
 import XIcon from "@/components/icons/XIcon";
-import { useEffect, useState } from 'react';
-import { toast } from 'sonner';
-import { updateService } from '@/services/updateService';
+import { useEffect, useState } from "react";
+import { toast } from "sonner";
+import { updateService } from "@/services/updateService";
 import { createLogger } from "@/lib/logger";
-import {
-  isStoreDistribution,
-  type DistributionInfo,
-} from '@/types/distribution';
+import { isStoreDistribution, type DistributionInfo } from "@/types/distribution";
 
 const log = createLogger("about");
 async function openExternalLink(url: string) {
   try {
     await open(url);
   } catch (error) {
-    log.error('Failed to open external link:', error);
-    toast.error('Failed to open link');
+    log.error("Failed to open external link:", error);
+    toast.error("Failed to open link");
   }
 }
 
-
 export function AboutSection() {
-  const [appVersion, setAppVersion] = useState<string>('');
+  const [appVersion, setAppVersion] = useState<string>("");
   const [isCheckingUpdate, setIsCheckingUpdate] = useState(false);
   const [updatesManagedByStore, setUpdatesManagedByStore] = useState<boolean | null>(null);
 
@@ -42,17 +33,17 @@ export function AboutSection() {
         const version = await getVersion();
         setAppVersion(version);
       } catch (error) {
-        log.error('Failed to get app version:', error);
-        setAppVersion('Unknown');
+        log.error("Failed to get app version:", error);
+        setAppVersion("Unknown");
       }
     };
 
     const fetchDistributionInfo = async () => {
       try {
-        const info = await invoke<DistributionInfo>('get_distribution_info');
+        const info = await invoke<DistributionInfo>("get_distribution_info");
         setUpdatesManagedByStore(isStoreDistribution(info));
       } catch (error) {
-        console.error('Failed to get distribution info:', error);
+        console.error("Failed to get distribution info:", error);
         setUpdatesManagedByStore(false);
       }
     };
@@ -67,7 +58,6 @@ export function AboutSection() {
     setIsCheckingUpdate(false);
   };
 
-
   return (
     <div className="h-full flex flex-col">
       {/* Header */}
@@ -75,9 +65,7 @@ export function AboutSection() {
         <div className="flex items-center justify-between">
           <div>
             <h1 className="text-2xl font-semibold">About</h1>
-            <p className="text-sm text-muted-foreground mt-1">
-              App information and resources
-            </p>
+            <p className="text-sm text-muted-foreground mt-1">App information and resources</p>
           </div>
         </div>
       </div>
@@ -87,7 +75,7 @@ export function AboutSection() {
           {/* App Information Section */}
           <div className="space-y-4">
             <h2 className="text-base font-semibold">App Information</h2>
-            
+
             <div className="rounded-lg border border-border/50 bg-card p-4 space-y-4">
               <div className="flex items-center justify-between">
                 <div className="flex items-center gap-2">
@@ -95,7 +83,7 @@ export function AboutSection() {
                   <span className="text-sm text-muted-foreground">Version</span>
                 </div>
                 <Badge variant="secondary" className="font-mono">
-                  v{appVersion || 'Loading...'}
+                  v{appVersion || "Loading..."}
                 </Badge>
               </div>
 
@@ -114,8 +102,10 @@ export function AboutSection() {
                     variant="ghost"
                     size="sm"
                   >
-                    <RefreshCw className={`h-3.5 w-3.5 mr-1.5 ${isCheckingUpdate ? 'animate-spin' : ''}`} />
-                    {isCheckingUpdate ? 'Checking...' : 'Check for Updates'}
+                    <RefreshCw
+                      className={`h-3.5 w-3.5 mr-1.5 ${isCheckingUpdate ? "animate-spin" : ""}`}
+                    />
+                    {isCheckingUpdate ? "Checking..." : "Check for Updates"}
                   </Button>
                 </div>
               )}
@@ -125,7 +115,7 @@ export function AboutSection() {
           {/* Resources Section */}
           <div className="space-y-4">
             <h2 className="text-base font-semibold">Resources</h2>
-            
+
             <div className="flex gap-3">
               <button
                 onClick={() => openExternalLink("https://voicetypr.com")}

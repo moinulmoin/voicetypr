@@ -1,14 +1,17 @@
-import { cn } from "@/lib/utils"
+import { cn } from "@/lib/utils";
 
 interface IOSSpinnerProps {
-  size?: number
-  className?: string
+  size?: number;
+  className?: string;
 }
 
 export default function IOSSpinner({ size = 20, className }: IOSSpinnerProps) {
   return (
     <>
-      <div className={cn("relative inline-flex items-center justify-center", className)} style={{ width: size, height: size }}>
+      <div
+        className={cn("relative inline-flex items-center justify-center", className)}
+        style={{ width: size, height: size }}
+      >
         {[...Array(12)].map((_, i) => (
           <div
             key={i}
@@ -28,5 +31,5 @@ export default function IOSSpinner({ size = 20, className }: IOSSpinnerProps) {
         ))}
       </div>
     </>
-  )
+  );
 }

@@ -23,9 +23,7 @@ function ShareStatsPreview({
         <div className="absolute inset-0 z-10 flex items-center justify-center bg-[#161618]/90 backdrop-blur-sm">
           <div className="flex flex-col items-center gap-2">
             <Loader2 className="size-8 animate-spin text-sage" />
-            <span className="text-sm text-muted-foreground">
-              Creating your share card…
-            </span>
+            <span className="text-sm text-muted-foreground">Creating your share card…</span>
           </div>
         </div>
       ) : null}
@@ -40,10 +38,7 @@ function ShareStatsPreview({
         ref={setCanvas}
         width={2400}
         height={1600}
-        className={cn(
-          "block h-auto w-full max-w-full",
-          imageDataUrl && "hidden",
-        )}
+        className={cn("block h-auto w-full max-w-full", imageDataUrl && "hidden")}
       />
     </div>
   );
@@ -67,18 +62,9 @@ function ShareStatsActions({
       <Button
         onClick={onCopy}
         disabled={isCopying || !imageDataUrl}
-        className={cn(
-          "min-w-32",
-          copied && "bg-sage text-sage-foreground hover:bg-sage/90",
-        )}
+        className={cn("min-w-32", copied && "bg-sage text-sage-foreground hover:bg-sage/90")}
       >
-        {isCopying ? (
-          <Loader2 className="animate-spin" />
-        ) : copied ? (
-          <Check />
-        ) : (
-          <Copy />
-        )}
+        {isCopying ? <Loader2 className="animate-spin" /> : copied ? <Check /> : <Copy />}
         {isCopying ? "Copying…" : copied ? "Copied" : "Copy image"}
       </Button>
       <Button onClick={onDownload} variant="outline">

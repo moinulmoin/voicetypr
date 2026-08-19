@@ -1,10 +1,6 @@
 import { useSetting } from "@/contexts/SettingsContext";
 import { useRecording } from "@/hooks/useRecording";
-import type {
-  PillIndicatorMode,
-  PillIndicatorPosition,
-  PillIndicatorStyle,
-} from "@/types";
+import type { PillIndicatorMode, PillIndicatorPosition, PillIndicatorStyle } from "@/types";
 import { listen } from "@tauri-apps/api/event";
 import { useEffect, useMemo, useState } from "react";
 
@@ -30,8 +26,7 @@ export function usePillController(): PillControllerState {
   const recording = useRecording();
   const pillIndicatorMode: PillIndicatorMode =
     useSetting("pill_indicator_mode") ?? "when_recording";
-  const pillStyle: PillIndicatorStyle =
-    useSetting("pill_indicator_style") ?? "compact";
+  const pillStyle: PillIndicatorStyle = useSetting("pill_indicator_style") ?? "compact";
   const pillPosition: PillIndicatorPosition =
     useSetting("pill_indicator_position") ?? "bottom-center";
   const [audioLevel, setAudioLevel] = useState(0);
@@ -91,7 +86,6 @@ export function usePillController(): PillControllerState {
     };
   }, [isListening]);
 
-
   useEffect(() => {
     let isMounted = true;
     const unlistenFns: Array<() => void> = [];
@@ -116,8 +110,7 @@ export function usePillController(): PillControllerState {
 
   const isActive = pillState !== "idle";
   const isVisible =
-    pillIndicatorMode === "always" ||
-    (pillIndicatorMode === "when_recording" && isActive);
+    pillIndicatorMode === "always" || (pillIndicatorMode === "when_recording" && isActive);
 
   return {
     audioLevel: isListening ? audioLevel : 0,

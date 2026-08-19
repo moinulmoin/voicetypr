@@ -37,16 +37,10 @@ export function ShortcutActionRow({
   const isCancelRecording = action.action === "cancel_recording";
 
   return (
-    <div
-      role="group"
-      aria-label={action.label}
-      className="py-3 first:pt-1 last:pb-0"
-    >
+    <div role="group" aria-label={action.label} className="py-3 first:pt-1 last:pb-0">
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between sm:gap-6">
         <div className="min-w-0">
-          <h3 className="text-[13.5px] font-medium text-foreground">
-            {action.label}
-          </h3>
+          <h3 className="text-[13.5px] font-medium text-foreground">{action.label}</h3>
           <p className="mt-0.5 text-[12px] leading-relaxed text-muted-foreground">
             {isCancelRecording
               ? "Press Escape twice while recording to cancel the current take."

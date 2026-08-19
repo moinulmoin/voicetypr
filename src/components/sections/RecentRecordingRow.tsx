@@ -1,14 +1,19 @@
 import { createElement } from "react";
-import { AlertTriangle, Copy, FolderOpen, Loader2, RotateCcw, Sparkles, ChevronDown, Trash2 } from "lucide-react";
+import {
+  AlertTriangle,
+  Copy,
+  FolderOpen,
+  Loader2,
+  RotateCcw,
+  Sparkles,
+  ChevronDown,
+  Trash2,
+} from "lucide-react";
 import { TranscriptionHistory } from "@/types";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import { getModelDisplayName } from "@/lib/model-display";
-import {
-  formatDurationMs,
-  sourceIcon,
-  sourceLabel,
-} from "./recentRecordingsHelpers";
+import { formatDurationMs, sourceIcon, sourceLabel } from "./recentRecordingsHelpers";
 import { RecentRecordingApplicationIcon } from "./RecentRecordingApplicationIcon";
 
 function copyTextToClipboard(text: string) {
@@ -41,17 +46,20 @@ export function RecentRecordingRow({
   onShowInFolder,
   onDelete,
 }: RecentRecordingRowProps) {
-  const isFailed = item.status === 'failed';
-  const isPersistedInProgress = item.status === 'in_progress';
+  const isFailed = item.status === "failed";
+  const isPersistedInProgress = item.status === "in_progress";
   const isInProgress = reTranscribingIds.has(item.id) || isPersistedInProgress;
-  const hasOriginal = Boolean(item.writing?.ai_applied && item.writing?.original_text && item.writing.original_text !== item.text);
+  const hasOriginal = Boolean(
+    item.writing?.ai_applied &&
+    item.writing?.original_text &&
+    item.writing.original_text !== item.text,
+  );
   const originalText = item.writing?.original_text;
   const displayText = item.text;
   const wordCount = displayText.trim() ? displayText.trim().split(/\s+/).length : 0;
   const appContext = item.writing?.context_hint;
   const usesDesktopApp =
-    (!item.writing?.source ||
-      item.writing.source === "desktop_recording") &&
+    (!item.writing?.source || item.writing.source === "desktop_recording") &&
     Boolean(appContext?.app_name);
   const sourceDisplayName =
     usesDesktopApp && appContext?.app_name
@@ -95,15 +103,17 @@ export function RecentRecordingRow({
           <div className="mb-1 flex flex-wrap items-center gap-2">
             <span className="text-xs font-medium text-amber-600 dark:text-amber-400">
               {verifiedRecordings.has(item.id)
-                ? 'Transcription failed - recording preserved'
+                ? "Transcription failed - recording preserved"
                 : checkedRecordings.has(item.id)
-                  ? 'Transcription failed - recording unavailable for retry'
-                  : 'Transcription failed'}
+                  ? "Transcription failed - recording unavailable for retry"
+                  : "Transcription failed"}
             </span>
             {verifiedRecordings.has(item.id) && (
               <button
                 type="button"
-                onClick={() => { void onReTranscribe(item); }}
+                onClick={() => {
+                  void onReTranscribe(item);
+                }}
                 className="inline-flex items-center gap-1 rounded-md bg-amber-500/15 px-2 py-0.5 text-xs font-medium text-amber-600 transition-colors hover:bg-amber-500/25 dark:text-amber-400"
               >
                 <RotateCcw className="h-3 w-3" /> Re-transcribe
@@ -115,7 +125,7 @@ export function RecentRecordingRow({
           <p className="mb-1 text-xs font-medium text-amber-600 dark:text-amber-400">
             {item.writing.target_language
               ? `Translation to ${item.writing.target_language} failed - saved untranslated`
-              : 'Translation failed - saved untranslated'}
+              : "Translation failed - saved untranslated"}
           </p>
         )}
 
@@ -133,10 +143,12 @@ export function RecentRecordingRow({
             {displayText}
           </button>
         ) : (
-          <p className={cn(
-            "text-sm leading-relaxed line-clamp-3",
-            isFailed ? "italic text-muted-foreground" : "text-foreground",
-          )}>
+          <p
+            className={cn(
+              "text-sm leading-relaxed line-clamp-3",
+              isFailed ? "italic text-muted-foreground" : "text-foreground",
+            )}
+          >
             {displayText}
           </p>
         )}
@@ -149,7 +161,10 @@ export function RecentRecordingRow({
                 processPath={appContext.process_path}
               />
             ) : (
-              createElement(sourceIcon(item.writing?.source), { "aria-hidden": true, className: "size-3.5" })
+              createElement(sourceIcon(item.writing?.source), {
+                "aria-hidden": true,
+                className: "size-3.5",
+              })
             )}
             {sourceDisplayName}
           </span>
@@ -165,14 +180,17 @@ export function RecentRecordingRow({
               <span className="inline-flex items-center gap-1 text-foreground/70">
                 <Sparkles className="h-3 w-3" />
                 {item.writing.ai_model
-                  ? getModelDisplayName(item.writing.ai_model) ?? item.writing.ai_model
+                  ? (getModelDisplayName(item.writing.ai_model) ?? item.writing.ai_model)
                   : item.writing.ai_provider}
               </span>
             </>
           )}
           <span className="text-muted-foreground/40">·</span>
           <span>
-            {new Date(item.timestamp).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}
+            {new Date(item.timestamp).toLocaleTimeString([], {
+              hour: "numeric",
+              minute: "2-digit",
+            })}
           </span>
           {wordCount > 0 && (
             <>
@@ -187,7 +205,9 @@ export function RecentRecordingRow({
             </>
           )}
           {item.writing?.diarized && (
-            <span className="rounded-md bg-muted px-1.5 py-0.5 text-[11px] font-medium">Speakers</span>
+            <span className="rounded-md bg-muted px-1.5 py-0.5 text-[11px] font-medium">
+              Speakers
+            </span>
           )}
           {hasOriginal && (
             <button
@@ -250,7 +270,9 @@ export function RecentRecordingRow({
         {verifiedRecordings.has(item.id) && (
           <button
             type="button"
-            onClick={() => { void onReTranscribe(item); }}
+            onClick={() => {
+              void onReTranscribe(item);
+            }}
             disabled={isInProgress}
             className={cn(
               "grid size-7 place-items-center rounded-md border border-border bg-card text-muted-foreground transition-colors hover:text-foreground",
@@ -258,7 +280,11 @@ export function RecentRecordingRow({
             )}
             title="Re-transcribe with current source"
           >
-            {isInProgress ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RotateCcw className="h-3.5 w-3.5" />}
+            {isInProgress ? (
+              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+            ) : (
+              <RotateCcw className="h-3.5 w-3.5" />
+            )}
           </button>
         )}
         <button

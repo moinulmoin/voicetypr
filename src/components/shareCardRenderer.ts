@@ -37,9 +37,7 @@ export function getSharePlays(
   plays.push({
     value: totalTranscriptions.toLocaleString(),
     play:
-      totalTranscriptions === 1
-        ? "time I skipped the keyboard"
-        : "times I skipped the keyboard",
+      totalTranscriptions === 1 ? "time I skipped the keyboard" : "times I skipped the keyboard",
   });
   return plays;
 }
@@ -78,38 +76,21 @@ export async function drawShareCard(
   context.imageSmoothingEnabled = true;
   context.imageSmoothingQuality = "high";
 
-  const fontFamily =
-    "'Geist Variable', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif";
+  const fontFamily = "'Geist Variable', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif";
   const cream = "#fffaf2";
   const mint = "#8ed6a3";
   const teal = "#4fc9c7";
   const ink = "#0f1711";
-  const plays = getSharePlays(
-    stats.totalWords,
-    stats.totalTranscriptions,
-    stats.timeSavedDisplay,
-  );
+  const plays = getSharePlays(stats.totalWords, stats.totalTranscriptions, stats.timeSavedDisplay);
   const centerX = logicalWidth / 2;
 
-  const background = context.createLinearGradient(
-    0,
-    0,
-    logicalWidth,
-    logicalHeight,
-  );
+  const background = context.createLinearGradient(0, 0, logicalWidth, logicalHeight);
   background.addColorStop(0, "#17181c");
   background.addColorStop(1, "#101113");
   context.fillStyle = background;
   context.fillRect(0, 0, logicalWidth, logicalHeight);
 
-  const glow = context.createRadialGradient(
-    centerX,
-    200,
-    30,
-    centerX,
-    200,
-    520,
-  );
+  const glow = context.createRadialGradient(centerX, 200, 30, centerX, 200, 520);
   glow.addColorStop(0, "rgba(79, 201, 199, 0.12)");
   glow.addColorStop(0.5, "rgba(142, 214, 163, 0.06)");
   glow.addColorStop(1, "rgba(79, 201, 199, 0)");

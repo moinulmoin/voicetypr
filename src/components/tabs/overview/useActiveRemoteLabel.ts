@@ -12,9 +12,7 @@ interface SavedConnection {
 }
 
 export function useActiveRemoteLabel(remoteSelected: boolean): string | null {
-  const [activeRemoteLabel, setActiveRemoteLabel] = useState<string | null>(
-    null,
-  );
+  const [activeRemoteLabel, setActiveRemoteLabel] = useState<string | null>(null);
 
   useEffect(() => {
     if (!remoteSelected) {
@@ -31,20 +29,13 @@ export function useActiveRemoteLabel(remoteSelected: boolean): string | null {
         ]);
         if (cancelled) return;
 
-        const activeServer = servers.find(
-          (server) => server.id === activeServerId,
-        );
+        const activeServer = servers.find((server) => server.id === activeServerId);
         setActiveRemoteLabel(
           activeServer?.name ||
-            (activeServer
-              ? `${activeServer.host}:${activeServer.port}`
-              : "Remote Voicetypr"),
+            (activeServer ? `${activeServer.host}:${activeServer.port}` : "Remote Voicetypr"),
         );
       } catch (error) {
-        log.error(
-          "[OverviewTab] Failed to load active remote Voicetypr:",
-          error,
-        );
+        log.error("[OverviewTab] Failed to load active remote Voicetypr:", error);
         if (!cancelled) {
           setActiveRemoteLabel("Remote Voicetypr");
         }

@@ -29,20 +29,13 @@ function formatElapsed(seconds: number): string {
   return `${minutes}:${remainder.toString().padStart(2, "0")}`;
 }
 
-export function PillShell({
-  children,
-  isActive,
-  position,
-  style,
-}: PillShellProps) {
+export function PillShell({ children, isActive, position, style }: PillShellProps) {
   const horizontalAlignment = position.endsWith("-left")
     ? "justify-start"
     : position.endsWith("-right")
       ? "justify-end"
       : "justify-center";
-  const verticalAlignment = position.startsWith("top-")
-    ? "items-start"
-    : "items-end";
+  const verticalAlignment = position.startsWith("top-") ? "items-start" : "items-end";
 
   return (
     <div
@@ -61,12 +54,7 @@ export function PillShell({
   );
 }
 
-export function PillStatus({
-  audioLevel,
-  elapsedSeconds,
-  state,
-  style,
-}: PillStatusProps) {
+export function PillStatus({ audioLevel, elapsedSeconds, state, style }: PillStatusProps) {
   const label = PILL_LABELS[state];
   const showLabel = style === "full" ? label : null;
   const showTimer = style === "full" && state === "listening";

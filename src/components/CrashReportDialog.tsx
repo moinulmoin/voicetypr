@@ -1,6 +1,6 @@
-import { useRef, useState, useEffect } from 'react';
-import { AlertTriangle, X, Copy, Check, Send } from 'lucide-react';
-import { toast } from 'sonner';
+import { useRef, useState, useEffect } from "react";
+import { AlertTriangle, X, Copy, Check, Send } from "lucide-react";
+import { toast } from "sonner";
 import {
   Dialog,
   DialogContent,
@@ -8,18 +8,14 @@ import {
   DialogFooter,
   DialogHeader,
   DialogTitle,
-} from '@/components/ui/dialog';
-import { Button } from '@/components/ui/button';
-import { ScrollArea } from '@/components/ui/scroll-area';
-import {
-  CrashReportData,
-  gatherCrashReportData,
-  submitCrashReport,
-} from '@/utils/crashReport';
-import { getModelDisplayName } from '@/lib/model-display';
-import { createLogger } from '@/lib/logger';
+} from "@/components/ui/dialog";
+import { Button } from "@/components/ui/button";
+import { ScrollArea } from "@/components/ui/scroll-area";
+import { CrashReportData, gatherCrashReportData, submitCrashReport } from "@/utils/crashReport";
+import { getModelDisplayName } from "@/lib/model-display";
+import { createLogger } from "@/lib/logger";
 
-const log = createLogger('crash-report');
+const log = createLogger("crash-report");
 
 interface CrashReportDialogProps {
   error: Error;
@@ -33,21 +29,21 @@ interface CrashReportDialogProps {
 function buildCopyDetails(data: CrashReportData): string {
   const parts = [
     `Error: ${data.errorMessage}`,
-    `Stack: ${data.errorStack || 'N/A'}`,
+    `Stack: ${data.errorStack || "N/A"}`,
     `App Version: ${data.appVersion}`,
     `Platform: ${data.platform} ${data.osVersion}`,
     `Architecture: ${data.architecture}`,
-    `Model: ${getModelDisplayName(data.currentModel) || 'None'}`,
+    `Model: ${getModelDisplayName(data.currentModel) || "None"}`,
     `Timestamp: ${data.timestamp}`,
   ];
 
   if (data.logContent) {
-    parts.push('', 'Latest App Log:', data.logContent);
+    parts.push("", "Latest App Log:", data.logContent);
   } else if (data.logStatusNote) {
-    parts.push('', `Latest App Log: ${data.logStatusNote}`);
+    parts.push("", `Latest App Log: ${data.logStatusNote}`);
   }
 
-  return parts.join('\n');
+  return parts.join("\n");
 }
 
 export function CrashReportDialog({
@@ -61,7 +57,7 @@ export function CrashReportDialog({
   const [crashData, setCrashData] = useState<CrashReportData | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [isSubmitting, setIsSubmitting] = useState(false);
-  const [submitError, setSubmitError] = useState('');
+  const [submitError, setSubmitError] = useState("");
   const [copied, setCopied] = useState(false);
   const copiedTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const actionIdRef = useRef(0);
@@ -77,7 +73,7 @@ export function CrashReportDialog({
     setCrashData(null);
     setIsLoading(true);
     setIsSubmitting(false);
-    setSubmitError('');
+    setSubmitError("");
     setCopied(false);
     clearCopyTimer();
   };
@@ -119,7 +115,6 @@ export function CrashReportDialog({
     const actionId = actionIdRef.current + 1;
     actionIdRef.current = actionId;
 
-
     gatherCrashReportData(error, componentStack, currentModel)
       .then((data) => {
         if (actionId === actionIdRef.current) {
@@ -141,7 +136,7 @@ export function CrashReportDialog({
   const handleSubmitReport = async () => {
     if (!crashData) return;
 
-    setSubmitError('');
+    setSubmitError("");
     setCopied(false);
     clearCopyTimer();
     const actionId = actionIdRef.current + 1;
@@ -152,13 +147,18 @@ export function CrashReportDialog({
       if (actionId !== actionIdRef.current) return;
 
       if (result.success) {
-        toast.success('Crash report submitted. Thank you.');
+        toast.success("Crash report submitted. Thank you.");
         handleClose();
         return;
       }
 
-      setSubmitError(result.message || 'Failed to submit crash report. You can copy the details and send them manually.');
-      toast.error(result.message || 'Failed to submit crash report. Please copy the details instead.');
+      setSubmitError(
+        result.message ||
+          "Failed to submit crash report. You can copy the details and send them manually.",
+      );
+      toast.error(
+        result.message || "Failed to submit crash report. Please copy the details instead.",
+      );
     } finally {
       setIsSubmitting(false);
     }
@@ -172,15 +172,15 @@ export function CrashReportDialog({
     try {
       await navigator.clipboard.writeText(details);
       setCopied(true);
-      toast.success('Details copied to clipboard');
+      toast.success("Details copied to clipboard");
       clearCopyTimer();
       copiedTimerRef.current = setTimeout(() => {
         setCopied(false);
         copiedTimerRef.current = null;
       }, 2000);
     } catch (err) {
-      log.error('Failed to copy:', err);
-      toast.error('Failed to copy details');
+      log.error("Failed to copy:", err);
+      toast.error("Failed to copy details");
     }
   };
 
@@ -193,15 +193,13 @@ export function CrashReportDialog({
             Something went wrong
           </DialogTitle>
           <DialogDescription>
-            Voicetypr hit an unexpected error. Submit a crash report with system info
-            and the latest app log so we can fix it.
+            Voicetypr hit an unexpected error. Submit a crash report with system info and the latest
+            app log so we can fix it.
           </DialogDescription>
         </DialogHeader>
 
         {isLoading ? (
-          <div className="py-8 text-center text-muted-foreground">
-            Gathering crash details...
-          </div>
+          <div className="py-8 text-center text-muted-foreground">Gathering crash details...</div>
         ) : crashData ? (
           <div className="space-y-4">
             {/* Error Message */}
@@ -250,13 +248,18 @@ export function CrashReportDialog({
                 </div>
                 <div className="flex justify-between p-2 rounded bg-muted/50">
                   <span className="text-muted-foreground">Model</span>
-                  <span className="font-medium">{getModelDisplayName(crashData.currentModel) || 'None'}</span>
+                  <span className="font-medium">
+                    {getModelDisplayName(crashData.currentModel) || "None"}
+                  </span>
                 </div>
               </div>
             </div>
 
             {submitError && (
-              <div className="rounded-md border border-destructive/30 bg-destructive/10 p-3" role="alert">
+              <div
+                className="rounded-md border border-destructive/30 bg-destructive/10 p-3"
+                role="alert"
+              >
                 <p className="text-xs text-destructive">{submitError}</p>
                 <p className="mt-1 text-xs text-muted-foreground">
                   If this keeps happening, copy the crash details and send them manually.
@@ -264,7 +267,6 @@ export function CrashReportDialog({
               </div>
             )}
           </div>
-
         ) : (
           <div className="py-8 text-center text-muted-foreground">
             Failed to gather crash details
@@ -281,7 +283,7 @@ export function CrashReportDialog({
               className="gap-2"
             >
               {copied ? <Check className="h-4 w-4" /> : <Copy className="h-4 w-4" />}
-              {copied ? 'Copied' : 'Copy Details'}
+              {copied ? "Copied" : "Copy Details"}
             </Button>
           )}
 
@@ -303,7 +305,7 @@ export function CrashReportDialog({
               className="gap-2"
             >
               <Send className="h-4 w-4" />
-              {isSubmitting ? 'Submitting...' : 'Submit'}
+              {isSubmitting ? "Submitting..." : "Submit"}
             </Button>
           </div>
         </DialogFooter>

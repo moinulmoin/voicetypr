@@ -41,44 +41,51 @@ export function BindingResultsList({
         ) : (
           <>
             {reachableBindings.map((result) => (
-                <div key={`ok:${result.ip}:${result.interface_name ?? ""}`} className="flex items-center gap-2">
-                  <CheckCircle className="h-4 w-4 text-green-500 flex-shrink-0" />
-                  <div className="flex-1 px-3 py-2 rounded-md bg-background/60 border border-border/60 font-mono text-sm">
-                    <span className="font-semibold">{result.ip}:{savedPort}</span>
-                    {result.interface_name && (
-                      <span className="ml-2 text-xs text-muted-foreground">
-                        ({result.interface_name})
-                      </span>
-                    )}
-                  </div>
-                  <button
-                    onClick={() => onCopyAddress(result.ip)}
-                    className="p-2 rounded-md border border-transparent text-muted-foreground hover:bg-accent hover:text-accent-foreground hover:border-border/50 active:bg-accent/80 active:scale-95 transition-[background-color,color,border-color,transform] duration-150"
-                    title="Copy address"
-                    aria-label={`Copy address ${result.ip}:${savedPort}`}
-                  >
-                    <Copy className="h-4 w-4" />
-                  </button>
+              <div
+                key={`ok:${result.ip}:${result.interface_name ?? ""}`}
+                className="flex items-center gap-2"
+              >
+                <CheckCircle className="h-4 w-4 text-green-500 flex-shrink-0" />
+                <div className="flex-1 px-3 py-2 rounded-md bg-background/60 border border-border/60 font-mono text-sm">
+                  <span className="font-semibold">
+                    {result.ip}:{savedPort}
+                  </span>
+                  {result.interface_name && (
+                    <span className="ml-2 text-xs text-muted-foreground">
+                      ({result.interface_name})
+                    </span>
+                  )}
                 </div>
-              ))}
-            {failedBindings.map((result) => (
-                <div
-                  key={`fail:${result.ip}:${result.interface_name ?? ""}`}
-                  className="flex items-center gap-2 opacity-50"
-                  title={result.error || "Could not use this address"}
+                <button
+                  onClick={() => onCopyAddress(result.ip)}
+                  className="p-2 rounded-md border border-transparent text-muted-foreground hover:bg-accent hover:text-accent-foreground hover:border-border/50 active:bg-accent/80 active:scale-95 transition-[background-color,color,border-color,transform] duration-150"
+                  title="Copy address"
+                  aria-label={`Copy address ${result.ip}:${savedPort}`}
                 >
-                  <XCircle className="h-4 w-4 text-red-400 flex-shrink-0" />
-                  <div className="flex-1 px-3 py-2 rounded-md bg-muted/30 border border-border/30 font-mono text-sm text-muted-foreground">
-                    <span>{result.ip}:{savedPort}</span>
-                    {result.interface_name && (
-                      <span className="ml-2 text-xs text-muted-foreground">
-                        ({result.interface_name})
-                      </span>
-                    )}
-                    <span className="ml-2 text-xs text-red-400">(could not use this address)</span>
-                  </div>
+                  <Copy className="h-4 w-4" />
+                </button>
+              </div>
+            ))}
+            {failedBindings.map((result) => (
+              <div
+                key={`fail:${result.ip}:${result.interface_name ?? ""}`}
+                className="flex items-center gap-2 opacity-50"
+                title={result.error || "Could not use this address"}
+              >
+                <XCircle className="h-4 w-4 text-red-400 flex-shrink-0" />
+                <div className="flex-1 px-3 py-2 rounded-md bg-muted/30 border border-border/30 font-mono text-sm text-muted-foreground">
+                  <span>
+                    {result.ip}:{savedPort}
+                  </span>
+                  {result.interface_name && (
+                    <span className="ml-2 text-xs text-muted-foreground">
+                      ({result.interface_name})
+                    </span>
+                  )}
+                  <span className="ml-2 text-xs text-red-400">(could not use this address)</span>
                 </div>
-              ))}
+              </div>
+            ))}
           </>
         )}
       </div>

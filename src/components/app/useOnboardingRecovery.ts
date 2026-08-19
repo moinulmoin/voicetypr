@@ -46,17 +46,19 @@ export function useOnboardingRecovery({
     }, 0);
 
     return () => window.clearTimeout(timeoutId);
-  }, [forceShowOnboarding, hasModels, forceOnboardingNeedsFreshAvailabilityRef, setForceShowOnboarding]);
+  }, [
+    forceShowOnboarding,
+    hasModels,
+    forceOnboardingNeedsFreshAvailabilityRef,
+    setForceShowOnboarding,
+  ]);
 
   // Check permissions only after an explicit onboarding completion.
   useEffect(() => {
     if (!showOnboarding && hasCompletedOnboardingRef.current) {
       hasCompletedOnboardingRef.current = false;
 
-      Promise.all([
-        checkAccessibilityPermission(),
-        checkMicrophonePermission(),
-      ]).then(() => {
+      Promise.all([checkAccessibilityPermission(), checkMicrophonePermission()]).then(() => {
         log.info("Permissions refreshed after onboarding completion");
       });
 

@@ -121,10 +121,7 @@ export function EnhancementsProviderModals({
             toast.success("Custom provider configured");
             setShowOpenAIConfig(false);
           } catch (error) {
-            const message = getErrorMessage(
-              error,
-              "Failed to save configuration",
-            );
+            const message = getErrorMessage(error, "Failed to save configuration");
             toast.error(message);
           } finally {
             setIsLoading(false);

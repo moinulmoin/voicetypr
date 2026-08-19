@@ -1,11 +1,4 @@
-import {
-  render,
-  screen,
-  fireEvent,
-  waitFor,
-  within,
-  act,
-} from "@testing-library/react";
+import { render, screen, fireEvent, waitFor, within, act } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { EnhancementsSection } from "../EnhancementsSection";
@@ -75,9 +68,7 @@ const providerModels = vi.hoisted(
       costOutput?: number | null;
     }>
   > => ({
-    gemini: [
-      { id: "gemini-1.5-flash", name: "Gemini 1.5 Flash", recommended: true },
-    ],
+    gemini: [{ id: "gemini-1.5-flash", name: "Gemini 1.5 Flash", recommended: true }],
     openai: [
       {
         id: "gpt-5-mini",
@@ -90,9 +81,7 @@ const providerModels = vi.hoisted(
       },
       { id: "gpt-5-nano", name: "GPT-5 Nano", recommended: false },
     ],
-    anthropic: [
-      { id: "claude-sonnet-4", name: "Claude Sonnet 4", recommended: true },
-    ],
+    anthropic: [{ id: "claude-sonnet-4", name: "Claude Sonnet 4", recommended: true }],
     groq: [
       {
         id: "llama-3.3-70b-versatile",
@@ -169,20 +158,15 @@ const modelDiscovery = vi.hoisted(() => ({
   loading: {} as Record<string, boolean>,
   errors: {} as Record<string, string | null>,
   hiddenProviders: new Set<string>(),
-  fetchModels: vi.fn((providerId: string) =>
-    Promise.resolve(providerModels[providerId] || []),
-  ),
+  fetchModels: vi.fn((providerId: string) => Promise.resolve(providerModels[providerId] || [])),
 }));
 
 vi.mock("@/hooks/useProviderModels", () => ({
   useAllProviderModels: () => ({
     fetchModels: (providerId: string) => modelDiscovery.fetchModels(providerId),
     getModels: (providerId: string) =>
-      modelDiscovery.hiddenProviders.has(providerId)
-        ? []
-        : providerModels[providerId] || [],
-    isLoading: (providerId: string) =>
-      modelDiscovery.loading[providerId] || false,
+      modelDiscovery.hiddenProviders.has(providerId) ? [] : providerModels[providerId] || [],
+    isLoading: (providerId: string) => modelDiscovery.loading[providerId] || false,
     getError: (providerId: string) => modelDiscovery.errors[providerId] || null,
     clearModels: (providerId: string) => {
       delete modelDiscovery.errors[providerId];
@@ -298,8 +282,7 @@ const localAgentProviderIds = new Set([
   "cline",
 ]);
 
-const isAgentCliProviderForTest = (providerId: string) =>
-  localAgentProviderIds.has(providerId);
+const isAgentCliProviderForTest = (providerId: string) => localAgentProviderIds.has(providerId);
 
 let rejectWritingSettingsUpdate = false;
 let agentCliProbeResponse: {
@@ -400,19 +383,13 @@ describe("EnhancementsSection", () => {
             : Promise.resolve(undefined);
         }
         if (cmd === "get_ai_settings") {
-          return aiSettingsHandler
-            ? aiSettingsHandler()
-            : Promise.resolve(aiSettingsResponse);
+          return aiSettingsHandler ? aiSettingsHandler() : Promise.resolve(aiSettingsResponse);
         }
         if (cmd === "get_ai_settings_for_provider") {
           const provider = (args as { provider?: string })?.provider || "";
           const model =
-            (aiSettingsResponse.modelsByProvider as Record<string, string>)[
-              provider
-            ] ??
-            (aiSettingsResponse.provider === provider
-              ? aiSettingsResponse.model
-              : "");
+            (aiSettingsResponse.modelsByProvider as Record<string, string>)[provider] ??
+            (aiSettingsResponse.provider === provider ? aiSettingsResponse.model : "");
           return Promise.resolve({ ...aiSettingsResponse, provider, model });
         }
         if (cmd === "get_openai_config") {
@@ -447,28 +424,18 @@ describe("EnhancementsSection", () => {
     renderWithProviders();
     const providersPanel = await getProviderSetupPanel();
 
-    expect(
-      within(providersPanel).getByRole("tab", { name: "Cloud API" }),
-    ).toHaveAttribute("data-active");
-    expect(
-      within(providersPanel).getByRole("tab", { name: "Local Agents" }),
-    ).toBeInTheDocument();
-    expect(
-      within(providersPanel).getByRole("heading", { name: "OpenAI" }),
-    ).toBeInTheDocument();
+    expect(within(providersPanel).getByRole("tab", { name: "Cloud API" })).toHaveAttribute(
+      "data-active",
+    );
+    expect(within(providersPanel).getByRole("tab", { name: "Local Agents" })).toBeInTheDocument();
+    expect(within(providersPanel).getByRole("heading", { name: "OpenAI" })).toBeInTheDocument();
     expect(
       within(providersPanel).getByRole("heading", { name: "Google Gemini" }),
     ).toBeInTheDocument();
+    expect(within(providersPanel).getByRole("heading", { name: "Anthropic" })).toBeInTheDocument();
+    expect(within(providersPanel).getByText("Experimental")).toBeInTheDocument();
     expect(
-      within(providersPanel).getByRole("heading", { name: "Anthropic" }),
-    ).toBeInTheDocument();
-    expect(
-      within(providersPanel).getByText("Experimental"),
-    ).toBeInTheDocument();
-    expect(
-      within(providersPanel).getByLabelText(
-        "Search cloud providers and models",
-      ),
+      within(providersPanel).getByLabelText("Search cloud providers and models"),
     ).toBeInTheDocument();
   });
 
@@ -476,9 +443,7 @@ describe("EnhancementsSection", () => {
     const user = userEvent.setup();
     const view = renderWithProviders();
     const providersPanel = await getProviderSetupPanel();
-    await user.click(
-      within(providersPanel).getByRole("tab", { name: "Local Agents" }),
-    );
+    await user.click(within(providersPanel).getByRole("tab", { name: "Local Agents" }));
 
     await waitFor(() => {
       const probeCalls = vi
@@ -506,17 +471,14 @@ describe("EnhancementsSection", () => {
 
   it("filters cloud providers and exposes matching models in the model select", async () => {
     (hasApiKey as ReturnType<typeof vi.fn>).mockImplementation(
-      async (providerId: string) =>
-        providerId === "openai" || providerId === "groq",
+      async (providerId: string) => providerId === "openai" || providerId === "groq",
     );
     const user = userEvent.setup();
     renderWithProviders();
     const providersPanel = await getProviderSetupPanel();
 
     await user.type(
-      within(providersPanel).getByLabelText(
-        "Search cloud providers and models",
-      ),
+      within(providersPanel).getByLabelText("Search cloud providers and models"),
       "llama",
     );
 
@@ -524,13 +486,9 @@ describe("EnhancementsSection", () => {
       expect(
         within(providersPanel).queryByRole("heading", { name: "OpenAI" }),
       ).not.toBeInTheDocument();
-      expect(
-        within(providersPanel).getByRole("heading", { name: "Groq" }),
-      ).toBeInTheDocument();
+      expect(within(providersPanel).getByRole("heading", { name: "Groq" })).toBeInTheDocument();
     });
-    await user.click(
-      within(providersPanel).getByRole("combobox", { name: "Model for Groq" }),
-    );
+    await user.click(within(providersPanel).getByRole("combobox", { name: "Model for Groq" }));
     expect(
       await screen.findByRole("option", { name: /llama 3\.3 70b versatile/i }),
     ).toBeInTheDocument();
@@ -549,9 +507,7 @@ describe("EnhancementsSection", () => {
         name: "Model for OpenAI",
       }),
     );
-    await user.click(
-      await screen.findByRole("option", { name: /gpt-5 nano/i }),
-    );
+    await user.click(await screen.findByRole("option", { name: /gpt-5 nano/i }));
 
     await waitFor(() => {
       expect(invoke).toHaveBeenCalledWith("update_ai_settings", {
@@ -589,9 +545,7 @@ describe("EnhancementsSection", () => {
     renderWithProviders();
 
     await openModes(user);
-    expect(
-      await screen.findByRole("tablist", { name: "Default mode" }),
-    ).toBeInTheDocument();
+    expect(await screen.findByRole("tablist", { name: "Default mode" })).toBeInTheDocument();
     for (const mode of ["Polish Off", "Clean Dictation", "Writing", "Notes", "Message", "Code"]) {
       expect(screen.getByRole("tab", { name: mode })).toBeInTheDocument();
     }
@@ -613,12 +567,8 @@ describe("EnhancementsSection", () => {
         "Use your own cloud API key or an agent already installed on this Mac.",
       ),
     ).toBeInTheDocument();
-    expect(
-      within(providersPanel).getByRole("tab", { name: "Cloud API" }),
-    ).toBeInTheDocument();
-    expect(
-      within(providersPanel).getByRole("tab", { name: "Local Agents" }),
-    ).toBeInTheDocument();
+    expect(within(providersPanel).getByRole("tab", { name: "Cloud API" })).toBeInTheDocument();
+    expect(within(providersPanel).getByRole("tab", { name: "Local Agents" })).toBeInTheDocument();
     expect(
       within(providersPanel).getByRole("heading", {
         name: "Choose provider & model",
@@ -640,18 +590,15 @@ describe("EnhancementsSection", () => {
     expect(launcher).toHaveTextContent("Provider & model");
     // The summary text arrives after the async settings load — wait for it
     // instead of asserting once (this raced under full-suite load).
-    await waitFor(
-      () => expect(launcher).toHaveTextContent("OpenAI · GPT-5 Mini"),
-      { timeout: 3000 },
-    );
+    await waitFor(() => expect(launcher).toHaveTextContent("OpenAI · GPT-5 Mini"), {
+      timeout: 3000,
+    });
     expect(launcher).toHaveTextContent("Active");
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
 
     await user.click(launcher);
     const providersPanel = await screen.findByRole("dialog");
-    expect(
-      within(providersPanel).getByRole("tab", { name: "Cloud API" }),
-    ).toBeInTheDocument();
+    expect(within(providersPanel).getByRole("tab", { name: "Cloud API" })).toBeInTheDocument();
 
     await user.click(within(providersPanel).getByRole("button", { name: /close/i }));
     // jsdom never finishes the exit animation, so assert the closed state
@@ -662,9 +609,7 @@ describe("EnhancementsSection", () => {
 
   it("does not expand then collapse while configured settings load", async () => {
     aiSettingsResponse = { ...enabledAISettings, enabled: false };
-    let resolveSettings:
-      | ((settings: typeof aiSettingsResponse) => void)
-      | undefined;
+    let resolveSettings: ((settings: typeof aiSettingsResponse) => void) | undefined;
     aiSettingsHandler = () =>
       new Promise((resolve) => {
         resolveSettings = resolve;
@@ -698,9 +643,7 @@ describe("EnhancementsSection", () => {
     renderWithProviders();
     const providersPanel = await getProviderSetupPanel();
 
-    await user.click(
-      within(providersPanel).getByRole("tab", { name: "Local Agents" }),
-    );
+    await user.click(within(providersPanel).getByRole("tab", { name: "Local Agents" }));
     expect(
       await within(providersPanel).findByRole("heading", {
         name: "Claude Code",
@@ -726,9 +669,7 @@ describe("EnhancementsSection", () => {
       });
     });
     await waitFor(() => {
-      expect(
-        within(providersPanel).getAllByText("Installed").length,
-      ).toBeGreaterThan(0);
+      expect(within(providersPanel).getAllByText("Installed").length).toBeGreaterThan(0);
     });
     expect(
       (invoke as ReturnType<typeof vi.fn>).mock.calls.some(
@@ -736,10 +677,9 @@ describe("EnhancementsSection", () => {
       ),
     ).toBe(false);
 
-    fireEvent.keyDown(
-      within(providersPanel).getByRole("button", { name: "Select Claude Code" }),
-      { key: "Enter" },
-    );
+    fireEvent.keyDown(within(providersPanel).getByRole("button", { name: "Select Claude Code" }), {
+      key: "Enter",
+    });
     await waitFor(() => {
       expect(invoke).toHaveBeenCalledWith("update_ai_settings", {
         enabled: false,
@@ -775,42 +715,27 @@ describe("EnhancementsSection", () => {
     renderWithProviders();
     const providersPanel = await getProviderSetupPanel();
 
-    await user.click(
-      within(providersPanel).getByRole("tab", { name: "Local Agents" }),
-    );
+    await user.click(within(providersPanel).getByRole("tab", { name: "Local Agents" }));
 
     expect(
       await within(providersPanel).findByRole("heading", {
         name: "Claude Code",
       }),
     ).toBeInTheDocument();
-    for (const providerName of [
-      "Codex",
-      "Droid",
-      "Grok",
-      "OpenCode",
-      "Cline",
-    ]) {
+    for (const providerName of ["Codex", "Droid", "Grok", "OpenCode", "Cline"]) {
       expect(
         within(providersPanel).getByRole("heading", { name: providerName }),
       ).toBeInTheDocument();
     }
-    expect(
-      within(providersPanel).queryByRole("heading", { name: "Amp" }),
-    ).not.toBeInTheDocument();
+    expect(within(providersPanel).queryByRole("heading", { name: "Amp" })).not.toBeInTheDocument();
     expect(
       within(providersPanel).queryByRole("heading", { name: "Kilo Code" }),
     ).not.toBeInTheDocument();
+    expect(within(providersPanel).getAllByText("Installed").length).toBeGreaterThan(0);
     expect(
-      within(providersPanel).getAllByText("Installed").length,
+      within(providersPanel).getAllByRole("button", { name: /refresh/i }).length,
     ).toBeGreaterThan(0);
-    expect(
-      within(providersPanel).getAllByRole("button", { name: /refresh/i })
-        .length,
-    ).toBeGreaterThan(0);
-    await user.click(
-      within(providersPanel).getByRole("button", { name: /close/i }),
-    );
+    await user.click(within(providersPanel).getByRole("button", { name: /close/i }));
     expect(screen.getByRole("dialog")).toHaveAttribute("data-closed");
     expect(screen.queryByLabelText("API Key")).not.toBeInTheDocument();
   });
@@ -820,23 +745,15 @@ describe("EnhancementsSection", () => {
     const user = userEvent.setup();
     renderWithProviders();
     const providersPanel = await getProviderSetupPanel();
-    await user.click(
-      within(providersPanel).getByRole("tab", { name: "Local Agents" }),
-    );
+    await user.click(within(providersPanel).getByRole("tab", { name: "Local Agents" }));
 
-    expect(
-      within(providersPanel).getAllByText(
-        "Checking installation…",
-      ).length,
-    ).toBeGreaterThan(0);
+    expect(within(providersPanel).getAllByText("Checking installation…").length).toBeGreaterThan(0);
     expect(
       within(providersPanel).getByRole("button", {
         name: "Model for Claude Code",
       }),
     ).toBeDisabled();
-    expect(
-      within(providersPanel).queryByText("Checking support…"),
-    ).not.toBeInTheDocument();
+    expect(within(providersPanel).queryByText("Checking support…")).not.toBeInTheDocument();
   });
 
   it("keeps ready controls mounted while a status refresh is pending", async () => {
@@ -853,9 +770,7 @@ describe("EnhancementsSection", () => {
     const user = userEvent.setup();
     renderWithProviders();
     const providersPanel = await getProviderSetupPanel();
-    await user.click(
-      within(providersPanel).getByRole("tab", { name: "Local Agents" }),
-    );
+    await user.click(within(providersPanel).getByRole("tab", { name: "Local Agents" }));
     const modelButton = await within(providersPanel).findByRole("button", {
       name: "Model for Claude Code",
     });
@@ -867,9 +782,7 @@ describe("EnhancementsSection", () => {
       }),
     );
     expect(modelButton).toBeEnabled();
-    expect(
-      within(providersPanel).getByText("Installed · Refreshing…"),
-    ).toBeInTheDocument();
+    expect(within(providersPanel).getByText("Installed · Refreshing…")).toBeInTheDocument();
   });
 
   it("persists the selected local-agent thinking level", async () => {
@@ -882,23 +795,15 @@ describe("EnhancementsSection", () => {
     renderWithProviders();
     const providersPanel = await getProviderSetupPanel();
 
-    await user.click(
-      within(providersPanel).getByRole("tab", { name: "Local Agents" }),
-    );
-    await user.click(
-      await within(providersPanel).findByRole("button", { name: "Select pi" }),
-    );
+    await user.click(within(providersPanel).getByRole("tab", { name: "Local Agents" }));
+    await user.click(await within(providersPanel).findByRole("button", { name: "Select pi" }));
     await user.click(
       await within(providersPanel).findByRole("combobox", {
         name: "Thinking for pi",
       }),
     );
-    expect(
-      screen.queryByRole("option", { name: "High" }),
-    ).not.toBeInTheDocument();
-    await user.click(
-      await screen.findByRole("option", { name: "Medium" }),
-    );
+    expect(screen.queryByRole("option", { name: "High" })).not.toBeInTheDocument();
+    await user.click(await screen.findByRole("option", { name: "Medium" }));
 
     expect(invoke).toHaveBeenCalledWith("update_agent_cli_reasoning", {
       provider: "pi",
@@ -921,16 +826,13 @@ describe("EnhancementsSection", () => {
     renderWithProviders();
     const providersPanel = await getProviderSetupPanel();
 
-    await user.click(
-      within(providersPanel).getByRole("tab", { name: "Local Agents" }),
-    );
+    await user.click(within(providersPanel).getByRole("tab", { name: "Local Agents" }));
     // Base UI routes the switch's accessible name through a hidden input,
     // so query by role within the Local Agents tab (only Claude Code exposes
     // fast mode here; pi does not).
-    const fastModeSwitch = await waitFor(
-      () => within(providersPanel).getByRole("switch"),
-      { timeout: 3000 },
-    );
+    const fastModeSwitch = await waitFor(() => within(providersPanel).getByRole("switch"), {
+      timeout: 3000,
+    });
     await user.click(fastModeSwitch);
 
     expect(invoke).toHaveBeenCalledWith("update_agent_cli_fast_mode", {
@@ -949,9 +851,7 @@ describe("EnhancementsSection", () => {
     renderWithProviders();
     const providersPanel = await getProviderSetupPanel();
 
-    await user.click(
-      within(providersPanel).getByRole("button", { name: "Add OpenAI API key" }),
-    );
+    await user.click(within(providersPanel).getByRole("button", { name: "Add OpenAI API key" }));
     await user.type(await screen.findByLabelText("API Key"), "openai-key");
     await user.click(screen.getByRole("button", { name: "Save API Key" }));
 
@@ -1029,9 +929,7 @@ describe("EnhancementsSection", () => {
       });
       expect(providerSummary).toHaveTextContent("OpenAI · GPT-5 Mini");
       expect(providerSummary).toHaveTextContent("Active");
-      expect(
-        screen.queryByText("Connect an AI to turn on Polish"),
-      ).not.toBeInTheDocument();
+      expect(screen.queryByText("Connect an AI to turn on Polish")).not.toBeInTheDocument();
     });
     expect(screen.getByRole("region", { name: "Corrections" })).toBeInTheDocument();
 
@@ -1053,9 +951,7 @@ describe("EnhancementsSection", () => {
     ).toBeInTheDocument();
     expect(screen.getByText("Choose a cloud API or local agent")).toBeInTheDocument();
     expect(container.querySelector(".lucide-lock")).toBeNull();
-    expect(
-      screen.queryByText(/premium|paywall|locked/i),
-    ).not.toBeInTheDocument();
+    expect(screen.queryByText(/premium|paywall|locked/i)).not.toBeInTheDocument();
   });
 
   it("hides specific language selection when Polish Off is loaded", async () => {
@@ -1095,12 +991,8 @@ describe("EnhancementsSection", () => {
     renderWithProviders();
     await openModes(user);
 
-    expect(
-      await screen.findByRole("button", { name: "Same as transcript" }),
-    ).toBeInTheDocument();
-    expect(
-      screen.getByRole("button", { name: "Specific language" }),
-    ).toBeDisabled();
+    expect(await screen.findByRole("button", { name: "Same as transcript" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Specific language" })).toBeDisabled();
     expect(screen.queryByRole("combobox", { name: /language/i })).not.toBeInTheDocument();
   });
 
@@ -1244,9 +1136,7 @@ describe("EnhancementsSection", () => {
     renderWithProviders();
     await openModes(user);
 
-    await user.click(
-      await screen.findByRole("button", { name: "Specific language" }),
-    );
+    await user.click(await screen.findByRole("button", { name: "Specific language" }));
 
     await waitFor(() => {
       expect(invoke).toHaveBeenCalledWith("save_settings", {
@@ -1272,18 +1162,14 @@ describe("EnhancementsSection", () => {
     await openModes(user);
     expect(await screen.findByText("Default mode")).toBeInTheDocument();
     expect(screen.getByText("Per-app modes")).toBeInTheDocument();
-    expect(
-      screen.getByText(/Override the default mode when dictation starts/),
-    ).toBeInTheDocument();
+    expect(screen.getByText(/Override the default mode when dictation starts/)).toBeInTheDocument();
   });
 
   it("does not render a context_policy control after the app-hint removal", async () => {
     renderWithProviders();
 
     expect(await screen.findByRole("region", { name: "Provider" })).toBeInTheDocument();
-    expect(
-      screen.queryByRole("switch", { name: "Context-aware cleanup" }),
-    ).not.toBeInTheDocument();
+    expect(screen.queryByRole("switch", { name: "Context-aware cleanup" })).not.toBeInTheDocument();
   });
 
   it("renders deterministic editors in their own tabs with AI off", async () => {
@@ -1293,9 +1179,7 @@ describe("EnhancementsSection", () => {
     await openPolishTab(user, "Dictionary");
     expect(await screen.findByText("Words & names")).toBeInTheDocument();
     await openPolishTab(user, "Corrections");
-    expect(
-      screen.getByRole("region", { name: "Corrections" }),
-    ).toBeInTheDocument();
+    expect(screen.getByRole("region", { name: "Corrections" })).toBeInTheDocument();
     await openPolishTab(user, "Snippets");
     expect(await screen.findByText("Saved text")).toBeInTheDocument();
   });
@@ -1308,14 +1192,8 @@ describe("EnhancementsSection", () => {
       "..",
       "..",
     );
-    const aiSrc = readFileSync(
-      path.join(projectRoot, "src/types/ai.ts"),
-      "utf8",
-    );
-    const providersSrc = readFileSync(
-      path.join(projectRoot, "src/types/providers.ts"),
-      "utf8",
-    );
+    const aiSrc = readFileSync(path.join(projectRoot, "src/types/ai.ts"), "utf8");
+    const providersSrc = readFileSync(path.join(projectRoot, "src/types/providers.ts"), "utf8");
     expect(providersSrc).toMatch(/export type AiProviderStatus/);
     expect(aiSrc).not.toMatch(/AiProviderStatus/);
 
@@ -1324,9 +1202,7 @@ describe("EnhancementsSection", () => {
       custom_words: [],
       snippets: [],
       context_policy: "app_hint_only",
-      voice_commands: [
-        { phrase: "insert comma", output: "comma", enabled: true },
-      ],
+      voice_commands: [{ phrase: "insert comma", output: "comma", enabled: true }],
     } as unknown as Partial<typeof defaultWritingSettings>;
     const merged = mergeWritingSettings(legacy);
     expect(merged.replacements).toHaveLength(1);
@@ -1345,18 +1221,13 @@ describe("EnhancementsSection", () => {
       "..",
     );
     expect(() =>
-      readFileSync(
-        path.join(projectRoot, "src/components/ProviderCard.tsx"),
-        "utf8",
-      ),
+      readFileSync(path.join(projectRoot, "src/components/ProviderCard.tsx"), "utf8"),
     ).toThrow();
   });
 
   it("does not persist placeholder writing settings before backend settings load", async () => {
     const user = userEvent.setup();
-    let resolveWritingSettings: (
-      settings: typeof defaultWritingSettings,
-    ) => void = () => {};
+    let resolveWritingSettings: (settings: typeof defaultWritingSettings) => void = () => {};
     const loadedWritingSettings = {
       ...defaultWritingSettings,
       replacements: [
@@ -1368,11 +1239,9 @@ describe("EnhancementsSection", () => {
         },
       ],
     };
-    const writingSettingsPromise = new Promise<typeof defaultWritingSettings>(
-      (resolve) => {
-        resolveWritingSettings = resolve;
-      },
-    );
+    const writingSettingsPromise = new Promise<typeof defaultWritingSettings>((resolve) => {
+      resolveWritingSettings = resolve;
+    });
 
     (invoke as ReturnType<typeof vi.fn>).mockImplementation(
       (cmd: string, args?: Record<string, unknown>) => {
@@ -1433,8 +1302,8 @@ describe("EnhancementsSection", () => {
       (invoke as ReturnType<typeof vi.fn>).mock.calls.some(
         ([cmd, args]) =>
           cmd === "update_writing_settings" &&
-          (args as { settings?: typeof defaultWritingSettings })?.settings
-            ?.replacements.length === 0,
+          (args as { settings?: typeof defaultWritingSettings })?.settings?.replacements.length ===
+            0,
       ),
     ).toBe(false);
 
@@ -1459,9 +1328,7 @@ describe("EnhancementsSection", () => {
     renderWithProviders();
     await openModes(user);
 
-    await user.click(
-      await screen.findByRole("button", { name: /add override/i }),
-    );
+    await user.click(await screen.findByRole("button", { name: /add override/i }));
 
     const appInput = await screen.findByPlaceholderText("App name, e.g. Slack");
     await user.type(appInput, "Slack");
@@ -1486,9 +1353,7 @@ describe("EnhancementsSection", () => {
     renderWithProviders();
     await openPolishTab(user, "Corrections");
 
-    await user.click(
-      await screen.findByRole("button", { name: /add rule/i }),
-    );
+    await user.click(await screen.findByRole("button", { name: /add rule/i }));
 
     await waitFor(() => {
       expect(invoke).toHaveBeenCalledWith("update_writing_settings", {
@@ -1577,9 +1442,9 @@ describe("EnhancementsSection", () => {
     resolveFirstSave?.();
 
     await waitFor(() => {
-      const updateCalls = (
-        invoke as ReturnType<typeof vi.fn>
-      ).mock.calls.filter(([cmd]) => cmd === "update_writing_settings");
+      const updateCalls = (invoke as ReturnType<typeof vi.fn>).mock.calls.filter(
+        ([cmd]) => cmd === "update_writing_settings",
+      );
       expect(updateCalls).toHaveLength(2);
       expect(updateCalls[1]?.[1]).toEqual({
         settings: expect.objectContaining({
@@ -1605,17 +1470,15 @@ describe("EnhancementsSection", () => {
     await user.click(addRuleButton);
 
     await waitFor(() => {
-      const updateCalls = (
-        invoke as ReturnType<typeof vi.fn>
-      ).mock.calls.filter(([cmd]) => cmd === "update_writing_settings");
+      const updateCalls = (invoke as ReturnType<typeof vi.fn>).mock.calls.filter(
+        ([cmd]) => cmd === "update_writing_settings",
+      );
       expect(updateCalls).toHaveLength(2);
       expect(
-        (updateCalls[0]?.[1] as { settings: typeof defaultWritingSettings })
-          .settings.replacements,
+        (updateCalls[0]![1] as { settings: typeof defaultWritingSettings }).settings.replacements,
       ).toHaveLength(1);
       expect(
-        (updateCalls[1]?.[1] as { settings: typeof defaultWritingSettings })
-          .settings.replacements,
+        (updateCalls[1]![1] as { settings: typeof defaultWritingSettings }).settings.replacements,
       ).toHaveLength(2);
     });
   });
@@ -1701,9 +1564,7 @@ describe("EnhancementsSection", () => {
     renderWithProviders();
     await openPolishTab(user, "Corrections");
 
-    await user.click(
-      await screen.findByRole("button", { name: /add rule/i }),
-    );
+    await user.click(await screen.findByRole("button", { name: /add rule/i }));
 
     await waitFor(() => {
       expect(toast.error).toHaveBeenCalledWith("disk full");
@@ -1728,21 +1589,17 @@ describe("EnhancementsSection", () => {
     const user = userEvent.setup();
     renderWithProviders();
 
-    await user.click(
-      await screen.findByRole("button", { name: "Choose provider and model" }),
-    );
+    await user.click(await screen.findByRole("button", { name: "Choose provider and model" }));
 
-    await user.click(
-      await screen.findByRole("button", { name: "Add Google Gemini API key" }),
-    );
+    await user.click(await screen.findByRole("button", { name: "Add Google Gemini API key" }));
     await user.type(await screen.findByLabelText("API Key"), "gemini-key");
     await user.click(screen.getByRole("button", { name: "Save API Key" }));
 
     await waitFor(() => {
       expect(saveApiKey).toHaveBeenCalledWith("gemini", "gemini-key");
-      expect(
-        screen.getByRole("combobox", { name: "Model for Google Gemini" }),
-      ).toHaveValue("Gemini 1.5 Flash");
+      expect(screen.getByRole("combobox", { name: "Model for Google Gemini" })).toHaveValue(
+        "Gemini 1.5 Flash",
+      );
     });
   });
 
@@ -1765,12 +1622,8 @@ describe("EnhancementsSection", () => {
         "Your previous model is unavailable. Choose another model to continue.",
       ),
     ).toBeInTheDocument();
-    await user.click(
-      within(providersPanel).getByRole("combobox", { name: "Model for OpenAI" }),
-    );
-    await user.click(
-      await screen.findByRole("option", { name: /GPT-5 Mini/i }),
-    );
+    await user.click(within(providersPanel).getByRole("combobox", { name: "Model for OpenAI" }));
+    await user.click(await screen.findByRole("option", { name: /GPT-5 Mini/i }));
 
     await waitFor(() => {
       expect(invoke).toHaveBeenCalledWith("update_ai_settings", {
@@ -1786,14 +1639,10 @@ describe("EnhancementsSection", () => {
     const user = userEvent.setup();
     renderWithProviders();
 
-    await user.click(
-      await screen.findByRole("button", { name: /polish guide/i }),
-    );
+    await user.click(await screen.findByRole("button", { name: /polish guide/i }));
 
     const dialog = await screen.findByRole("dialog");
-    expect(
-      within(dialog).getByText(/cloud API or isolated local agent/i),
-    ).toBeInTheDocument();
+    expect(within(dialog).getByText(/cloud API or isolated local agent/i)).toBeInTheDocument();
     expect(within(dialog).getAllByText(/exact replacements/i)).not.toHaveLength(0);
   });
 
@@ -1805,13 +1654,9 @@ describe("EnhancementsSection", () => {
     const user = userEvent.setup();
     renderWithProviders();
     const providersPanel = await getProviderSetupPanel();
-    await user.click(
-      within(providersPanel).getByRole("tab", { name: "Local Agents" }),
-    );
+    await user.click(within(providersPanel).getByRole("tab", { name: "Local Agents" }));
 
-    expect(
-      await within(providersPanel).findAllByText("Installed"),
-    ).not.toHaveLength(0);
+    expect(await within(providersPanel).findAllByText("Installed")).not.toHaveLength(0);
     await user.click(
       within(providersPanel).getByRole("button", {
         name: "Model for Claude Code",
@@ -1852,9 +1697,7 @@ describe("EnhancementsSection", () => {
     const user = userEvent.setup();
     const firstRender = renderWithProviders();
     const providersPanel = await getProviderSetupPanel();
-    await user.click(
-      within(providersPanel).getByRole("tab", { name: "Local Agents" }),
-    );
+    await user.click(within(providersPanel).getByRole("tab", { name: "Local Agents" }));
     await user.click(
       within(providersPanel).getByRole("button", {
         name: "Model for Claude Code",
@@ -1879,9 +1722,7 @@ describe("EnhancementsSection", () => {
     expect(restoredLauncher).toHaveTextContent("Sonnet");
 
     const restoredPanel = await getProviderSetupPanel();
-    await user.click(
-      within(restoredPanel).getByRole("tab", { name: "Local Agents" }),
-    );
+    await user.click(within(restoredPanel).getByRole("tab", { name: "Local Agents" }));
     expect(
       await within(restoredPanel).findByRole("heading", {
         name: "Claude Code",
@@ -1916,13 +1757,9 @@ describe("EnhancementsSection", () => {
     const providerSummary = await screen.findByRole("button", {
       name: "Choose provider and model",
     });
-    expect(providerSummary).toHaveTextContent(
-      "Claude Code · Legacy Model · Effort low",
-    );
+    expect(providerSummary).toHaveTextContent("Claude Code · Legacy Model · Effort low");
     const providersPanel = await getProviderSetupPanel();
-    await user.click(
-      within(providersPanel).getByRole("tab", { name: "Local Agents" }),
-    );
+    await user.click(within(providersPanel).getByRole("tab", { name: "Local Agents" }));
 
     const modelButton = await within(providersPanel).findByRole("button", {
       name: "Model for Claude Code",
@@ -1981,9 +1818,7 @@ describe("EnhancementsSection", () => {
     renderWithProviders();
     const providersPanel = await getProviderSetupPanel();
 
-    await user.click(
-      within(providersPanel).getByRole("tab", { name: "Local Agents" }),
-    );
+    await user.click(within(providersPanel).getByRole("tab", { name: "Local Agents" }));
     const piModel = await within(providersPanel).findByRole("button", {
       name: "Model for pi",
     });
@@ -2004,12 +1839,8 @@ describe("EnhancementsSection", () => {
     const user = userEvent.setup();
     renderWithProviders();
     const providersPanel = await getProviderSetupPanel();
-    await user.click(
-      within(providersPanel).getByRole("tab", { name: "Local Agents" }),
-    );
-    await user.click(
-      await within(providersPanel).findByRole("button", { name: "Select Droid" }),
-    );
+    await user.click(within(providersPanel).getByRole("tab", { name: "Local Agents" }));
+    await user.click(await within(providersPanel).findByRole("button", { name: "Select Droid" }));
 
     const droidModel = await within(providersPanel).findByRole("button", {
       name: "Model for Droid",
@@ -2065,15 +1896,11 @@ describe("EnhancementsSection", () => {
     renderWithProviders();
     const providersPanel = await getProviderSetupPanel();
 
-    expect(
-      vi.mocked(invoke).mock.calls.some(
-        ([command]) => command === "probe_agent_cli",
-      ),
-    ).toBe(false);
-
-    await user.click(
-      within(providersPanel).getByRole("tab", { name: "Local Agents" }),
+    expect(vi.mocked(invoke).mock.calls.some(([command]) => command === "probe_agent_cli")).toBe(
+      false,
     );
+
+    await user.click(within(providersPanel).getByRole("tab", { name: "Local Agents" }));
 
     await waitFor(() => {
       expect(invoke).toHaveBeenCalledWith("probe_agent_cli", {
@@ -2083,13 +1910,13 @@ describe("EnhancementsSection", () => {
     });
 
     expect(
-      vi.mocked(invoke).mock.calls.some(
-        ([command, args]) =>
-          command === "list_provider_models" &&
-          isAgentCliProviderForTest(
-            (args as { provider?: string })?.provider ?? "",
-          ),
-      ),
+      vi
+        .mocked(invoke)
+        .mock.calls.some(
+          ([command, args]) =>
+            command === "list_provider_models" &&
+            isAgentCliProviderForTest((args as { provider?: string })?.provider ?? ""),
+        ),
     ).toBe(false);
   });
 
@@ -2105,10 +1932,7 @@ describe("EnhancementsSection", () => {
     it("shows the inline banner with auth copy when an auth error fires", async () => {
       renderWithProviders();
 
-      emitEvent(
-        "ai-enhancement-auth-error",
-        "Please check your AI API key in settings.",
-      );
+      emitEvent("ai-enhancement-auth-error", "Please check your AI API key in settings.");
 
       expect(screen.getByText(authCopy)).toBeInTheDocument();
       expect(
@@ -2133,10 +1957,7 @@ describe("EnhancementsSection", () => {
       const user = userEvent.setup();
       renderWithProviders();
 
-      emitEvent(
-        "ai-enhancement-auth-error",
-        "Please check your AI API key in settings.",
-      );
+      emitEvent("ai-enhancement-auth-error", "Please check your AI API key in settings.");
       expect(screen.getByText(authCopy)).toBeInTheDocument();
 
       await user.click(
@@ -2151,10 +1972,7 @@ describe("EnhancementsSection", () => {
     it("clears the banner when a polish run completes", async () => {
       renderWithProviders();
 
-      emitEvent(
-        "ai-enhancement-auth-error",
-        "Please check your AI API key in settings.",
-      );
+      emitEvent("ai-enhancement-auth-error", "Please check your AI API key in settings.");
       expect(screen.getByText(authCopy)).toBeInTheDocument();
 
       emitEvent("enhancing-completed", null);
@@ -2167,10 +1985,7 @@ describe("EnhancementsSection", () => {
     it("keeps the banner across remounts (tab switches) until dismissed", async () => {
       const view = renderWithProviders();
 
-      emitEvent(
-        "ai-enhancement-auth-error",
-        "Please check your AI API key in settings.",
-      );
+      emitEvent("ai-enhancement-auth-error", "Please check your AI API key in settings.");
       expect(screen.getByText(authCopy)).toBeInTheDocument();
 
       act(() => {

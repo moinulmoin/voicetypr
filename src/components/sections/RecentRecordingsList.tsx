@@ -115,10 +115,7 @@ export function RecentRecordingsList({
     return (
       <div aria-hidden className="py-4 pl-2 pr-4 space-y-2.5">
         {[0, 1, 2].map((key) => (
-          <div
-            key={key}
-            className="h-16 rounded-lg bg-muted/60 animate-pulse"
-          />
+          <div key={key} className="h-16 rounded-lg bg-muted/60 animate-pulse" />
         ))}
       </div>
     );
@@ -160,7 +157,8 @@ export function RecentRecordingsList({
             <p className="text-sm text-muted-foreground">No recordings yet</p>
             {availability.canAutoInsert ? (
               <p className="text-xs text-muted-foreground/70 mt-2">
-                Press {formatHotkey(hotkey)} to record. Save recordings in Settings to enable re-transcription.
+                Press {formatHotkey(hotkey)} to record. Save recordings in Settings to enable
+                re-transcription.
               </p>
             ) : (
               <p className="text-xs text-amber-600 mt-2">
@@ -172,9 +170,7 @@ export function RecentRecordingsList({
           <>
             <AlertCircle className="w-12 h-12 text-amber-500/50 mx-auto mb-4" />
             <p className="text-sm text-muted-foreground">Cannot record yet</p>
-            <p className="text-xs text-amber-600 mt-2">
-              {availability.unavailableMessage}
-            </p>
+            <p className="text-xs text-amber-600 mt-2">{availability.unavailableMessage}</p>
           </>
         )}
       </div>

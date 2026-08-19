@@ -14,13 +14,8 @@ export function isAccelerationStatus(value: unknown): value is AccelerationStatu
   );
 }
 
-export function isMetalOnUnsupportedPlatformStatus(
-  status: AccelerationStatus,
-): boolean {
-  return (
-    status.diagnostic_code === "unsupported_platform" &&
-    status.effective_backend === "metal"
-  );
+export function isMetalOnUnsupportedPlatformStatus(status: AccelerationStatus): boolean {
+  return status.diagnostic_code === "unsupported_platform" && status.effective_backend === "metal";
 }
 
 export function getRecommendedActionDescription(action: string): string | undefined {
@@ -73,8 +68,6 @@ export function getAccelerationGuidance(status: AccelerationStatus | null): stri
 
 export function getAccelerationToastDescription(status: AccelerationStatus): string | undefined {
   return (
-    getRecommendedActionDescription(status.recommended_action) ||
-    status.last_error ||
-    undefined
+    getRecommendedActionDescription(status.recommended_action) || status.last_error || undefined
   );
 }

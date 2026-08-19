@@ -1,9 +1,5 @@
 import { Button } from "@/components/ui/button";
-import {
-  Field,
-  FieldDescription,
-  FieldLabel,
-} from "@/components/ui/field";
+import { Field, FieldDescription, FieldLabel } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import {
   InputGroup,
@@ -126,11 +122,7 @@ export function AddServerAuthField({
             tabIndex={-1}
             aria-label={showPassword ? "Hide password" : "Show password"}
           >
-            {showPassword ? (
-              <EyeOff className="size-4" />
-            ) : (
-              <Eye className="size-4" />
-            )}
+            {showPassword ? <EyeOff className="size-4" /> : <Eye className="size-4" />}
           </InputGroupButton>
         </InputGroupAddon>
       </InputGroup>
@@ -202,7 +194,9 @@ export function AddServerTestPanel({
         variant="outline"
         className="w-full"
         onClick={onTestConnection}
-        disabled={!host.trim() || testStatus === "testing" || saving || testRequiresReplacementPassword}
+        disabled={
+          !host.trim() || testStatus === "testing" || saving || testRequiresReplacementPassword
+        }
       >
         {testStatus === "testing" ? (
           <>
@@ -215,7 +209,8 @@ export function AddServerTestPanel({
       </Button>
       {testRequiresReplacementPassword && (
         <p className="text-xs text-muted-foreground">
-          Enter a replacement password to test this server. Saving with this field empty keeps the saved password.
+          Enter a replacement password to test this server. Saving with this field empty keeps the
+          saved password.
         </p>
       )}
 
@@ -234,16 +229,18 @@ export function AddServerTestPanel({
       )}
 
       {testStatus === "error" && testError && (
-        <div className={`rounded-lg border px-3 py-2 ${
-          isSelfConnection
-            ? "border-amber-500/30 bg-amber-500/10"
-            : "border-destructive/30 bg-destructive/10"
-        }`}>
-          <div className={`flex items-center gap-1.5 ${
+        <div
+          className={`rounded-lg border px-3 py-2 ${
             isSelfConnection
-              ? "text-amber-700 dark:text-amber-400"
-              : "text-destructive"
-          }`}>
+              ? "border-amber-500/30 bg-amber-500/10"
+              : "border-destructive/30 bg-destructive/10"
+          }`}
+        >
+          <div
+            className={`flex items-center gap-1.5 ${
+              isSelfConnection ? "text-amber-700 dark:text-amber-400" : "text-destructive"
+            }`}
+          >
             <XCircle className="size-3.5" />
             <span className="text-xs font-medium">
               {isSelfConnection ? "Self-connection detected" : "Connection failed"}

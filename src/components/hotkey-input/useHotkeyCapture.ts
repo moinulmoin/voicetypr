@@ -82,7 +82,6 @@ export function useHotkeyCapture({
     };
   }, [mode, allowBareModifier, inline]);
 
-
   const handleSave = useCallback(() => {
     // ── Bare modifier save ────────────────────────────────────────────────
     if (allowBareModifier && pendingBareModifier) {
@@ -119,7 +118,16 @@ export function useHotkeyCapture({
       setCurrentKeysDisplay("");
       onEditingChange?.(false); // Notify parent that editing is done
     }
-  }, [allowBareModifier, pendingBareModifier, pendingHotkey, validationError, onChange, onBareModifier, onEditingChange, validationRules]);
+  }, [
+    allowBareModifier,
+    pendingBareModifier,
+    pendingHotkey,
+    validationError,
+    onChange,
+    onBareModifier,
+    onEditingChange,
+    validationRules,
+  ]);
 
   const handleEdit = useCallback(() => {
     setPendingHotkey("");
@@ -145,7 +153,8 @@ export function useHotkeyCapture({
     ? formatBareModifierDisplay(pendingBareModifier)
     : null;
 
-  const canSave = (allowBareModifier && !!pendingBareModifier) || (!!pendingHotkey && !validationError);
+  const canSave =
+    (allowBareModifier && !!pendingBareModifier) || (!!pendingHotkey && !validationError);
 
   return {
     mode,

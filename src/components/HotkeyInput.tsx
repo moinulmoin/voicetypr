@@ -1,16 +1,16 @@
 import React from "react";
-import { HotkeyDisplayView, HotkeyEditView, HotkeyInlineView } from "./hotkey-input/HotkeyInputViews";
+import {
+  HotkeyDisplayView,
+  HotkeyEditView,
+  HotkeyInlineView,
+} from "./hotkey-input/HotkeyInputViews";
 import { useHotkeyCapture } from "./hotkey-input/useHotkeyCapture";
 import type { BareModifierSpec, HotkeyInputProps } from "./hotkey-input/types";
 
 export type { BareModifierSpec };
 
 export const HotkeyInput = React.memo(function HotkeyInput(props: HotkeyInputProps) {
-  const {
-    value,
-    placeholder,
-    inline = false,
-  } = props;
+  const { value, placeholder, inline = false } = props;
   const {
     mode,
     pendingHotkey,

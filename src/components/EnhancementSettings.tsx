@@ -1,12 +1,7 @@
 import { LanguageSelection } from "@/components/LanguageSelection";
 import { Button } from "@/components/ui/button";
 import { ButtonGroup } from "@/components/ui/button-group";
-import {
-  Empty,
-  EmptyDescription,
-  EmptyHeader,
-  EmptyTitle,
-} from "@/components/ui/empty";
+import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from "@/components/ui/empty";
 import {
   Field,
   FieldContent,
@@ -32,11 +27,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
-import {
-  Tabs,
-  TabsList,
-  TabsTrigger,
-} from "@/components/ui/tabs";
+import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { presetDisplayLabel, presetRequiresAiFormatting, type EnhancementPreset } from "@/types/ai";
 import type {
   AppFormattingRule,
@@ -45,11 +36,7 @@ import type {
   TextReplacementRule,
   WritingSettings,
 } from "@/types/writing";
-import {
-  Globe,
-  Plus,
-  Trash2,
-} from "lucide-react";
+import { Globe, Plus, Trash2 } from "lucide-react";
 import { useState, type ReactNode } from "react";
 
 interface EnhancementSettingsProps {
@@ -95,9 +82,7 @@ function useStableRowKeys(items: readonly object[]): string[] {
     for (let index = 0; index < items.length; index++) {
       const displaced = state.prev[index];
       const slotReusable =
-        displaced !== undefined &&
-        displaced !== items[index] &&
-        !used.has(displaced);
+        displaced !== undefined && displaced !== items[index] && !used.has(displaced);
       let key =
         state.prev[index] === items[index]
           ? state.keys[index]
@@ -151,8 +136,8 @@ function AppFormattingRulesEditor({
         <div>
           <FieldLegend className="mb-1 text-sm">Per-app modes</FieldLegend>
           <FieldDescription>
-            Override the default mode when dictation starts in a matched app.
-            App identity is captured locally for every desktop transcription.
+            Override the default mode when dictation starts in a matched app. App identity is
+            captured locally for every desktop transcription.
           </FieldDescription>
         </div>
         <Button
@@ -160,12 +145,7 @@ function AppFormattingRulesEditor({
           size="sm"
           variant="outline"
           disabled={disabled}
-          onClick={() =>
-            onChange([
-              ...rules,
-              { app_name: "", preset, enabled: true },
-            ])
-          }
+          onClick={() => onChange([...rules, { app_name: "", preset, enabled: true }])}
         >
           <Plus className="mr-2 h-4 w-4" />
           Add override
@@ -193,10 +173,7 @@ function AppFormattingRulesEditor({
             const selectedMode = FORMATTING_MODES.find((mode) => mode.id === rule.preset);
 
             return (
-              <div
-                key={rowKeys[index]}
-                className="rounded-lg border border-border bg-card p-3"
-              >
+              <div key={rowKeys[index]} className="rounded-lg border border-border bg-card p-3">
                 <div className="flex flex-wrap items-center gap-2">
                   <InputGroup className="min-w-[10rem] flex-1">
                     <InputGroupAddon>
@@ -277,7 +254,6 @@ function AppFormattingRulesEditor({
                     </Button>
                   </div>
                 </div>
-
               </div>
             );
           })}
@@ -303,8 +279,8 @@ function ReplacementEditor({
         <div>
           <FieldLegend className="mb-1">Corrections</FieldLegend>
           <FieldDescription>
-            Always applied after transcription. Whisper and Soniox can also use
-            them while recognizing speech.
+            Always applied after transcription. Whisper and Soniox can also use them while
+            recognizing speech.
           </FieldDescription>
         </div>
         <Button
@@ -313,10 +289,7 @@ function ReplacementEditor({
           variant="outline"
           disabled={disabled}
           onClick={() =>
-            onChange([
-              ...replacements,
-              { from: "", to: "", language: null, enabled: true },
-            ])
+            onChange([...replacements, { from: "", to: "", language: null, enabled: true }])
           }
         >
           <Plus className="mr-2 h-4 w-4" />
@@ -449,8 +422,8 @@ function CustomWordEditor({
         <div>
           <FieldLegend className="mb-1">Words &amp; names</FieldLegend>
           <FieldDescription>
-            Always corrects spelling. Whisper, Parakeet, Deepgram, and Soniox can
-            also use these terms while recognizing speech.
+            Always corrects spelling. Whisper, Parakeet, Deepgram, and Soniox can also use these
+            terms while recognizing speech.
           </FieldDescription>
         </div>
         <Button
@@ -596,8 +569,8 @@ function SnippetEditor({
         <div>
           <FieldLegend className="mb-1">Saved text</FieldLegend>
           <FieldDescription>
-            Say “insert” followed by a trigger to add a saved signature,
-            address, response, or template.
+            Say “insert” followed by a trigger to add a saved signature, address, response, or
+            template.
           </FieldDescription>
         </div>
         <Button
@@ -774,113 +747,99 @@ export function EnhancementSettings({
     allowsSpecificFinalLanguage && finalTextLanguage !== "same_as_transcript";
 
   return (
-    <div
-      className={
-        disabled ? "flex flex-col gap-5 opacity-60" : "flex flex-col gap-5"
-      }
-    >
+    <div className={disabled ? "flex flex-col gap-5 opacity-60" : "flex flex-col gap-5"}>
       <div className="flex min-w-0 max-w-4xl flex-col gap-5">
         <section aria-label="Provider">{providerContent}</section>
 
         <section aria-label="Modes" className="flex flex-col gap-5">
-        <FieldSet className="rounded-xl border border-border/60 bg-card p-4">
-          <FieldLegend className="mb-1">Default mode</FieldLegend>
-          <FieldDescription className="mb-3">
-            Applied unless a per-app override matches.
-          </FieldDescription>
-          <Tabs
-            value={preset}
-            onValueChange={(value) =>
-              onPresetChange(value as EnhancementPreset)
+          <FieldSet className="rounded-xl border border-border/60 bg-card p-4">
+            <FieldLegend className="mb-1">Default mode</FieldLegend>
+            <FieldDescription className="mb-3">
+              Applied unless a per-app override matches.
+            </FieldDescription>
+            <Tabs
+              value={preset}
+              onValueChange={(value) => onPresetChange(value as EnhancementPreset)}
+            >
+              <TabsList
+                aria-label="Default mode"
+                className="grid h-auto w-full grid-cols-3 sm:grid-cols-6"
+              >
+                {FORMATTING_MODES.map((mode) => {
+                  const requiresPolish =
+                    !aiFormattingEnabled && presetRequiresAiFormatting(mode.id);
+                  return (
+                    <TabsTrigger
+                      key={mode.id}
+                      value={mode.id}
+                      disabled={requiresPolish}
+                      className="gap-1.5 px-2 py-2 text-xs"
+                      title={requiresPolish ? "Requires Polish to be turned on" : undefined}
+                    >
+                      {formattingModeLabel(mode.id)}
+                    </TabsTrigger>
+                  );
+                })}
+              </TabsList>
+            </Tabs>
+          </FieldSet>
+
+          <FieldSet className="rounded-xl border border-border/60 bg-card p-4">
+            <FieldLegend className="mb-1">Final text language</FieldLegend>
+            <FieldDescription className="mb-3">
+              Keep the transcript language, or choose a different written language. Translation
+              requires Polish.
+            </FieldDescription>
+            {!aiFormattingEnabled && finalTextLanguage !== "same_as_transcript" ? (
+              <div className="mb-3 rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-700 dark:text-amber-300">
+                Turn on Polish to use a different final text language.
+              </div>
+            ) : null}
+            <ButtonGroup className="w-full flex-wrap md:w-fit">
+              <Button
+                type="button"
+                variant={!usingSpecificLanguage ? "default" : "outline"}
+                size="sm"
+                disabled={disabled}
+                onClick={() => onFinalTextLanguageChange("same_as_transcript")}
+              >
+                Same as transcript
+              </Button>
+              <Button
+                type="button"
+                variant={usingSpecificLanguage ? "default" : "outline"}
+                size="sm"
+                disabled={disabled || !allowsSpecificFinalLanguage}
+                onClick={() =>
+                  onFinalTextLanguageChange(usingSpecificLanguage ? finalTextLanguage : "en")
+                }
+              >
+                Specific language
+              </Button>
+            </ButtonGroup>
+            {usingSpecificLanguage ? (
+              <div className="mt-3">
+                <LanguageSelection
+                  value={finalTextLanguage}
+                  onValueChange={onFinalTextLanguageChange}
+                  className="w-full md:w-64"
+                />
+              </div>
+            ) : null}
+          </FieldSet>
+
+          <AppFormattingRulesEditor
+            preset={preset}
+            rules={writingSettings.app_formatting_rules}
+            disabled={writingSettingsDisabled}
+            aiFormattingEnabled={aiFormattingEnabled}
+            onChange={(app_formatting_rules) =>
+              onWritingSettingsChange({
+                ...writingSettings,
+                app_formatting_rules,
+              })
             }
-          >
-            <TabsList
-              aria-label="Default mode"
-              className="grid h-auto w-full grid-cols-3 sm:grid-cols-6"
-            >
-              {FORMATTING_MODES.map((mode) => {
-                const requiresPolish =
-                  !aiFormattingEnabled &&
-                  presetRequiresAiFormatting(mode.id);
-                return (
-                  <TabsTrigger
-                    key={mode.id}
-                    value={mode.id}
-                    disabled={requiresPolish}
-                    className="gap-1.5 px-2 py-2 text-xs"
-                    title={
-                      requiresPolish ? "Requires Polish to be turned on" : undefined
-                    }
-                  >
-                    {formattingModeLabel(mode.id)}
-                  </TabsTrigger>
-                );
-              })}
-            </TabsList>
-          </Tabs>
-        </FieldSet>
-
-        <FieldSet className="rounded-xl border border-border/60 bg-card p-4">
-          <FieldLegend className="mb-1">Final text language</FieldLegend>
-          <FieldDescription className="mb-3">
-            Keep the transcript language, or choose a different written
-            language. Translation requires Polish.
-          </FieldDescription>
-          {!aiFormattingEnabled &&
-          finalTextLanguage !== "same_as_transcript" ? (
-            <div className="mb-3 rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-700 dark:text-amber-300">
-              Turn on Polish to use a different final text language.
-            </div>
-          ) : null}
-          <ButtonGroup className="w-full flex-wrap md:w-fit">
-            <Button
-              type="button"
-              variant={!usingSpecificLanguage ? "default" : "outline"}
-              size="sm"
-              disabled={disabled}
-              onClick={() =>
-                onFinalTextLanguageChange("same_as_transcript")
-              }
-            >
-              Same as transcript
-            </Button>
-            <Button
-              type="button"
-              variant={usingSpecificLanguage ? "default" : "outline"}
-              size="sm"
-              disabled={disabled || !allowsSpecificFinalLanguage}
-              onClick={() =>
-                onFinalTextLanguageChange(
-                  usingSpecificLanguage ? finalTextLanguage : "en",
-                )
-              }
-            >
-              Specific language
-            </Button>
-          </ButtonGroup>
-          {usingSpecificLanguage ? (
-            <div className="mt-3">
-              <LanguageSelection
-                value={finalTextLanguage}
-                onValueChange={onFinalTextLanguageChange}
-                className="w-full md:w-64"
-              />
-            </div>
-          ) : null}
-        </FieldSet>
-
-        <AppFormattingRulesEditor
-          preset={preset}
-          rules={writingSettings.app_formatting_rules}
-          disabled={writingSettingsDisabled}
-          aiFormattingEnabled={aiFormattingEnabled}
-          onChange={(app_formatting_rules) =>
-            onWritingSettingsChange({
-              ...writingSettings,
-              app_formatting_rules,
-            })
-          }
-        />
+          />
         </section>
 
         <section aria-label="Dictionary">
@@ -907,9 +866,7 @@ export function EnhancementSettings({
           <SnippetEditor
             snippets={writingSettings.snippets}
             disabled={writingSettingsDisabled}
-            onChange={(snippets) =>
-              onWritingSettingsChange({ ...writingSettings, snippets })
-            }
+            onChange={(snippets) => onWritingSettingsChange({ ...writingSettings, snippets })}
           />
         </section>
       </div>

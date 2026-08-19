@@ -1,39 +1,33 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
-import {
-  AlertCircle,
-  Bug,
-  Check,
-  Copy,
-  Send,
-} from 'lucide-react';
-import { toast } from 'sonner';
-import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
-import { Button } from '@/components/ui/button';
-import { Field, FieldDescription, FieldError, FieldGroup, FieldLabel } from '@/components/ui/field';
-import { Input } from '@/components/ui/input';
-import { Textarea } from '@/components/ui/textarea';
-import { SettingsCard, SettingsHeader, SettingsPage } from '@/components/settings/settings-ui';
+import { useCallback, useEffect, useRef, useState } from "react";
+import { AlertCircle, Bug, Check, Copy, Send } from "lucide-react";
+import { toast } from "sonner";
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
+import { Button } from "@/components/ui/button";
+import { Field, FieldDescription, FieldError, FieldGroup, FieldLabel } from "@/components/ui/field";
+import { Input } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/textarea";
+import { SettingsCard, SettingsHeader, SettingsPage } from "@/components/settings/settings-ui";
 import {
   buildReportBody,
   gatherManualReportData,
   submitManualReport,
   type ManualReportData,
-} from '@/utils/crashReport';
-import { useSettings } from '@/contexts/SettingsContext';
-import { useModelManagementContext } from '@/contexts/ModelManagementContext';
-import { getModelDisplayName } from '@/lib/model-display';
-import { createLogger } from '@/lib/logger';
+} from "@/utils/crashReport";
+import { useSettings } from "@/contexts/SettingsContext";
+import { useModelManagementContext } from "@/contexts/ModelManagementContext";
+import { getModelDisplayName } from "@/lib/model-display";
+import { createLogger } from "@/lib/logger";
 
-const log = createLogger('report-problem');
+const log = createLogger("report-problem");
 const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 export function ReportProblemSection() {
-  const [name, setName] = useState('');
-  const [email, setEmail] = useState('');
-  const [message, setMessage] = useState('');
-  const [emailError, setEmailError] = useState('');
-  const [messageError, setMessageError] = useState('');
-  const [submitError, setSubmitError] = useState('');
+  const [name, setName] = useState("");
+  const [email, setEmail] = useState("");
+  const [message, setMessage] = useState("");
+  const [emailError, setEmailError] = useState("");
+  const [messageError, setMessageError] = useState("");
+  const [submitError, setSubmitError] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [copied, setCopied] = useState(false);
   const [fallbackReportData, setFallbackReportData] = useState<ManualReportData | null>(null);
@@ -58,7 +52,7 @@ export function ReportProblemSection() {
   }, [clearCopyTimer]);
 
   const resetSubmitFallback = useCallback(() => {
-    setSubmitError('');
+    setSubmitError("");
     setFallbackReportData(null);
     setCopied(false);
     clearCopyTimer();
@@ -71,20 +65,20 @@ export function ReportProblemSection() {
     let isValid = true;
 
     if (!trimmedEmail) {
-      setEmailError('Enter an email address so we can follow up.');
+      setEmailError("Enter an email address so we can follow up.");
       isValid = false;
     } else if (!EMAIL_PATTERN.test(trimmedEmail)) {
-      setEmailError('Enter a valid email address.');
+      setEmailError("Enter a valid email address.");
       isValid = false;
     } else {
-      setEmailError('');
+      setEmailError("");
     }
 
     if (!trimmedMessage) {
-      setMessageError('Please describe the issue you are experiencing.');
+      setMessageError("Please describe the issue you are experiencing.");
       isValid = false;
     } else {
-      setMessageError('');
+      setMessageError("");
     }
 
     if (!isValid) return;
@@ -105,8 +99,8 @@ export function ReportProblemSection() {
         );
       } catch (error) {
         if (actionId === actionIdRef.current) {
-          log.error('Failed to gather report data:', error);
-          toast.error('Failed to gather report data');
+          log.error("Failed to gather report data:", error);
+          toast.error("Failed to gather report data");
         }
         return;
       }
@@ -117,14 +111,15 @@ export function ReportProblemSection() {
       if (actionId !== actionIdRef.current) return;
 
       if (result.success) {
-        setName('');
-        setEmail('');
-        setMessage('');
-        toast.success('Report submitted. Thank you.');
+        setName("");
+        setEmail("");
+        setMessage("");
+        toast.success("Report submitted. Thank you.");
         return;
       }
 
-      const errorMessage = result.message || 'Failed to submit report. You can copy the report and send it manually.';
+      const errorMessage =
+        result.message || "Failed to submit report. You can copy the report and send it manually.";
       setSubmitError(errorMessage);
       setFallbackReportData(data);
       toast.error(errorMessage);
@@ -141,7 +136,7 @@ export function ReportProblemSection() {
       await navigator.clipboard.writeText(buildReportBody(fallbackReportData));
       if (actionId !== actionIdRef.current) return;
       setCopied(true);
-      toast.success('Report copied to clipboard');
+      toast.success("Report copied to clipboard");
       clearCopyTimer();
       copiedTimerRef.current = window.setTimeout(() => {
         setCopied(false);
@@ -149,8 +144,8 @@ export function ReportProblemSection() {
       }, 2000);
     } catch (error) {
       if (actionId !== actionIdRef.current) return;
-      log.error('Failed to copy report:', error);
-      toast.error('Failed to copy report');
+      log.error("Failed to copy report:", error);
+      toast.error("Failed to copy report");
     }
   };
 
@@ -202,10 +197,10 @@ export function ReportProblemSection() {
                   value={email}
                   disabled={isSubmitting}
                   aria-invalid={Boolean(emailError)}
-                  aria-describedby={emailError ? 'report-email-error' : 'report-email-description'}
+                  aria-describedby={emailError ? "report-email-error" : "report-email-description"}
                   onChange={(event) => {
                     setEmail(event.target.value);
-                    if (emailError) setEmailError('');
+                    if (emailError) setEmailError("");
                     if (submitError) resetSubmitFallback();
                   }}
                 />
@@ -228,7 +223,7 @@ export function ReportProblemSection() {
                 value={message}
                 onChange={(event) => {
                   setMessage(event.target.value);
-                  if (messageError) setMessageError('');
+                  if (messageError) setMessageError("");
                   if (submitError) resetSubmitFallback();
                 }}
                 rows={8}
@@ -236,7 +231,7 @@ export function ReportProblemSection() {
                 required
                 disabled={isSubmitting}
                 aria-invalid={Boolean(messageError)}
-                aria-describedby={messageError ? 'report-message-error' : 'report-diagnostics-note'}
+                aria-describedby={messageError ? "report-message-error" : "report-diagnostics-note"}
                 className="min-h-40 resize-y"
               />
               {messageError ? (
@@ -253,7 +248,8 @@ export function ReportProblemSection() {
                 <AlertCircle />
                 <AlertTitle>Report not sent</AlertTitle>
                 <AlertDescription>
-                  {submitError} Copy the prepared report and send it manually if this keeps happening.
+                  {submitError} Copy the prepared report and send it manually if this keeps
+                  happening.
                 </AlertDescription>
               </Alert>
             ) : null}
@@ -268,18 +264,17 @@ export function ReportProblemSection() {
                   disabled={isSubmitting}
                 >
                   {copied ? <Check data-icon="inline-start" /> : <Copy data-icon="inline-start" />}
-                  {copied ? 'Copied' : 'Copy report'}
+                  {copied ? "Copied" : "Copy report"}
                 </Button>
               ) : null}
               <Button type="submit" size="sm" disabled={isSubmitting} aria-busy={isSubmitting}>
                 <Send data-icon="inline-start" />
-                {isSubmitting ? 'Submitting...' : 'Send report'}
+                {isSubmitting ? "Submitting..." : "Send report"}
               </Button>
             </Field>
           </FieldGroup>
         </form>
       </SettingsCard>
-
     </SettingsPage>
   );
 }

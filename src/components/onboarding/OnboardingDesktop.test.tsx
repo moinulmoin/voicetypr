@@ -88,16 +88,12 @@ vi.mock("@tauri-apps/api/event", () => ({
   emit: vi.fn().mockResolvedValue(undefined),
 }));
 
-
 const platformMock = vi.hoisted(() => ({ isMacOS: true, isWindows: false, isLinux: false }));
 vi.mock("@/lib/platform", () => platformMock);
 
 const renderOnboarding = () =>
   render(
-    <OnboardingDesktop
-      onComplete={onCompleteMock}
-      modelManagement={modelManagement as never}
-    />,
+    <OnboardingDesktop onComplete={onCompleteMock} modelManagement={modelManagement as never} />,
   );
 
 beforeEach(() => {
@@ -170,15 +166,12 @@ describe("OnboardingDesktop", () => {
       shortcut: "CommandOrControl+Shift+Space",
     });
 
-    await user.click(
-      screen.getByRole("button", { name: /start using voicetypr/i }),
-    );
+    await user.click(screen.getByRole("button", { name: /start using voicetypr/i }));
 
     expect(updateSettingsMock).toHaveBeenCalledWith({ onboarding_completed: true });
     expect(onCompleteMock).toHaveBeenCalledTimes(1);
     expect(onCompleteMock).toHaveBeenCalledWith();
   });
-
 
   it("strips a stale onboarding hold binding when a combo hotkey is saved", async () => {
     const user = userEvent.setup();
@@ -294,7 +287,9 @@ describe("OnboardingDesktop", () => {
     await user.click(screen.getByRole("button", { name: /start setup/i }));
     await user.click(screen.getByRole("button", { name: /continue/i }));
     await user.click(screen.getByRole("button", { name: /continue/i }));
-    expect(await screen.findByRole("heading", { name: /choose a local model/i })).toBeInTheDocument();
+    expect(
+      await screen.findByRole("heading", { name: /choose a local model/i }),
+    ).toBeInTheDocument();
     expect(screen.getByText("Active")).toBeInTheDocument();
     expect(settingsState.current_model).toBe("base.en");
     expect(updateSettingsMock).not.toHaveBeenCalledWith(
@@ -308,15 +303,21 @@ describe("OnboardingDesktop", () => {
 
     await user.click(screen.getByRole("button", { name: /start setup/i }));
 
-    expect(screen.getByRole("heading", { name: /choose where transcription runs/i }))
-      .toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /use a local model/i })).toHaveAttribute("aria-pressed", "true");
+    expect(
+      screen.getByRole("heading", { name: /choose where transcription runs/i }),
+    ).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /use a local model/i })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
     expect(screen.getByRole("button", { name: /use a cloud provider/i })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /use another voicetypr/i })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /continue/i })).toBeEnabled();
-    expect(updateSettingsMock).not.toHaveBeenCalledWith(expect.objectContaining({
-      current_model: "base.en",
-    }));
+    expect(updateSettingsMock).not.toHaveBeenCalledWith(
+      expect.objectContaining({
+        current_model: "base.en",
+      }),
+    );
   });
 
   it("does not overwrite an explicit source choice when remote restore resolves late", async () => {
@@ -342,8 +343,14 @@ describe("OnboardingDesktop", () => {
       await activeRemote;
     });
 
-    expect(screen.getByRole("button", { name: /use a cloud provider/i })).toHaveAttribute("aria-pressed", "true");
-    expect(screen.getByRole("button", { name: /use another voicetypr/i })).toHaveAttribute("aria-pressed", "false");
+    expect(screen.getByRole("button", { name: /use a cloud provider/i })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+    expect(screen.getByRole("button", { name: /use another voicetypr/i })).toHaveAttribute(
+      "aria-pressed",
+      "false",
+    );
   });
 
   it("does not overwrite a selected model when remote restore resolves late", async () => {
@@ -679,9 +686,7 @@ describe("OnboardingDesktop", () => {
     expect(screen.getByRole("checkbox", { name: /crash & error reporting/i })).toBeChecked();
     expect(screen.getByRole("checkbox", { name: /usage analytics/i })).toBeChecked();
 
-    await user.click(
-      screen.getByRole("button", { name: /start using voicetypr/i }),
-    );
+    await user.click(screen.getByRole("button", { name: /start using voicetypr/i }));
     await waitFor(() => {
       expect(invokeMock).toHaveBeenCalledWith("set_telemetry_consent", { enabled: true });
       expect(invokeMock).toHaveBeenCalledWith("set_product_analytics_consent", {
@@ -704,9 +709,7 @@ describe("OnboardingDesktop", () => {
     await screen.findByRole("heading", { name: /you're all set/i });
 
     await user.click(screen.getByRole("checkbox", { name: /usage analytics/i }));
-    await user.click(
-      screen.getByRole("button", { name: /start using voicetypr/i }),
-    );
+    await user.click(screen.getByRole("button", { name: /start using voicetypr/i }));
     await waitFor(() => {
       expect(invokeMock).toHaveBeenCalledWith("set_telemetry_consent", { enabled: true });
       expect(invokeMock).toHaveBeenCalledWith("set_product_analytics_consent", {

@@ -35,9 +35,7 @@ export function EnhancementsHeader({
         title="Change provider & model"
         onClick={onOpenProviderSetup}
       >
-        <p className="truncate text-xs font-medium text-foreground">
-          {activeProviderName}
-        </p>
+        <p className="truncate text-xs font-medium text-foreground">{activeProviderName}</p>
         <p className="truncate text-[11px] text-muted-foreground">
           {activeModelName || "Connected"}
         </p>
@@ -63,51 +61,54 @@ export function EnhancementsHeader({
           <div className="flex items-center gap-2">
             <h1 className="text-2xl font-semibold tracking-tight">Polish</h1>
             <Dialog>
-              <DialogTrigger render={<Button
-                  type="button"
-                  variant="secondary"
-                  size="icon"
-                  aria-label="Polish guide"
-                  className="rounded-full"
-                />}><HelpCircle className="h-4.5 w-4.5" /></DialogTrigger>
+              <DialogTrigger
+                render={
+                  <Button
+                    type="button"
+                    variant="secondary"
+                    size="icon"
+                    aria-label="Polish guide"
+                    className="rounded-full"
+                  />
+                }
+              >
+                <HelpCircle className="h-4.5 w-4.5" />
+              </DialogTrigger>
               <DialogContent className="sm:max-w-lg">
                 <DialogHeader>
                   <DialogTitle>Polish guide</DialogTitle>
                   <DialogDescription>
-                    Configure the provider, dictionary, corrections, snippets,
-                    and writing modes.
+                    Configure the provider, dictionary, corrections, snippets, and writing modes.
                   </DialogDescription>
                 </DialogHeader>
                 <div className="space-y-3 text-sm leading-6 text-muted-foreground">
                   <p>
-                    <strong className="text-foreground">Provider</strong>{" "}
-                    chooses the cloud API or isolated local agent used by
-                    Polish.
+                    <strong className="text-foreground">Provider</strong> chooses the cloud API or
+                    isolated local agent used by Polish.
                   </p>
                   <p>
-                    <strong className="text-foreground">Dictionary</strong>{" "}
-                    protects words and names and can improve recognition.
+                    <strong className="text-foreground">Dictionary</strong> protects words and names
+                    and can improve recognition.
                   </p>
                   <p>
-                    <strong className="text-foreground">Corrections</strong>{" "}
-                    applies exact replacements with or without Polish.
+                    <strong className="text-foreground">Corrections</strong> applies exact
+                    replacements with or without Polish.
                   </p>
                   <p>
-                    <strong className="text-foreground">Snippets</strong>{" "}
-                    expands “insert” triggers into saved text.
+                    <strong className="text-foreground">Snippets</strong> expands “insert” triggers
+                    into saved text.
                   </p>
                   <p>
-                    <strong className="text-foreground">Modes</strong>{" "}
-                    sets the default writing mode and optional per-app
-                    overrides.
+                    <strong className="text-foreground">Modes</strong> sets the default writing mode
+                    and optional per-app overrides.
                   </p>
                 </div>
               </DialogContent>
             </Dialog>
           </div>
           <p className="mt-0.5 text-sm leading-relaxed text-muted-foreground">
-            AI cleanup when enabled; dictionary, corrections, snippets, and
-            app identity remain available independently.
+            AI cleanup when enabled; dictionary, corrections, snippets, and app identity remain
+            available independently.
           </p>
         </div>
         <div className="ml-auto shrink-0">{polishHeaderActions}</div>

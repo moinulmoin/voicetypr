@@ -16,23 +16,17 @@ vi.mock("@/contexts/LicenseContext", () => ({
   }),
 }));
 
-
 vi.mock("@/services/updateService", () => ({
   updateService: { checkForUpdatesManually: vi.fn() },
 }));
 
-function renderSidebar(
-  activeSection: Parameters<typeof Sidebar>[0]["activeSection"] = "overview",
-) {
+function renderSidebar(activeSection: Parameters<typeof Sidebar>[0]["activeSection"] = "overview") {
   const onSectionChange = vi.fn();
   render(
     <TooltipProvider>
       <SidebarProvider>
         <SidebarTrigger />
-        <Sidebar
-          activeSection={activeSection}
-          onSectionChange={onSectionChange}
-        />
+        <Sidebar activeSection={activeSection} onSectionChange={onSectionChange} />
       </SidebarProvider>
     </TooltipProvider>,
   );
@@ -47,24 +41,20 @@ describe("Sidebar navigation", () => {
   it("renders one flat ordered list of destinations", async () => {
     renderSidebar();
     await screen.findByText("v2.0.5");
-    expect(
-      document.querySelector('[data-slot="sidebar-container"]'),
-    ).toHaveClass("group-data-[side=left]:border-r-0");
+    expect(document.querySelector('[data-slot="sidebar-container"]')).toHaveClass(
+      "group-data-[side=left]:border-r-0",
+    );
 
     const sources = screen.getByRole("button", { name: "Sources" });
     const recording = screen.getByRole("button", { name: "Recording" });
     const polish = screen.getByRole("button", { name: "Polish" });
     expect(
-      sources.compareDocumentPosition(recording) &
-        Node.DOCUMENT_POSITION_FOLLOWING,
+      sources.compareDocumentPosition(recording) & Node.DOCUMENT_POSITION_FOLLOWING,
     ).toBeTruthy();
     expect(
-      recording.compareDocumentPosition(polish) &
-        Node.DOCUMENT_POSITION_FOLLOWING,
+      recording.compareDocumentPosition(polish) & Node.DOCUMENT_POSITION_FOLLOWING,
     ).toBeTruthy();
-    expect(
-      screen.getByRole("button", { name: /network sharing/i }),
-    ).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /network sharing/i })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "CLI" })).toBeInTheDocument();
   });
 
@@ -82,23 +72,18 @@ describe("Sidebar navigation", () => {
     const report = within(footerGroup).getByRole("button", { name: "Report a problem" });
 
     expect(
-      overview.compareDocumentPosition(general) &
-        Node.DOCUMENT_POSITION_FOLLOWING,
+      overview.compareDocumentPosition(general) & Node.DOCUMENT_POSITION_FOLLOWING,
     ).toBeTruthy();
     expect(
-      general.compareDocumentPosition(history) &
-        Node.DOCUMENT_POSITION_FOLLOWING,
+      general.compareDocumentPosition(history) & Node.DOCUMENT_POSITION_FOLLOWING,
     ).toBeTruthy();
     expect(within(mainNav).getByRole("button", { name: "License" })).toBeInTheDocument();
     expect(within(mainNav).queryByRole("button", { name: "Quick help" })).not.toBeInTheDocument();
     expect(
-      diagnostics.compareDocumentPosition(report) &
-        Node.DOCUMENT_POSITION_FOLLOWING,
+      diagnostics.compareDocumentPosition(report) & Node.DOCUMENT_POSITION_FOLLOWING,
     ).toBeTruthy();
     expect(footerGroup).not.toHaveTextContent(/general|license/i);
-    expect(
-      document.querySelector('[data-slot="sidebar-content"]'),
-    ).toHaveClass("overflow-hidden");
+    expect(document.querySelector('[data-slot="sidebar-content"]')).toHaveClass("overflow-hidden");
 
     await user.click(general);
     expect(onSectionChange).toHaveBeenLastCalledWith("general");
@@ -109,9 +94,7 @@ describe("Sidebar navigation", () => {
 
   it("keeps the brand row close to the native titlebar", () => {
     renderSidebar();
-    expect(
-      document.querySelector('[data-slot="sidebar-header"]'),
-    ).toHaveClass("pt-1");
+    expect(document.querySelector('[data-slot="sidebar-header"]')).toHaveClass("pt-1");
   });
 
   it("collapses to the icon rail through the sidebar control contract", async () => {

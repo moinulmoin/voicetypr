@@ -5,13 +5,7 @@ import {
   ONBOARDING_HOTKEY_VALIDATION,
 } from "@/components/onboarding/onboardingTypes";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
-import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Switch } from "@/components/ui/switch";
 import { Info, Keyboard } from "lucide-react";
 
@@ -59,12 +53,9 @@ export function HotkeyStep({
             </span>
             Recording hotkey
           </CardTitle>
-          <CardDescription>
-            Double tap Esc cancels an active recording.
-          </CardDescription>
+          <CardDescription>Double tap Esc cancels an active recording.</CardDescription>
         </CardHeader>
         <CardContent className="flex flex-col gap-4">
-
           <HotkeyInput
             value={hotkey}
             onChange={onHotkeyChange}
@@ -72,11 +63,13 @@ export function HotkeyStep({
             onBareModifier={onBareModifier}
             allowBareModifier
             validationRules={ONBOARDING_HOTKEY_VALIDATION}
-            placeholder={capturedBareModifier
-              ? holdToTalk
-                ? `Hold ${formatBareModifierLabel(capturedBareModifier)} · push-to-talk`
-                : `Tap ${formatBareModifierLabel(capturedBareModifier)} · toggle on/off`
-              : undefined}
+            placeholder={
+              capturedBareModifier
+                ? holdToTalk
+                  ? `Hold ${formatBareModifierLabel(capturedBareModifier)} · push-to-talk`
+                  : `Tap ${formatBareModifierLabel(capturedBareModifier)} · toggle on/off`
+                : undefined
+            }
           />
           {capturedBareModifier ? (
             holdToTalk ? (
@@ -84,7 +77,8 @@ export function HotkeyStep({
                 <Info className="size-4" />
                 <AlertTitle>Hold to talk</AlertTitle>
                 <AlertDescription>
-                  Hold {formatBareModifierLabel(capturedBareModifier)} anywhere to start recording — release to stop.
+                  Hold {formatBareModifierLabel(capturedBareModifier)} anywhere to start recording —
+                  release to stop.
                 </AlertDescription>
               </Alert>
             ) : (
@@ -92,17 +86,14 @@ export function HotkeyStep({
                 <Info className="size-4" />
                 <AlertTitle>Tap to toggle on/off</AlertTitle>
                 <AlertDescription>
-                  Tap {formatBareModifierLabel(capturedBareModifier)} to start recording, tap again to stop.
+                  Tap {formatBareModifierLabel(capturedBareModifier)} to start recording, tap again
+                  to stop.
                 </AlertDescription>
               </Alert>
             )
           ) : null}
           <div className="flex items-center gap-3">
-            <Switch
-              id="hold-to-talk"
-              checked={holdToTalk}
-              onCheckedChange={onHoldToTalkChange}
-            />
+            <Switch id="hold-to-talk" checked={holdToTalk} onCheckedChange={onHoldToTalkChange} />
             <label htmlFor="hold-to-talk" className="text-sm cursor-pointer select-none">
               Hold to talk (push-to-talk)
             </label>

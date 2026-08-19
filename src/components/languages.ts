@@ -100,4 +100,4 @@ export const languages = [
   { value: "cy", label: "Welsh" },
   { value: "yi", label: "Yiddish" },
   { value: "yo", label: "Yoruba" },
-]
+];

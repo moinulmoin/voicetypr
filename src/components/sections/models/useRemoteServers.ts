@@ -1,6 +1,4 @@
-import {
-  SavedConnection,
-} from "@/components/RemoteServerCard";
+import { SavedConnection } from "@/components/RemoteServerCard";
 import { getErrorMessage } from "@/utils/error";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
@@ -38,14 +36,13 @@ export interface RemoteServersManager {
 
 export function useRemoteServers(): RemoteServersManager {
   const [remoteServers, setRemoteServers] = useState<SavedConnection[]>([]);
-  const [activeRemoteServer, setActiveRemoteServer] = useState<string | null>(
-    null
-  );
+  const [activeRemoteServer, setActiveRemoteServer] = useState<string | null>(null);
   const [addServerModalOpen, setAddServerModalOpen] = useState(false);
   const [editingServer, setEditingServer] = useState<SavedConnection | null>(null);
   const [isRefreshingServers, setIsRefreshingServers] = useState(false);
   const [discoveredServers, setDiscoveredServers] = useState<DiscoveredRemoteServer[]>([]);
-  const [selectedDiscoveredServer, setSelectedDiscoveredServer] = useState<DiscoveredRemoteServer | null>(null);
+  const [selectedDiscoveredServer, setSelectedDiscoveredServer] =
+    useState<DiscoveredRemoteServer | null>(null);
   const [isDiscoveringServers, setIsDiscoveringServers] = useState(false);
 
   // Quick list fetch (no status checks) - for immediate display
@@ -98,26 +95,29 @@ export function useRemoteServers(): RemoteServersManager {
     }
   }, []);
 
-  const discoverRemoteServers = useCallback(async (notifyEmpty = false) => {
-    setIsDiscoveringServers(true);
-    try {
-      const discovered = await invoke<DiscoveredRemoteServer[]>("discover_remote_servers", {
-        timeoutMs: 1200,
-      });
-      setDiscoveredServers(discovered);
-      if (notifyEmpty && discovered.length === 0) {
-        toast.info("No remote Voicetypr devices found. You can still add one manually.");
+  const discoverRemoteServers = useCallback(
+    async (notifyEmpty = false) => {
+      setIsDiscoveringServers(true);
+      try {
+        const discovered = await invoke<DiscoveredRemoteServer[]>("discover_remote_servers", {
+          timeoutMs: 1200,
+        });
+        setDiscoveredServers(discovered);
+        if (notifyEmpty && discovered.length === 0) {
+          toast.info("No remote Voicetypr devices found. You can still add one manually.");
+        }
+      } catch (error) {
+        log.error("Failed to discover remote Voicetypr devices:", error);
+        if (notifyEmpty) {
+          toast.error("Failed to scan for remote Voicetypr devices");
+        }
+      } finally {
+        await refreshRemoteServers();
+        setIsDiscoveringServers(false);
       }
-    } catch (error) {
-      log.error("Failed to discover remote Voicetypr devices:", error);
-      if (notifyEmpty) {
-        toast.error("Failed to scan for remote Voicetypr devices");
-      }
-    } finally {
-      await refreshRemoteServers();
-      setIsDiscoveringServers(false);
-    }
-  }, [refreshRemoteServers]);
+    },
+    [refreshRemoteServers],
+  );
 
   const fetchActiveRemoteServer = useCallback(async () => {
     try {
@@ -173,7 +173,7 @@ export function useRemoteServers(): RemoteServersManager {
         toast.error(message);
       }
     },
-    [activeRemoteServer]
+    [activeRemoteServer],
   );
 
   const handleDeselectRemoteServer = useCallback(async () => {
@@ -204,7 +204,7 @@ export function useRemoteServers(): RemoteServersManager {
         toast.error("Failed to remove remote Voicetypr");
       }
     },
-    [activeRemoteServer]
+    [activeRemoteServer],
   );
 
   const handleServerAdded = useCallback(
@@ -225,13 +225,15 @@ export function useRemoteServers(): RemoteServersManager {
       // Trigger status refresh for all servers
       refreshRemoteServers();
     },
-    [refreshRemoteServers]
+    [refreshRemoteServers],
   );
 
   const handleAddDiscoveredServer = useCallback(
     async (server: DiscoveredRemoteServer) => {
       if (server.auth_required) {
-        toast.info("This remote Voicetypr requires a password. Enter it to finish adding the server.");
+        toast.info(
+          "This remote Voicetypr requires a password. Enter it to finish adding the server.",
+        );
         setSelectedDiscoveredServer(server);
         setEditingServer(null);
         setAddServerModalOpen(true);
@@ -247,7 +249,9 @@ export function useRemoteServers(): RemoteServersManager {
         });
         handleServerAdded(added);
         setDiscoveredServers((prev) =>
-          prev.filter((candidate) => !(candidate.host === server.host && candidate.port === server.port)),
+          prev.filter(
+            (candidate) => !(candidate.host === server.host && candidate.port === server.port),
+          ),
         );
         toast.success(`${server.name} added`);
       } catch (error) {
