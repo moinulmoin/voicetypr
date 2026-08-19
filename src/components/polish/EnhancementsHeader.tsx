@@ -28,14 +28,20 @@ export function EnhancementsHeader({
 }) {
   const polishHeaderActions: ReactNode = hasSelectedModel ? (
     <div className="flex items-center gap-3 rounded-lg border border-border/60 bg-card px-3 py-1.5">
-      <div className="min-w-0 max-w-56 flex-1 text-right">
+      <button
+        type="button"
+        className="min-w-0 max-w-56 flex-1 rounded-md px-1.5 py-0.5 text-right outline-none transition-colors hover:bg-muted/40 focus-visible:ring-2 focus-visible:ring-ring"
+        aria-label="Change provider and model"
+        title="Change provider & model"
+        onClick={onOpenProviderSetup}
+      >
         <p className="truncate text-xs font-medium text-foreground">
           {activeProviderName}
         </p>
         <p className="truncate text-[11px] text-muted-foreground">
           {activeModelName || "Connected"}
         </p>
-      </div>
+      </button>
       <Switch
         id="polish-enabled"
         aria-label="Polish"

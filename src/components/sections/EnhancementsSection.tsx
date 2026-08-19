@@ -1,6 +1,4 @@
-import { ScrollArea } from "@/components/ui/scroll-area";
-import { useCallback, useEffect, useState } from "react";
-import { useReadinessState } from "@/contexts/ReadinessContext";
+import { ProviderSetupDialog } from "@/components/polish/ProviderSetupDialog";
 import { useSettings } from "@/contexts/SettingsContext";
 import { EnhancementsHeader } from "@/components/polish/EnhancementsHeader";
 import { EnhancementSettingsPanel } from "@/components/polish/EnhancementSettingsPanel";
@@ -19,7 +17,9 @@ import {
   isAgentCliProvider,
   shortModelName,
 } from "@/components/polish/agentCli";
-
+import { useCallback, useEffect, useState } from "react";
+import { useReadinessState } from "@/contexts/ReadinessContext";
+import { ScrollArea } from "@/components/ui/scroll-area";
 export function EnhancementsSection() {
   const readiness = useReadinessState();
   const { settings, updateSettings } = useSettings();
@@ -140,9 +140,8 @@ export function EnhancementsSection() {
   }, [aiSettings.provider]);
 
   const showGuidedSetup = settingsLoaded && !hasSelectedModel;
-  const polishSetupExpanded = showGuidedSetup || providerSetupOpen;
   useEffect(() => {
-    if (!polishSetupExpanded || providerTab !== "local") return;
+    if (!providerSetupOpen || providerTab !== "local") return;
 
     for (const candidate of providers) {
       if (!isAgentCliProvider(candidate.id)) continue;
@@ -150,7 +149,7 @@ export function EnhancementsSection() {
         void probeAgentCli(candidate.id, false);
       }
     }
-  }, [agentCliStatus, polishSetupExpanded, probeAgentCli, providerTab, providers]);
+  }, [agentCliStatus, providerSetupOpen, probeAgentCli, providerTab, providers]);
 
   return (
     <div className="h-full min-h-0 min-w-0 flex flex-col overflow-x-hidden">
@@ -178,40 +177,48 @@ export function EnhancementsSection() {
             onWritingSettingsChange={handleWritingSettingsChange}
             providerSetup={{
               aiSettings,
-              providers,
-              providerApiKeys,
-              agentCliStatus,
-              agentCliProbing,
-              customModelName,
-              guidedSetupProvider,
-              setGuidedSetupProvider,
-              isModelsLoading,
-              getModels,
-              fetchModels: (providerId) => void fetchModels(providerId),
-              getError,
-              getDisplayModels,
+              setProviderSetupOpen,
+              setProviderTab,
+              setProviderSearch,
               hasSelectedModel,
               showGuidedSetup,
-              showAiModelReselectionNotice,
               activeProviderName,
               activeModelName,
               activeReasoningName,
-              providerTab,
-              setProviderTab,
-              providerSearch,
-              setProviderSearch,
-              providerSetupOpen,
-              setProviderSetupOpen,
-              onSelectModel: handleSelectModel,
-              onSelectReasoning: handleSelectReasoning,
-              onToggleFastMode: handleToggleFastMode,
-              onRefreshAgentCli: handleRefreshAgentCli,
-              onSetupApiKey: handleSetupApiKey,
-              onRemoveApiKey: handleRemoveApiKey,
             }}
           />
         </div>
       </ScrollArea>
+
+      <ProviderSetupDialog
+        open={providerSetupOpen}
+        onOpenChange={setProviderSetupOpen}
+        aiSettings={aiSettings}
+        providers={providers}
+        providerApiKeys={providerApiKeys}
+        agentCliStatus={agentCliStatus}
+        agentCliProbing={agentCliProbing}
+        customModelName={customModelName}
+        guidedSetupProvider={guidedSetupProvider}
+        setGuidedSetupProvider={setGuidedSetupProvider}
+        isModelsLoading={isModelsLoading}
+        getModels={getModels}
+        fetchModels={(providerId) => void fetchModels(providerId)}
+        getError={getError}
+        getDisplayModels={getDisplayModels}
+        showGuidedSetup={showGuidedSetup}
+        showAiModelReselectionNotice={showAiModelReselectionNotice}
+        providerTab={providerTab}
+        setProviderTab={setProviderTab}
+        providerSearch={providerSearch}
+        setProviderSearch={setProviderSearch}
+        onSelectModel={handleSelectModel}
+        onSelectReasoning={handleSelectReasoning}
+        onToggleFastMode={handleToggleFastMode}
+        onRefreshAgentCli={handleRefreshAgentCli}
+        onSetupApiKey={handleSetupApiKey}
+        onRemoveApiKey={handleRemoveApiKey}
+      />
 
       <EnhancementsProviderModals
         showApiKeyModal={showApiKeyModal}

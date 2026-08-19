@@ -342,12 +342,16 @@ async function openModes(user: ReturnType<typeof userEvent.setup>) {
 }
 
 async function getProviderSetupPanel() {
-  const providersHeading = await screen.findByText(
-    /Connect an AI to turn on Polish|Provider & model/,
-  );
-  const providersPanel = providersHeading.closest("fieldset");
-  expect(providersPanel).toBeTruthy();
-  return providersPanel as HTMLElement;
+  const launcher = await screen.findByRole("button", {
+    name: "Choose provider and model",
+  });
+  const alreadyOpen =
+    screen.queryByRole("dialog", { name: /Choose provider & model/i }) ??
+    screen.queryByRole("dialog");
+  if (!alreadyOpen) {
+    await fireEvent.click(launcher);
+  }
+  return await screen.findByRole("dialog");
 }
 
 describe("EnhancementsSection", () => {
@@ -592,13 +596,14 @@ describe("EnhancementsSection", () => {
 
   it("shows cloud and local setup tabs when Polish is unconfigured", async () => {
     renderWithProviders();
+    expect(
+      await screen.findByRole("button", {
+        name: "Select a provider to enable Polish",
+      }),
+    ).toBeInTheDocument();
+    expect(screen.queryByRole("switch", { name: /polish/i })).not.toBeInTheDocument();
 
     const providersPanel = await getProviderSetupPanel();
-    expect(
-      screen.getByText(
-        "AI cleanup when enabled; dictionary, corrections, snippets, and app identity remain available independently.",
-      ),
-    ).toBeInTheDocument();
     expect(
       within(providersPanel).getByText(
         "Use your own cloud API key or an agent already installed on this Mac.",
@@ -611,50 +616,39 @@ describe("EnhancementsSection", () => {
       within(providersPanel).getByRole("tab", { name: "Local Agents" }),
     ).toBeInTheDocument();
     expect(
-      screen.getByRole("button", {
-        name: "Select a provider to enable Polish",
+      within(providersPanel).getByRole("heading", {
+        name: "Choose provider & model",
       }),
     ).toBeInTheDocument();
-    expect(screen.queryByRole("switch", { name: /polish/i })).not.toBeInTheDocument();
   });
 
-  it("keeps the selected provider and model in a collapsible summary", async () => {
+  it("keeps the selected provider and model in the launcher summary", async () => {
     aiSettingsResponse = { ...enabledAISettings, enabled: false };
     (hasApiKey as ReturnType<typeof vi.fn>).mockImplementation(
       async (providerId: string) => providerId === "openai",
     );
     const user = userEvent.setup();
     renderWithProviders();
-    const providersPanel = await getProviderSetupPanel();
 
-    expect(
-      within(providersPanel).getByText("OpenAI · GPT-5 Mini"),
-    ).toBeInTheDocument();
-    expect(within(providersPanel).getByText("Active")).toBeInTheDocument();
-    expect(
-      within(providersPanel).queryByRole("tab", { name: "Cloud API" }),
-    ).not.toBeInTheDocument();
-    expect(
-      screen.queryByRole("button", { name: "Change Polish provider or model" }),
-    ).not.toBeInTheDocument();
+    const launcher = await screen.findByRole("button", {
+      name: "Choose provider and model",
+    });
+    expect(launcher).toHaveTextContent("Provider & model");
+    expect(launcher).toHaveTextContent("OpenAI · GPT-5 Mini");
+    expect(launcher).toHaveTextContent("Active");
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
 
-    await user.click(
-      within(providersPanel).getByRole("button", {
-        name: "Expand provider and model",
-      }),
-    );
+    await user.click(launcher);
+    const providersPanel = await screen.findByRole("dialog");
     expect(
       within(providersPanel).getByRole("tab", { name: "Cloud API" }),
     ).toBeInTheDocument();
 
-    await user.click(
-      within(providersPanel).getByRole("button", {
-        name: "Collapse provider and model",
-      }),
-    );
-    expect(
-      within(providersPanel).queryByRole("tab", { name: "Cloud API" }),
-    ).not.toBeInTheDocument();
+    await user.click(within(providersPanel).getByRole("button", { name: /close/i }));
+    // jsdom never finishes the exit animation, so assert the closed state
+    // instead of unmount.
+    expect(screen.getByRole("dialog")).toHaveAttribute("data-closed");
+    expect(launcher).toHaveTextContent("OpenAI · GPT-5 Mini");
   });
 
   it("does not expand then collapse while configured settings load", async () => {
@@ -669,23 +663,18 @@ describe("EnhancementsSection", () => {
 
     renderWithProviders();
 
-    expect(
-      await screen.findByRole("button", {
-        name: "Expand provider and model",
-      }),
-    ).toBeInTheDocument();
-    expect(
-      screen.queryByRole("button", {
-        name: "Collapse provider and model",
-      }),
-    ).not.toBeInTheDocument();
+    const launcher = await screen.findByRole("button", {
+      name: "Choose provider and model",
+    });
+    expect(launcher).toBeInTheDocument();
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
 
     resolveSettings?.(aiSettingsResponse);
 
     await waitFor(() => {
       expect(
         screen.getByRole("button", {
-          name: "Expand provider and model",
+          name: "Choose provider and model",
         }),
       ).toHaveTextContent("OpenAI · GPT-5 Mini");
     });
@@ -727,28 +716,39 @@ describe("EnhancementsSection", () => {
         refresh: true,
       });
     });
+    await waitFor(() => {
+      expect(
+        within(providersPanel).getAllByText("Installed").length,
+      ).toBeGreaterThan(0);
+    });
     expect(
       (invoke as ReturnType<typeof vi.fn>).mock.calls.some(
         ([command]) => command === "update_ai_settings",
       ),
     ).toBe(false);
 
-    await user.click(
+    fireEvent.keyDown(
       within(providersPanel).getByRole("button", { name: "Select Claude Code" }),
+      { key: "Enter" },
     );
-    expect(invoke).toHaveBeenCalledWith("update_ai_settings", {
-      enabled: false,
-      provider: "claude-code",
-      model: "",
+    await waitFor(() => {
+      expect(invoke).toHaveBeenCalledWith("update_ai_settings", {
+        enabled: false,
+        provider: "claude-code",
+        model: "",
+      });
     });
   });
 
   it("opens the API key modal from a cloud provider row", async () => {
     const user = userEvent.setup();
     renderWithProviders();
+    const providersPanel = await getProviderSetupPanel();
 
     await user.click(
-      await screen.findByRole("button", { name: "Add Anthropic API key" }),
+      within(providersPanel).getByRole("button", {
+        name: "Add Anthropic API key",
+      }),
     );
 
     await waitFor(() => {
@@ -799,7 +799,10 @@ describe("EnhancementsSection", () => {
       within(providersPanel).getAllByRole("button", { name: /refresh/i })
         .length,
     ).toBeGreaterThan(0);
-    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    await user.click(
+      within(providersPanel).getByRole("button", { name: /close/i }),
+    );
+    expect(screen.getByRole("dialog")).toHaveAttribute("data-closed");
     expect(screen.queryByLabelText("API Key")).not.toBeInTheDocument();
   });
 
@@ -935,9 +938,10 @@ describe("EnhancementsSection", () => {
   it("auto-selects the recommended model and turns Polish on after guided key validation", async () => {
     const user = userEvent.setup();
     renderWithProviders();
+    const providersPanel = await getProviderSetupPanel();
 
     await user.click(
-      await screen.findByRole("button", { name: "Add OpenAI API key" }),
+      within(providersPanel).getByRole("button", { name: "Add OpenAI API key" }),
     );
     await user.type(await screen.findByLabelText("API Key"), "openai-key");
     await user.click(screen.getByRole("button", { name: "Save API Key" }));
@@ -971,7 +975,7 @@ describe("EnhancementsSection", () => {
     await waitFor(() => {
       const polishSwitch = screen.getByRole("switch", { name: "Polish" });
       const providerSummary = screen.getByRole("button", {
-        name: "Expand provider and model",
+        name: "Choose provider and model",
       });
       expect(polishSwitch).toBeChecked();
       expect(polishSwitch).not.toHaveAttribute("aria-disabled", "true");
@@ -1008,12 +1012,11 @@ describe("EnhancementsSection", () => {
       async (providerId: string) => providerId === "openai",
     );
 
-    const user = userEvent.setup();
     renderWithProviders();
 
     await waitFor(() => {
       const providerSummary = screen.getByRole("button", {
-        name: "Expand provider and model",
+        name: "Choose provider and model",
       });
       expect(providerSummary).toHaveTextContent("OpenAI · GPT-5 Mini");
       expect(providerSummary).toHaveTextContent("Active");
@@ -1021,13 +1024,14 @@ describe("EnhancementsSection", () => {
         screen.queryByText("Connect an AI to turn on Polish"),
       ).not.toBeInTheDocument();
     });
-
-    await user.click(
-      screen.getByRole("button", { name: "Expand provider and model" }),
-    );
-
-    expect(await screen.findByText("Provider & model")).toBeInTheDocument();
     expect(screen.getByRole("tab", { name: "Corrections" })).toBeInTheDocument();
+
+    const providersPanel = await getProviderSetupPanel();
+    expect(
+      within(providersPanel).getByRole("heading", {
+        name: "Choose provider & model",
+      }),
+    ).toBeInTheDocument();
   });
 
   it("keeps the simple Polish surface free of paywall or locked cues", async () => {
@@ -1193,9 +1197,10 @@ describe("EnhancementsSection", () => {
     aiSettingsResponse = { ...baseAISettings, provider: "", model: "" };
     const user = userEvent.setup();
     renderWithProviders();
+    const providersPanel = await getProviderSetupPanel();
 
     await user.click(
-      await screen.findByRole("button", {
+      within(providersPanel).getByRole("button", {
         name: "Configure Custom (OpenAI-compatible)",
       }),
     );
@@ -1715,7 +1720,7 @@ describe("EnhancementsSection", () => {
     renderWithProviders();
 
     await user.click(
-      await screen.findByRole("button", { name: "Expand provider and model" }),
+      await screen.findByRole("button", { name: "Choose provider and model" }),
     );
 
     await user.click(
@@ -1745,13 +1750,14 @@ describe("EnhancementsSection", () => {
     const user = userEvent.setup();
     renderWithProviders();
 
+    const providersPanel = await getProviderSetupPanel();
     expect(
-      await screen.findByText(
+      within(providersPanel).getByText(
         "Your previous model is unavailable. Choose another model to continue.",
       ),
     ).toBeInTheDocument();
     await user.click(
-      screen.getByRole("combobox", { name: "Model for OpenAI" }),
+      within(providersPanel).getByRole("combobox", { name: "Model for OpenAI" }),
     );
     await user.click(
       await screen.findByRole("option", { name: /GPT-5 Mini/i }),
@@ -1857,12 +1863,31 @@ describe("EnhancementsSection", () => {
 
     firstRender.unmount();
     renderWithProviders();
+    const restoredLauncher = await screen.findByRole("button", {
+      name: "Choose provider and model",
+    });
+    expect(restoredLauncher).toHaveTextContent("Claude Code");
+    expect(restoredLauncher).toHaveTextContent("Sonnet");
+
     const restoredPanel = await getProviderSetupPanel();
+    await user.click(
+      within(restoredPanel).getByRole("tab", { name: "Local Agents" }),
+    );
     expect(
-      await within(restoredPanel).findByText(
-        "Claude Code · Sonnet · Effort low",
-      ),
+      await within(restoredPanel).findByRole("heading", {
+        name: "Claude Code",
+      }),
     ).toBeInTheDocument();
+    expect(
+      within(restoredPanel).getByRole("button", {
+        name: "Model for Claude Code",
+      }),
+    ).toHaveTextContent("Sonnet");
+    expect(
+      within(restoredPanel).getByRole("combobox", {
+        name: "Effort for Claude Code",
+      }),
+    ).toHaveTextContent("Low");
   });
 
   it("keeps an undiscovered saved local model label truthful", async () => {
@@ -1880,12 +1905,11 @@ describe("EnhancementsSection", () => {
     renderWithProviders();
 
     const providerSummary = await screen.findByRole("button", {
-      name: "Expand provider and model",
+      name: "Choose provider and model",
     });
     expect(providerSummary).toHaveTextContent(
       "Claude Code · Legacy Model · Effort low",
     );
-    await user.click(providerSummary);
     const providersPanel = await getProviderSetupPanel();
     await user.click(
       within(providersPanel).getByRole("tab", { name: "Local Agents" }),
@@ -1912,10 +1936,9 @@ describe("EnhancementsSection", () => {
     const user = userEvent.setup();
     renderWithProviders();
     const providerSummary = await screen.findByRole("button", {
-      name: "Expand provider and model",
+      name: "Choose provider and model",
     });
     expect(providerSummary).toHaveTextContent("pi · GPT-5 Mini · Thinking off");
-    await user.click(providerSummary);
     const providersPanel = await getProviderSetupPanel();
 
     const piModel = await within(providersPanel).findByRole("button", {
@@ -2072,16 +2095,15 @@ describe("EnhancementsSection", () => {
 
     it("shows the inline banner with auth copy when an auth error fires", async () => {
       renderWithProviders();
-      const providersPanel = await getProviderSetupPanel();
 
       emitEvent(
         "ai-enhancement-auth-error",
         "Please check your AI API key in settings.",
       );
 
-      expect(within(providersPanel).getByText(authCopy)).toBeInTheDocument();
+      expect(screen.getByText(authCopy)).toBeInTheDocument();
       expect(
-        within(providersPanel).getByRole("button", {
+        screen.getByRole("button", {
           name: "Dismiss Polish error",
         }),
       ).toBeInTheDocument();
@@ -2089,77 +2111,66 @@ describe("EnhancementsSection", () => {
 
     it("shows the failure message for a generic polish error", async () => {
       renderWithProviders();
-      const providersPanel = await getProviderSetupPanel();
 
       emitEvent("enhancing-failed", {
         category: "service_unavailable",
         message: "AI service unavailable",
       });
 
-      expect(
-        within(providersPanel).getByText("AI service unavailable"),
-      ).toBeInTheDocument();
+      expect(screen.getByText("AI service unavailable")).toBeInTheDocument();
     });
 
     it("dismisses the banner", async () => {
       const user = userEvent.setup();
       renderWithProviders();
-      const providersPanel = await getProviderSetupPanel();
 
       emitEvent(
         "ai-enhancement-auth-error",
         "Please check your AI API key in settings.",
       );
-      expect(within(providersPanel).getByText(authCopy)).toBeInTheDocument();
+      expect(screen.getByText(authCopy)).toBeInTheDocument();
 
       await user.click(
-        within(providersPanel).getByRole("button", {
+        screen.getByRole("button", {
           name: "Dismiss Polish error",
         }),
       );
 
-      expect(within(providersPanel).queryByText(authCopy)).not.toBeInTheDocument();
+      expect(screen.queryByText(authCopy)).not.toBeInTheDocument();
     });
 
     it("clears the banner when a polish run completes", async () => {
       renderWithProviders();
-      const providersPanel = await getProviderSetupPanel();
 
       emitEvent(
         "ai-enhancement-auth-error",
         "Please check your AI API key in settings.",
       );
-      expect(within(providersPanel).getByText(authCopy)).toBeInTheDocument();
+      expect(screen.getByText(authCopy)).toBeInTheDocument();
 
       emitEvent("enhancing-completed", null);
 
       await waitFor(() => {
-        expect(
-          within(providersPanel).queryByText(authCopy),
-        ).not.toBeInTheDocument();
+        expect(screen.queryByText(authCopy)).not.toBeInTheDocument();
       });
     });
 
     it("keeps the banner across remounts (tab switches) until dismissed", async () => {
       const view = renderWithProviders();
-      const providersPanel = await getProviderSetupPanel();
 
       emitEvent(
         "ai-enhancement-auth-error",
         "Please check your AI API key in settings.",
       );
-      expect(within(providersPanel).getByText(authCopy)).toBeInTheDocument();
+      expect(screen.getByText(authCopy)).toBeInTheDocument();
 
       act(() => {
         view.unmount();
       });
       renderWithProviders();
-      const reMountedPanel = await getProviderSetupPanel();
 
       await waitFor(() => {
-        expect(
-          within(reMountedPanel).getByText(authCopy),
-        ).toBeInTheDocument();
+        expect(screen.getByText(authCopy)).toBeInTheDocument();
       });
     });
   });
