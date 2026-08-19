@@ -189,11 +189,6 @@ export function ProviderSetupDialog(props: ProviderSetupDialogProps) {
           </div>
         </Tabs>
 
-        <p className="shrink-0 text-xs text-muted-foreground">
-          Cloud keys stay in the system keychain. Local agents receive the
-          Polish system prompt and dictated text in isolated one-shot mode
-          with tools and sessions disabled.
-        </p>
       </DialogContent>
     </Dialog>
   );
