@@ -6,6 +6,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
+import { ScrollArea } from "@/components/ui/scroll-area";
 import { Spinner } from "@/components/ui/spinner";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import type { AISettings } from "@/types/ai";
@@ -119,7 +120,7 @@ export function ProviderSetupDialog(props: ProviderSetupDialogProps) {
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent
-        className="sm:max-w-3xl"
+        className="flex max-h-[calc(100svh-4rem)] flex-col overflow-hidden sm:max-w-3xl"
         aria-describedby="provider-setup-description"
       >
         <DialogHeader>
@@ -137,6 +138,7 @@ export function ProviderSetupDialog(props: ProviderSetupDialogProps) {
           </div>
         )}
 
+        <ScrollArea className="min-h-0 flex-1 rounded-md">
         <Tabs
           value={providerTab}
           onValueChange={(value) => {
@@ -186,7 +188,7 @@ export function ProviderSetupDialog(props: ProviderSetupDialogProps) {
             ))}
           </TabsContent>
         </Tabs>
-
+        </ScrollArea>
         <p className="text-xs text-muted-foreground">
           Cloud keys stay in the system keychain. Local agents receive the
           Polish system prompt and dictated text in isolated one-shot mode

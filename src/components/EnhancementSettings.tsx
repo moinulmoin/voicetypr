@@ -32,6 +32,11 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
+import {
+  Tabs,
+  TabsList,
+  TabsTrigger,
+} from "@/components/ui/tabs";
 import { presetDisplayLabel, presetRequiresAiFormatting, type EnhancementPreset } from "@/types/ai";
 import type {
   AppFormattingRule,
@@ -783,35 +788,36 @@ export function EnhancementSettings({
           <FieldDescription className="mb-3">
             Applied unless a per-app override matches.
           </FieldDescription>
-          <Select
+          <Tabs
             value={preset}
-            disabled={disabled}
             onValueChange={(value) =>
               onPresetChange(value as EnhancementPreset)
             }
           >
-            <SelectTrigger className="w-full sm:w-64" aria-label="Default mode">
-              <SelectValue>{formattingModeLabel(preset)}</SelectValue>
-            </SelectTrigger>
-            <SelectContent>
-              {FORMATTING_MODES.map((mode) => (
-                <SelectItem
-                  key={mode.id}
-                  value={mode.id}
-                  disabled={
-                    !aiFormattingEnabled &&
-                    presetRequiresAiFormatting(mode.id)
-                  }
-                >
-                  {formattingModeLabel(mode.id)}
-                  {!aiFormattingEnabled &&
-                  presetRequiresAiFormatting(mode.id)
-                    ? " (requires Polish)"
-                    : ""}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
+            <TabsList
+              aria-label="Default mode"
+              className="grid h-auto w-full grid-cols-3 sm:grid-cols-6"
+            >
+              {FORMATTING_MODES.map((mode) => {
+                const requiresPolish =
+                  !aiFormattingEnabled &&
+                  presetRequiresAiFormatting(mode.id);
+                return (
+                  <TabsTrigger
+                    key={mode.id}
+                    value={mode.id}
+                    disabled={requiresPolish}
+                    className="gap-1.5 px-2 py-2 text-xs"
+                    title={
+                      requiresPolish ? "Requires Polish to be turned on" : undefined
+                    }
+                  >
+                    {formattingModeLabel(mode.id)}
+                  </TabsTrigger>
+                );
+              })}
+            </TabsList>
+          </Tabs>
         </FieldSet>
 
         <FieldSet className="rounded-xl border border-border/60 bg-card p-4">

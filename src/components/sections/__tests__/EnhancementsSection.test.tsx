@@ -584,14 +584,17 @@ describe("EnhancementsSection", () => {
     expect(invoke).toHaveBeenCalledWith("list_ai_providers");
   });
 
-  it("keeps the default mode picker in Modes", async () => {
+  it("keeps the default mode picker segmented control in Modes", async () => {
     const user = userEvent.setup();
     renderWithProviders();
 
     await openModes(user);
     expect(
-      await screen.findByRole("combobox", { name: "Default mode" }),
+      await screen.findByRole("tablist", { name: "Default mode" }),
     ).toBeInTheDocument();
+    for (const mode of ["Polish Off", "Clean Dictation", "Writing", "Notes", "Message", "Code"]) {
+      expect(screen.getByRole("tab", { name: mode })).toBeInTheDocument();
+    }
     expect(screen.queryByRole("region", { name: "Style" })).not.toBeInTheDocument();
   });
 
