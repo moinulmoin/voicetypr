@@ -638,7 +638,12 @@ describe("EnhancementsSection", () => {
       name: "Choose provider and model",
     });
     expect(launcher).toHaveTextContent("Provider & model");
-    expect(launcher).toHaveTextContent("OpenAI · GPT-5 Mini");
+    // The summary text arrives after the async settings load — wait for it
+    // instead of asserting once (this raced under full-suite load).
+    await waitFor(
+      () => expect(launcher).toHaveTextContent("OpenAI · GPT-5 Mini"),
+      { timeout: 3000 },
+    );
     expect(launcher).toHaveTextContent("Active");
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
 
