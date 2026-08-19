@@ -129,7 +129,7 @@ pnpm lint
 pnpm typecheck
 pnpm test
 pnpm test:backend
-pnpm quality-gate
+pnpm check
 ```
 
 See [`AGENTS.md`](AGENTS.md) and [`CLAUDE.md`](CLAUDE.md) for repository conventions and architecture notes.

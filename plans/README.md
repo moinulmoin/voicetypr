@@ -9,7 +9,7 @@ when done.
 
 Verification commands used across all plans: `pnpm typecheck`, `pnpm lint`,
 `pnpm exec vitest run`, `cd src-tauri && cargo test`, `cargo fmt --check`,
-`cargo clippy -- -D warnings`, `pnpm quality-gate`.
+`cargo clippy -- -D warnings`, `pnpm check`.
 
 ## Concurrency protocol (multiple agents/sessions work this repo)
 
