@@ -156,14 +156,3 @@ export const CODE_TO_KEY_MAP: Record<string, string> = {
 export function mapCodeToKey(code: string): string {
   return CODE_TO_KEY_MAP[code] || code; // Fallback to code if not mapped
 }
-
-/**
- * Check if we should use physical key code for this key
- * Some keys like modifiers are better handled by e.key
- */
-export function shouldUsePhysicalCode(key: string): boolean {
-  // Modifier keys and some special keys work better with e.key
-  const useKeyNotCode = ["Control", "Shift", "Alt", "Meta", "ContextMenu", "OS", "Hyper", "Super"];
-
-  return !useKeyNotCode.includes(key);
-}

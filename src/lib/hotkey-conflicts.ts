@@ -173,38 +173,6 @@ export function checkForSystemConflict(
 }
 
 /**
- * Get all known conflicts for the current platform
- * @param platform Optional platform override
- * @returns Array of all known conflicts
- */
-export function getAllConflicts(platform?: "windows" | "macos" | "linux"): ConflictInfo[] {
-  if (!platform) {
-    if (typeof window !== "undefined" && window.navigator) {
-      const userAgent = window.navigator.userAgent.toLowerCase();
-      if (userAgent.includes("win")) {
-        platform = "windows";
-      } else if (userAgent.includes("mac")) {
-        platform = "macos";
-      } else {
-        platform = "linux";
-      }
-    } else {
-      platform = "windows";
-    }
-  }
-
-  switch (platform) {
-    case "macos":
-      return MACOS_CONFLICTS;
-    case "linux":
-      return LINUX_CONFLICTS;
-    case "windows":
-    default:
-      return WINDOWS_CONFLICTS;
-  }
-}
-
-/**
  * Format a conflict warning message
  * @param conflict The conflict information
  * @returns Formatted warning message

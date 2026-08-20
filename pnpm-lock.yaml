@@ -44,9 +44,6 @@ importers:
       '@tauri-apps/plugin-shell':
         specifier: ^2.3.5
         version: 2.3.5
-      '@tauri-apps/plugin-updater':
-        specifier: ^2.10.1
-        version: 2.10.1
       class-variance-authority:
         specifier: ^0.7.1
         version: 0.7.1
@@ -77,9 +74,6 @@ importers:
       tailwindcss:
         specifier: ^4.3.3
         version: 4.3.3
-      tauri-plugin-macos-permissions-api:
-        specifier: ^2.3.0
-        version: 2.3.0
       zustand:
         specifier: ^5.0.15
         version: 5.0.15(@types/react@19.2.18)(react@19.2.8)(use-sync-external-store@1.6.0(react@19.2.8))
@@ -88,8 +82,8 @@ importers:
         specifier: ^2.11.4
         version: 2.11.4
       '@testing-library/jest-dom':
-        specifier: ^6.10.0
-        version: 6.10.0(@testing-library/dom@10.4.0)
+        specifier: ^6.9.1
+        version: 6.9.1
       '@testing-library/react':
         specifier: ^16.3.2
         version: 16.3.2(@testing-library/dom@10.4.0)(@types/react-dom@19.2.4(@types/react@19.2.18))(@types/react@19.2.18)(react-dom@19.2.8(react@19.2.8))(react@19.2.8)
@@ -1360,19 +1354,13 @@ packages:
   '@tauri-apps/plugin-shell@2.3.5':
     resolution: {integrity: sha512-jewtULhiQ7lI7+owCKAjc8tYLJr92U16bPOeAa472LHJdgaibLP83NcfAF2e+wkEcA53FxKQAZ7byDzs2eeizg==}
 
-  '@tauri-apps/plugin-updater@2.10.1':
-    resolution: {integrity: sha512-NFYMg+tWOZPJdzE/PpFj2qfqwAWwNS3kXrb1tm1gnBJ9mYzZ4WDRrwy8udzWoAnfGCHLuePNLY1WVCNHnh3eRA==}
-
   '@testing-library/dom@10.4.0':
     resolution: {integrity: sha512-pemlzrSESWbdAloYml3bAJMEfNh1Z7EduzqPKprCH5S341frlpYnUEW0H72dLxa6IsYr+mPno20GiSm+h9dEdQ==}
     engines: {node: '>=18'}
 
-  '@testing-library/jest-dom@6.10.0':
-    resolution: {integrity: sha512-HQwu0KaB2zyT0iLzBL+8CLyZDL3KlZlZJ+2iyc9uCUnlJVskJU/UlPuVCyIPhtukjPQdT2QNoR5nCP5FqTmmDQ==}
-    engines: {node: '>=22', npm: '>=6', yarn: '>=1'}
-    deprecated: Incorrect minor release with breaking changes (Node >=22 and required @testing-library/dom peer). Use 6.9.1 for the 6.x line, or upgrade to 7.0.0.
-    peerDependencies:
-      '@testing-library/dom': '>=10 <11'
+  '@testing-library/jest-dom@6.9.1':
+    resolution: {integrity: sha512-zIcONa+hVtVSSep9UT3jZ5rizo2BsxgyDYU7WFD5eICBE7no3881HGeb/QkGfsJs6JTkY1aQhT7rIPC7e+0nnA==}
+    engines: {node: '>=14', npm: '>=6', yarn: '>=1'}
 
   '@testing-library/react@16.3.2':
     resolution: {integrity: sha512-XU5/SytQM+ykqMnAnvB2umaJNIOsLF3PVv//1Ew4CTcpz0/BRyy/af40qqrt7SjKpDdT1saBMc42CUok5gaw+g==}
@@ -3022,9 +3010,6 @@ packages:
     resolution: {integrity: sha512-uxc/zpqFg6x7C8vOE7lh6Lbda8eEL9zmVm/PLeTPBRhh1xCgdWaQ+J1CUieGpIfm2HdtsUpRv+HshiasBMcc6A==}
     engines: {node: '>=6'}
 
-  tauri-plugin-macos-permissions-api@2.3.0:
-    resolution: {integrity: sha512-pZp0jmDySysBqrGueknd1a7Rr4XEO9aXpMv9TNrT2PDHP0MSH20njieOagsFYJ5MCVb8A+wcaK0cIkjUC2dOww==}
-
   tiny-invariant@1.3.3:
     resolution: {integrity: sha512-+FbBPE1o9QAYvviau/qC5SE3caw21q3xkvWKBtja5vgqOWIHHJ3ioaq1VPfn/Szqctz2bU/oYeKd9/z5BL+PVg==}
 
@@ -4306,10 +4291,6 @@ snapshots:
     dependencies:
       '@tauri-apps/api': 2.11.1
 
-  '@tauri-apps/plugin-updater@2.10.1':
-    dependencies:
-      '@tauri-apps/api': 2.11.1
-
   '@testing-library/dom@10.4.0':
     dependencies:
       '@babel/code-frame': 7.29.7
@@ -4321,10 +4302,9 @@ snapshots:
       lz-string: 1.5.0
       pretty-format: 27.5.1
 
-  '@testing-library/jest-dom@6.10.0(@testing-library/dom@10.4.0)':
+  '@testing-library/jest-dom@6.9.1':
     dependencies:
       '@adobe/css-tools': 4.5.0
-      '@testing-library/dom': 10.4.0
       aria-query: 5.3.2
       css.escape: 1.5.1
       dom-accessibility-api: 0.6.3
@@ -5927,10 +5907,6 @@ snapshots:
   tailwindcss@4.3.3: {}
 
   tapable@2.3.3: {}
-
-  tauri-plugin-macos-permissions-api@2.3.0:
-    dependencies:
-      '@tauri-apps/api': 2.11.1
 
   tiny-invariant@1.3.3: {}
 

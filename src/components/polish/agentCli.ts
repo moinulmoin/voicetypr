@@ -85,8 +85,6 @@ const CLAUDE_CODE_MODELS: AIProviderModel[] = [
 
 export const AGENT_CLI_DEFAULT_LABEL = "Default";
 
-export const CLAUDE_CODE_FALLBACK_MODELS = CLAUDE_CODE_MODELS;
-
 const fallbackAgentCliDefault = (_providerId: string): AIProviderModel => ({
   id: "",
   name: AGENT_CLI_DEFAULT_LABEL,

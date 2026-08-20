@@ -123,9 +123,6 @@ export const secondaryScreens: ScreenDefinition[] = [
 
 export const screens = [...primaryScreens, ...secondaryScreens] as const;
 
-export const isScreenId = (value: string): value is ScreenId =>
-  screens.some((screen) => screen.id === value);
-
 const screenById = (id: ScreenId): ScreenDefinition =>
   screens.find((screen) => screen.id === id) as ScreenDefinition;
 
