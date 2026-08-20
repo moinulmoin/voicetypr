@@ -57,6 +57,7 @@ const reportData = {
   logContent: 'INFO log line',
   logTruncated: false,
   logStatusNote: '',
+  debugRingContent: '',
 };
 
 const windowsSpecs = {
@@ -83,7 +84,7 @@ describe('ReportProblemSection', () => {
     vi.clearAllMocks();
     platformMock.isMacOS = false;
     vi.mocked(gatherManualReportData).mockResolvedValue(reportData);
-    vi.mocked(getSystemSpecs).mockResolvedValue(windowsSpecs);
+    vi.mocked(getSystemSpecs).mockResolvedValue({ specs: windowsSpecs });
     vi.mocked(buildReportBody).mockReturnValue('REPORT BODY with The app broke');
     vi.mocked(submitManualReport).mockResolvedValue({ success: true, message: 'Report submitted' });
     if (!navigator.clipboard) {
@@ -266,6 +267,7 @@ describe('ReportProblemSection', () => {
       logFileName: null,
       logContent: '',
       logStatusNote: 'No log file found.',
+      debugRingContent: '',
     });
     render(<ReportProblemSection />);
 

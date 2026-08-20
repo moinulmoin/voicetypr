@@ -9,6 +9,32 @@ Run on a real macOS machine via `pnpm tauri:dev` (item 16-S8 needs a Windows
 build). Check each box with date + result; on failure, file the failure
 against the named plan instead of hot-fixing inline.
 
+## Plan 044 — Soniox lifecycle, failure events, report diagnostics (NEEDS-SMOKE)
+
+Needs a real Soniox account with stored-file backlog plus the GlitchTip
+project's Discord alert wired. macOS first; 044-S4 needs a Windows build
+(sidecar backend tag only exists there).
+
+- [ ] 044-S1 Soniox dictation with a key that has stored records →
+      transcription succeeds AND `Settings → Cloud transcription → Soniox
+      stored files` counts do not grow (auto-delete fired); Soniox console
+      shows the new records gone.
+- [ ] 044-S2 Fill the Soniox org to its file cap (or use an at-cap account)
+      → dictation fails fast (single attempt, no double 429 in the log) with
+      the storage-limit message naming cleanup; the cleanup button drains
+      counts to zero and dictation works again.
+- [ ] 044-S3 Force a failure (e.g. invalid Groq key set to Groq engine, or
+      pull network during local whisper) → GlitchTip issue appears with
+      message `flow.transcription.failed.<class>` and tags
+      engine/model/backend/failure_class, Discord alert fires; verify NO
+      structured logs/transactions arrive anymore (logs view stays empty).
+- [ ] 044-S4 Windows with GPU sidecar active → failure event carries
+      `backend=sidecar`; with GPU off/fallback → `backend=cpu`.
+- [ ] 044-S5 Report Bug from a release build → report contains the System
+      section (or an explicit collection-failed line) and a `## Debug (most
+      in-memory ring)` section with redacted DEBUG lines; verify no DEBUG
+      lines appear in the on-disk voicetypr-*.log file in release.
+
 ## Plan 030 — Windows crash dependencies (NEEDS-SMOKE)
 
 Run these on the signed Windows Beta 7 build. Keep Bugsink open for recurrence

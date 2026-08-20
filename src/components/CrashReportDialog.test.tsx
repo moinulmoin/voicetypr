@@ -33,6 +33,7 @@ const crashData = {
   logContent: 'INFO log line',
   logTruncated: false,
   logStatusNote: '',
+  debugRingContent: '',
 };
 
 let writeTextMock: MockInstance<(data: string) => Promise<void>>;

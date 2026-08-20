@@ -33,10 +33,12 @@ pub async fn clear_old_logs(app: tauri::AppHandle, days_to_keep: u32) -> Result<
                 .unwrap_or("")
                 .to_string();
 
-            if file_name.starts_with("voicetypr-") && file_name.ends_with(".log") {
+            let is_voicetypr_log = file_name.starts_with("voicetypr-")
+                && (file_name.ends_with(".log") || file_name.contains(".log."));
+            if is_voicetypr_log {
                 let date_str = file_name
                     .strip_prefix("voicetypr-")
-                    .and_then(|s| s.strip_suffix(".log"))
+                    .and_then(|s| s.strip_suffix(".log").or_else(|| s.split(".log.").next()))
                     .unwrap_or("");
 
                 if let Ok(file_date) = NaiveDate::parse_from_str(date_str, "%Y-%m-%d") {
@@ -101,6 +103,8 @@ pub async fn open_logs_folder(app: tauri::AppHandle) -> Result<(), String> {
 
 /// Maximum bytes to read from the tail of the latest log for bug reports.
 const MAX_TAIL_BYTES: u64 = 40_960; // ~40KB
+/// Maximum bytes of the in-memory DEBUG ring to attach to bug reports.
+const MAX_RING_BYTES: usize = 64 * 1024; // ~64KB
 
 /// Response for the latest-log bug-report attachment command.
 #[derive(Debug, Serialize)]
@@ -114,6 +118,10 @@ pub struct LatestLogAttachment {
     pub truncated: bool,
     /// Human-readable status for the frontend (empty when log exists).
     pub status_note: String,
+    /// Redacted dump of the in-memory DEBUG ring (plan 044): timings,
+    /// budgets, and backend decisions that never reach the Info-filtered
+    /// file log in release builds.
+    pub debug_ring: String,
 }
 
 /// Find the newest `voicetypr-*.log` file in the given directory.
@@ -138,7 +146,9 @@ pub fn find_newest_log(log_dir: &std::path::Path) -> Option<std::path::PathBuf> 
         let path = entry.path();
         let file_name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
 
-        if file_name.starts_with("voicetypr-") && file_name.ends_with(".log") {
+        if file_name.starts_with("voicetypr-")
+            && (file_name.ends_with(".log") || file_name.contains(".log."))
+        {
             if let Ok(meta) = entry.metadata() {
                 if let Ok(modified) = meta.modified() {
                     match &newest {
@@ -293,6 +303,8 @@ pub async fn get_latest_log_for_bug_report(
 
     let newest = find_newest_log(&log_dir);
 
+    let debug_ring = redact_log_content(&crate::utils::ring_log::snapshot_joined(MAX_RING_BYTES));
+
     let Some(log_path) = newest else {
         return Ok(LatestLogAttachment {
             file_name: None,
@@ -300,6 +312,7 @@ pub async fn get_latest_log_for_bug_report(
             truncated: false,
             status_note: "No log file found. Logs will be included automatically when available."
                 .to_string(),
+            debug_ring,
         });
     };
 
@@ -317,6 +330,7 @@ pub async fn get_latest_log_for_bug_report(
                 redacted_content: String::new(),
                 truncated: false,
                 status_note: "Found a log file, but it could not be read.".to_string(),
+                debug_ring,
             });
         }
     };
@@ -328,5 +342,6 @@ pub async fn get_latest_log_for_bug_report(
         redacted_content: redacted,
         truncated,
         status_note: String::new(),
+        debug_ring,
     })
 }

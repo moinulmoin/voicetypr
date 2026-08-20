@@ -1,4 +1,19 @@
 use std::path::Path;
+
+/// Whisper acceleration actually in use (plan 044 failure-event tag):
+/// "cpu" | "metal" | "sidecar". Written at backend-decision points and by
+/// the acceleration wrapper when the sidecar handles (or fails) a request;
+/// read when a failure event is emitted.
+static ACTIVE_BACKEND: parking_lot::RwLock<Option<&'static str>> = parking_lot::RwLock::new(None);
+
+pub(crate) fn set_active_backend(backend: &'static str) {
+    *ACTIVE_BACKEND.write() = Some(backend);
+}
+
+pub(crate) fn active_backend() -> Option<&'static str> {
+    *ACTIVE_BACKEND.read()
+}
+
 use std::time::Instant;
 use whisper_rs::{
     convert_integer_to_float_audio, convert_stereo_to_mono_audio, FullParams, SamplingStrategy,
@@ -134,6 +149,7 @@ impl Transcriber {
                         &[("backend", backend_type), ("model_path", model_path_str)],
                     );
 
+                    set_active_backend(if cpu_profile { "cpu" } else { "metal" });
                     return Ok(Self {
                         context: ctx,
                         cpu_profile,
@@ -179,6 +195,7 @@ impl Transcriber {
             format!("Failed to load model: {}", e)
         })?;
 
+        set_active_backend("cpu");
         let backend_type = "CPU";
 
         let cpu_time = cpu_start.elapsed().as_millis();

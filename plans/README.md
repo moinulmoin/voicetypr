@@ -39,6 +39,7 @@ Verification commands used across all plans: `pnpm typecheck`, `pnpm lint`,
 | 027  | Formatting & recording-pill UI/UX pass (naming, guidance, pill state legibility, app-category UI) | P2 | M | 016, 017 | TODO — captured 2026-06-19; backlog for post-2.0.0-smoke UAUX phase (notes only, not yet claimed) |
 | 028  | Transcription latency + streaming ("fast af" dictation) — investigation + phased design | P2 | XL | 015/020 smoke | TODO — drafted 2026-06-20; design/index only, not claimed. Phase 0 (insert-path plumbing tail + ffmpeg normalize) is S/LOW-risk and shippable alone; Phases 1–5 (decode-ahead, Parakeet/Whisper/cloud streaming, partial UX) graduate to 029+ |
 | 031  | GlitchTip observability — errors, symbols, curated logs, sampled traces | P0 | M | — | IN PROGRESS — claimed Main 2026-07-14; user approved stages 1–4 for next Beta |
+| 032  | Product analytics + automatic formatting corrections | P1 | XL | 031 core | TODO — backend approved 2026-07-16: PostHog Cloud EU + first-party Cloudflare Worker/R2; wait for unfinished 031 source changes |
 | 034  | Compact report problem page | P1 | S | 033 | DONE — reviewer pass; contact fields + system configuration preview; local macOS UI smoke and frontend checks passed 2026-07-23 |
 | 040  | Punctuation consistency + AI-formatting decision diagnostics | P1 | S | 027 | DONE — reviewer pass; focused checks + local UI smoke passed 2026-07-24 |
 | 041  | Paid-license validation resilience | P0 | M | — | DONE — reviewer PASS; focused/full gates + local Account UI smoke passed 2026-07-24 |
@@ -47,6 +48,7 @@ Verification commands used across all plans: `pnpm typecheck`, `pnpm lint`,
 | 044  | Agent-CLI Polish hardening + model selection | P1 | L | 030 | DONE (code) — NEEDS-SMOKE; automated gates + adversarial review passed 2026-08-06 |
 | 045  | Privacy-safe PostHog product analytics | P1 | L | 031 | DONE (code) — NEEDS-SMOKE 045-S1..S6; full gate, release compile, local dev UI smoke, and adversarial reviews passed 2026-08-06 |
 | 046  | Polish workflow alignment — natural punctuation, Saved Text, app-first mode resolution | P1 | S | 016, 027, 040 | DONE (code) — NEEDS-SMOKE 046-S1..S6; full gate and local native/browser UI smokes passed 2026-08-09 |
+| 047  | Silent failures — Soniox storage lifecycle, alertable failure events, report diagnostics | P0 | L | 031 (pivot), 019 seam | DONE (code) — NEEDS-SMOKE 047-S1..S5 (branch fix/047-silent-failures); auto-delete on all exits + storage-limit self-heal, LimitExceeded mapping + cleanup UI, telemetry funnel/traces removed in favor of failure events (031 pivot, PostHog journeys preserved), specs swallow surfaced, DEBUG ring attached to reports, dead deps removed (env_logger + 5 npm) |
 
 ## Code-done, awaiting batched manual smoke (`plans/SMOKE.md`)
 
@@ -131,6 +133,11 @@ Status values: TODO | IN PROGRESS — claimed <by> <date> | DONE | NEEDS-SMOKE
     language normalization broader than provider contracts.
   - Merge order: reliability-fixed 019 lands first, then 017/018 adapt around
     the established `stt_*` namespace.
+- **032 after 031 core (hard)**: 032 splits the existing GlitchTip consent keys,
+  changes release-client initialization, and reuses the transcription telemetry
+  boundaries introduced by 031. Do not execute it concurrently with unfinished
+  031 source changes. Native symbolication may remain pending because 032 does
+  not depend on resolved GlitchTip frames.
 
 ## Execution review notes
 

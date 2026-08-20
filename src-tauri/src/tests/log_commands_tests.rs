@@ -288,6 +288,7 @@ mod tests {
             redacted_content: "[REDACTED] log content".to_string(),
             truncated: true,
             status_note: String::new(),
+            debug_ring: String::new(),
         };
 
         let json = serde_json::to_string(&attachment).unwrap();
@@ -305,6 +306,7 @@ mod tests {
             redacted_content: String::new(),
             truncated: false,
             status_note: "No log file found.".to_string(),
+            debug_ring: String::new(),
         };
 
         let json = serde_json::to_string(&attachment).unwrap();

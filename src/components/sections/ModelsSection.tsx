@@ -1,4 +1,5 @@
 import { ApiKeyModal } from "@/components/ApiKeyModal";
+import { SonioxStorageCard } from "@/components/SonioxStorageCard";
 import { LanguageSelection } from "@/components/LanguageSelection";
 import { ModelCard } from "@/components/ModelCard";
 import {
@@ -775,6 +776,9 @@ export function ModelsSection({
           <div className="mt-4 grid gap-3">
             {readyCloudModels.map(([name, model]) => renderCloudCard([name, model]))}
           </div>
+          {readyCloudModels.some(([name]) => name === "soniox") && (
+            <SonioxStorageCard />
+          )}
         </SettingsCard>
       )}
 

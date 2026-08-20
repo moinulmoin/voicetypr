@@ -16,6 +16,9 @@ pub(crate) enum SttError {
     Auth,
     ModelUnavailable,
     RateLimited,
+    /// Provider-side storage/quota wall (e.g. Soniox `limit_exceeded`):
+    /// permanent until stored records are deleted — never a retry candidate.
+    LimitExceeded,
     Timeout,
     Network,
     Server,
@@ -33,6 +36,10 @@ impl SttError {
             Self::RateLimited => {
                 format!("{} rate limit reached. Try again shortly.", provider_name)
             }
+            Self::LimitExceeded => format!(
+                "{provider} storage quota exceeded — delete stored files/transcriptions and retry",
+                provider = provider_name
+            ),
             Self::Timeout => format!("{} request timed out", provider_name),
             Self::Network => format!("Network error reaching {}", provider_name),
             Self::Server => format!("{} service error. Try again shortly.", provider_name),
@@ -171,9 +178,28 @@ where
 
 pub(super) async fn log_http_body(resp: reqwest::Response, label: &str) -> SttError {
     let status = resp.status();
-    let err = classify_status(status);
+    let mut err = classify_status(status);
     // Body holds err_msg + a request id, never the key — safe to log, needed to diagnose.
     let body = resp.text().await.unwrap_or_default();
+    // Soniox quota walls (stored files / stored transcriptions) surface as
+    // HTTP 429 with `error_type: "limit_exceeded"`. Those are permanent
+    // until records are deleted, so they must not be retried or shown as a
+    // transient rate limit (plan 044). The top-level snake_case
+    // `error_type` field is Soniox's catalog shape; other providers' 429s
+    // keep the transient `RateLimited` classification.
+    if matches!(err, SttError::RateLimited)
+        && serde_json::from_str::<serde_json::Value>(&body)
+            .ok()
+            .and_then(|v| {
+                v.get("error_type")
+                    .and_then(|t| t.as_str())
+                    .map(str::to_owned)
+            })
+            .as_deref()
+            == Some("limit_exceeded")
+    {
+        err = SttError::LimitExceeded;
+    }
     let snippet: String = body.chars().take(500).collect();
     if snippet.trim().is_empty() {
         log::warn!("{label}: HTTP {status} (empty response body)");

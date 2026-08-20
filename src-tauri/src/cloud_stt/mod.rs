@@ -14,6 +14,7 @@ mod deepgram;
 mod groq;
 mod openai;
 mod soniox;
+pub(crate) use soniox::{cleanup_stored, storage_counts, SonioxCleanupResult, SonioxStorageCounts};
 
 use crate::transcription::TranscriptionWord;
 use std::path::Path;

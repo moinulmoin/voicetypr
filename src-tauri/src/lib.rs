@@ -299,7 +299,9 @@ use commands::{
     reset::reset_app_data,
     settings::*,
     shortcuts::{get_shortcut_settings, list_shortcut_actions, update_shortcut_settings},
-    stt::{clear_stt_key_cache, validate_stt_key},
+    stt::{
+        cleanup_soniox_storage, clear_stt_key_cache, get_soniox_storage_counts, validate_stt_key,
+    },
     system_info::get_system_specs,
     text::*,
     updater::{check_for_app_update, install_app_update},
@@ -349,21 +351,32 @@ fn log_filter_predicate(metadata: &log::Metadata) -> bool {
 fn setup_logging() -> tauri_plugin_log::Builder {
     let today = Local::now().format("%Y-%m-%d").to_string();
 
+    // Release builds keep stdout + the FILE sink at Info (no DEBUG firehose
+    // on disk) while the global level stays Debug: the in-memory ring target
+    // captures DEBUG lines and every bug report attaches a redacted dump
+    // (plan 044). Debug builds log Debug everywhere as before.
+    let file_sink_max = if cfg!(debug_assertions) {
+        log::Level::Trace
+    } else {
+        log::Level::Info
+    };
+
     LogBuilder::default()
         .targets([
-            Target::new(TargetKind::Stdout).filter(log_filter_predicate),
+            Target::new(TargetKind::Stdout)
+                .filter(log_filter_predicate)
+                .filter(move |m| m.level() <= file_sink_max),
             Target::new(TargetKind::LogDir {
                 file_name: Some(format!("voicetypr-{}", today)),
             })
-            .filter(log_filter_predicate),
+            .filter(log_filter_predicate)
+            .filter(move |m| m.level() <= file_sink_max),
+            Target::new(TargetKind::Dispatch(crate::utils::ring_log::ring_dispatch()))
+                .filter(log_filter_predicate),
         ])
         .rotation_strategy(RotationStrategy::KeepAll)
         .max_file_size(10_000_000) // 10MB per file
-        .level(if cfg!(debug_assertions) {
-            log::LevelFilter::Debug
-        } else {
-            log::LevelFilter::Info
-        })
+        .level(log::LevelFilter::Debug)
 }
 
 type TrayBuilder = Arc<dyn Fn() -> Result<(), String> + Send + Sync>;
@@ -1634,6 +1647,8 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             keyring_has,
             validate_stt_key,
             clear_stt_key_cache,
+            get_soniox_storage_counts,
+            cleanup_soniox_storage,
             get_latest_log_for_bug_report,
             get_log_directory,
             open_logs_folder,

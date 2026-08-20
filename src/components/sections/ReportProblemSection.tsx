@@ -119,8 +119,9 @@ export function ReportProblemSection() {
 
   useEffect(() => {
     let cancelled = false;
-    void getSystemSpecs().then((specs) => {
-      if (!cancelled) setSystemSpecs(specs ?? null);
+    void getSystemSpecs().then((result) => {
+      if (cancelled) return;
+      setSystemSpecs('specs' in result ? result.specs : null);
     });
 
     return () => {
