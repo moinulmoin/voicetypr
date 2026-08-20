@@ -207,13 +207,11 @@ describe("report submission payloads", () => {
   });
 
   it("submits manual reports to the support endpoint", async () => {
-    global.fetch = vi
-      .fn()
-      .mockResolvedValue(
-        new Response(JSON.stringify({ success: true, message: "Report submitted" }), {
-          status: 200,
-        }),
-      );
+    global.fetch = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ success: true, message: "Report submitted" }), {
+        status: 200,
+      }),
+    );
 
     await expect(submitManualReport(baseReport)).resolves.toEqual({
       success: true,
@@ -232,13 +230,11 @@ describe("report submission payloads", () => {
   });
 
   it("submits crash reports to the support endpoint", async () => {
-    global.fetch = vi
-      .fn()
-      .mockResolvedValue(
-        new Response(JSON.stringify({ success: true, message: "Crash report submitted" }), {
-          status: 200,
-        }),
-      );
+    global.fetch = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ success: true, message: "Crash report submitted" }), {
+        status: 200,
+      }),
+    );
 
     await expect(submitCrashReport(baseCrashReport)).resolves.toEqual({
       success: true,
@@ -280,13 +276,11 @@ describe("report submission payloads", () => {
   });
 
   it("honors 2xx API envelopes that report failure", async () => {
-    global.fetch = vi
-      .fn()
-      .mockResolvedValue(
-        new Response(JSON.stringify({ success: false, message: "Webhook misconfigured." }), {
-          status: 200,
-        }),
-      );
+    global.fetch = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ success: false, message: "Webhook misconfigured." }), {
+        status: 200,
+      }),
+    );
 
     await expect(submitManualReport(baseReport)).resolves.toEqual({
       success: false,

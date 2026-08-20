@@ -193,7 +193,10 @@ export function LicenseProvider({ children }: { children: ReactNode }) {
   // Check license status on mount
   useEffect(() => {
     log.debug("LicenseProvider mounted, checking status...");
-    checkStatus();
+    void (async () => {
+      await Promise.resolve();
+      await checkStatus();
+    })();
   }, [checkStatus]);
 
   const value = useMemo<LicenseContextValue>(

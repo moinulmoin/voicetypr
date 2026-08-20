@@ -92,7 +92,7 @@ export function useCloudProviders({
         toast.error(`Failed to disconnect ${provider.providerName}: ${message}`);
       }
     },
-    [refreshModels, settings?.current_model, updateSettings],
+    [refreshModels, settings, updateSettings],
   );
 
   const handleCloudModelChange = useCallback(

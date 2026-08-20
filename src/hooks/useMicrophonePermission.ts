@@ -44,7 +44,10 @@ export function useMicrophonePermission(options?: MicrophonePermissionOptions) {
   // Optionally check permission on mount
   useEffect(() => {
     if (!checkOnMount) return;
-    checkPermission();
+    void (async () => {
+      await Promise.resolve();
+      await checkPermission();
+    })();
   }, [checkPermission, checkOnMount]);
 
   // Listen for permission changes

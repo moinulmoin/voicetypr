@@ -96,7 +96,10 @@ export function SettingsProvider({ children }: { children: ReactNode }) {
 
   // Load settings on mount
   useEffect(() => {
-    loadSettings();
+    void (async () => {
+      await Promise.resolve();
+      await loadSettings();
+    })();
   }, [loadSettings]);
 
   // Listen for settings changes from other sources (e.g., tray menu or backend auto-selection)

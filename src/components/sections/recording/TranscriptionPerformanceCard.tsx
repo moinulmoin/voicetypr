@@ -47,7 +47,10 @@ export function TranscriptionPerformanceCard() {
   }, []);
 
   useEffect(() => {
-    void loadAccelerationStatus();
+    const timeoutId = window.setTimeout(() => {
+      void loadAccelerationStatus();
+    }, 0);
+    return () => window.clearTimeout(timeoutId);
   }, [loadAccelerationStatus]);
 
   if (!settings || !isWindows) return null;

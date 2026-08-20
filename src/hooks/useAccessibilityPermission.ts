@@ -52,7 +52,10 @@ export function useAccessibilityPermission(options?: AccessibilityPermissionOpti
   // Optionally check permission on mount
   useEffect(() => {
     if (!checkOnMount) return;
-    checkPermission();
+    void (async () => {
+      await Promise.resolve();
+      await checkPermission();
+    })();
   }, [checkPermission, checkOnMount]);
 
   // Poll for permission changes when permission is not granted

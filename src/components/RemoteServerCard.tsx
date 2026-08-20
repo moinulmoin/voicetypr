@@ -139,6 +139,19 @@ function RemoteTranscriptionModelControl({
   const [updating, setUpdating] = useState(false);
   const [fetchError, setFetchError] = useState<string | null>(null);
 
+  // Clear remote control state when the selected server becomes unavailable.
+  const [previousServer, setPreviousServer] = useState({
+    id: server.id,
+    status: server.status,
+  });
+  if (previousServer.id !== server.id || previousServer.status !== server.status) {
+    setPreviousServer({ id: server.id, status: server.status });
+    if (server.status !== "Online") {
+      setControl(null);
+      setFetchError(null);
+    }
+  }
+
   const loadControl = useCallback(async () => {
     setLoading(true);
     setFetchError(null);
@@ -163,13 +176,12 @@ function RemoteTranscriptionModelControl({
   }, [server.id]);
 
   useEffect(() => {
-    if (server.status !== "Online") {
-      setControl(null);
-      setFetchError(null);
-      return;
-    }
+    if (server.status !== "Online") return;
 
-    void loadControl();
+    const timeoutId = window.setTimeout(() => {
+      void loadControl();
+    }, 0);
+    return () => window.clearTimeout(timeoutId);
   }, [server.id, server.status, loadControl]);
 
   const selectedValue = useMemo(() => {

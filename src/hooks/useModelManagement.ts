@@ -611,7 +611,10 @@ export function useModelManagement(options: UseModelManagementOptions = {}) {
 
   // Load models on mount
   useEffect(() => {
-    loadModels();
+    void (async () => {
+      await Promise.resolve();
+      await loadModels();
+    })();
   }, [loadModels]);
 
   // Derive model order from sorted models

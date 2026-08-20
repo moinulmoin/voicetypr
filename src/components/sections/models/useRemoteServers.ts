@@ -129,11 +129,14 @@ export function useRemoteServers(): RemoteServersManager {
   }, []);
 
   useEffect(() => {
-    // On mount: fetch list quickly, then refresh status in background
-    fetchRemoteServers();
-    fetchActiveRemoteServer();
-    // Trigger status refresh after initial list load
-    discoverRemoteServers();
+    // On mount: fetch list quickly, then refresh status in background.
+    const timeoutId = window.setTimeout(() => {
+      void fetchRemoteServers();
+      void fetchActiveRemoteServer();
+      void discoverRemoteServers();
+    }, 0);
+
+    return () => window.clearTimeout(timeoutId);
   }, [fetchRemoteServers, fetchActiveRemoteServer, discoverRemoteServers]);
 
   // Note: Status updates are handled via the refreshRemoteServers function

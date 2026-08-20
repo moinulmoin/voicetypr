@@ -27,17 +27,6 @@ export function ShareStatsModal({ open, onOpenChange, stats }: ShareStatsModalPr
   const [imageDataUrl, setImageDataUrl] = useState("");
   const [isLoading, setIsLoading] = useState(true);
   const [isCopying, setIsCopying] = useState(false);
-
-  // Reset transient flags whenever the modal closes — adjusted during render.
-  const [wasOpen, setWasOpen] = useState(open);
-  if (wasOpen !== open) {
-    setWasOpen(open);
-    if (!open) {
-      setIsLoading(true);
-      setCopied(false);
-    }
-  }
-
   // Exactly the fields the card renderer consumes; identity changes only when
   // one of them does, so the draw effect doesn't redraw on unrelated churn.
   const cardStats = useMemo(
@@ -48,12 +37,31 @@ export function ShareStatsModal({ open, onOpenChange, stats }: ShareStatsModalPr
     }),
     [stats.totalTranscriptions, stats.totalWords, stats.timeSavedDisplay],
   );
-  useEffect(() => {
-    if (!open) return;
 
-    setImageDataUrl("");
-    setIsLoading(true);
-    if (!canvas) return;
+  // Reset transient draw state when the inputs change — adjusted during render.
+  const [previousDrawInputs, setPreviousDrawInputs] = useState({
+    canvas,
+    open,
+    cardStats,
+  });
+  if (
+    previousDrawInputs.canvas !== canvas ||
+    previousDrawInputs.open !== open ||
+    previousDrawInputs.cardStats !== cardStats
+  ) {
+    const wasOpen = previousDrawInputs.open;
+    setPreviousDrawInputs({ canvas, open, cardStats });
+    if (open) {
+      setImageDataUrl("");
+      setIsLoading(true);
+    } else if (wasOpen) {
+      setIsLoading(true);
+      setCopied(false);
+    }
+  }
+
+  useEffect(() => {
+    if (!open || !canvas) return;
 
     let cancelled = false;
 

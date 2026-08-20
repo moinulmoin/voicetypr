@@ -158,7 +158,7 @@ export function usePolishSectionSettings({
         await persistEnhancementOptionsRef.current({ preset: nextPreset });
       }
     },
-    [settings?.final_text_language, enhancementOptions.preset],
+    [settings, enhancementOptions.preset],
   );
 
   const handleActiveProviderCleared = useCallback(async () => {

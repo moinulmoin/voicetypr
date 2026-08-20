@@ -162,6 +162,7 @@ function deriveAvailabilityState(
 
 export function useModelAvailability() {
   const { settings } = useSettings();
+  const selectedModel = settings?.current_model;
   const [state, setState] = useState<ModelAvailabilityState>(DEFAULT_STATE);
   const refreshGenerationRef = useRef(0);
   const latestAvailabilityRef = useRef<DerivedAvailabilityState>({
@@ -220,10 +221,7 @@ export function useModelAvailability() {
       }
 
       const availability = availabilityResult ?? FALLBACK_AVAILABILITY;
-      const localSelectedModelAvailable = getLocalSelectedModelAvailability(
-        status,
-        settings?.current_model,
-      );
+      const localSelectedModelAvailable = getLocalSelectedModelAvailability(status, selectedModel);
       return applyCanonicalAvailability(availability, localSelectedModelAvailable);
     } catch (error) {
       log.error("Failed to check model availability:", error);
@@ -252,7 +250,7 @@ export function useModelAvailability() {
       }));
       return unresolved;
     }
-  }, [applyCanonicalAvailability, settings?.current_model]);
+  }, [applyCanonicalAvailability, selectedModel]);
 
   useEffect(() => {
     const timeoutId = window.setTimeout(() => {

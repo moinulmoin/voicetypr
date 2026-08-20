@@ -74,7 +74,7 @@ export function useOnboardingDesktop({
   const [sourceType, setSourceType] = useState<SourceType>(() =>
     isCloudEngine(settings?.current_model_engine ?? "") ? "cloud" : "local",
   );
-  const [hotkey, setHotkey] = useState(settings?.hotkey || "");
+  const [hotkey, setHotkey] = useState(() => settings?.hotkey || "");
   const [isEditingHotkey, setIsEditingHotkey] = useState(false);
   const [capturedBareModifier, setCapturedBareModifier] = useState<BareModifierSpec | null>(null);
   const [isRequestingPermission, setIsRequestingPermission] = useState<string | null>(null);
@@ -92,8 +92,20 @@ export function useOnboardingDesktop({
   const [holdToTalk, setHoldToTalk] = useState(false);
   const [cloudModelSetup, setCloudModelSetup] = useState<string | null>(null);
   const [isSavingCloudKey, setIsSavingCloudKey] = useState(false);
-  const hotkeyHydrated = useRef(false);
+  const [hotkeyHydrated, setHotkeyHydrated] = useState(() => Boolean(settings?.hotkey));
+  const [previousSettings, setPreviousSettings] = useState(settings);
   const sourceChosenByUser = useRef(false);
+
+  // Mirror a hotkey that arrives with settings during render rather than
+  // synchronously updating state from the settings effect below.
+  if (settings !== previousSettings) {
+    setPreviousSettings(settings);
+    if (settings?.hotkey && !hotkeyHydrated) {
+      setHotkey(settings.hotkey);
+      setCapturedBareModifier(null);
+      setHotkeyHydrated(true);
+    }
+  }
 
   const permissions = {
     microphone: {
@@ -225,7 +237,10 @@ export function useOnboardingDesktop({
 
   useEffect(() => {
     if (currentStep !== "readiness" || sourceType !== "remote") return;
-    void loadRemoteServers();
+    void (async () => {
+      await Promise.resolve();
+      await loadRemoteServers();
+    })();
   }, [currentStep, sourceType, loadRemoteServers]);
 
   useEffect(() => {
@@ -248,14 +263,7 @@ export function useOnboardingDesktop({
   }, []);
 
   useEffect(() => {
-    if (!settings || hotkeyHydrated.current) return;
-    if (settings.hotkey) {
-      setHotkey(settings.hotkey);
-      setCapturedBareModifier(null);
-      hotkeyHydrated.current = true;
-      return;
-    }
-
+    if (!settings || hotkeyHydrated) return;
     let cancelled = false;
     void invoke<ShortcutSettings>("get_shortcut_settings")
       .then((shortcutSettings) => {
@@ -268,18 +276,18 @@ export function useOnboardingDesktop({
         } else {
           setHotkey("Alt+Space");
         }
-        hotkeyHydrated.current = true;
+        setHotkeyHydrated(true);
       })
       .catch((error) => {
         if (cancelled) return;
         log.error("[OnboardingDesktop] Failed to restore configured hotkey:", error);
         setHotkey("Alt+Space");
-        hotkeyHydrated.current = true;
+        setHotkeyHydrated(true);
       });
     return () => {
       cancelled = true;
     };
-  }, [settings]);
+  }, [settings, hotkeyHydrated]);
 
   const confirmSource = (nextSourceType: SourceType) => {
     sourceChosenByUser.current = true;
