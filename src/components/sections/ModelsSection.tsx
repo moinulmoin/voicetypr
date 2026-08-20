@@ -122,6 +122,24 @@ export function ModelsSection({
   const [isDiscoveringServers, setIsDiscoveringServers] = useState(false);
   const [sourceFilter, setSourceFilter] = useState<"all" | "local" | "cloud" | "remote">("all");
 
+  // Plan 044: when a Soniox storage-limit escalation lands the dashboard
+  // here, the cloud cards (and the Soniox stored-files cleanup card) must be
+  // visible even if the user had filtered to local/remote sources.
+  useEffect(() => {
+    let disposed = false;
+    let unlisten: (() => void) | undefined;
+    void listen("soniox-storage-limit", () => {
+      if (!disposed) setSourceFilter("all");
+    }).then((fn) => {
+      if (disposed) fn();
+      else unlisten = fn;
+    });
+    return () => {
+      disposed = true;
+      unlisten?.();
+    };
+  }, []);
+
   const { availableToUse, availableToSetup } = useMemo(() => {
     const useList: [string, ModelInfo][] = [];
     const setupList: [string, ModelInfo][] = [];

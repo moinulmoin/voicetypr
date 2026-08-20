@@ -2,12 +2,17 @@ use std::path::Path;
 
 /// Whisper acceleration actually in use (plan 044 failure-event tag):
 /// "cpu" | "metal" | "sidecar". Written at backend-decision points and by
-/// the acceleration wrapper when the sidecar handles (or fails) a request;
-/// read when a failure event is emitted.
+/// the acceleration wrapper; read when a failure event is emitted. Cleared
+/// at `Transcriber::new` entry so a failed init after a cache eviction does
+/// not report the previous model's backend.
 static ACTIVE_BACKEND: parking_lot::RwLock<Option<&'static str>> = parking_lot::RwLock::new(None);
 
 pub(crate) fn set_active_backend(backend: &'static str) {
     *ACTIVE_BACKEND.write() = Some(backend);
+}
+
+pub(crate) fn clear_active_backend() {
+    *ACTIVE_BACKEND.write() = None;
 }
 
 pub(crate) fn active_backend() -> Option<&'static str> {
@@ -40,6 +45,7 @@ pub struct WhisperTranscriptionOutput {
 
 impl Transcriber {
     pub fn new(model_path: &Path) -> Result<Self, String> {
+        clear_active_backend();
         let init_start = Instant::now();
         let model_path_str = model_path
             .to_str()

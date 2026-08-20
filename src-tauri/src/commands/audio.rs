@@ -5654,7 +5654,6 @@ pub async fn stop_recording(
                 let should_emit_enhancing_for_task = should_emit_enhancing;
                 let recording_file_for_task = recording_file.clone();
 
-
                 (async move {
                     let formatting_started = Instant::now();
 
@@ -7370,7 +7369,6 @@ pub async fn cancel_recording(app: AppHandle) -> Result<(), String> {
             }
         }
     }
-
 
     // Resume system media if we paused it
     MEDIA_CONTROLLER.resume_if_we_paused();

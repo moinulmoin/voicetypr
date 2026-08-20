@@ -33,15 +33,8 @@ pub async fn clear_old_logs(app: tauri::AppHandle, days_to_keep: u32) -> Result<
                 .unwrap_or("")
                 .to_string();
 
-            let is_voicetypr_log = file_name.starts_with("voicetypr-")
-                && (file_name.ends_with(".log") || file_name.contains(".log."));
-            if is_voicetypr_log {
-                let date_str = file_name
-                    .strip_prefix("voicetypr-")
-                    .and_then(|s| s.strip_suffix(".log").or_else(|| s.split(".log.").next()))
-                    .unwrap_or("");
-
-                if let Ok(file_date) = NaiveDate::parse_from_str(date_str, "%Y-%m-%d") {
+            if let Some(date_str) = voicetypr_log_date(&file_name) {
+                if let Ok(file_date) = NaiveDate::parse_from_str(&date_str, "%Y-%m-%d") {
                     if file_date < cutoff_date {
                         fs::remove_file(&path)
                             .map_err(|e| format!("Failed to delete log file: {}", e))?;
@@ -54,6 +47,23 @@ pub async fn clear_old_logs(app: tauri::AppHandle, days_to_keep: u32) -> Result<
     }
 
     Ok(deleted_count)
+}
+
+/// Strict Voicetypr log-name shape: `voicetypr-YYYY-MM-DD.log` or a rotation
+/// `voicetypr-YYYY-MM-DD.log.N` with a NUMERIC suffix only. Anything else
+/// sharing the prefix (e.g. `voicetypr-2026-01-01.log.1.exe`) is NOT a log
+/// and must never be deleted or attached to a report. Returns the date
+/// segment.
+pub(crate) fn voicetypr_log_date(file_name: &str) -> Option<String> {
+    let stem = file_name.strip_prefix("voicetypr-")?;
+    if let Some(date) = stem.strip_suffix(".log") {
+        return Some(date.to_string());
+    }
+    let (date, rotation) = stem.split_once(".log.")?;
+    if rotation.is_empty() || !rotation.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    Some(date.to_string())
 }
 
 #[tauri::command]
@@ -146,9 +156,7 @@ pub fn find_newest_log(log_dir: &std::path::Path) -> Option<std::path::PathBuf> 
         let path = entry.path();
         let file_name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
 
-        if file_name.starts_with("voicetypr-")
-            && (file_name.ends_with(".log") || file_name.contains(".log."))
-        {
+        if voicetypr_log_date(file_name).is_some() {
             if let Ok(meta) = entry.metadata() {
                 if let Ok(modified) = meta.modified() {
                     match &newest {
@@ -214,13 +222,14 @@ pub fn redact_log_content(content: &str) -> String {
     static EMAIL_RE: OnceLock<regex::Regex> = OnceLock::new();
     static HOME_RE: OnceLock<regex::Regex> = OnceLock::new();
     static ABSOLUTE_PATH_RE: OnceLock<regex::Regex> = OnceLock::new();
+    static UNC_PATH_RE: OnceLock<regex::Regex> = OnceLock::new();
 
     let mut result = content.to_string();
 
     // Key/value secret patterns. Keep the field name, redact the value.
     let wrapped_secret_re = WRAPPED_SECRET_RE.get_or_init(|| {
         regex::Regex::new(
-            r#"(?i)([\"']?\b(?:api[_-]?key|apikey|secret[_-]?key|access[_-]?token|license[_-]?key)\b[\"']?\s*[:=]\s*(?:Some\(|String\()?['\"])[^'\"]+(['\"]\)?)"#,
+            r#"(?i)([\"']?\b(?:api[_-]?key|apikey|secret[_-]?key|access[_-]?token|license[_-]?key|password|passwd)\b[\"']?\s*[:=]\s*(?:Some\(|String\()?['\"])[^'\"]+(['\"]\)?)"#,
         )
         .unwrap()
     });
@@ -230,7 +239,7 @@ pub fn redact_log_content(content: &str) -> String {
 
     let unquoted_secret_re = UNQUOTED_SECRET_RE.get_or_init(|| {
         regex::Regex::new(
-            r#"(?i)(\b(?:api[_-]?key|apikey|secret[_-]?key|access[_-]?token|license[_-]?key)\b\s*[:=]\s*)[^\s,;}]+"#,
+            r#"(?i)(\b(?:api[_-]?key|apikey|secret[_-]?key|access[_-]?token|license[_-]?key|password|passwd)\b\s*[:=]\s*)[^\s,;}]+"#,
         )
         .unwrap()
     });
@@ -285,6 +294,15 @@ pub fn redact_log_content(content: &str) -> String {
     });
     result = absolute_path_re
         .replace_all(&result, "$1[PATH_REDACTED]")
+        .to_string();
+
+    // UNC paths (\\server\share\...): the drive-letter and unix roots above
+    // do not match these; user-selected save targets can be on network shares.
+    let unc_path_re = UNC_PATH_RE.get_or_init(|| {
+        regex::Regex::new(r#"\\\\[^\\/\"\s]+\\[^\\/\r\n\"',)]+(?:\\[^\r\n\"',)]+)*"#).unwrap()
+    });
+    result = unc_path_re
+        .replace_all(&result, "[PATH_REDACTED]")
         .to_string();
 
     result

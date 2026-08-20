@@ -196,7 +196,11 @@ async fn list_record_ids(
 /// RPM is real but its numeric limit is undocumented — pace every request.
 enum DeleteOutcome {
     Deleted,
+    /// 409: record still processing — leave it for a later pass.
     SkippedProcessing,
+    /// 404: already gone (e.g. cascaded by a transcription delete, or raced
+    /// with another cleanup) — the goal state, not an error.
+    AlreadyGone,
 }
 
 async fn delete_one(
@@ -217,6 +221,9 @@ async fn delete_one(
         }
         if status == reqwest::StatusCode::CONFLICT {
             return Ok(DeleteOutcome::SkippedProcessing);
+        }
+        if status == reqwest::StatusCode::NOT_FOUND {
+            return Ok(DeleteOutcome::AlreadyGone);
         }
         if status == reqwest::StatusCode::TOO_MANY_REQUESTS && attempt == 0 {
             tokio::time::sleep(std::time::Duration::from_secs(5)).await;
@@ -246,16 +253,7 @@ pub(crate) async fn cleanup_stored(app: &AppHandle) -> Result<SonioxCleanupResul
 
     let key = stored_key(app)?;
     let client = common::http_client();
-    let mut result = SonioxCleanupResult::default();
 
-    let transcription_ids = list_record_ids(&client, &key, "transcriptions")
-        .await
-        .map_err(|e| e.message("Soniox"))?;
-    let file_ids = list_record_ids(&client, &key, "files")
-        .await
-        .map_err(|e| e.message("Soniox"))?;
-    let total_ops = (transcription_ids.len() + file_ids.len()) as u64;
-    let mut done_ops: u64 = 0;
     let report = |done: u64, total: u64| {
         let _ = app.emit(
             "soniox-cleanup-progress",
@@ -263,24 +261,65 @@ pub(crate) async fn cleanup_stored(app: &AppHandle) -> Result<SonioxCleanupResul
         );
     };
 
+    drain_stored_records(&client, &key, Some(&report)).await
+}
+
+/// Deletes every stored transcription record (each cascading to its file),
+/// then lists files AGAIN and deletes only the true orphans — listing before
+/// the transcription pass would issue guaranteed-404 deletes for every
+/// cascaded file, wasting the rate-limited file-management API and reporting
+/// phantom errors. Pacing: Soniox's file-management RPM is real but its
+/// numeric limit is undocumented. Shared by the settings clean-up command
+/// (progress events) and the background auto-clean (counter only).
+async fn drain_stored_records(
+    client: &reqwest::Client,
+    key: &str,
+    report: Option<&(dyn Fn(u64, u64) + Send + Sync)>,
+) -> Result<SonioxCleanupResult, String> {
+    let mut result = SonioxCleanupResult::default();
+
+    let transcription_ids = list_record_ids(client, key, "transcriptions")
+        .await
+        .map_err(|e| e.message("Soniox"))?;
+    // Placeholder until the post-transcription listing replaces it.
+    let mut total_ops = transcription_ids.len() as u64;
+    let mut done_ops: u64 = 0;
+
     for id in &transcription_ids {
         let url = format!("{}/transcriptions/{id}", base_url());
-        match delete_one(&client, &key, &url).await {
-            Ok(DeleteOutcome::Deleted) => result.deleted_transcriptions += 1,
+        match delete_one(client, key, &url).await {
+            Ok(DeleteOutcome::Deleted) => {
+                result.deleted_transcriptions += 1;
+                bump_auto_cleanup_progress();
+            }
             Ok(DeleteOutcome::SkippedProcessing) => result.skipped_processing += 1,
+            Ok(DeleteOutcome::AlreadyGone) => {}
             Err(e) => result.errors.push(format!("transcription {id}: {e}")),
         }
         done_ops += 1;
         if done_ops % 25 == 0 {
-            report(done_ops, total_ops);
+            if let Some(report) = report {
+                report(done_ops, total_ops);
+            }
         }
         tokio::time::sleep(std::time::Duration::from_millis(25)).await;
     }
+
+    // Fresh listing AFTER the transcription deletes: cascaded files are
+    // already gone server-side, so only genuine orphans remain to delete.
+    let file_ids = list_record_ids(client, key, "files")
+        .await
+        .map_err(|e| e.message("Soniox"))?;
+    total_ops += file_ids.len() as u64;
     for id in &file_ids {
         let url = format!("{}/files/{id}", base_url());
-        match delete_one(&client, &key, &url).await {
-            Ok(DeleteOutcome::Deleted) => result.deleted_files += 1,
-            // Files have no processing state; count conflicts as errors.
+        match delete_one(client, key, &url).await {
+            Ok(DeleteOutcome::Deleted) => {
+                result.deleted_files += 1;
+                bump_auto_cleanup_progress();
+            }
+            Ok(DeleteOutcome::AlreadyGone) => {}
+            // Files have no processing state; a 409 here is unexpected.
             Ok(DeleteOutcome::SkippedProcessing) => {
                 result.errors.push(format!("file {id}: HTTP 409"))
             }
@@ -288,12 +327,89 @@ pub(crate) async fn cleanup_stored(app: &AppHandle) -> Result<SonioxCleanupResul
         }
         done_ops += 1;
         if done_ops % 25 == 0 {
-            report(done_ops, total_ops);
+            if let Some(report) = report {
+                report(done_ops, total_ops);
+            }
         }
         tokio::time::sleep(std::time::Duration::from_millis(25)).await;
     }
-    report(done_ops, total_ops);
+    if let Some(report) = report {
+        report(done_ops, total_ops);
+    }
     Ok(result)
+}
+
+// --- Storage-limit self-heal (plan 044) --------------------------------------
+//
+// When a dictation hits Soniox's storage wall, drain the stored records in
+// the background and retry once — for most users the cap is only reachable
+// via pre-044 backlog, so the first limit hit self-heals and the dictation
+// succeeds a few seconds later with no visible error. If the retry still
+// hits the wall, the flow returns LimitExceeded and the caller surfaces the
+// settings toast.
+
+static AUTO_CLEANUP_RUNNING: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+static AUTO_CLEANUP_DELETED: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+fn bump_auto_cleanup_progress() {
+    AUTO_CLEANUP_DELETED.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+}
+
+/// Starts the background drain unless one is already running. Each deletion
+/// immediately frees org capacity, so a blocked dictation only needs the
+/// FIRST deletion before retrying.
+fn spawn_auto_cleanup(client: reqwest::Client, key: String) {
+    use std::sync::atomic::Ordering;
+    if AUTO_CLEANUP_RUNNING.swap(true, Ordering::SeqCst) {
+        return;
+    }
+    tokio::spawn(async move {
+        log::info!("Soniox storage limit hit: background cleanup started");
+        match drain_stored_records(&client, &key, None).await {
+            Ok(totals) => log::info!(
+                "Soniox background cleanup finished: {} transcriptions + {} files deleted, {} skipped, {} errors",
+                totals.deleted_transcriptions,
+                totals.deleted_files,
+                totals.skipped_processing,
+                totals.errors.len()
+            ),
+            Err(e) => log::warn!("Soniox background cleanup failed: {e}"),
+        }
+        AUTO_CLEANUP_RUNNING.store(false, Ordering::SeqCst);
+    });
+}
+
+/// Waits (polled, bounded) until the auto-cleanup has freed at least one
+/// record since the wait started, or `budget` elapses. The retry attempt is
+/// the source of truth either way.
+async fn wait_for_cleanup_progress(budget: std::time::Duration) {
+    use std::sync::atomic::Ordering;
+    let start = std::time::Instant::now();
+    let baseline = AUTO_CLEANUP_DELETED.load(Ordering::SeqCst);
+    while start.elapsed() < budget {
+        if AUTO_CLEANUP_DELETED.load(Ordering::SeqCst) > baseline {
+            return;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+    }
+}
+
+/// Frontend escalation when the storage-limit self-heal did NOT succeed:
+/// same shape as the license-required flow — bring the dashboard to front
+/// and let the main window navigate itself to the Soniox stored-files card.
+/// No toast action needed: the user lands directly on the fix.
+async fn notify_storage_limit(app: &AppHandle) {
+    use tauri::Emitter;
+    let _ = crate::commands::window::focus_main_window(app.clone()).await;
+    let _ = app.emit(
+        "soniox-storage-limit",
+        serde_json::json!({
+            "title": "Soniox storage limit reached",
+            "message": "Automatic cleanup could not free enough space. Delete stored files here, then dictate again.",
+            "autoHealed": false,
+        }),
+    );
 }
 
 fn build_create_payload(
@@ -335,14 +451,70 @@ pub(super) async fn transcribe_typed(
     wav_path: &Path,
     language: Option<&str>,
 ) -> Result<String, common::SttError> {
-    use reqwest::multipart::{Form, Part};
     use tokio::fs;
 
     let wav_bytes = fs::read(wav_path)
         .await
         .map_err(|_| common::SttError::BadResponse)?;
-
     let client = common::http_client();
+    let soniox_context = load_soniox_context(app, language);
+
+    let result =
+        transcribe_typed_with_autoheal(&client, key, wav_path, wav_bytes, language, soniox_context)
+            .await;
+    if matches!(result, Err(common::SttError::LimitExceeded)) {
+        notify_storage_limit(app).await;
+    }
+    result
+}
+
+/// Upload → transcribe → delete-records with the plan-044 storage-limit
+/// self-heal: on `LimitExceeded`, a background cleanup drains stored records
+/// (each deletion immediately frees capacity); once the first record is gone
+/// the WHOLE flow restarts from upload — the just-uploaded file may itself
+/// have been deleted by the cleanup, so the create step must not be reused.
+/// One retry; a second limit wall is terminal.
+async fn transcribe_typed_with_autoheal(
+    client: &reqwest::Client,
+    key: &str,
+    wav_path: &Path,
+    wav_bytes: Vec<u8>,
+    language: Option<&str>,
+    soniox_context: Option<crate::writing::SonioxContext>,
+) -> Result<String, common::SttError> {
+    const LIMIT_ATTEMPTS: usize = 2;
+    for attempt in 1..=LIMIT_ATTEMPTS {
+        match attempt_typed_once(
+            client,
+            key,
+            wav_path,
+            &wav_bytes,
+            language,
+            soniox_context.clone(),
+        )
+        .await
+        {
+            Ok(text) => return Ok(text),
+            Err(e) if matches!(e, common::SttError::LimitExceeded) && attempt < LIMIT_ATTEMPTS => {
+                spawn_auto_cleanup(client.clone(), key.to_string());
+                wait_for_cleanup_progress(std::time::Duration::from_secs(8)).await;
+            }
+            Err(e) => return Err(e),
+        }
+    }
+    unreachable!("attempt loop always returns within LIMIT_ATTEMPTS")
+}
+
+/// One full attempt: upload + create/poll/extract + record cleanup.
+async fn attempt_typed_once(
+    client: &reqwest::Client,
+    key: &str,
+    wav_path: &Path,
+    wav_bytes: &[u8],
+    language: Option<&str>,
+    soniox_context: Option<crate::writing::SonioxContext>,
+) -> Result<String, common::SttError> {
+    use reqwest::multipart::{Form, Part};
 
     // 1) Upload file -> file_id
     let filename = wav_path
@@ -355,7 +527,7 @@ pub(super) async fn transcribe_typed(
         let client = client.clone();
         let filename = filename.clone();
         let upload_url = upload_url.clone();
-        let wav_bytes = wav_bytes.clone();
+        let wav_bytes = wav_bytes.to_vec();
         async move {
             let file_part = Part::bytes(wav_bytes)
                 .file_name(filename)
@@ -388,19 +560,13 @@ pub(super) async fn transcribe_typed(
         .ok_or(common::SttError::BadResponse)?
         .to_string();
 
-    let (transcription_id, result) = run_typed_transcription(
-        &client,
-        key,
-        &file_id,
-        language,
-        load_soniox_context(app, language),
-    )
-    .await;
+    let (transcription_id, result) =
+        run_typed_transcription(client, key, &file_id, language, soniox_context).await;
 
     // Soniox stores every uploaded file + transcription record against the
     // org's caps (1k files / 2k transcriptions). Delete-after-extract on ALL
     // exits — success included (plan 044).
-    cleanup_stored_records(&client, key, transcription_id.as_deref(), &file_id).await;
+    cleanup_stored_records(client, key, transcription_id.as_deref(), &file_id).await;
     result
 }
 
@@ -560,14 +726,72 @@ pub(super) async fn transcribe_typed_diarized(
     wav_path: &Path,
     language: Option<&str>,
 ) -> Result<super::CloudTranscript, common::SttError> {
-    use reqwest::multipart::{Form, Part};
     use tokio::fs;
 
     let wav_bytes = fs::read(wav_path)
         .await
         .map_err(|_| common::SttError::BadResponse)?;
-
     let client = common::http_client();
+    let soniox_context = load_soniox_context(app, language);
+
+    let result = transcribe_diarized_with_autoheal(
+        &client,
+        key,
+        wav_path,
+        wav_bytes,
+        language,
+        soniox_context,
+    )
+    .await;
+    if matches!(result, Err(common::SttError::LimitExceeded)) {
+        notify_storage_limit(app).await;
+    }
+    result
+}
+
+/// Diarized twin of [`transcribe_typed_with_autoheal`] — same storage-limit
+/// self-heal: background cleanup, one full restart from upload.
+async fn transcribe_diarized_with_autoheal(
+    client: &reqwest::Client,
+    key: &str,
+    wav_path: &Path,
+    wav_bytes: Vec<u8>,
+    language: Option<&str>,
+    soniox_context: Option<crate::writing::SonioxContext>,
+) -> Result<super::CloudTranscript, common::SttError> {
+    const LIMIT_ATTEMPTS: usize = 2;
+    for attempt in 1..=LIMIT_ATTEMPTS {
+        match attempt_diarized_once(
+            client,
+            key,
+            wav_path,
+            &wav_bytes,
+            language,
+            soniox_context.clone(),
+        )
+        .await
+        {
+            Ok(transcript) => return Ok(transcript),
+            Err(e) if matches!(e, common::SttError::LimitExceeded) && attempt < LIMIT_ATTEMPTS => {
+                spawn_auto_cleanup(client.clone(), key.to_string());
+                wait_for_cleanup_progress(std::time::Duration::from_secs(8)).await;
+            }
+            Err(e) => return Err(e),
+        }
+    }
+    unreachable!("attempt loop always returns within LIMIT_ATTEMPTS")
+}
+
+/// One full diarized attempt: upload + create/poll/extract + record cleanup.
+async fn attempt_diarized_once(
+    client: &reqwest::Client,
+    key: &str,
+    wav_path: &Path,
+    wav_bytes: &[u8],
+    language: Option<&str>,
+    soniox_context: Option<crate::writing::SonioxContext>,
+) -> Result<super::CloudTranscript, common::SttError> {
+    use reqwest::multipart::{Form, Part};
 
     // 1) Upload file -> file_id
     let filename = wav_path
@@ -580,7 +804,7 @@ pub(super) async fn transcribe_typed_diarized(
         let client = client.clone();
         let filename = filename.clone();
         let upload_url = upload_url.clone();
-        let wav_bytes = wav_bytes.clone();
+        let wav_bytes = wav_bytes.to_vec();
         async move {
             let file_part = Part::bytes(wav_bytes)
                 .file_name(filename)
@@ -612,16 +836,10 @@ pub(super) async fn transcribe_typed_diarized(
         .ok_or(common::SttError::BadResponse)?
         .to_string();
 
-    let (transcription_id, result) = run_diarized_transcription(
-        &client,
-        key,
-        &file_id,
-        language,
-        load_soniox_context(app, language),
-    )
-    .await;
+    let (transcription_id, result) =
+        run_diarized_transcription(client, key, &file_id, language, soniox_context).await;
 
-    cleanup_stored_records(&client, key, transcription_id.as_deref(), &file_id).await;
+    cleanup_stored_records(client, key, transcription_id.as_deref(), &file_id).await;
     result
 }
 
@@ -1056,6 +1274,133 @@ mod tests {
             assert!(tid.is_none());
 
             cleanup_stored_records(&client, "k", tid.as_deref(), "f1").await;
+            server.verify().await;
+        }
+
+        #[tokio::test]
+        async fn storage_limit_self_heals_via_background_cleanup_and_retry() {
+            let server = MockServer::start().await;
+            let _guard = BaseOverrideGuard::install(&server);
+            let client = common::http_client();
+
+            // Attempt 1 upload -> f1; attempt 2 (after auto-cleanup) -> f2:
+            // the retry must restart from upload because the background
+            // cleanup deletes the just-uploaded orphan file.
+            let uploads = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+            let uploads_for_mock = uploads.clone();
+            Mock::given(method("POST"))
+                .and(path("/v1/files"))
+                .respond_with(move |_req: &wiremock::Request| {
+                    let n = uploads_for_mock.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                    ResponseTemplate::new(201).set_body_json(if n == 0 {
+                        serde_json::json!({ "id": "f1" })
+                    } else {
+                        serde_json::json!({ "id": "f2" })
+                    })
+                })
+                .expect(2)
+                .mount(&server)
+                .await;
+            // Attempt 1 create hits the storage wall; attempt 2 succeeds.
+            let creates = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+            let creates_for_mock = creates.clone();
+            Mock::given(method("POST"))
+                .and(path("/v1/transcriptions"))
+                .respond_with(move |_req: &wiremock::Request| {
+                    let n = creates_for_mock.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                    if n == 0 {
+                        ResponseTemplate::new(429).set_body_json(limit_exceeded_body())
+                    } else {
+                        ResponseTemplate::new(201)
+                            .set_body_json(serde_json::json!({ "id": "t1", "status": "queued" }))
+                    }
+                })
+                .expect(2)
+                .mount(&server)
+                .await;
+            // Background auto-cleanup: one old transcription + the attempt-1
+            // orphan file (f-old listed alongside f1).
+            Mock::given(method("GET"))
+                .and(path("/v1/transcriptions"))
+                .and(wiremock::matchers::query_param_is_missing("cursor"))
+                .respond_with(
+                    ResponseTemplate::new(200).set_body_json(
+                        serde_json::json!({ "transcriptions": [ { "id": "t-old" } ] }),
+                    ),
+                )
+                .mount(&server)
+                .await;
+            Mock::given(method("DELETE"))
+                .and(path("/v1/transcriptions/t-old"))
+                .respond_with(ResponseTemplate::new(204))
+                .expect(1)
+                .mount(&server)
+                .await;
+            Mock::given(method("GET"))
+                .and(path("/v1/files"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(
+                    serde_json::json!({ "files": [ { "id": "f-old" }, { "id": "f1" } ] }),
+                ))
+                .mount(&server)
+                .await;
+            // f1 is deleted twice — by attempt 1's orphan cleanup and again
+            // by the background drain's file listing — both legitimate.
+            for (file, expected) in [("f-old", 1), ("f1", 2)] {
+                Mock::given(method("DELETE"))
+                    .and(path(format!("/v1/files/{file}")))
+                    .respond_with(ResponseTemplate::new(204))
+                    .expect(expected)
+                    .mount(&server)
+                    .await;
+            }
+            // Attempt 2 completes normally.
+            Mock::given(method("GET"))
+                .and(path("/v1/transcriptions/t1"))
+                .respond_with(
+                    ResponseTemplate::new(200)
+                        .set_body_json(serde_json::json!({ "status": "completed" })),
+                )
+                .mount(&server)
+                .await;
+            Mock::given(method("GET"))
+                .and(path("/v1/transcriptions/t1/transcript"))
+                .respond_with(
+                    ResponseTemplate::new(200)
+                        .set_body_json(serde_json::json!({ "text": "healed" })),
+                )
+                .mount(&server)
+                .await;
+
+            let dir = tempfile::tempdir().unwrap();
+            let wav = dir.path().join("audio.wav");
+            std::fs::write(&wav, b"RIFF....WAVEfmt ").unwrap();
+
+            let text = transcribe_typed_with_autoheal(
+                &client,
+                "k",
+                &wav,
+                b"RIFF....WAVEfmt ".to_vec(),
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+            assert_eq!(text, "healed");
+
+            // The background cleanup task runs concurrently; give it a
+            // moment to finish its deletions before verifying expectations.
+            for _ in 0..50 {
+                if server
+                    .received_requests()
+                    .await
+                    .unwrap()
+                    .iter()
+                    .any(|r| r.method.as_str() == "DELETE" && r.url.path() == "/v1/files/f1")
+                {
+                    break;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+            }
             server.verify().await;
         }
 

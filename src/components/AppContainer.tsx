@@ -234,6 +234,23 @@ export function AppContainer() {
           });
         });
 
+        await register<{ title?: string; message?: string; autoHealed?: boolean }>(
+          "soniox-storage-limit",
+          (data) => {
+            log.info("Soniox storage limit event received");
+            // Same escalation as license-required: the backend already
+            // focused the main window; land on the page with the Soniox
+            // stored-files card and explain inline.
+            setActiveSection("models");
+            toast.error(data.title || "Soniox storage limit reached", {
+              description:
+                data.message ||
+                "Automatic cleanup could not free enough space. Delete stored files and try again.",
+              duration: 8000,
+            });
+          },
+        );
+
         await register<ErrorEventPayload>("no-models-error", async (data) => {
           log.error("No models available:", data);
           setForceShowOnboarding(true);

@@ -28,8 +28,11 @@ export async function getSystemSpecs(): Promise<SystemSpecsResult> {
   try {
     return { specs: await invoke<SystemSpecs>('get_system_specs') };
   } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
+    const raw = error instanceof Error ? error.message : String(error);
     log.error('Failed to collect system specs:', error);
+    // Single-line, pipe-free so BOTH the report body table and the raw JSON
+    // payload carry a bounded diagnostic; the payload path has no sanitizer.
+    const message = raw.replace(/[|\r\n]+/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 300);
     return { error: message };
   }
 }
@@ -319,6 +322,7 @@ interface LatestLogPayload {
   content: string;
   truncated: boolean;
   statusNote: string;
+  debugRing: string;
 }
 
 export type BugReportPayload =
@@ -448,5 +452,7 @@ function buildLatestLogPayload(data: ManualReportData | CrashReportData): Latest
     content: data.logContent,
     truncated: data.logTruncated,
     statusNote: data.logStatusNote,
+    debugRing: data.debugRingContent,
   };
 }
+

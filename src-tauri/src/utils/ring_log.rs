@@ -61,14 +61,35 @@ impl DebugRing {
 static RING: LazyLock<DebugRing> = LazyLock::new(DebugRing::default);
 
 /// Fern sink: receives every formatted record that passes the global level
-/// filter. The fern formatter emits one line per record (trailing newline
-/// trimmed here); embedded newlines in a message stay on one ring line.
-struct RingWriter;
+/// filter. fern composes a record via `write!` and may deliver it in
+/// MULTIPLE `write()` fragments (message, then line separator), so partial
+/// writes accumulate in a line buffer and only complete lines enter the
+/// ring — otherwise a single record would be split into fabricated lines
+/// and redaction patterns could miss secrets split across fragments.
+struct RingWriter {
+    pending: Vec<u8>,
+}
+
+/// A pathological record with no newline must not grow `pending` unboundedly.
+const MAX_PENDING_BYTES: usize = 64 * 1024;
 
 impl Write for RingWriter {
     fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
-        let line = String::from_utf8_lossy(buf);
-        RING.push_line(line.trim_end_matches(['\r', '\n']));
+        self.pending.extend_from_slice(buf);
+        let mut consumed = 0usize;
+        while let Some(idx) = self.pending[consumed..].iter().position(|&b| b == b'\n') {
+            let end = consumed + idx;
+            let line = String::from_utf8_lossy(&self.pending[consumed..end]);
+            RING.push_line(line.trim_end_matches('\r'));
+            consumed = end + 1;
+        }
+        self.pending.drain(..consumed);
+        if self.pending.len() > MAX_PENDING_BYTES {
+            // Flush the oversized fragment as its own line to bound memory.
+            let line = String::from_utf8_lossy(&self.pending).into_owned();
+            RING.push_line(line.trim_end_matches(['\r', '\n']));
+            self.pending.clear();
+        }
         Ok(buf.len())
     }
 
@@ -80,8 +101,12 @@ impl Write for RingWriter {
 /// The dispatch handed to `tauri_plugin_log::TargetKind::Dispatch` — the
 /// only release-build sink that sees DEBUG records.
 pub fn ring_dispatch() -> fern::Dispatch {
-    fern::Dispatch::new().chain(Box::new(RingWriter) as Box<dyn Write + Send>)
+    fern::Dispatch::new().chain(Box::new(RingWriter {
+        pending: Vec::new(),
+    }) as Box<dyn Write + Send>)
 }
+
+/// Capped snapshot joined with newlines, ready for `redact_log_content`.
 pub fn snapshot_joined(max_bytes: usize) -> String {
     RING.snapshot_lines(max_bytes).join("\n")
 }
@@ -89,14 +114,6 @@ pub fn snapshot_joined(max_bytes: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    fn ring_with(lines: &[&str]) -> DebugRing {
-        let ring = DebugRing::default();
-        for line in lines {
-            ring.push_line(line);
-        }
-        ring
-    }
 
     #[test]
     fn ring_keeps_most_recent_lines_under_entry_cap() {
@@ -127,8 +144,29 @@ mod tests {
 
     #[test]
     fn snapshot_byte_cap_takes_most_recent_tail() {
-        let ring = ring_with(&["a", "b", "c", "d"]);
+        let ring = DebugRing::default();
+        for line in ["a", "b", "c", "d"] {
+            ring.push_line(line);
+        }
         let snapshot = ring.snapshot_lines(2);
         assert_eq!(snapshot, vec!["c", "d"], "oldest lines drop first");
+    }
+
+    #[test]
+    fn ring_writer_buffers_fragments_until_complete_lines() {
+        let mut writer = RingWriter {
+            pending: Vec::new(),
+        };
+        // fern-style fragmentation: message fragment without a newline...
+        writer.write_all(b"WHISPER_BACKEND cpu").unwrap();
+        // ...then the line separator arrives as its own write.
+        writer.write_all(b"\n").unwrap();
+
+        let snapshot = RING.snapshot_lines(usize::MAX);
+        assert_eq!(
+            snapshot.last().map(String::as_str),
+            Some("WHISPER_BACKEND cpu"),
+            "fragments of one record must join into a single ring line"
+        );
     }
 }

@@ -201,8 +201,17 @@ describe('report submission payloads', () => {
         content: 'INFO redacted log line',
         truncated: false,
         statusNote: '',
+        debugRing: '',
       },
     });
+  });
+
+  it('ships the debug ring in the submitted payload (not just the copy view)', () => {
+    const payload = buildManualReportPayload({
+      ...baseReport,
+      debugRingContent: 'DEBUG WHISPER_BACKEND cpu',
+    });
+    expect(payload.latestLog.debugRing).toBe('DEBUG WHISPER_BACKEND cpu');
   });
 
   it('includes tray status in the support endpoint payload', () => {

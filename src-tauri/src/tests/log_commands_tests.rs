@@ -1,7 +1,7 @@
 #[cfg(test)]
 mod tests {
     use crate::commands::logs::{
-        find_newest_log, read_log_tail, redact_log_content, LatestLogAttachment,
+        find_newest_log, read_log_tail, redact_log_content, voicetypr_log_date, LatestLogAttachment,
     };
     use std::io::Write;
     use tempfile::TempDir;
@@ -277,6 +277,48 @@ mod tests {
     #[test]
     fn test_redact_empty_string() {
         assert_eq!(redact_log_content(""), "");
+    }
+
+    #[test]
+    fn test_redact_password_fields_in_json_and_plain() {
+        let json_line = r#"Raw JSON: {"active_connection_id":"x","password":"hunter2"}"#;
+        let redacted = redact_log_content(json_line);
+        assert!(
+            !redacted.contains("hunter2"),
+            "password value must be redacted"
+        );
+        assert!(redacted.contains("password"), "field name must survive");
+
+        let plain = "remote auth password=super-secret accepted";
+        let redacted = redact_log_content(plain);
+        assert!(!redacted.contains("super-secret"));
+    }
+
+    #[test]
+    fn test_redact_unc_paths() {
+        let line = r#"saved transcript to \\fileserver\private\report.txt ok"#;
+        let redacted = redact_log_content(line);
+        assert!(
+            !redacted.contains("fileserver"),
+            "UNC server must be redacted"
+        );
+        assert!(!redacted.contains("private"));
+    }
+
+    #[test]
+    fn test_voicetypr_log_date_strict_shapes() {
+        assert_eq!(
+            voicetypr_log_date("voicetypr-2026-08-20.log").as_deref(),
+            Some("2026-08-20")
+        );
+        assert_eq!(
+            voicetypr_log_date("voicetypr-2026-08-20.log.3").as_deref(),
+            Some("2026-08-20")
+        );
+        // Non-numeric or executable suffixes are NOT logs — never deleted,
+        // never attached to reports.
+        assert_eq!(voicetypr_log_date("voicetypr-2026-08-20.log.1.exe"), None);
+        assert_eq!(voicetypr_log_date("voicetypr-backup.logx"), None);
     }
 
     // ── LatestLogAttachment serialization ──────────────────────────────
