@@ -69,12 +69,19 @@ export function CrashReportDialog({
     }
   };
 
-  const resetState = () => {
+  // Render-safe session reset: state only. Refs must never be touched during
+  // render; a pending copy timer firing after a reset is a harmless no-op
+  // (it only sets copied back to false).
+  const resetSessionState = () => {
     setCrashData(null);
     setIsLoading(true);
     setIsSubmitting(false);
     setSubmitError("");
     setCopied(false);
+  };
+
+  const resetState = () => {
+    resetSessionState();
     clearCopyTimer();
   };
 
@@ -102,7 +109,7 @@ export function CrashReportDialog({
     currentModel !== prevSession.currentModel
   ) {
     setPrevSession({ isOpen, error, componentStack, currentModel });
-    resetState();
+    resetSessionState();
   }
 
   useEffect(() => {
