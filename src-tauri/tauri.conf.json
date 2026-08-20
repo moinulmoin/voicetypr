@@ -14,19 +14,19 @@
         "title": "Voicetypr",
         "hiddenTitle": true,
         "titleBarStyle": "Overlay",
-        "trafficLightPosition": { "x": 12, "y": 11 },
+        "trafficLightPosition": { "x": 12, "y": 12 },
         "label": "main",
-        "width": 1100,
-        "height": 860,
-        "minWidth": 1040,
-        "minHeight": 760,
+        "width": 1000,
+        "height": 680,
+        "minWidth": 1000,
+        "minHeight": 680,
         "resizable": true,
         "center": true,
         "visible": false,
         "skipTaskbar": true,
         "alwaysOnTop": false,
-        "minimizable": false,
-        "maximizable": false
+        "minimizable": true,
+        "maximizable": true
       }
     ],
     "security": {

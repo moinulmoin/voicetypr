@@ -1,26 +1,26 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { LicenseStatus } from '@/types';
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { LicenseStatus } from "@/types";
 
-vi.mock('@tauri-apps/api/core', () => ({
+vi.mock("@tauri-apps/api/core", () => ({
   invoke: vi.fn(),
 }));
 
-vi.mock('sonner', () => ({
+vi.mock("sonner", () => ({
   toast: { error: vi.fn(), success: vi.fn(), info: vi.fn() },
 }));
 
-import { invoke } from '@tauri-apps/api/core';
-import { LicenseProvider, useLicense } from './LicenseContext';
+import { invoke } from "@tauri-apps/api/core";
+import { LicenseProvider, useLicense } from "./LicenseContext";
 
-const SECRET_KEY = 'SUPER-SECRET-LICENSE-KEY-XYZ';
+const SECRET_KEY = "SUPER-SECRET-LICENSE-KEY-XYZ";
 
 const licensedStatus: LicenseStatus = {
-  status: 'licensed',
+  status: "licensed",
   trial_days_left: undefined,
-  license_type: 'lifetime',
+  license_type: "lifetime",
   license_key: SECRET_KEY,
-  expires_at: '2027-01-01T00:00:00Z',
+  expires_at: "2027-01-01T00:00:00Z",
 };
 
 function Probe() {
@@ -32,7 +32,7 @@ function RevalidationProbe() {
   const { status, revalidateLicense } = useLicense();
   return (
     <>
-      <span>{status?.verification_state ?? 'none'}</span>
+      <span>{status?.verification_state ?? "none"}</span>
       <button type="button" onClick={revalidateLicense}>
         Revalidate
       </button>
@@ -40,7 +40,7 @@ function RevalidationProbe() {
   );
 }
 
-describe('LicenseContext', () => {
+describe("LicenseContext", () => {
   beforeEach(() => {
     vi.clearAllMocks();
   });
@@ -49,10 +49,10 @@ describe('LicenseContext', () => {
     vi.restoreAllMocks();
   });
 
-  it('never logs the license key when checking status', async () => {
+  it("never logs the license key when checking status", async () => {
     vi.mocked(invoke).mockResolvedValue(licensedStatus);
 
-    const debugSpy = vi.spyOn(console, 'debug').mockImplementation(() => {});
+    const debugSpy = vi.spyOn(console, "debug").mockImplementation(() => {});
 
     render(
       <LicenseProvider>
@@ -60,12 +60,12 @@ describe('LicenseContext', () => {
       </LicenseProvider>,
     );
 
-    await waitFor(() => expect(invoke).toHaveBeenCalledWith('check_license_status'));
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith("check_license_status"));
 
     // Give the awaited resolution + the post-invoke debug log a tick to flush.
     await waitFor(() =>
       expect(
-        debugSpy.mock.calls.some((c) => JSON.stringify(c).includes('License status received')),
+        debugSpy.mock.calls.some((c) => JSON.stringify(c).includes("License status received")),
       ).toBe(true),
     );
 
@@ -76,7 +76,7 @@ describe('LicenseContext', () => {
     // Sanity: the non-secret status fields ARE still logged (proves the check
     // ran and that we redacted rather than silencing the log entirely).
     const receivedLog = debugSpy.mock.calls.find((c) =>
-      JSON.stringify(c).includes('License status received'),
+      JSON.stringify(c).includes("License status received"),
     );
     expect(receivedLog).toBeDefined();
     const serialized = JSON.stringify(receivedLog);
@@ -84,12 +84,12 @@ describe('LicenseContext', () => {
     expect(serialized).toContain('"license_type":"lifetime"');
   });
 
-  it('revalidates explicitly and replaces offline-grace metadata', async () => {
+  it("revalidates explicitly and replaces offline-grace metadata", async () => {
     vi.mocked(invoke).mockImplementation(async (command) => {
-      if (command === 'revalidate_license') {
-        return { ...licensedStatus, verification_state: 'verified' };
+      if (command === "revalidate_license") {
+        return { ...licensedStatus, verification_state: "verified" };
       }
-      return { ...licensedStatus, verification_state: 'offline_grace' };
+      return { ...licensedStatus, verification_state: "offline_grace" };
     });
 
     render(
@@ -98,10 +98,10 @@ describe('LicenseContext', () => {
       </LicenseProvider>,
     );
 
-    expect(await screen.findByText('offline_grace')).toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: 'Revalidate' }));
+    expect(await screen.findByText("offline_grace")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Revalidate" }));
 
-    await waitFor(() => expect(invoke).toHaveBeenCalledWith('revalidate_license'));
-    expect(await screen.findByText('verified')).toBeInTheDocument();
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith("revalidate_license"));
+    expect(await screen.findByText("verified")).toBeInTheDocument();
   });
 });

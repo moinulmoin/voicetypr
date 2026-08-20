@@ -503,6 +503,26 @@ RMS/peak/prepared-audio evidence before attributing it to an engine. Any
 resulting product fix requires a newly cut beta and a rerun of the affected
 checks above.
 
+## Plan 050 — share card + chrome/UI pass (NEEDS-SMOKE)
+
+Verified on the local macOS dev build (`pnpm tauri:dev`) 2026-08-18: share
+modal geometry and rendered card pixels, Overview restructure (header share
+button, activity block, all-time strip), Quick help rename, CLI copy, and
+titlebar traffic-light/toggle alignment measured at 0.0px delta. Full
+`pnpm quality-gate` green (1378 backend tests).
+
+- [ ] 050-S1 Windows build (compile-only in CI): open Overview, Polish, and
+      History — container rhythm renders sanely at the 1000×680 min size and
+      the share modal export (Copy image / Download) produces the 2400×1600
+      PNG.
+- [ ] 050-S2 Packaged macOS build (non-dev): traffic lights at `y:12` stay
+      pixel-aligned with the sidebar-toggle glyph, and the branded share card
+      (logo, gradient CTA) renders identically to the dev build.
+- [ ] 050-S3 Real `pi` CLI against an OpenAI provider: Polish → Local Agents
+      → pi → Thinking selector offers Off/Minimal/Low/Medium and a polish run
+      at Minimal succeeds end-to-end (contract covered by
+      `agent_cli` unit tests; the real-binary round-trip is ignored in CI).
+
 ## Release rule
 
 015 + 016 + 046 smoke are ship gates for the AI-polish release; 004/008 smoke

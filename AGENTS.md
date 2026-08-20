@@ -14,7 +14,7 @@ pnpm lint             # ESLint
 pnpm typecheck        # TypeScript compiler
 pnpm test             # Vitest frontend tests
 pnpm test:backend     # Rust tests (cd src-tauri && cargo test)
-pnpm quality-gate     # All checks in one script
+pnpm check            # All checks in one script
 
 # Build
 pnpm build            # Frontend build
@@ -79,7 +79,7 @@ src-tauri/src/                # Rust backend
 ## Git Workflow
 
 - **Commits**: Conventional Commits (`feat:`, `fix:`, `docs:`, `refactor:`)
-- **Pre-commit**: Run `pnpm quality-gate` or individual checks
+- **Pre-commit**: Run `pnpm check` or individual checks
 - **Branches**: Feature branches off `main`
 - **Never push** without explicit user instruction
 

@@ -9,7 +9,7 @@ when done.
 
 Verification commands used across all plans: `pnpm typecheck`, `pnpm lint`,
 `pnpm exec vitest run`, `cd src-tauri && cargo test`, `cargo fmt --check`,
-`cargo clippy -- -D warnings`, `pnpm quality-gate`.
+`cargo clippy -- -D warnings`, `pnpm check`.
 
 ## Concurrency protocol (multiple agents/sessions work this repo)
 
@@ -46,7 +46,15 @@ Verification commands used across all plans: `pnpm typecheck`, `pnpm lint`,
 | 043  | README + canonical AGPL license refresh | P1 | S | — | DONE — GitHub detects AGPL-3.0; README link + formatting validation passed 2026-08-03 |
 | 044  | Agent-CLI Polish hardening + model selection | P1 | L | 030 | DONE (code) — NEEDS-SMOKE; automated gates + adversarial review passed 2026-08-06 |
 | 045  | Privacy-safe PostHog product analytics | P1 | L | 031 | DONE (code) — NEEDS-SMOKE 045-S1..S6; full gate, release compile, local dev UI smoke, and adversarial reviews passed 2026-08-06 |
-| 046  | Polish workflow alignment — natural punctuation, Saved Text, app-first mode resolution | P1 | S | 016, 027, 040 | DONE (code) — NEEDS-SMOKE 046-S1..S6; full gate and local native/browser UI smokes passed 2026-08-09 |
+| 046  | Polish workflow alignment — natural punctuation, Saved Text, app-first mode resolution | P1 | S | 016, 027, 040 | DONE (code) — NEEDS-SMOKE 046-S1..S6; full gate and local native/browser UI smokes passed; app context now persists without Polish, and distinct listening/transcribing/polishing pill states were browser-verified 2026-08-10 |
+| 047  | Polish provider UX + no-input fast path | P0 | M | 044, 046 | DONE — local-agent probe storm removed; stable rows, per-agent model dialog/search, supported thinking controls, and persisted CLI defaults verified 2026-08-10; warmup hardened 2026-08-13 (custom origins validated before HEAD, OpenRouter + OpenAI legacy-fallback origins warm, agent-CLI never warms; recording start prefetches the selected provider only — HTTP HEAD or CLI capability probe); shortcut zero-count chrome removed and curated, friendly-labeled cloud STT model selection verified 2026-08-14 |
+| 048  | Expanded local-agent CLI Polish adapters | P1 | L | 044, 047 | DONE — focused frontend/backend gates, exact installed-CLI smokes, and native CUA UI exercise passed 2026-08-10; droid isolation flag corrected to documented `--restrict-tools` + real droid round-trip smoke passed 2026-08-13 |
+| 051  | Polish tab component split (monolith → hooks + provider card) | P2 | M | 050 | DONE — 663 frontend tests + local macOS CUA smoke (expand/collapse, Cloud/Local tabs, agent rows, API-key modal) 2026-08-18 (`676eaa3f`) |
+| 052  | Effect-safety sweep (derived state, useSyncExternalStore, useTauriEvent) | P2 | M | — | DONE — react-doctor targets cleared (AdvancedSection flicker-sync, matchMedia store, source-tab snap); 663 tests + local CUA smoke (Sources tabs, Quick help permissions) 2026-08-19 |
+| 053  | Reset-on-prop & parent-notify effect elimination | P2 | M | 052 | DONE — react-doctor 55→62 (Critical→Needs work); 663 tests + Shortcuts smoke 2026-08-19 (see `053-effect-reset-elimination.md`) |
+| 054  | react-doctor full-court cleanup | P2 | L | 052, 053 | DONE — score 62→89 ("Great"), 93→1 finding (verified false positive); 15 giants split into ~60 modules; 663/663 tests + live click-through 2026-08-19 (see `054-react-doctor-cleanup.md`) |
+| 055  | Polish latency — fast-path defaults, speed guidance, measured-latency chips | P1 | M | 047 | TODO — brief filed 2026-08-20 from measured CLI autopsy (42K-token backpack, TTFT ~5s, no caching, $0.03/call); see `055-polish-fast-path.md` |
+| 056  | Local Polish model — Phase A s1-mini GGUF integration (no ML), Phase B LFM2.5-350M training | P1 | L | 055 | TODO — evidence filed 2026-08-20; Phase A uses public Apache-2.0+naming-clause weights, Phase B gated on license + eval; see `056-local-polish-model.md` |
 
 ## Code-done, awaiting batched manual smoke (`plans/SMOKE.md`)
 
@@ -79,6 +87,7 @@ Verification commands used across all plans: `pnpm typecheck`, `pnpm lint`,
 | 012  | Shared transcription contract — design doc (no code) | DONE |
 | 014  | Shared transcription contract — Stage 1 (DTOs + executor) | DONE (2026-06-13) — additive `transcription/` contract module (request/error/capability DTOs + delegating executor); `Explicit`→Whisper/Parakeet/Cloud delegate to existing helpers; `HostDefault` (Stage 4) + Remote send (Stage 5) typed-deferred; cloud_stt typed-error seam added; no callsite rewired (zero runtime change); gates green (clippy --all-targets, 919 tests). Executor engine dispatch is exercised when a later stage ports callsites. Stages 2-6 are future plans. |
 | 018  | AI provider graduation — OpenRouter, Groq, xAI | DROPPED (2026-06-13) — Groq/OpenRouter (and earlier xAI/DeepSeek/Cohere) removed per user; OpenAI-compatible providers are served by the Custom escape hatch, so there is nothing to graduate |
+| 050  | Navigation ownership reorganization — dedicated Recording, direct settings routes, compact chrome, CLI onboarding, and Polish workflow | DONE (2026-08-17) — focused/full frontend gates and native macOS CUA smoke passed |
 
 Status values: TODO | IN PROGRESS — claimed <by> <date> | DONE | NEEDS-SMOKE
 (code done, manual smoke pending) | BLOCKED (one-line reason) | REJECTED
@@ -131,6 +140,10 @@ Status values: TODO | IN PROGRESS — claimed <by> <date> | DONE | NEEDS-SMOKE
     language normalization broader than provider contracts.
   - Merge order: reliability-fixed 019 lands first, then 017/018 adapt around
     the established `stt_*` namespace.
+- **Plan-number collision (2026-08-20)**: branch `feat/049-pure-rust-audio`
+  commit `b8ff14cf` labels parakeet decode-ahead live preview as "plan 051",
+  while this branch's 051 is the Polish tab split. Both exist; renumber the
+  decode-ahead plan to a free number when that branch next lands.
 
 ## Execution review notes
 

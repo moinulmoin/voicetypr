@@ -383,7 +383,10 @@ mod injection_filter_tests {
     #[test]
     fn own_injection_is_ignored() {
         // Injected flag + our signature => our own paste => ignored.
-        assert!(is_own_injection(LLKHF_INJECTED.0, crate::INJECTED_SIGNATURE));
+        assert!(is_own_injection(
+            LLKHF_INJECTED.0,
+            crate::INJECTED_SIGNATURE
+        ));
     }
 
     #[test]

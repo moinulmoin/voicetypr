@@ -386,7 +386,12 @@ fn insert_event_properties(event: &mut Event, product_event: ProductEvent) {
         } => {
             let provider = safe_provider_id(&provider_id);
             let model = safe_model_id(&provider, &model_id);
+            let attempted = matches!(
+                outcome,
+                PolishOutcome::Applied | PolishOutcome::Unchanged | PolishOutcome::Fallback
+            );
             let _ = event.insert_prop("outcome", outcome.as_str());
+            let _ = event.insert_prop("attempted", attempted);
             let _ = event.insert_prop("preset", preset.as_str());
             let _ = event.insert_prop("provider", provider);
             let _ = event.insert_prop("model", model);
@@ -504,6 +509,8 @@ fn validated_dynamic_properties(event: &Event) -> Option<Vec<(&'static str, Valu
             let preset = string("preset")?;
             let provider = string("provider")?;
             let model = string("model")?;
+            let attempted = event.properties().get("attempted")?.as_bool()?;
+            let expected_attempted = matches!(outcome, "applied" | "unchanged" | "fallback");
             if !allowed(
                 outcome,
                 &["disabled", "skipped", "applied", "unchanged", "fallback"],
@@ -517,13 +524,15 @@ fn validated_dynamic_properties(event: &Event) -> Option<Vec<(&'static str, Valu
                     "message",
                     "code",
                 ],
-            ) || safe_provider_id(provider) != provider
+            ) || attempted != expected_attempted
+                || safe_provider_id(provider) != provider
                 || safe_model_id(provider, model) != model
             {
                 return None;
             }
             Some(vec![
                 ("outcome", Value::String(outcome.to_string())),
+                ("attempted", Value::Bool(attempted)),
                 ("preset", Value::String(preset.to_string())),
                 ("provider", Value::String(provider.to_string())),
                 ("model", Value::String(model.to_string())),
@@ -657,6 +666,32 @@ mod tests {
     fn arbitrary_provider_and_model_values_are_bucketed() {
         assert_eq!(safe_provider_id("secret-provider"), "unknown");
         assert_eq!(safe_model_id("unknown", "private-model-name"), "custom");
+    }
+
+    #[test]
+    fn polish_attempts_include_fallbacks_but_not_disabled_events() {
+        for (outcome, expected) in [
+            (PolishOutcome::Fallback, true),
+            (PolishOutcome::Applied, true),
+            (PolishOutcome::Unchanged, true),
+            (PolishOutcome::Disabled, false),
+            (PolishOutcome::Skipped, false),
+        ] {
+            let mut event = Event::new("polish.finished".to_string(), "install-id".to_string());
+            insert_event_properties(
+                &mut event,
+                ProductEvent::PolishFinished {
+                    outcome,
+                    preset: PolishPreset::CleanDictation,
+                    provider_id: "pi".to_string(),
+                    model_id: String::new(),
+                },
+            );
+            assert_eq!(
+                event.properties().get("attempted").and_then(Value::as_bool),
+                Some(expected)
+            );
+        }
     }
 
     #[test]

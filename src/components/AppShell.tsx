@@ -1,31 +1,17 @@
 import { useEffect, useState, type CSSProperties } from "react";
-import { listen } from "@tauri-apps/api/event";
 import { CircleAlert } from "lucide-react";
+import { useTauriEvent } from "@/hooks/useTauriEvent";
 import { toast } from "sonner";
 import type { ScreenId } from "@/components/navigation";
 import { Sidebar } from "@/components/Sidebar";
 import { TabContainer } from "@/components/tabs/TabContainer";
-import {
-  Alert,
-  AlertAction,
-  AlertDescription,
-  AlertTitle,
-} from "@/components/ui/alert";
+import { Alert, AlertAction, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
-import {
-  SidebarInset,
-  SidebarProvider,
-  SidebarTrigger,
-} from "@/components/ui/sidebar";
-import { Switch } from "@/components/ui/switch";
+import { SidebarInset, SidebarProvider, SidebarTrigger } from "@/components/ui/sidebar";
 import { Spinner } from "@/components/ui/spinner";
-import { useSettings } from "@/contexts/SettingsContext";
 import { createLogger } from "@/lib/logger";
-import {
-  getTrayStatus,
-  retryTrayCreation,
-  type TrayStatus,
-} from "@/lib/tray";
+import { isMacOS } from "@/lib/platform";
+import { getTrayStatus, retryTrayCreation, type TrayStatus } from "@/lib/tray";
 
 const log = createLogger("app-shell");
 
@@ -37,37 +23,15 @@ interface AppShellProps {
 export function AppShell({ activeSection, onSectionChange }: AppShellProps) {
   const [trayStatus, setTrayStatus] = useState<TrayStatus | null>(null);
   const [isRetryingTray, setIsRetryingTray] = useState(false);
-  const [isModeUpdating, setIsModeUpdating] = useState(false);
-  const { settings, updateSettings } = useSettings();
-  const settingsMode = settings?.settings_mode ?? "recommended";
-
   useEffect(() => {
-    let isMounted = true;
-    let unlisten: (() => void) | undefined;
-
     void getTrayStatus()
-      .then((status) => {
-        if (isMounted) setTrayStatus(status);
-      })
+      .then(setTrayStatus)
       .catch((error) => {
         log.warn("Failed to read tray status:", error);
       });
-
-    void listen<TrayStatus>("tray-status-changed", (event) => {
-      if (isMounted) setTrayStatus(event.payload);
-    }).then((nextUnlisten) => {
-      if (!isMounted) {
-        nextUnlisten();
-        return;
-      }
-      unlisten = nextUnlisten;
-    });
-
-    return () => {
-      isMounted = false;
-      unlisten?.();
-    };
   }, []);
+
+  useTauriEvent<TrayStatus>("tray-status-changed", setTrayStatus);
 
   const handleRetryTray = async () => {
     setIsRetryingTray(true);
@@ -77,7 +41,9 @@ export function AppShell({ activeSection, onSectionChange }: AppShellProps) {
       if (status.available) {
         toast.success("Menu-bar icon restored");
       } else {
-        toast.error("Menu-bar icon is still unavailable. Keep this window open and report the issue.");
+        toast.error(
+          "Menu-bar icon is still unavailable. Keep this window open and report the issue.",
+        );
       }
     } catch (error) {
       log.error("Failed to retry tray creation:", error);
@@ -87,64 +53,38 @@ export function AppShell({ activeSection, onSectionChange }: AppShellProps) {
     }
   };
 
-  const handleModeChange = async (value: "recommended" | "advanced") => {
-    if (isModeUpdating) return;
-
-    setIsModeUpdating(true);
-    try {
-      await updateSettings({ settings_mode: value });
-      if (
-        value === "recommended" &&
-        (activeSection === "network" ||
-          activeSection === "agent" ||
-          activeSection === "advanced")
-      ) {
-        onSectionChange("general");
-      }
-    } catch {
-      toast.error("Could not change interface mode");
-    } finally {
-      setIsModeUpdating(false);
-    }
-  };
-
-  const trayUnavailable =
-    trayStatus !== null && !trayStatus.available && trayStatus.attempts > 0;
+  const trayUnavailable = trayStatus !== null && !trayStatus.available && trayStatus.attempts > 0;
 
   return (
-    <SidebarProvider style={{ "--sidebar-width": "14rem" } as CSSProperties}>
+    <SidebarProvider
+      className="bg-background"
+      style={
+        {
+          "--sidebar-width": "14rem",
+          "--sidebar": "var(--background)",
+        } as CSSProperties
+      }
+    >
       <header
         data-tauri-drag-region
-        className="fixed inset-x-0 top-0 z-50 flex h-9 items-center border-b border-border/60 bg-background/95 px-3 backdrop-blur-sm"
+        className={`fixed inset-x-0 top-0 z-50 flex h-9 items-center bg-sidebar pr-3 ${
+          isMacOS ? "pl-[4.75rem]" : "pl-3"
+        }`}
       >
         <SidebarTrigger
-          className="ml-8 size-7 text-muted-foreground"
+          className="size-7 translate-y-1 text-muted-foreground"
           title="Toggle sidebar"
         />
-        <label className="ml-auto flex cursor-pointer items-center gap-2 text-xs font-medium text-muted-foreground">
-          <span className="text-right">Power user</span>
-          <Switch
-            size="sm"
-            checked={settingsMode === "advanced"}
-            onCheckedChange={(checked) =>
-              void handleModeChange(checked ? "advanced" : "recommended")
-            }
-            aria-label="Power user mode"
-            title="Show Network sharing, Agent & CLI, and diagnostics"
-            disabled={!settings || isModeUpdating}
-          />
-        </label>
       </header>
       <Sidebar activeSection={activeSection} onSectionChange={onSectionChange} />
-      <SidebarInset className="pt-9">
+      <SidebarInset className="mb-2 mr-2 mt-9 h-[calc(100svh-2.75rem)] min-h-0 min-w-0 overflow-hidden rounded-2xl bg-background">
         {trayUnavailable ? (
           <Alert variant="destructive" className="mx-4 mt-4">
             <CircleAlert />
             <AlertTitle>Menu-bar icon unavailable</AlertTitle>
             <AlertDescription>
-              Voicetypr could not create its menu-bar icon after{" "}
-              {trayStatus.attempts} attempts. Keep this window open, then retry
-              or submit a bug report with the included diagnostic.
+              Voicetypr could not create its menu-bar icon after {trayStatus.attempts} attempts.
+              Keep this window open, then retry or submit a bug report with the included diagnostic.
             </AlertDescription>
             <AlertAction>
               <Button
@@ -160,8 +100,8 @@ export function AppShell({ activeSection, onSectionChange }: AppShellProps) {
             </AlertAction>
           </Alert>
         ) : null}
-        <div className="min-h-0 flex-1">
-          <TabContainer activeSection={activeSection} />
+        <div className="min-h-0 min-w-0 flex-1 overflow-hidden">
+          <TabContainer activeSection={activeSection} onNavigate={onSectionChange} />
         </div>
       </SidebarInset>
     </SidebarProvider>

@@ -5,6 +5,7 @@ import { EnhancementsTab } from "./EnhancementsTab";
 import { ModelsTab } from "./ModelsTab";
 import { OverviewTab } from "./OverviewTab";
 import { RecordingsTab } from "./RecordingsTab";
+import { RecordingTab } from "./RecordingTab";
 import { SettingsTab } from "./SettingsTab";
 import { ShortcutsTab } from "./ShortcutsTab";
 import { NetworkSharingTab } from "./NetworkSharingTab";
@@ -15,20 +16,22 @@ import type { ScreenId } from "@/components/navigation";
 
 interface TabContainerProps {
   activeSection: ScreenId;
+  onNavigate?: (section: ScreenId) => void;
 }
 
-export function TabContainer({ activeSection }: TabContainerProps) {
-
+export function TabContainer({ activeSection, onNavigate }: TabContainerProps) {
   const renderTabContent = () => {
     switch (activeSection) {
       case "overview":
-        return <OverviewTab />;
+        return <OverviewTab onNavigate={onNavigate} />;
 
       case "recordings":
         return <RecordingsTab />;
 
       case "audio":
         return <AudioUploadSection />;
+      case "recording":
+        return <RecordingTab />;
 
       case "general":
         return <SettingsTab />;
@@ -54,13 +57,11 @@ export function TabContainer({ activeSection }: TabContainerProps) {
       case "license":
         return <AccountTab />;
 
-
       case "report-problem":
         return <ReportProblemSection />;
 
-
       default:
-        return <OverviewTab />;
+        return <OverviewTab onNavigate={onNavigate} />;
     }
   };
 

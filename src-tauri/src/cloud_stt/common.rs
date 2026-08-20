@@ -113,11 +113,22 @@ fn build_client(timeout: std::time::Duration) -> reqwest::Client {
     builder.build().unwrap_or_else(|_| reqwest::Client::new())
 }
 
+#[cfg(not(test))]
 static SHARED_CLIENT: std::sync::LazyLock<reqwest::Client> =
     std::sync::LazyLock::new(|| build_client(REQUEST_TIMEOUT));
 
 pub(super) fn http_client() -> reqwest::Client {
-    SHARED_CLIENT.clone()
+    #[cfg(test)]
+    {
+        // Wiremock servers use ephemeral ports that can be recycled between
+        // parallel tests. Isolate their connection pools so a stale keep-alive
+        // socket cannot reach a later server that inherited the same port.
+        build_client(REQUEST_TIMEOUT)
+    }
+    #[cfg(not(test))]
+    {
+        SHARED_CLIENT.clone()
+    }
 }
 
 // Fire-and-forget: warm the shared pool's DNS+TCP+TLS for `origin`; result ignored.
@@ -311,7 +322,13 @@ pub(super) async fn openai_compatible_transcribe(
                 .text("model", model.to_string())
                 .text("response_format", "json".to_string());
             if let Some(lang) = language {
-                form = form.text("language", lang);
+                // `gpt-transcribe` takes the language as an array field; every
+                // other OpenAI-compatible model keeps the singular `language`.
+                if model == "gpt-transcribe" {
+                    form = form.text("languages[]", lang);
+                } else {
+                    form = form.text("language", lang);
+                }
             }
             if let Some(prompt) = prompt {
                 form = form.text("prompt", prompt);
@@ -427,6 +444,78 @@ mod tests {
         let body = String::from_utf8_lossy(&request.body);
         assert!(body.contains("name=\"model\""));
         assert!(body.contains("gpt-4o-transcribe"));
+    }
+
+    #[tokio::test]
+    async fn openai_compatible_transcribe_gpt_transcribe_sends_languages_array_not_singular() {
+        // `gpt-transcribe` expects the language as `languages[]`; the singular
+        // `language` field would be rejected by the API.
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/audio/transcriptions"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "text": "ok"
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let audio = audio_file();
+
+        openai_compatible_transcribe(
+            &server.uri(),
+            "k",
+            "gpt-transcribe",
+            audio.path(),
+            Some("en"),
+            None,
+            "OpenAI transcription",
+        )
+        .await
+        .unwrap();
+
+        let requests = server.received_requests().await.unwrap();
+        let body = String::from_utf8_lossy(&requests[0].body);
+        assert!(body.contains("name=\"languages[]\""));
+        assert!(body.contains("\r\n\r\nen\r\n"));
+        assert!(!body.contains("name=\"language\""));
+        // The selected model must be propagated, not a hardcoded default.
+        assert!(body.contains("name=\"model\""));
+        assert!(body.contains("gpt-transcribe"));
+    }
+
+    #[tokio::test]
+    async fn openai_compatible_transcribe_keeps_singular_language_for_other_models() {
+        // Every other model (OpenAI mini, Groq whisper) keeps `language`.
+        for model in ["gpt-4o-mini-transcribe", "whisper-large-v3-turbo"] {
+            let server = MockServer::start().await;
+            Mock::given(method("POST"))
+                .and(path("/audio/transcriptions"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                    "text": "ok"
+                })))
+                .expect(1)
+                .mount(&server)
+                .await;
+            let audio = audio_file();
+
+            openai_compatible_transcribe(
+                &server.uri(),
+                "k",
+                model,
+                audio.path(),
+                Some("en"),
+                None,
+                "transcription",
+            )
+            .await
+            .unwrap();
+
+            let requests = server.received_requests().await.unwrap();
+            let body = String::from_utf8_lossy(&requests[0].body);
+            assert!(body.contains("name=\"language\""), "model {model}");
+            assert!(!body.contains("name=\"languages[]\""), "model {model}");
+            assert!(body.contains(model), "model {model} not propagated");
+        }
     }
     #[tokio::test]
     async fn openai_compatible_transcribe_includes_prompt_field_when_provided() {

@@ -97,8 +97,8 @@ export function PrivacyConsentDialog() {
         <DialogHeader>
           <DialogTitle>Help improve Voicetypr</DialogTitle>
           <DialogDescription>
-            Choose what anonymous information Voicetypr may send. Both options
-            can be changed anytime in Settings.
+            Choose what anonymous information Voicetypr may send. Both options can be changed
+            anytime in Settings.
           </DialogDescription>
         </DialogHeader>
 
@@ -107,8 +107,7 @@ export function PrivacyConsentDialog() {
             <div className="min-w-0">
               <p className="font-medium">Crash &amp; error reporting</p>
               <p className="mt-1 text-xs text-muted-foreground">
-                Sends scrubbed crash and error details to GlitchTip so bugs can
-                be diagnosed.
+                Sends scrubbed crash and error details to GlitchTip so bugs can be diagnosed.
               </p>
             </div>
             <Switch
@@ -124,8 +123,7 @@ export function PrivacyConsentDialog() {
             <div className="min-w-0">
               <p className="font-medium">Usage analytics</p>
               <p className="mt-1 text-xs text-muted-foreground">
-                Sends anonymous feature usage, outcome, and performance buckets
-                to PostHog.
+                Sends anonymous feature usage, outcome, and performance buckets to PostHog.
               </p>
             </div>
             <Switch
@@ -139,17 +137,12 @@ export function PrivacyConsentDialog() {
         </div>
 
         <p className="text-xs text-muted-foreground">
-          Never includes audio, transcripts, clipboard contents, prompts, API
-          keys, file paths, window titles, or session replay.
+          Never includes audio, transcripts, clipboard contents, prompts, API keys, file paths,
+          window titles, or session replay.
         </p>
 
         <DialogFooter>
-          <Button
-            type="button"
-            variant="outline"
-            onClick={() => void defer()}
-            disabled={saving}
-          >
+          <Button type="button" variant="outline" onClick={() => void defer()} disabled={saving}>
             Not now
           </Button>
           <Button type="button" onClick={() => void save()} disabled={saving}>

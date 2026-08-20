@@ -1,10 +1,4 @@
-import {
-  act,
-  fireEvent,
-  render,
-  screen,
-  waitFor,
-} from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { TelemetrySection } from "../TelemetrySection";
 
@@ -72,10 +66,7 @@ describe("TelemetrySection", () => {
         enabled: true,
       });
     });
-    expect(mockInvoke).not.toHaveBeenCalledWith(
-      "set_telemetry_consent",
-      expect.anything(),
-    );
+    expect(mockInvoke).not.toHaveBeenCalledWith("set_telemetry_consent", expect.anything());
   });
 
   it("allows opting out of an unavailable category", async () => {

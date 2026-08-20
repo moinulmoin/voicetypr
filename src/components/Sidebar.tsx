@@ -1,9 +1,7 @@
 import { Brandmark } from "@/components/Brandmark";
 import {
-  advancedNavScreens,
-  powerUserUtilityNavScreens,
-  recommendedNavScreens,
-  reportProblemNavScreens,
+  footerNavScreens,
+  navScreens,
   type ScreenDefinition,
   type ScreenId,
 } from "@/components/navigation";
@@ -21,7 +19,6 @@ import {
   Sidebar as SidebarPrimitive,
 } from "@/components/ui/sidebar";
 import { useLicense } from "@/contexts/LicenseContext";
-import { useSettings } from "@/contexts/SettingsContext";
 import type { LicenseStatus } from "@/types";
 import { cn } from "@/lib/utils";
 import { RefreshCw } from "lucide-react";
@@ -32,7 +29,6 @@ interface SidebarProps {
   activeSection: ScreenId;
   onSectionChange: (section: ScreenId) => void;
 }
-
 
 function getLicenseBadge(status: LicenseStatus | null, daysLeft: number) {
   if (!status || status.status === "none") {
@@ -45,7 +41,7 @@ function getLicenseBadge(status: LicenseStatus | null, daysLeft: number) {
   if (status.status === "licensed") {
     return {
       label: "Pro",
-      className: "border-emerald-500/30 bg-emerald-500/10 text-emerald-700",
+      className: "border-emerald-500/30 bg-emerald-500/10 text-emerald-800",
     };
   }
 
@@ -53,48 +49,41 @@ function getLicenseBadge(status: LicenseStatus | null, daysLeft: number) {
     if (daysLeft > 1) {
       return {
         label: `Trial · ${daysLeft} days left`,
-        className: "border-green-500/25 bg-green-500/10 text-green-700 dark:text-green-400",
+        className: "border-green-500/25 bg-green-500/10 text-green-800 dark:text-green-400",
       };
     }
 
     if (daysLeft === 1) {
       return {
         label: "Trial · 1 day left",
-        className: "border-amber-500/25 bg-amber-500/10 text-amber-700 dark:text-amber-400",
+        className: "border-amber-500/25 bg-amber-500/10 text-amber-800 dark:text-amber-400",
       };
     }
 
     if (daysLeft === 0) {
       return {
         label: "Trial expires today",
-        className: "border-amber-500/25 bg-amber-500/10 text-amber-700 dark:text-amber-400",
+        className: "border-amber-500/25 bg-amber-500/10 text-amber-800 dark:text-amber-400",
       };
     }
 
     return {
       label: "Trial",
-      className: "border-green-500/25 bg-green-500/10 text-green-700 dark:text-green-400",
+      className: "border-green-500/25 bg-green-500/10 text-green-800 dark:text-green-400",
     };
   }
 
   return {
     label: "Trial expired",
-    className: "border-red-500/25 bg-red-500/10 text-red-700 dark:text-red-400",
+    className: "border-red-500/25 bg-red-500/10 text-red-800 dark:text-red-400",
   };
 }
 export function Sidebar({ activeSection, onSectionChange }: SidebarProps) {
   const { status, isLoading } = useLicense();
-  const { settings } = useSettings();
   const [appVersion, setAppVersion] = useState("—");
   const licenseBadge = getLicenseBadge(status, status?.trial_days_left ?? -1);
-  const visibleScreens =
-    settings?.settings_mode === "advanced"
-      ? advancedNavScreens
-      : recommendedNavScreens;
-  const utilityScreens =
-    settings?.settings_mode === "advanced"
-      ? powerUserUtilityNavScreens
-      : reportProblemNavScreens;
+  const licenseNeedsAttention =
+    status?.status === "expired" || status?.verification_state === "needs_revalidation";
 
   useEffect(() => {
     const loadVersion = async () => {
@@ -107,56 +96,71 @@ export function Sidebar({ activeSection, onSectionChange }: SidebarProps) {
     void loadVersion();
   }, []);
 
-
   return (
-    <>
-      <SidebarPrimitive collapsible="icon" className="border-sidebar-border/80 bg-sidebar/95 pt-9 backdrop-blur-sm">
-        <SidebarHeader className="gap-2 px-4 pb-2 pt-4 group-data-[collapsible=icon]:px-2">
+    <SidebarPrimitive
+      collapsible="icon"
+      className="group-data-[side=left]:border-r-0 bg-sidebar/95 pt-9 backdrop-blur-sm"
+    >
+      <SidebarHeader className="gap-2 px-4 pb-2 pt-1 group-data-[collapsible=icon]:px-2">
+        <div className="flex w-full items-center gap-2 rounded-lg px-1">
           <button
             type="button"
             onClick={() => onSectionChange("overview")}
             aria-label="Overview"
             title="Overview"
-            className="flex w-full items-center justify-between gap-3 rounded-lg px-3 py-2 text-left transition-colors hover:bg-sidebar-accent group-data-[collapsible=icon]:justify-center group-data-[collapsible=icon]:px-2"
+            className="flex min-w-0 flex-1 items-center gap-2.5 rounded-lg px-2 py-2 text-left transition-colors hover:bg-sidebar-accent group-data-[collapsible=icon]:justify-center"
           >
-            <div className="flex min-w-0 items-center gap-2.5">
-              <Brandmark className="size-6 shrink-0 text-sage" />
-              <span className="truncate text-sm font-semibold tracking-tight group-data-[collapsible=icon]:hidden">Voicetypr</span>
-            </div>
-            {!isLoading && status ? (
-              <span
-                className={cn(
-                  "shrink-0 rounded-full border px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.12em] group-data-[collapsible=icon]:hidden",
-                  licenseBadge.className,
-                )}
-              >
-                {licenseBadge.label}
-              </span>
-            ) : null}
+            <Brandmark className="size-6 shrink-0 text-sage" />
+            <span className="truncate text-sm font-semibold tracking-tight group-data-[collapsible=icon]:hidden">
+              Voicetypr
+            </span>
           </button>
-        </SidebarHeader>
+          {!isLoading && status ? (
+            <button
+              type="button"
+              onClick={() => onSectionChange("license")}
+              aria-label={`${licenseBadge.label}. Open License`}
+              title="Open License"
+              className={cn(
+                "shrink-0 rounded-full border px-2 py-0.5 text-[11px] font-semibold uppercase tracking-[0.12em] transition-shadow hover:ring-2 hover:ring-sage/20 group-data-[collapsible=icon]:hidden",
+                licenseBadge.className,
+                licenseNeedsAttention && "ring-2 ring-amber-500/25",
+              )}
+            >
+              {licenseBadge.label}
+            </button>
+          ) : null}
+        </div>
+      </SidebarHeader>
 
-        <SidebarContent className="px-2">
-          <SidebarNavMenu
-            items={visibleScreens}
-            activeSection={activeSection}
-            onSectionChange={onSectionChange}
-          />
-          <div className="mt-auto pb-2">
-            <SidebarNavMenu
-              items={utilityScreens}
-              activeSection={activeSection}
-              onSectionChange={onSectionChange}
-            />
-          </div>
-        </SidebarContent>
+      <SidebarContent className="overflow-hidden px-2">
+        <SidebarNavMenu
+          items={navScreens}
+          activeSection={activeSection}
+          onSectionChange={onSectionChange}
+        />
+      </SidebarContent>
 
-        <SidebarFooter className="border-t border-sidebar-border/70 px-3 py-2 group-data-[collapsible=icon]:px-2">
-          <SidebarFooterStatus appVersion={appVersion} />
-        </SidebarFooter>
-      </SidebarPrimitive>
-
-    </>
+      <SidebarFooter className="gap-1 px-2">
+        <nav data-testid="sidebar-footer-nav">
+          <SidebarGroup className="py-1">
+            <SidebarGroupContent>
+              <SidebarMenu className="group-data-[collapsible=icon]:items-center">
+                {footerNavScreens.map((item) => (
+                  <SidebarNavItem
+                    key={item.id}
+                    item={item}
+                    isActive={activeSection === item.id}
+                    onSelect={onSectionChange}
+                  />
+                ))}
+              </SidebarMenu>
+            </SidebarGroupContent>
+          </SidebarGroup>
+        </nav>
+        <SidebarFooterStatus appVersion={appVersion} />
+      </SidebarFooter>
+    </SidebarPrimitive>
   );
 }
 
@@ -170,20 +174,22 @@ function SidebarNavMenu({
   onSectionChange: (section: ScreenId) => void;
 }) {
   return (
-    <SidebarGroup className="py-2">
-      <SidebarGroupContent>
-        <SidebarMenu className="group-data-[collapsible=icon]:items-center">
-          {items.map((item) => (
-            <SidebarNavItem
-              key={item.id}
-              item={item}
-              isActive={activeSection === item.id}
-              onSelect={onSectionChange}
-            />
-          ))}
-        </SidebarMenu>
-      </SidebarGroupContent>
-    </SidebarGroup>
+    <nav data-testid="sidebar-main-nav">
+      <SidebarGroup className="py-1">
+        <SidebarGroupContent>
+          <SidebarMenu className="group-data-[collapsible=icon]:items-center">
+            {items.map((item) => (
+              <SidebarNavItem
+                key={item.id}
+                item={item}
+                isActive={activeSection === item.id}
+                onSelect={onSectionChange}
+              />
+            ))}
+          </SidebarMenu>
+        </SidebarGroupContent>
+      </SidebarGroup>
+    </nav>
   );
 }
 
@@ -201,6 +207,7 @@ function SidebarNavItem({
   return (
     <SidebarMenuItem>
       <SidebarMenuButton
+        size="sm"
         tooltip={item.description}
         isActive={isActive}
         onClick={() => onSelect(item.id)}
@@ -218,12 +225,7 @@ function SidebarNavItem({
   );
 }
 
-
-function SidebarFooterStatus({
-  appVersion,
-}: {
-  appVersion: string;
-}) {
+function SidebarFooterStatus({ appVersion }: { appVersion: string }) {
   const [isCheckingUpdates, setIsCheckingUpdates] = useState(false);
 
   const checkUpdates = async () => {
@@ -236,20 +238,24 @@ function SidebarFooterStatus({
   };
 
   return (
-    <div className="flex items-center justify-between gap-2 group-data-[collapsible=icon]:justify-center">
-      <span className="text-xs text-muted-foreground group-data-[collapsible=icon]:hidden">v{appVersion}</span>
-      <Button
-        type="button"
-        variant="ghost"
-        size="icon-sm"
-        className="size-7 rounded-md text-muted-foreground"
-        onClick={checkUpdates}
-        disabled={isCheckingUpdates}
-        title="Check for updates"
-      >
-        <RefreshCw className={cn("size-3.5", isCheckingUpdates && "animate-spin")} />
-        <span className="sr-only">Check for updates</span>
-      </Button>
+    <div className="flex flex-col gap-2 px-2">
+      <div className="flex items-center justify-between gap-2 group-data-[collapsible=icon]:justify-center">
+        <span className="text-xs text-muted-foreground group-data-[collapsible=icon]:hidden">
+          v{appVersion}
+        </span>
+        <Button
+          type="button"
+          variant="ghost"
+          size="icon-sm"
+          className="size-7 rounded-md text-muted-foreground"
+          onClick={checkUpdates}
+          disabled={isCheckingUpdates}
+          title="Check for updates"
+        >
+          <RefreshCw className={cn("size-3.5", isCheckingUpdates && "animate-spin")} />
+          <span className="sr-only">Check for updates</span>
+        </Button>
+      </div>
     </div>
   );
 }

@@ -128,8 +128,8 @@ export function useAllProviderModels() {
       return inFlightRequest;
     }
 
-    setLoadingMap(prev => ({ ...prev, [providerId]: true }));
-    setErrorMap(prev => ({ ...prev, [providerId]: null }));
+    setLoadingMap((prev) => ({ ...prev, [providerId]: true }));
+    setErrorMap((prev) => ({ ...prev, [providerId]: null }));
 
     const request = (async () => {
       try {
@@ -138,16 +138,16 @@ export function useAllProviderModels() {
             provider: providerId,
           }),
         );
-        setModelsMap(prev => ({ ...prev, [providerId]: fetchedModels }));
+        setModelsMap((prev) => ({ ...prev, [providerId]: fetchedModels }));
         return fetchedModels;
       } catch (err) {
         const errorMessage = err instanceof Error ? err.message : String(err);
-        setErrorMap(prev => ({ ...prev, [providerId]: errorMessage }));
+        setErrorMap((prev) => ({ ...prev, [providerId]: errorMessage }));
         log.error(`Failed to fetch models for ${providerId}:`, err);
         return [];
       } finally {
         delete inFlightMapRef.current[providerId];
-        setLoadingMap(prev => ({ ...prev, [providerId]: false }));
+        setLoadingMap((prev) => ({ ...prev, [providerId]: false }));
       }
     })();
 
@@ -155,25 +155,34 @@ export function useAllProviderModels() {
     return request;
   }, []);
 
-  const getModels = useCallback((providerId: string): AIProviderModel[] => {
-    return modelsMap[providerId] || [];
-  }, [modelsMap]);
+  const getModels = useCallback(
+    (providerId: string): AIProviderModel[] => {
+      return modelsMap[providerId] || [];
+    },
+    [modelsMap],
+  );
 
-  const isLoading = useCallback((providerId: string): boolean => {
-    return loadingMap[providerId] || false;
-  }, [loadingMap]);
+  const isLoading = useCallback(
+    (providerId: string): boolean => {
+      return loadingMap[providerId] || false;
+    },
+    [loadingMap],
+  );
 
-  const getError = useCallback((providerId: string): string | null => {
-    return errorMap[providerId] || null;
-  }, [errorMap]);
+  const getError = useCallback(
+    (providerId: string): string | null => {
+      return errorMap[providerId] || null;
+    },
+    [errorMap],
+  );
 
   const clearModels = useCallback((providerId: string) => {
-    setModelsMap(prev => {
+    setModelsMap((prev) => {
       const next = { ...prev };
       delete next[providerId];
       return next;
     });
-    setErrorMap(prev => {
+    setErrorMap((prev) => {
       const next = { ...prev };
       delete next[providerId];
       return next;

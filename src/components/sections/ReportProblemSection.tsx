@@ -1,109 +1,36 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
-import {
-  AlertCircle,
-  Bug,
-  Check,
-  ChevronDown,
-  Copy,
-  Download,
-  Keyboard,
-  Mic,
-  MonitorCog,
-  Send,
-  Type,
-  Wrench,
-  type LucideIcon,
-} from 'lucide-react';
-import { toast } from 'sonner';
-import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
-import { Button } from '@/components/ui/button';
-import {
-  Collapsible,
-  CollapsibleContent,
-  CollapsibleTrigger,
-} from '@/components/ui/collapsible';
-import { Field, FieldDescription, FieldError, FieldGroup, FieldLabel } from '@/components/ui/field';
-import { Input } from '@/components/ui/input';
-import { Textarea } from '@/components/ui/textarea';
-import { SettingsCard, SettingsHeader, SettingsPage } from '@/components/settings/settings-ui';
+import { useCallback, useEffect, useRef, useState } from "react";
+import { AlertCircle, Bug, Check, Copy, Send } from "lucide-react";
+import { toast } from "sonner";
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
+import { Button } from "@/components/ui/button";
+import { Field, FieldDescription, FieldError, FieldGroup, FieldLabel } from "@/components/ui/field";
+import { Input } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/textarea";
+import { SettingsCard, SettingsHeader, SettingsPage } from "@/components/settings/settings-ui";
 import {
   buildReportBody,
   gatherManualReportData,
-  getSystemSpecs,
   submitManualReport,
   type ManualReportData,
-  type SystemSpecs,
-} from '@/utils/crashReport';
-import { useSettings } from '@/contexts/SettingsContext';
-import { useModelManagementContext } from '@/contexts/ModelManagementContext';
-import { getModelDisplayName } from '@/lib/model-display';
-import { createLogger } from '@/lib/logger';
-import { isMacOS } from '@/lib/platform';
+} from "@/utils/crashReport";
+import { useSettings } from "@/contexts/SettingsContext";
+import { useModelManagementContext } from "@/contexts/ModelManagementContext";
+import { getModelDisplayName } from "@/lib/model-display";
+import { createLogger } from "@/lib/logger";
 
-const log = createLogger('report-problem');
+const log = createLogger("report-problem");
 const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
-interface QuickFix {
-  id: string;
-  title: string;
-  icon: LucideIcon;
-  issue: string;
-  solution: () => string;
-}
-
-const QUICK_FIXES: QuickFix[] = [
-  {
-    id: 'recording',
-    title: 'Recording not working',
-    icon: Mic,
-    issue: 'Voice recording does not start from the shortcut.',
-    solution: () =>
-      isMacOS
-        ? 'Open Power user mode and check microphone permission in Advanced. Also confirm a recording device is selected in Settings.'
-        : 'In Windows Settings, allow desktop apps to use the microphone. Also confirm a recording device is selected in Settings.',
-  },
-  {
-    id: 'hotkey',
-    title: 'Shortcut not responding',
-    icon: Keyboard,
-    issue: 'The global shortcut does not trigger recording.',
-    solution: () =>
-      isMacOS
-        ? 'Open Power user mode, then Advanced, and grant Accessibility permission so the global shortcut can work.'
-        : 'Open Power user mode, then Shortcuts, and choose another shortcut if the current one is reserved by another app.',
-  },
-  {
-    id: 'insertion',
-    title: 'Text not inserting',
-    icon: Type,
-    issue: 'The transcript does not appear at the cursor.',
-    solution: () =>
-      isMacOS
-        ? 'Place the cursor in an editable text field. In Power user mode, check Accessibility permission under Advanced.'
-        : 'Place the cursor in an editable text field, then confirm Auto-paste after transcription is enabled in Settings.',
-  },
-  {
-    id: 'download',
-    title: 'Model download stuck',
-    icon: Download,
-    issue: 'A local model download is not progressing.',
-    solution: () =>
-      'Open Models, cancel the current download, and try again. Check your internet connection before retrying.',
-  },
-];
-
 export function ReportProblemSection() {
-  const [name, setName] = useState('');
-  const [email, setEmail] = useState('');
-  const [message, setMessage] = useState('');
-  const [emailError, setEmailError] = useState('');
-  const [messageError, setMessageError] = useState('');
-  const [submitError, setSubmitError] = useState('');
+  const [name, setName] = useState("");
+  const [email, setEmail] = useState("");
+  const [message, setMessage] = useState("");
+  const [emailError, setEmailError] = useState("");
+  const [messageError, setMessageError] = useState("");
+  const [submitError, setSubmitError] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [copied, setCopied] = useState(false);
   const [fallbackReportData, setFallbackReportData] = useState<ManualReportData | null>(null);
-  const [systemSpecs, setSystemSpecs] = useState<SystemSpecs | null>();
-  const [openQuickFixes, setOpenQuickFixes] = useState<string[]>([]);
   const { settings } = useSettings();
   const { models } = useModelManagementContext();
   const currentModelLabel = getModelDisplayName(settings?.current_model, models);
@@ -118,20 +45,14 @@ export function ReportProblemSection() {
   }, []);
 
   useEffect(() => {
-    let cancelled = false;
-    void getSystemSpecs().then((specs) => {
-      if (!cancelled) setSystemSpecs(specs ?? null);
-    });
-
     return () => {
-      cancelled = true;
       actionIdRef.current += 1;
       clearCopyTimer();
     };
   }, [clearCopyTimer]);
 
   const resetSubmitFallback = useCallback(() => {
-    setSubmitError('');
+    setSubmitError("");
     setFallbackReportData(null);
     setCopied(false);
     clearCopyTimer();
@@ -144,20 +65,20 @@ export function ReportProblemSection() {
     let isValid = true;
 
     if (!trimmedEmail) {
-      setEmailError('Enter an email address so we can follow up.');
+      setEmailError("Enter an email address so we can follow up.");
       isValid = false;
     } else if (!EMAIL_PATTERN.test(trimmedEmail)) {
-      setEmailError('Enter a valid email address.');
+      setEmailError("Enter a valid email address.");
       isValid = false;
     } else {
-      setEmailError('');
+      setEmailError("");
     }
 
     if (!trimmedMessage) {
-      setMessageError('Please describe the issue you are experiencing.');
+      setMessageError("Please describe the issue you are experiencing.");
       isValid = false;
     } else {
-      setMessageError('');
+      setMessageError("");
     }
 
     if (!isValid) return;
@@ -167,45 +88,43 @@ export function ReportProblemSection() {
     actionIdRef.current = actionId;
     setIsSubmitting(true);
 
-    let data: ManualReportData;
     try {
-      data = await gatherManualReportData(
-        trimmedName || undefined,
-        trimmedEmail,
-        trimmedMessage,
-        currentModelLabel,
-      );
-    } catch (error) {
-      if (actionId === actionIdRef.current) {
-        log.error('Failed to gather report data:', error);
-        toast.error('Failed to gather report data');
-        setIsSubmitting(false);
+      let data: ManualReportData;
+      try {
+        data = await gatherManualReportData(
+          trimmedName || undefined,
+          trimmedEmail,
+          trimmedMessage,
+          currentModelLabel,
+        );
+      } catch (error) {
+        if (actionId === actionIdRef.current) {
+          log.error("Failed to gather report data:", error);
+          toast.error("Failed to gather report data");
+        }
+        return;
       }
-      return;
-    }
 
-    if (actionId !== actionIdRef.current) return;
+      if (actionId !== actionIdRef.current) return;
 
-    try {
       const result = await submitManualReport(data);
       if (actionId !== actionIdRef.current) return;
 
       if (result.success) {
-        setName('');
-        setEmail('');
-        setMessage('');
-        toast.success('Report submitted. Thank you.');
+        setName("");
+        setEmail("");
+        setMessage("");
+        toast.success("Report submitted. Thank you.");
         return;
       }
 
-      const errorMessage = result.message || 'Failed to submit report. You can copy the report and send it manually.';
+      const errorMessage =
+        result.message || "Failed to submit report. You can copy the report and send it manually.";
       setSubmitError(errorMessage);
       setFallbackReportData(data);
       toast.error(errorMessage);
     } finally {
-      if (actionId === actionIdRef.current) {
-        setIsSubmitting(false);
-      }
+      setIsSubmitting(false);
     }
   };
 
@@ -217,7 +136,7 @@ export function ReportProblemSection() {
       await navigator.clipboard.writeText(buildReportBody(fallbackReportData));
       if (actionId !== actionIdRef.current) return;
       setCopied(true);
-      toast.success('Report copied to clipboard');
+      toast.success("Report copied to clipboard");
       clearCopyTimer();
       copiedTimerRef.current = window.setTimeout(() => {
         setCopied(false);
@@ -225,8 +144,8 @@ export function ReportProblemSection() {
       }, 2000);
     } catch (error) {
       if (actionId !== actionIdRef.current) return;
-      log.error('Failed to copy report:', error);
-      toast.error('Failed to copy report');
+      log.error("Failed to copy report:", error);
+      toast.error("Failed to copy report");
     }
   };
 
@@ -234,59 +153,8 @@ export function ReportProblemSection() {
     <SettingsPage>
       <SettingsHeader
         title="Report a problem"
-        description="Tell us what happened and how to reach you. Voicetypr attaches the relevant system information and recent logs automatically."
+        description="Tell us what happened and how to reach you. We'll attach the app version, your current model, system details, and recent diagnostic logs automatically."
       />
-
-      <SettingsCard
-        icon={Wrench}
-        title="Try a quick fix first"
-        description="Common issues you may be able to resolve immediately."
-      >
-        <div className="mt-4 space-y-2">
-          {QUICK_FIXES.map((fix) => {
-            const Icon = fix.icon;
-            const isOpen = openQuickFixes.includes(fix.id);
-
-            return (
-              <Collapsible
-                key={fix.id}
-                open={isOpen}
-                onOpenChange={() =>
-                  setOpenQuickFixes((current) =>
-                    current.includes(fix.id)
-                      ? current.filter((id) => id !== fix.id)
-                      : [...current, fix.id],
-                  )
-                }
-              >
-                <div className="overflow-hidden rounded-lg border border-border/50 bg-card">
-                  <CollapsibleTrigger className="flex w-full items-center justify-between px-4 py-3 text-left transition-colors hover:bg-accent/50">
-                    <span className="flex items-center gap-3">
-                      <Icon className="size-4 text-muted-foreground" />
-                      <span className="text-sm font-medium">{fix.title}</span>
-                    </span>
-                    <ChevronDown
-                      className={`size-4 text-muted-foreground transition-transform ${isOpen ? 'rotate-180' : ''}`}
-                    />
-                  </CollapsibleTrigger>
-                  <CollapsibleContent>
-                    <div className="space-y-3 border-t border-border/50 px-4 pb-4 pt-3">
-                      <div>
-                        <p className="text-xs font-medium text-muted-foreground">Issue</p>
-                        <p className="mt-1 text-sm">{fix.issue}</p>
-                      </div>
-                      <div>
-                        <p className="text-xs font-medium text-muted-foreground">Solution</p>
-                        <p className="mt-1 text-sm">{fix.solution()}</p>
-                      </div>
-                    </div>
-                  </CollapsibleContent>
-                </div>
-              </Collapsible>
-            );
-          })}
-        </div>
-      </SettingsCard>
 
       <SettingsCard icon={Bug} title="Report details">
         <form
@@ -329,10 +197,10 @@ export function ReportProblemSection() {
                   value={email}
                   disabled={isSubmitting}
                   aria-invalid={Boolean(emailError)}
-                  aria-describedby={emailError ? 'report-email-error' : 'report-email-description'}
+                  aria-describedby={emailError ? "report-email-error" : "report-email-description"}
                   onChange={(event) => {
                     setEmail(event.target.value);
-                    if (emailError) setEmailError('');
+                    if (emailError) setEmailError("");
                     if (submitError) resetSubmitFallback();
                   }}
                 />
@@ -355,7 +223,7 @@ export function ReportProblemSection() {
                 value={message}
                 onChange={(event) => {
                   setMessage(event.target.value);
-                  if (messageError) setMessageError('');
+                  if (messageError) setMessageError("");
                   if (submitError) resetSubmitFallback();
                 }}
                 rows={8}
@@ -363,7 +231,7 @@ export function ReportProblemSection() {
                 required
                 disabled={isSubmitting}
                 aria-invalid={Boolean(messageError)}
-                aria-describedby={messageError ? 'report-message-error' : 'report-diagnostics-note'}
+                aria-describedby={messageError ? "report-message-error" : "report-diagnostics-note"}
                 className="min-h-40 resize-y"
               />
               {messageError ? (
@@ -380,7 +248,8 @@ export function ReportProblemSection() {
                 <AlertCircle />
                 <AlertTitle>Report not sent</AlertTitle>
                 <AlertDescription>
-                  {submitError} Copy the prepared report and send it manually if this keeps happening.
+                  {submitError} Copy the prepared report and send it manually if this keeps
+                  happening.
                 </AlertDescription>
               </Alert>
             ) : null}
@@ -395,52 +264,16 @@ export function ReportProblemSection() {
                   disabled={isSubmitting}
                 >
                   {copied ? <Check data-icon="inline-start" /> : <Copy data-icon="inline-start" />}
-                  {copied ? 'Copied' : 'Copy report'}
+                  {copied ? "Copied" : "Copy report"}
                 </Button>
               ) : null}
               <Button type="submit" size="sm" disabled={isSubmitting} aria-busy={isSubmitting}>
                 <Send data-icon="inline-start" />
-                {isSubmitting ? 'Submitting...' : 'Send report'}
+                {isSubmitting ? "Submitting..." : "Send report"}
               </Button>
             </Field>
           </FieldGroup>
         </form>
-      </SettingsCard>
-
-      <SettingsCard icon={MonitorCog} title="System configuration included">
-        {systemSpecs ? (
-          <dl className="grid gap-4 sm:grid-cols-2">
-            <div className="flex flex-col gap-1">
-              <dt className="text-sm text-muted-foreground">Operating system</dt>
-              <dd>
-                {systemSpecs.osName} {systemSpecs.osVersion} ({systemSpecs.arch})
-              </dd>
-            </div>
-            <div className="flex flex-col gap-1">
-              <dt className="text-sm text-muted-foreground">Processor</dt>
-              <dd>
-                {systemSpecs.cpuBrand} · {systemSpecs.cpuCores} cores
-              </dd>
-            </div>
-            <div className="flex flex-col gap-1">
-              <dt className="text-sm text-muted-foreground">Memory</dt>
-              <dd>{Math.round(systemSpecs.totalMemoryMb / 1024)} GB</dd>
-            </div>
-            <div className="flex flex-col gap-1">
-              <dt className="text-sm text-muted-foreground">Graphics</dt>
-              <dd>{systemSpecs.gpus.length ? systemSpecs.gpus.join(', ') : 'Not detected'}</dd>
-            </div>
-          </dl>
-        ) : (
-          <p className="text-sm text-muted-foreground">
-            {systemSpecs === undefined
-              ? 'Loading system configuration…'
-              : 'System configuration will be collected again when the report is sent.'}
-          </p>
-        )}
-        <p className="mt-4 text-xs text-muted-foreground">
-          The report also includes the app version, current model, anonymous device ID, and latest redacted app log.
-        </p>
       </SettingsCard>
     </SettingsPage>
   );

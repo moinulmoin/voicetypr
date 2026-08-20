@@ -7,11 +7,7 @@ import { createLogger } from "@/lib/logger";
 import { isMacOS } from "@/lib/platform";
 import { findActivePrimaryBinding } from "@/lib/shortcut-display";
 import { eventMatchesShortcut } from "@/lib/shortcut-event-match";
-import type {
-  ModifierSpec,
-  ShortcutBinding,
-  ShortcutSettings,
-} from "@/types/shortcuts";
+import type { ModifierSpec, ShortcutBinding, ShortcutSettings } from "@/types/shortcuts";
 
 const log = createLogger("in-app-hotkey");
 
@@ -127,9 +123,7 @@ export function useInAppRecordingHotkey(): void {
     invoke<ShortcutSettings>("get_shortcut_settings")
       .then((settings) => {
         if (token === bareModifierLoadTokenRef.current) {
-          bareModifierRef.current = tapToggleModifier(
-            findActivePrimaryBinding(settings.bindings),
-          );
+          bareModifierRef.current = tapToggleModifier(findActivePrimaryBinding(settings.bindings));
         }
       })
       .catch(() => {

@@ -22,7 +22,9 @@ vi.mock("@/hooks/useRecording", () => ({
   useRecording: () => mockRecording,
 }));
 
-const mockSettings = vi.hoisted(() => ({ hotkey: "CommandOrControl+Space" }) as Record<string, unknown>);
+const mockSettings = vi.hoisted(
+  () => ({ hotkey: "CommandOrControl+Space" }) as Record<string, unknown>,
+);
 vi.mock("@/contexts/SettingsContext", () => ({
   useSetting: (key: string) => mockSettings[key],
 }));
@@ -275,10 +277,18 @@ describe("useInAppRecordingHotkey", () => {
     await renderWithBareModifier();
 
     const opts = { bubbles: true, cancelable: true };
-    editable.dispatchEvent(new KeyboardEvent("keydown", { ...opts, code: "ControlLeft", key: "Control", ctrlKey: true }));
-    editable.dispatchEvent(new KeyboardEvent("keydown", { ...opts, code: "KeyC", key: "c", ctrlKey: true }));
-    editable.dispatchEvent(new KeyboardEvent("keyup", { ...opts, code: "KeyC", key: "c", ctrlKey: true }));
-    editable.dispatchEvent(new KeyboardEvent("keyup", { ...opts, code: "ControlLeft", key: "Control" }));
+    editable.dispatchEvent(
+      new KeyboardEvent("keydown", { ...opts, code: "ControlLeft", key: "Control", ctrlKey: true }),
+    );
+    editable.dispatchEvent(
+      new KeyboardEvent("keydown", { ...opts, code: "KeyC", key: "c", ctrlKey: true }),
+    );
+    editable.dispatchEvent(
+      new KeyboardEvent("keyup", { ...opts, code: "KeyC", key: "c", ctrlKey: true }),
+    );
+    editable.dispatchEvent(
+      new KeyboardEvent("keyup", { ...opts, code: "ControlLeft", key: "Control" }),
+    );
 
     expect(mockRecording.startRecording).not.toHaveBeenCalled();
     expect(mockRecording.stopRecording).not.toHaveBeenCalled();
@@ -310,7 +320,9 @@ describe("useInAppRecordingHotkey", () => {
   it("ignores a push-to-talk (modifier_hold) binding — tap path is toggle-only", async () => {
     mockSettings.hotkey = "";
     mockInvoke.mockResolvedValue({
-      bindings: [{ ...bareControlBinding, action: "hold_to_record", trigger_kind: "modifier_hold" }],
+      bindings: [
+        { ...bareControlBinding, action: "hold_to_record", trigger_kind: "modifier_hold" },
+      ],
     });
     await renderWithBareModifier();
 
@@ -403,5 +415,4 @@ describe("useInAppRecordingHotkey", () => {
     expect(mockRecording.startRecording).toHaveBeenCalledTimes(1);
     expect(mockRecording.stopRecording).not.toHaveBeenCalled();
   });
-
 });

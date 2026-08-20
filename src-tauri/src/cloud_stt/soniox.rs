@@ -4,8 +4,6 @@ use super::common::{self, AuthScheme};
 use std::path::Path;
 use tauri::AppHandle;
 
-pub(super) const MODEL: &str = "stt-async-v5";
-
 const BASE: &str = "https://api.soniox.com/v1";
 
 pub(super) async fn validate_key(key: &str) -> Result<(), String> {
@@ -20,13 +18,14 @@ pub(super) async fn validate_key(key: &str) -> Result<(), String> {
 }
 
 fn build_create_payload(
+    model: &str,
     file_id: &str,
     language: Option<&str>,
     context: Option<crate::writing::SonioxContext>,
     diarize: bool,
 ) -> serde_json::Value {
     let mut payload = serde_json::json!({
-        "model": MODEL,
+        "model": model,
         "file_id": file_id,
     });
 
@@ -55,6 +54,7 @@ fn build_create_payload(
 pub(super) async fn transcribe_typed(
     app: &AppHandle,
     key: &str,
+    model: &str,
     wav_path: &Path,
     language: Option<&str>,
 ) -> Result<String, common::SttError> {
@@ -121,7 +121,7 @@ pub(super) async fn transcribe_typed(
             None
         }
     };
-    let payload = build_create_payload(&file_id, language, soniox_context, false);
+    let payload = build_create_payload(model, &file_id, language, soniox_context, false);
 
     let create_url = format!("{}/transcriptions", BASE);
     let create_resp = common::with_retry(|| {
@@ -250,6 +250,7 @@ pub(super) async fn transcribe_typed(
 pub(super) async fn transcribe_typed_diarized(
     app: &AppHandle,
     key: &str,
+    model: &str,
     wav_path: &Path,
     language: Option<&str>,
 ) -> Result<super::CloudTranscript, common::SttError> {
@@ -315,7 +316,7 @@ pub(super) async fn transcribe_typed_diarized(
             None
         }
     };
-    let payload = build_create_payload(&file_id, language, soniox_context, true);
+    let payload = build_create_payload(model, &file_id, language, soniox_context, true);
 
     let create_url = format!("{}/transcriptions", BASE);
     let create_resp = common::with_retry(|| {
@@ -473,6 +474,7 @@ mod tests {
     #[test]
     fn create_payload_includes_language_and_structured_context() {
         let payload = build_create_payload(
+            "stt-async-v5",
             "file_123",
             Some(" en "),
             Some(SonioxContext {
@@ -508,6 +510,7 @@ mod tests {
     #[test]
     fn create_payload_omits_empty_optional_fields() {
         let payload = build_create_payload(
+            "stt-async-v5",
             "file_123",
             Some(" "),
             Some(SonioxContext {
@@ -525,12 +528,18 @@ mod tests {
 
     #[test]
     fn build_create_payload_diarize_flag_sets_field() {
-        let payload = build_create_payload("fid", None, None, true);
+        let payload = build_create_payload("stt-async-v5", "fid", None, None, true);
         assert_eq!(payload["enable_speaker_diarization"].as_bool(), Some(true));
-        let payload_no_diarize = build_create_payload("fid", None, None, false);
+        let payload_no_diarize = build_create_payload("stt-async-v5", "fid", None, None, false);
         assert!(payload_no_diarize
             .get("enable_speaker_diarization")
             .is_none());
+    }
+
+    #[test]
+    fn create_payload_uses_selected_model() {
+        let payload = build_create_payload("custom-model", "fid", None, None, false);
+        assert_eq!(payload["model"].as_str(), Some("custom-model"));
     }
 
     #[test]

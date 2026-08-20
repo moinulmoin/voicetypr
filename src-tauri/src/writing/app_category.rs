@@ -43,6 +43,7 @@ const TERMINAL: &[&str] = &[
     "alacritty",
     "kitty",
     "wezterm",
+    "ghostty",
     "powershell",
     "cmd",
     "windowsterminal",
@@ -62,9 +63,9 @@ const BROWSER: &[&str] = &["safari", "chrome", "firefox", "arc", "edge", "brave"
 
 /// Coarse-grained category of the app the user is dictating into.
 ///
-/// Drives a behavioral nudge injected into the polish prompt (see
-/// [`category_prompt_hint`]). Local-only: derived purely from string matching
-/// over the active app identity, never sent over the network.
+/// Drives a behavioral nudge injected into the Polish prompt (see
+/// [`category_prompt_hint`]). Classification happens locally from the active app
+/// identity; only the coarse category guidance, never the raw identity, reaches AI.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum AppCategory {
@@ -287,6 +288,14 @@ mod tests {
         assert_eq!(classify(&hint(Some("Safari"), None)), AppCategory::Browser);
         assert_eq!(classify(&hint(Some("Chrome"), None)), AppCategory::Browser);
         assert_eq!(classify(&hint(Some("Firefox"), None)), AppCategory::Browser);
+    }
+
+    #[test]
+    fn classify_returns_terminal_for_ghostty() {
+        assert_eq!(
+            classify(&hint(Some("Ghostty"), Some("/Applications/Ghostty.app"))),
+            AppCategory::Terminal
+        );
     }
 
     #[test]

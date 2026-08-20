@@ -23,9 +23,8 @@ export function ModelsTab() {
     deleteModel,
     repairModel,
     loadModels,
-    sortedModels
+    sortedModels,
   } = useModelManagementContext();
-
 
   // Save settings
   const saveSettings = useCallback(
@@ -36,7 +35,7 @@ export function ModelsTab() {
         log.error("Failed to save settings:", error);
       }
     },
-    [updateSettings]
+    [updateSettings],
   );
 
   // Handle deleting a model with settings update
@@ -55,12 +54,11 @@ export function ModelsTab() {
 
       // If deleted model was the current one, clear selection in settings
       if (deleted && settings?.current_model === modelName) {
-        await saveSettings({ current_model: "", current_model_engine: 'whisper' });
+        await saveSettings({ current_model: "", current_model_engine: "whisper" });
       }
     },
-    [deleteModel, settings, saveSettings]
+    [deleteModel, settings, saveSettings],
   );
-
 
   return (
     <ModelsSection
@@ -77,27 +75,50 @@ export function ModelsTab() {
       onRepair={repairModel}
       onSelect={async (modelName) => {
         if (!settings) return;
-        const engine = sortedModels.find(([name]) => name === modelName)?.[1]?.engine ?? 'whisper';
+        const engine = sortedModels.find(([name]) => name === modelName)?.[1]?.engine ?? "whisper";
         const previousSpeechLanguage = settings.speech_language;
         const parakeetSupportedLanguages = new Set([
-          'bg', 'cs', 'da', 'de', 'el', 'en', 'es', 'et', 'fi', 'fr', 'hr', 'hu',
-          'it', 'lt', 'lv', 'mt', 'nl', 'pl', 'pt', 'ro', 'ru', 'sk', 'sl', 'sv', 'uk',
+          "bg",
+          "cs",
+          "da",
+          "de",
+          "el",
+          "en",
+          "es",
+          "et",
+          "fi",
+          "fr",
+          "hr",
+          "hu",
+          "it",
+          "lt",
+          "lv",
+          "mt",
+          "nl",
+          "pl",
+          "pt",
+          "ro",
+          "ru",
+          "sk",
+          "sl",
+          "sv",
+          "uk",
         ]);
         const requiresSpeechLanguageReset =
-          (engine === 'whisper' && /\.en$/i.test(modelName) && previousSpeechLanguage !== 'en') ||
-          (engine === 'parakeet' &&
-            ((modelName.includes('-v2') && previousSpeechLanguage !== 'en') ||
-              (!modelName.includes('-v2') &&
+          (engine === "whisper" && /\.en$/i.test(modelName) && previousSpeechLanguage !== "en") ||
+          (engine === "parakeet" &&
+            ((modelName.includes("-v2") && previousSpeechLanguage !== "en") ||
+              (!modelName.includes("-v2") &&
                 !parakeetSupportedLanguages.has(previousSpeechLanguage))));
 
         await saveSettings({
           current_model: modelName,
           current_model_engine: engine,
-          ...(requiresSpeechLanguageReset ? { speech_language: 'en' } : {}),
+          ...(requiresSpeechLanguageReset ? { speech_language: "en" } : {}),
         });
 
         if (requiresSpeechLanguageReset) {
-          toast.info('Spoken language reset to English for the new model.');
+          toast.info("Spoken language reset to English for the new model.");
         }
       }}
       refreshModels={async () => {

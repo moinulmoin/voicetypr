@@ -1,7 +1,7 @@
 use std::time::Instant;
 
 use active_win_pos_rs::get_active_window;
-use tauri::AppHandle;
+use tauri::{AppHandle, Manager};
 use tauri_plugin_store::StoreExt;
 
 use crate::ai::error::{user_facing_message, AiProviderError};
@@ -26,10 +26,6 @@ fn enabled_app_rules(settings: &WritingSettings) -> impl Iterator<Item = &AppFor
         .app_formatting_rules
         .iter()
         .filter(|rule| rule.enabled && !rule.app_name.trim().is_empty())
-}
-
-fn app_rules_need_active_app(settings: &WritingSettings) -> bool {
-    enabled_app_rules(settings).next().is_some()
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -231,9 +227,7 @@ fn read_pipeline_config_inputs(app: &AppHandle) -> Result<PipelineConfigInputs, 
 pub fn effective_pipeline_config(app: &AppHandle) -> Result<EffectiveConfig, String> {
     let settings = load_writing_settings(app)?;
     let inputs = read_pipeline_config_inputs(app)?;
-    let should_capture_active_app =
-        app_rules_need_active_app(&settings) || inputs.ai_state.stored_ai_enabled;
-    let active_app = capture_active_app_context(should_capture_active_app);
+    let active_app = capture_active_app_context();
 
     Ok(resolve_pipeline_config(
         &settings,
@@ -286,11 +280,10 @@ pub(crate) fn language_scope_matches(
     }
 }
 
-fn capture_active_app_context(should_capture: bool) -> Option<ContextHint> {
-    if !should_capture {
-        return None;
-    }
-
+/// Capture the destination app for every desktop transcription. App identity is
+/// local history metadata and may drive explicit App Rules; AI availability only
+/// controls whether the derived coarse category is added to a Polish prompt.
+pub fn capture_active_app_context() -> Option<ContextHint> {
     let window = get_active_window().ok()?;
     if window.app_name.trim().is_empty() {
         return None;
@@ -503,8 +496,10 @@ pub async fn process_transcription(
     let settings = load_writing_settings(&app).map_err(WritingError::Config)?;
     let inputs = read_pipeline_config_inputs(&app).map_err(WritingError::Config)?;
     let ai_enabled = inputs.ai_state.stored_ai_enabled;
-    let should_capture_active_app = app_rules_need_active_app(&settings) || ai_enabled;
-    let mut active_app = capture_active_app_context(should_capture_active_app);
+    let mut active_app = app
+        .try_state::<crate::state::AppState>()
+        .and_then(|state| state.take_recording_app_context())
+        .or_else(capture_active_app_context);
     let pipeline_config = resolve_pipeline_config(
         &settings,
         inputs.global_preset,
@@ -624,6 +619,7 @@ pub async fn process_transcription(
         }
         library_result.text.clone()
     } else if should_run_ai {
+        let ai_polish_started = std::time::Instant::now();
         let smart_formatting = run_smart_formatting(SmartFormattingRequest {
             app,
             text: &library_result.text,
@@ -636,6 +632,7 @@ pub async fn process_transcription(
             warnings: &mut warnings,
         })
         .await;
+        let attempted_ai_polish_ms = ai_polish_started.elapsed().as_millis() as u64;
         let outcome = match resolve_smart_formatting_outcome(
             smart_formatting,
             &library_result.text,
@@ -646,6 +643,10 @@ pub async fn process_transcription(
         ) {
             Ok(outcome) => outcome,
             Err(error) => {
+                log::info!(
+                    "transcription_stage_timing stage=ai_polish duration_ms={} outcome=failed",
+                    attempted_ai_polish_ms
+                );
                 log_ai_formatting_decision(
                     ai_enabled,
                     pipeline_config.preset,
@@ -655,13 +656,15 @@ pub async fn process_transcription(
                 return Err(error);
             }
         };
+        let ai_failed = outcome.error.is_some();
         ai_error = outcome.error;
-        ai_polish_ms = outcome.duration_ms;
+        ai_polish_ms = outcome.duration_ms.or(Some(attempted_ai_polish_ms));
         ai_execution = outcome.execution;
         if let Some(duration_ms) = ai_polish_ms {
             log::info!(
-                "transcription_stage_timing stage=ai_polish duration_ms={}",
-                duration_ms
+                "transcription_stage_timing stage=ai_polish duration_ms={} outcome={}",
+                duration_ms,
+                if ai_failed { "failed" } else { "succeeded" }
             );
         }
         outcome.text
@@ -1305,7 +1308,7 @@ mod tests {
     }
 
     #[test]
-    fn test_category_hint_some_when_no_explicit_rule_matches() {
+    fn test_category_hint_is_resolved_without_ai_when_app_context_exists() {
         let settings = WritingSettings::default();
         let active_app = ContextHint {
             app_name: Some("Slack Desktop".to_string()),
@@ -1313,12 +1316,12 @@ mod tests {
         };
         let effective = resolve_pipeline_config(
             &settings,
-            EnhancementPreset::CleanDictation,
+            EnhancementPreset::PersonalDictation,
             FINAL_TEXT_LANGUAGE_SAME_AS_TRANSCRIPT,
             Some(&active_app),
-            PipelineAiState::from_validated_ai_enabled(true),
+            PipelineAiState::from_validated_ai_enabled(false),
         );
-        assert_eq!(effective.preset, EnhancementPreset::CleanDictation);
+        assert_eq!(effective.preset, EnhancementPreset::PersonalDictation);
         assert_eq!(
             effective.category_hint,
             Some(crate::writing::AppCategory::Chat)
