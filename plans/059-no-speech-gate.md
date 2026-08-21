@@ -20,19 +20,24 @@ and inserts it. Expected: "no speech detected" and nothing else.
   (audio/speech_evidence.rs:88-127) — the repo-rule instrumentation already
   exists.
 - Gates today:
-  - Exact-zero gate only (audio.rs:4973-4989).
+  - Exact-zero gate only (audio.rs:4973-4989) via `classify_speech_evidence`
+    (speech_evidence.rs:142-167), whose `Uncertain` class deliberately passes
+    through.
   - Local Whisper: normalize-with-metrics then **normalized duration < 0.5s**
     gate (audio.rs:5327-5351) → a ≥0.5s recording of pure room tone passes and
     Whisper hallucinates on it.
   - **Cloud/Remote STT: normalization + duration gate bypassed entirely**
-    (audio.rs:5233-5248) → even 0.2s can go to the cloud engine.
-  - Post-result `is_non_speech_transcript` word list (audio.rs:1125-1137,
-    5684-5708) catches some hallucinations after the fact — a word list can't
-    cover them all, and the GPU/API call already happened.
+    (audio.rs:5217-5248) → even short room tone can reach the cloud engine.
+  - Post-result `is_non_speech_transcript` marker list (audio.rs:1125-1137,
+    5684-5708) catches `""`/`[blank_audio]`/`[noise]`-style strings after the
+    fact — Whisper's natural-word hallucinations ("yeah", "okay so") are not
+    covered, and the engine call already happened.
 
 ## Fix design (honors AGENTS.md gotcha #11)
 
-**Decision point: before engine dispatch, on every path (local/cloud/remote).**
+**Decision point: before engine dispatch, on every path (local/cloud/remote),
+by extending `classify_speech_evidence` past exact-zero while keeping
+`Uncertain` → pass-through.**
 
 Reject only when evidence of absence is strong — never reject uncertain audio:
 
@@ -60,7 +65,8 @@ no_speech = speech_detected == false
 
 - No second full-buffer scan (reuse the metrics snapshot already taken).
 - No engine-config changes (Whisper `no_speech_prob` tuning may be a follow-up
-  if telemetry shows the pre-gate misses).
+  if telemetry shows the pre-gate misses; note `no_speech_thold(0.6)` is
+  already set at whisper/transcriber.rs:557-596).
 
 ## Acceptance
 
