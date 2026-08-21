@@ -1,0 +1,82 @@
+# Plan 059 — No-speech gate ("said nothing → nothing happens")
+
+**Status:** TODO
+**Priority:** P0 (recurring user-reported pain)
+**Effort:** S
+**Depends on:** — (independent; shares 058's stop-path context)
+
+## Problem (user-reported 2026-08-21)
+
+Press hotkey, say nothing, press again → the app transcribes room tone into a
+hallucinated word ("yeah", "okay so") and — worse — runs it through AI polish
+and inserts it. Expected: "no speech detected" and nothing else.
+
+## Current behavior (traced, file:line evidence)
+
+- Stop path snapshots `CaptureAudioMetrics { sample_count, duration_ms, rms,
+  peak, sample_rate, channels, speech_detected }` at recorder.rs:825-836,
+  handed to the command at audio.rs:4783-4799.
+- Full metrics are already shadow-logged by `SpeechEvidenceAttempt` Drop
+  (audio/speech_evidence.rs:88-127) — the repo-rule instrumentation already
+  exists.
+- Gates today:
+  - Exact-zero gate only (audio.rs:4973-4989).
+  - Local Whisper: normalize-with-metrics then **normalized duration < 0.5s**
+    gate (audio.rs:5327-5351) → a ≥0.5s recording of pure room tone passes and
+    Whisper hallucinates on it.
+  - **Cloud/Remote STT: normalization + duration gate bypassed entirely**
+    (audio.rs:5233-5248) → even 0.2s can go to the cloud engine.
+  - Post-result `is_non_speech_transcript` word list (audio.rs:1125-1137,
+    5684-5708) catches some hallucinations after the fact — a word list can't
+    cover them all, and the GPU/API call already happened.
+
+## Fix design (honors AGENTS.md gotcha #11)
+
+**Decision point: before engine dispatch, on every path (local/cloud/remote).**
+
+Reject only when evidence of absence is strong — never reject uncertain audio:
+
+```
+no_speech = speech_detected == false
+            AND rms < CALIBRATED_FLOOR
+            AND peak < PEAK_CEILING
+```
+
+- Thresholds calibrated from the **existing** SpeechEvidence telemetry (query
+  logged attempts: distribution of rms/peak for known-good short utterances vs.
+  known-hallucination outcomes). No new instrumentation pass needed if the
+  logged corpus suffices; else ship shadow-only first and calibrate from one
+  beta's telemetry (enforcement flag default off → on).
+- Duration is **context, not a gate**: short+loud speech must still transcribe.
+- On reject: emit "No speech detected" outcome → pill toast, **no engine call,
+  no polish call, no cursor insertion**, no history row (or an explicit
+  `no_speech` history entry per existing outcome taxonomy — match how cancel is
+  stored).
+- Expand `is_non_speech_transcript` as the second line of defense (cheap,
+  post-engine): include multi-word junk patterns; route its hits to the same
+  "no speech detected" outcome instead of inserting.
+
+## Non-goals
+
+- No second full-buffer scan (reuse the metrics snapshot already taken).
+- No engine-config changes (Whisper `no_speech_prob` tuning may be a follow-up
+  if telemetry shows the pre-gate misses).
+
+## Acceptance
+
+1. Gates green + focused unit tests for the gate predicate (boundary rms/peak,
+   short-loud-speech passes, long-silence rejects, metrics-missing → pass-
+   through, never reject on uncertain).
+2. Telemetry: gate decision + evidence fields on every stop (extend
+   SpeechEvidenceAttempt).
+3. Smoke (SMOKE.md when claimed): hotkey with silence → pill says "No speech
+   detected", nothing inserted, no polish request in logs; quiet whisper still
+   transcribes; cloud STT path shows same behavior as local.
+4. Beta gating: enforcement lands flag-default-on only after threshold
+   calibration is written into this file with the queried numbers.
+
+## STOP conditions
+
+- If telemetry corpus cannot separate speech/no-speech cleanly (false-negative
+  risk on soft speech), keep shadow mode and file findings — do not guess a
+  threshold.
