@@ -8458,6 +8458,7 @@ dependencies = [
  "clipboard-rs",
  "command-group",
  "core-graphics 0.24.0",
+ "coreaudio-sys",
  "cpal 0.16.0",
  "dirs 5.0.1",
  "dotenv",
