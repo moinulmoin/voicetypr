@@ -55,6 +55,9 @@ Verification commands used across all plans: `pnpm typecheck`, `pnpm lint`,
 | 054  | react-doctor full-court cleanup | P2 | L | 052, 053 | DONE — score 62→89 ("Great"), 93→1 finding (verified false positive); 15 giants split into ~60 modules; 663/663 tests + live click-through 2026-08-19 (see `054-react-doctor-cleanup.md`) |
 | 055  | Polish latency — fast-path defaults, speed guidance, measured-latency chips | P1 | M | 047 | TODO — brief filed 2026-08-20 from measured CLI autopsy (42K-token backpack, TTFT ~5s, no caching, $0.03/call); see `055-polish-fast-path.md` |
 | 056  | Local Polish model — Phase A s1-mini GGUF integration (no ML), Phase B LFM2.5-350M training | P1 | L | 055 | TODO — evidence filed 2026-08-20; Phase A uses public Apache-2.0+naming-clause weights, Phase B gated on license + eval; see `056-local-polish-model.md` |
+| 057  | cpal 0.18 stream resilience + auto device recovery (StreamInvalidated rebuild, stable IDs, busy/permission UX) | P1 | M | — | TODO — brief filed 2026-08-21 from upstream 0.17/0.18 changelog audit; see `057-cpal-stream-resilience.md` |
+| 058  | Pause & resume media during dictation (macOS MediaRemote/perl + NX-key + mute fallback; Windows SMTC + `globalMediaControl` manifest) | P1 | M | 057 | TODO — brief filed 2026-08-21; mechanism verified against VoiceInk source + MS docs; see `058-pause-media-during-dictation.md` |
+| 059  | No-speech gate — pre-engine reject on strong absence evidence, all STT paths; kills hallucinate-and-polish | P0 | S | — | TODO — brief filed 2026-08-21 after user report; shadow telemetry already exists (SpeechEvidenceAttempt); see `059-no-speech-gate.md` |
 
 ## Code-done, awaiting batched manual smoke (`plans/SMOKE.md`)
 
