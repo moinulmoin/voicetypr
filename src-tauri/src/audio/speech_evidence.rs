@@ -5,6 +5,7 @@ use super::recorder::CaptureAudioMetrics;
 pub enum SpeechEvidenceClass {
     SpeechPositive,
     HighConfidenceNoInput,
+    HighConfidenceNoSpeech,
     Uncertain,
 }
 
@@ -13,12 +14,16 @@ impl SpeechEvidenceClass {
         match self {
             Self::SpeechPositive => "speech_positive",
             Self::HighConfidenceNoInput => "high_confidence_no_input",
+            Self::HighConfidenceNoSpeech => "high_confidence_no_speech",
             Self::Uncertain => "uncertain",
         }
     }
 
     pub const fn would_skip_engine(self) -> bool {
-        matches!(self, Self::HighConfidenceNoInput)
+        matches!(
+            self,
+            Self::HighConfidenceNoInput | Self::HighConfidenceNoSpeech
+        )
     }
 }
 
@@ -28,6 +33,7 @@ pub enum SpeechEvidenceOutcome {
     CancelledBeforeEngine,
     PreparationFailure,
     SkippedNoInput,
+    SkippedNoSpeech,
     RecordingTooShort,
     EngineSuccess,
     EngineFailure,
@@ -40,6 +46,7 @@ impl SpeechEvidenceOutcome {
             Self::CancelledBeforeEngine => "cancelled_before_engine",
             Self::PreparationFailure => "preparation_failure",
             Self::SkippedNoInput => "skipped_no_input",
+            Self::SkippedNoSpeech => "skipped_no_speech",
             Self::RecordingTooShort => "recording_too_short",
             Self::EngineSuccess => "success",
             Self::EngineFailure => "failure",
@@ -138,7 +145,6 @@ impl Drop for SpeechEvidenceAttempt {
         }
     }
 }
-
 pub fn classify_speech_evidence(
     capture: Option<CaptureAudioMetrics>,
     prepared: Option<NormalizationMetrics>,
@@ -153,23 +159,43 @@ pub fn classify_speech_evidence(
         return SpeechEvidenceClass::SpeechPositive;
     }
 
-    if capture
-        .map(|metrics| {
-            metrics.sample_count > 0
-                && metrics.rms.is_finite()
-                && metrics.peak.is_finite()
-                && metrics.rms >= 0.0
-                && metrics.peak >= 0.0
-                && metrics.rms == 0.0
-                && metrics.peak == 0.0
-        })
-        .unwrap_or(false)
-    {
-        SpeechEvidenceClass::HighConfidenceNoInput
-    } else {
-        SpeechEvidenceClass::Uncertain
+    let capture = match capture {
+        Some(metrics) if metrics.sample_count > 0 => metrics,
+        _ => return SpeechEvidenceClass::Uncertain,
+    };
+
+    if capture.rms == 0.0 && capture.peak == 0.0 {
+        return SpeechEvidenceClass::HighConfidenceNoInput;
     }
+
+    // Calibrated from SPEECH_EVIDENCE telemetry (dev logs 2026-08-20/21):
+    // silence-with-room-tone captures sat at rms 0.00068–0.00071, peak
+    // 0.009–0.018 with no sustained speech latch, while the quietest real
+    // speech latched the detector (and is unreachable here) with aggregate
+    // rms >= 0.0084. The conjunction (no latch AND rms floor AND peak
+    // ceiling) keeps short, quiet, unlatched speech transcribing: any real
+    // word carries far more energy than these floors.
+    if !capture.speech_detected
+        && capture.rms.is_finite()
+        && capture.peak.is_finite()
+        && capture.rms > 0.0
+        && capture.rms < NO_SPEECH_RMS_FLOOR
+        && capture.peak < NO_SPEECH_PEAK_CEILING
+    {
+        return SpeechEvidenceClass::HighConfidenceNoSpeech;
+    }
+
+    SpeechEvidenceClass::Uncertain
 }
+
+/// Aggregate RMS below this with no sustained-speech latch is treated as
+/// strong evidence no speech occurred (calibrated: silence observed at
+/// rms <= 0.00071; quietest real speech at 0.0084 — 4x headroom above).
+pub const NO_SPEECH_RMS_FLOOR: f64 = 0.002;
+
+/// Peak ceiling for the no-speech class (calibrated: silence observed at
+/// peak <= 0.018; spoken words peak far above 0.05).
+pub const NO_SPEECH_PEAK_CEILING: f32 = 0.05;
 
 fn finite_f64(value: f64) -> Option<f64> {
     value.is_finite().then_some(value)
@@ -212,6 +238,59 @@ mod tests {
     }
 
     #[test]
+    fn silence_below_calibrated_floor_is_high_confidence_no_speech() {
+        // Observed real silence: rms 0.0007, peak 0.018, no latch.
+        assert_eq!(
+            classify_speech_evidence(Some(capture(171_008, 0.00071, 0.018, false)), None),
+            SpeechEvidenceClass::HighConfidenceNoSpeech
+        );
+    }
+
+    #[test]
+    fn quiet_unlatched_capture_above_floor_stays_uncertain() {
+        // Quiet but real energy above the rms floor must transcribe.
+        assert_eq!(
+            classify_speech_evidence(Some(capture(48_000, 0.0084, 0.12, false)), None),
+            SpeechEvidenceClass::Uncertain
+        );
+    }
+
+    #[test]
+    fn low_rms_with_loud_peak_stays_uncertain() {
+        // A transient click: quiet average, loud peak — never reject.
+        assert_eq!(
+            classify_speech_evidence(Some(capture(48_000, 0.0015, 0.4, false)), None),
+            SpeechEvidenceClass::Uncertain
+        );
+    }
+
+    #[test]
+    fn rms_at_floor_boundary_is_uncertain() {
+        assert_eq!(
+            classify_speech_evidence(
+                Some(capture(48_000, NO_SPEECH_RMS_FLOOR, 0.03, false)),
+                None
+            ),
+            SpeechEvidenceClass::Uncertain
+        );
+        assert_eq!(
+            classify_speech_evidence(
+                Some(capture(48_000, 0.00199, NO_SPEECH_PEAK_CEILING, false)),
+                None
+            ),
+            SpeechEvidenceClass::Uncertain
+        );
+    }
+
+    #[test]
+    fn latched_speech_never_classified_as_no_speech() {
+        assert_eq!(
+            classify_speech_evidence(Some(capture(48_000, 0.0001, 0.001, true)), None),
+            SpeechEvidenceClass::SpeechPositive
+        );
+    }
+
+    #[test]
     fn positive_capture_or_prepared_evidence_always_wins() {
         assert_eq!(
             classify_speech_evidence(Some(capture(16_000, 0.0, 0.0, true)), None),
@@ -235,7 +314,6 @@ mod tests {
 
         for metrics in [
             capture(0, 0.0, 0.0, false),
-            capture(16_000, 1e-12, 0.0, false),
             capture(16_000, 0.0, 1e-10, false),
             capture(16_000, f64::NAN, 0.0, false),
             capture(16_000, 0.0, f32::NAN, false),
@@ -249,17 +327,25 @@ mod tests {
                 SpeechEvidenceClass::Uncertain
             );
         }
+
+        // Degenerate-but-nonzero silence with zero peak now classifies as
+        // strong no-speech evidence (calibrated floor; see plan 059).
+        assert_eq!(
+            classify_speech_evidence(Some(capture(16_000, 1e-12, 0.0, false)), None),
+            SpeechEvidenceClass::HighConfidenceNoSpeech
+        );
     }
 
     #[test]
     fn any_nonzero_or_missing_capture_evidence_remains_uncertain() {
+        // Below-floor silence now rejects — the 059 contract change.
         assert_eq!(
             classify_speech_evidence(Some(capture(16_000, 1e-12, 1e-10, false)), None,),
-            SpeechEvidenceClass::Uncertain
+            SpeechEvidenceClass::HighConfidenceNoSpeech
         );
         assert_eq!(
             classify_speech_evidence(Some(capture(16_000, 0.000_01, 0.005, false)), None,),
-            SpeechEvidenceClass::Uncertain
+            SpeechEvidenceClass::HighConfidenceNoSpeech
         );
         assert_eq!(
             classify_speech_evidence(None, Some(prepared(false))),
