@@ -533,3 +533,14 @@ Native triggers (NT-S1..S4) are a SEPARATE post-2.0.0 add-on (plan 022 P2,
 owner-confirmed): optional to smoke and they do NOT gate the 2.0.0 release.
 If they fail, the native engine is simply not advertised; the legacy
 global_shortcut path is untouched, so 2.0.0 ships regardless.
+
+- [ ] **058-S1** Packaged macOS (v2.0.6-beta.7): with "Pause media during recording" enabled —
+      (a) Spotify or Music.app playing → hotkey: music pauses, stop: resumes (log: `paused via MediaRemote command`);
+      (b) browser player playing → hotkey: audio silences via mute fallback if the player ignores commands (log: `muted via CoreAudio`), stop: unmutes;
+      (c) quick tap (<0.5s) with music: still resumes;
+      (d) back-to-back recordings: stays paused through both, resumes after last stop;
+      (e) quit the app while a muted recording is active → output unmutes on exit;
+      (f) nothing playing → no phantom media action.
+- [ ] **058-S2** Windows (v2.0.6-beta.7): media pause via SMTC — Spotify + a Chrome tab video pause on record, resume on stop; verify the paused-session ledger resumes only the session we paused.
+- [ ] **059-S1** Packaged macOS (v2.0.6-beta.7): hotkey with silence → pill "No speech detected", nothing inserted, no engine/polish in logs (`skipped_no_speech` in SPEECH_EVIDENCE); quiet whisper still transcribes; cloud STT path same behavior as local.
+
