@@ -184,6 +184,11 @@ pub struct CaptureAudioMetrics {
     pub duration_ms: u64,
     pub rms: f64,
     pub peak: f32,
+    /// Highest single-callback (window) RMS seen during the capture. A short
+    /// quiet word inside a long silent capture keeps the aggregate RMS low
+    /// but pushes this well above room tone — the no-speech gate's guard
+    /// against deleting real speech.
+    pub max_window_rms: f32,
     pub sample_rate: u32,
     pub channels: u16,
     pub speech_detected: bool,
@@ -194,6 +199,7 @@ struct CaptureMetricsAccumulator {
     sample_count: AtomicU64,
     sum_squares_bits: AtomicU64,
     peak_bits: AtomicU32,
+    max_window_rms_bits: AtomicU32,
 }
 
 impl CaptureMetricsAccumulator {
@@ -210,13 +216,17 @@ impl CaptureMetricsAccumulator {
             peak = peak.max(sample.abs());
         }
 
+        // Bit-exact legacy formula (including NaN on empty slices) — the
+        // silence-detector threshold math depends on these bits.
+        let window_rms = (callback_sum_squares / samples.len() as f32).sqrt();
         if !samples.is_empty() {
             self.sample_count
                 .fetch_add(samples.len() as u64, Ordering::Relaxed);
             atomic_add_f64(&self.sum_squares_bits, aggregate_sum_squares);
             atomic_max_f32(&self.peak_bits, peak);
+            atomic_max_f32(&self.max_window_rms_bits, window_rms);
         }
-        (callback_sum_squares / samples.len() as f32).sqrt()
+        window_rms
     }
 
     fn snapshot(
@@ -243,6 +253,7 @@ impl CaptureMetricsAccumulator {
             duration_ms,
             rms,
             peak: f32::from_bits(self.peak_bits.load(Ordering::Relaxed)),
+            max_window_rms: f32::from_bits(self.max_window_rms_bits.load(Ordering::Relaxed)),
             sample_rate,
             channels,
             speech_detected,
@@ -1441,6 +1452,7 @@ mod tests {
             duration_ms: 1000,
             rms: 0.1,
             peak: 0.2,
+            max_window_rms: 0.1,
             sample_rate: 16_000,
             channels: 1,
             speech_detected: true,
@@ -1465,6 +1477,7 @@ mod tests {
             duration_ms: 1000,
             rms: 0.1,
             peak: 0.2,
+            max_window_rms: 0.1,
             sample_rate: 16_000,
             channels: 1,
             speech_detected: false,

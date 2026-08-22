@@ -43,9 +43,19 @@ Reject only when evidence of absence is strong — never reject uncertain audio:
 
 ```
 no_speech = speech_detected == false
-            AND rms < CALIBRATED_FLOOR
-            AND peak < PEAK_CEILING
+            AND 0 < rms < NO_SPEECH_RMS_FLOOR
+            AND peak < NO_SPEECH_PEAK_CEILING
 ```
+
+**Calibration (dev-log corpus 2026-08-20/21, 76 attempts — 2026-08-21):**
+72 speech_positive (all latched; lowest aggregate rms 0.0084), 2 exact-zero
+(already gated), 2 silence captures — the reported-bug cases — at rms
+0.00068–0.00071 / peak 0.0087–0.0183, no latch. Shipped floors:
+`NO_SPEECH_RMS_FLOOR = 0.002` (2.8x above observed silence, 4.2x below the
+quietest unlatched risk zone), `NO_SPEECH_PEAK_CEILING = 0.05` (2.7x above
+observed silence peaks). Latched speech is unreachable by construction; a
+loud transient fails the peak conjunction; quiet unlatched speech above the
+floor stays Uncertain and transcribes. Enforcement shipped default-on.
 
 - Thresholds calibrated from the **existing** SpeechEvidence telemetry (query
   logged attempts: distribution of rms/peak for known-good short utterances vs.

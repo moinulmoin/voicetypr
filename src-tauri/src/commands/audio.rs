@@ -62,6 +62,13 @@ static TOAST_ID_COUNTER: AtomicU64 = AtomicU64::new(0);
 /// Global media pause controller for pausing/resuming system media during recording
 static MEDIA_CONTROLLER: Lazy<MediaPauseController> = Lazy::new(MediaPauseController::new);
 
+/// Restore any output device the media pause controller muted before the
+/// application exits (macOS mute layer). Player pause state is untouched.
+#[cfg(target_os = "macos")]
+pub fn cleanup_media_pause_on_exit() {
+    MEDIA_CONTROLLER.cleanup_on_exit();
+}
+
 /// Monotonically increasing recording-generation counter. `start_recording`
 /// bumps it to open a new generation; a transcription task captures the value
 /// at spawn time and rejects its own result when the generation has advanced
@@ -4969,9 +4976,39 @@ pub async fn stop_recording(
         duration_ms: capture_metrics.as_ref().map(|metrics| metrics.duration_ms),
     });
 
-    if classify_speech_evidence(capture_metrics, None).would_skip_engine() {
+    let evidence_class = classify_speech_evidence(capture_metrics, None);
+    if evidence_class.would_skip_engine() {
         let mut speech_evidence_attempt =
             SpeechEvidenceAttempt::new("none".to_string(), "pre_engine", capture_metrics);
+        if evidence_class
+            == crate::audio::speech_evidence::SpeechEvidenceClass::HighConfidenceNoSpeech
+        {
+            speech_evidence_attempt.set_outcome(SpeechEvidenceOutcome::SkippedNoSpeech);
+            log::info!(
+                "Skipping speech engine: capture below calibrated no-speech floor (no sustained speech, negligible energy)"
+            );
+            if let Err(error) = std::fs::remove_file(&audio_path) {
+                log::debug!("Failed to remove no-speech recording: {}", error);
+            }
+            update_recording_state(&app, RecordingState::Idle, None);
+            pill_toast_with_suggestion(
+                &app,
+                "No speech detected",
+                "Try speaking closer to the microphone",
+                1500,
+                None,
+            );
+            if should_hide_pill(&app).await {
+                if let Err(error) = crate::commands::window::hide_pill_widget(app.clone()).await {
+                    log::error!(
+                        "Failed to hide pill window after no-speech recording: {}",
+                        error
+                    );
+                }
+            }
+            return Ok(String::new());
+        }
+
         speech_evidence_attempt.set_outcome(SpeechEvidenceOutcome::SkippedNoInput);
         log::info!("Skipping speech engine: capture contained only exact digital zero samples");
         if let Err(error) = std::fs::remove_file(&audio_path) {
