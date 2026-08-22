@@ -62,6 +62,13 @@ static TOAST_ID_COUNTER: AtomicU64 = AtomicU64::new(0);
 /// Global media pause controller for pausing/resuming system media during recording
 static MEDIA_CONTROLLER: Lazy<MediaPauseController> = Lazy::new(MediaPauseController::new);
 
+/// Restore any output device the media pause controller muted before the
+/// application exits (macOS mute layer). Player pause state is untouched.
+#[cfg(target_os = "macos")]
+pub fn cleanup_media_pause_on_exit() {
+    MEDIA_CONTROLLER.cleanup_on_exit();
+}
+
 /// Monotonically increasing recording-generation counter. `start_recording`
 /// bumps it to open a new generation; a transcription task captures the value
 /// at spawn time and rejects its own result when the generation has advanced

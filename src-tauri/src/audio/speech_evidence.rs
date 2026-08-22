@@ -172,15 +172,19 @@ pub fn classify_speech_evidence(
     // silence-with-room-tone captures sat at rms 0.00068–0.00071, peak
     // 0.009–0.018 with no sustained speech latch, while the quietest real
     // speech latched the detector (and is unreachable here) with aggregate
-    // rms >= 0.0084. The conjunction (no latch AND rms floor AND peak
-    // ceiling) keeps short, quiet, unlatched speech transcribing: any real
-    // word carries far more energy than these floors.
+    // rms >= 0.0084. The conjunction (no latch AND aggregate floor AND peak
+    // ceiling AND window ceiling) keeps short, quiet, unlatched speech
+    // transcribing: a 200ms quiet word inside a long silent capture drives
+    // one callback window's RMS far above room tone even though the whole-
+    // capture aggregate stays under the floor.
     if !capture.speech_detected
         && capture.rms.is_finite()
         && capture.peak.is_finite()
+        && capture.max_window_rms.is_finite()
         && capture.rms > 0.0
         && capture.rms < NO_SPEECH_RMS_FLOOR
         && capture.peak < NO_SPEECH_PEAK_CEILING
+        && capture.max_window_rms < NO_SPEECH_WINDOW_RMS_FLOOR
     {
         return SpeechEvidenceClass::HighConfidenceNoSpeech;
     }
@@ -196,6 +200,11 @@ pub const NO_SPEECH_RMS_FLOOR: f64 = 0.002;
 /// Peak ceiling for the no-speech class (calibrated: silence observed at
 /// peak <= 0.018; spoken words peak far above 0.05).
 pub const NO_SPEECH_PEAK_CEILING: f32 = 0.05;
+
+/// Highest single-callback RMS ceiling for the no-speech class. Room tone
+/// windows sit at ~0.0007; a quiet spoken word drives at least one callback
+/// window above 0.003 by a wide margin (calibrated, see plan 059).
+pub const NO_SPEECH_WINDOW_RMS_FLOOR: f32 = 0.003;
 
 fn finite_f64(value: f64) -> Option<f64> {
     value.is_finite().then_some(value)
@@ -215,11 +224,23 @@ mod tests {
         peak: f32,
         speech_detected: bool,
     ) -> CaptureAudioMetrics {
+        // Default: windows proportional to the aggregate (pure tone shape).
+        capture_with_windows(sample_count, rms, peak, speech_detected, rms as f32)
+    }
+
+    fn capture_with_windows(
+        sample_count: u64,
+        rms: f64,
+        peak: f32,
+        speech_detected: bool,
+        max_window_rms: f32,
+    ) -> CaptureAudioMetrics {
         CaptureAudioMetrics {
             sample_count,
             duration_ms: 1000,
             rms,
             peak,
+            max_window_rms,
             sample_rate: 16_000,
             channels: 1,
             speech_detected,
@@ -279,6 +300,34 @@ mod tests {
                 None
             ),
             SpeechEvidenceClass::Uncertain
+        );
+    }
+
+    #[test]
+    fn quiet_short_word_inside_long_silence_is_not_rejected() {
+        // Reviewer scenario: 200ms quiet word (window rms 0.01) inside a
+        // 10s silent capture -> aggregate rms ~0.0016, peak 0.04, unlatched.
+        // The window guard must keep this transcribing.
+        assert_eq!(
+            classify_speech_evidence(
+                Some(capture_with_windows(480_000, 0.001_58, 0.04, false, 0.01)),
+                None
+            ),
+            SpeechEvidenceClass::Uncertain
+        );
+    }
+
+    #[test]
+    fn steady_silence_with_flat_windows_still_rejects() {
+        // Pure room tone: every window at the same low level as the aggregate.
+        assert_eq!(
+            classify_speech_evidence(
+                Some(capture_with_windows(
+                    171_008, 0.000_71, 0.018, false, 0.000_8
+                )),
+                None
+            ),
+            SpeechEvidenceClass::HighConfidenceNoSpeech
         );
     }
 

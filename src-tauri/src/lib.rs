@@ -1769,7 +1769,13 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
                     show_main_window(app_handle);
                 }
             }
-            tauri::RunEvent::Exit => product_analytics::shutdown(),
+            tauri::RunEvent::Exit => {
+                // Never strand a system output device we muted: restore the
+                // mute state we changed before the process goes away.
+                #[cfg(target_os = "macos")]
+                crate::commands::audio::cleanup_media_pause_on_exit();
+                product_analytics::shutdown()
+            }
             _ => {}
         });
 
