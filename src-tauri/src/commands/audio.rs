@@ -1130,7 +1130,7 @@ fn desktop_failure_from_transcription_error(
 }
 
 fn is_non_speech_transcript(raw: &str) -> bool {
-    matches!(
+    if matches!(
         raw.trim().to_ascii_lowercase().as_str(),
         "" | "[blank_audio]"
             | "[sound]"
@@ -1140,7 +1140,14 @@ fn is_non_speech_transcript(raw: &str) -> bool {
             | "(silence)"
             | "(music)"
             | "(noise)"
-    )
+    ) {
+        return true;
+    }
+    // A transcript containing no letters or digits carries no information —
+    // engines hallucinate punctuation-only output (e.g. ". ") from transients
+    // and room tone. Observed live: a 2-char punctuation transcript pasted at
+    // the cursor from a silent capture.
+    raw.trim().chars().all(|c| !c.is_alphanumeric())
 }
 
 pub(crate) fn parakeet_segments_to_transcription_segments(

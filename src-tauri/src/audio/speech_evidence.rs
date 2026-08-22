@@ -100,6 +100,8 @@ impl SpeechEvidenceAttempt {
                 "duration_ms": metrics.duration_ms,
                 "rms": finite_f64(metrics.rms),
                 "peak": finite_f32(metrics.peak),
+                "max_window_rms": finite_f32(metrics.max_window_rms),
+                "windows_above_rms_floor": metrics.windows_above_rms_floor,
                 "sample_rate": metrics.sample_rate,
                 "channels": metrics.channels,
                 "sustained_speech": metrics.speech_detected,
@@ -169,14 +171,13 @@ pub fn classify_speech_evidence(
     }
 
     // Calibrated from SPEECH_EVIDENCE telemetry (dev logs 2026-08-20/21):
-    // silence-with-room-tone captures sat at rms 0.00068–0.00071, peak
-    // 0.009–0.018 with no sustained speech latch, while the quietest real
-    // speech latched the detector (and is unreachable here) with aggregate
-    // rms >= 0.0084. The conjunction (no latch AND aggregate floor AND peak
-    // ceiling AND window ceiling) keeps short, quiet, unlatched speech
-    // transcribing: a 200ms quiet word inside a long silent capture drives
-    // one callback window's RMS far above room tone even though the whole-
-    // capture aggregate stays under the floor.
+    // pure silence sits at rms ~0.0007 with every window under the floor,
+    // while real speech — even a 200ms quiet word — drives tens of callback
+    // windows above it. A mic wake-up pop or click drives only 1-2. The
+    // window COUNT is the transient discriminator: aggregate floors alone
+    // would reject a quiet word buried in long silence, and a window MAX
+    // alone lets a single pop through (observed live: 746ms "silent" capture
+    // with a transient window, engine hallucinated 2 chars, pasted).
     if !capture.speech_detected
         && capture.rms.is_finite()
         && capture.peak.is_finite()
@@ -184,7 +185,7 @@ pub fn classify_speech_evidence(
         && capture.rms > 0.0
         && capture.rms < NO_SPEECH_RMS_FLOOR
         && capture.peak < NO_SPEECH_PEAK_CEILING
-        && capture.max_window_rms < NO_SPEECH_WINDOW_RMS_FLOOR
+        && capture.windows_above_rms_floor <= NO_SPEECH_MAX_TRANSIENT_WINDOWS
     {
         return SpeechEvidenceClass::HighConfidenceNoSpeech;
     }
@@ -201,10 +202,17 @@ pub const NO_SPEECH_RMS_FLOOR: f64 = 0.002;
 /// peak <= 0.018; spoken words peak far above 0.05).
 pub const NO_SPEECH_PEAK_CEILING: f32 = 0.05;
 
-/// Highest single-callback RMS ceiling for the no-speech class. Room tone
-/// windows sit at ~0.0007; a quiet spoken word drives at least one callback
-/// window above 0.003 by a wide margin (calibrated, see plan 059).
+/// Highest single-callback RMS ceiling that still counts as a silent window.
+/// Room tone windows sit at ~0.0007; a quiet spoken word drives callback
+/// windows well above 0.003 (calibrated, see plan 059).
 pub const NO_SPEECH_WINDOW_RMS_FLOOR: f32 = 0.003;
+
+/// How many above-floor windows a "silent" capture may contain and still be
+/// classified no-speech. Real speech spans tens of ~10ms callback windows;
+/// mic wake-up pops and clicks span 1-2. Observed live 2026-08-22: a 746ms
+/// silent capture whose 1-2 transient windows let a hallucinated 2-char
+/// transcript through the window-max guard.
+pub const NO_SPEECH_MAX_TRANSIENT_WINDOWS: u32 = 2;
 
 fn finite_f64(value: f64) -> Option<f64> {
     value.is_finite().then_some(value)
@@ -225,7 +233,7 @@ mod tests {
         speech_detected: bool,
     ) -> CaptureAudioMetrics {
         // Default: windows proportional to the aggregate (pure tone shape).
-        capture_with_windows(sample_count, rms, peak, speech_detected, rms as f32)
+        capture_with_windows(sample_count, rms, peak, speech_detected, rms as f32, 0)
     }
 
     fn capture_with_windows(
@@ -234,6 +242,7 @@ mod tests {
         peak: f32,
         speech_detected: bool,
         max_window_rms: f32,
+        windows_above_floor: u32,
     ) -> CaptureAudioMetrics {
         CaptureAudioMetrics {
             sample_count,
@@ -241,6 +250,7 @@ mod tests {
             rms,
             peak,
             max_window_rms,
+            windows_above_rms_floor: windows_above_floor,
             sample_rate: 16_000,
             channels: 1,
             speech_detected,
@@ -305,12 +315,14 @@ mod tests {
 
     #[test]
     fn quiet_short_word_inside_long_silence_is_not_rejected() {
-        // Reviewer scenario: 200ms quiet word (window rms 0.01) inside a
-        // 10s silent capture -> aggregate rms ~0.0016, peak 0.04, unlatched.
-        // The window guard must keep this transcribing.
+        // Reviewer scenario: 200ms quiet word inside a 10s silent capture ->
+        // aggregate rms ~0.0016, peak 0.04, unlatched, but the word spans
+        // ~20 above-floor callback windows (200ms / ~10ms callbacks).
         assert_eq!(
             classify_speech_evidence(
-                Some(capture_with_windows(480_000, 0.001_58, 0.04, false, 0.01)),
+                Some(capture_with_windows(
+                    480_000, 0.001_58, 0.04, false, 0.01, 20
+                )),
                 None
             ),
             SpeechEvidenceClass::Uncertain
@@ -323,11 +335,48 @@ mod tests {
         assert_eq!(
             classify_speech_evidence(
                 Some(capture_with_windows(
-                    171_008, 0.000_71, 0.018, false, 0.000_8
+                    171_008, 0.000_71, 0.018, false, 0.000_8, 0
                 )),
                 None
             ),
             SpeechEvidenceClass::HighConfidenceNoSpeech
+        );
+    }
+
+    #[test]
+    fn transient_mic_pop_inside_silence_is_rejected() {
+        // Observed live 2026-08-22: 746ms "silent" capture where a mic
+        // wake-up transient drove 1-2 above-floor windows; the window-MAX
+        // guard let it through and the engine hallucinated 2 chars that got
+        // pasted. The count guard rejects it.
+        assert_eq!(
+            classify_speech_evidence(
+                Some(capture_with_windows(
+                    71_680, 0.000_795, 0.007_48, false, 0.004, 1
+                )),
+                None
+            ),
+            SpeechEvidenceClass::HighConfidenceNoSpeech
+        );
+        // Two transient windows still reject.
+        assert_eq!(
+            classify_speech_evidence(
+                Some(capture_with_windows(
+                    71_680, 0.000_795, 0.007_48, false, 0.004, 2
+                )),
+                None
+            ),
+            SpeechEvidenceClass::HighConfidenceNoSpeech
+        );
+        // Three windows (~30ms of energy) is speech-shaped: transcribe.
+        assert_eq!(
+            classify_speech_evidence(
+                Some(capture_with_windows(
+                    71_680, 0.000_795, 0.007_48, false, 0.004, 3
+                )),
+                None
+            ),
+            SpeechEvidenceClass::Uncertain
         );
     }
 

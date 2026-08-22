@@ -189,6 +189,10 @@ pub struct CaptureAudioMetrics {
     /// but pushes this well above room tone — the no-speech gate's guard
     /// against deleting real speech.
     pub max_window_rms: f32,
+    /// How many callback windows exceeded the no-speech floor. Real speech
+    /// spans tens of windows (~10ms each); a mic wake-up pop or click is
+    /// 1-2. This count is what separates a transient from a word.
+    pub windows_above_rms_floor: u32,
     pub sample_rate: u32,
     pub channels: u16,
     pub speech_detected: bool,
@@ -200,8 +204,8 @@ struct CaptureMetricsAccumulator {
     sum_squares_bits: AtomicU64,
     peak_bits: AtomicU32,
     max_window_rms_bits: AtomicU32,
+    windows_above_rms_floor: AtomicU32,
 }
-
 impl CaptureMetricsAccumulator {
     /// Observe one CPAL callback buffer and return its RMS. This is the callback's
     /// only sample traversal; the returned RMS feeds the existing level/silence path.
@@ -225,6 +229,9 @@ impl CaptureMetricsAccumulator {
             atomic_add_f64(&self.sum_squares_bits, aggregate_sum_squares);
             atomic_max_f32(&self.peak_bits, peak);
             atomic_max_f32(&self.max_window_rms_bits, window_rms);
+            if window_rms > crate::audio::speech_evidence::NO_SPEECH_WINDOW_RMS_FLOOR {
+                self.windows_above_rms_floor.fetch_add(1, Ordering::Relaxed);
+            }
         }
         window_rms
     }
@@ -254,6 +261,7 @@ impl CaptureMetricsAccumulator {
             rms,
             peak: f32::from_bits(self.peak_bits.load(Ordering::Relaxed)),
             max_window_rms: f32::from_bits(self.max_window_rms_bits.load(Ordering::Relaxed)),
+            windows_above_rms_floor: self.windows_above_rms_floor.load(Ordering::Relaxed),
             sample_rate,
             channels,
             speech_detected,
@@ -1453,6 +1461,7 @@ mod tests {
             rms: 0.1,
             peak: 0.2,
             max_window_rms: 0.1,
+            windows_above_rms_floor: 0,
             sample_rate: 16_000,
             channels: 1,
             speech_detected: true,
@@ -1478,6 +1487,7 @@ mod tests {
             rms: 0.1,
             peak: 0.2,
             max_window_rms: 0.1,
+            windows_above_rms_floor: 0,
             sample_rate: 16_000,
             channels: 1,
             speech_detected: false,
