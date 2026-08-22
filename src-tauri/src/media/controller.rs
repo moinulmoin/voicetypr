@@ -77,6 +77,9 @@ fn now_playing_snapshot_via_osascript() -> Option<NowPlayingSnapshot> {
         let stdin = child.stdin.as_mut()?;
         stdin.write_all(NOW_PLAYING_JXA_SCRIPT.as_bytes()).ok()?;
     }
+    // osascript reads the program until EOF; if the write end stays open in
+    // the Child, it never executes and every bounded wait times out.
+    drop(child.stdin.take());
 
     let output = wait_for_output_bounded(child, Duration::from_millis(750)).ok()?;
     if !output.status.success() {
@@ -230,11 +233,15 @@ impl MediaPauseController {
     /// Resume media if we paused it. Call when recording stops.
     /// Returns true if media was resumed.
     pub fn resume_if_we_paused(&self) -> bool {
-        // Resolve an in-flight pause first: a very short recording can stop
-        // before the pause worker finished, and its outcome must be applied
-        // before the resume decision below.
+        // Resolve an in-flight pause first (under the lifecycle lock): a
+        // very short recording can stop before the pause worker finished,
+        // and its outcome must be applied before the decision below. This
+        // must happen BEFORE the was_playing swap.
         #[cfg(target_os = "macos")]
-        self.join_pending_pause();
+        {
+            let mut guard = self.pending_pause.lock();
+            self.join_pending_pause_locked(&mut guard);
+        }
 
         if self
             .was_playing_before_recording
@@ -263,7 +270,10 @@ impl MediaPauseController {
     #[allow(dead_code)]
     pub fn reset(&self) {
         #[cfg(target_os = "macos")]
-        self.join_pending_pause();
+        {
+            let mut guard = self.pending_pause.lock();
+            self.join_pending_pause_locked(&mut guard);
+        }
 
         self.was_playing_before_recording
             .store(false, Ordering::SeqCst);
@@ -328,7 +338,8 @@ impl MediaPauseController {
     /// device we muted. Player pause state is left alone (the player owns
     /// it); the system output mute is ours to restore.
     pub fn cleanup_on_exit(&self) {
-        self.join_pending_pause();
+        let mut guard = self.pending_pause.lock();
+        self.join_pending_pause_locked(&mut guard);
         let mechanism = self
             .pause_mechanism
             .swap(PAUSE_MECHANISM_NONE, Ordering::SeqCst);
@@ -338,6 +349,7 @@ impl MediaPauseController {
             .swap(false, Ordering::SeqCst);
         self.was_playing_before_recording
             .store(false, Ordering::SeqCst);
+        drop(guard);
         if mechanism == PAUSE_MECHANISM_MUTE && !was_user_muted && device != 0 {
             if let Err(err) = set_output_device_muted(device, false) {
                 log::warn!("⚠️ Exit unmute failed for device {}: {}", device, err);
@@ -352,8 +364,14 @@ impl MediaPauseController {
     /// The layered logic can cost ~300ms (state check + verification polls);
     /// running it on a worker keeps `Starting` latency untouched. The stop
     /// and cancel paths join the pending pause before resuming.
+    ///
+    /// All lifecycle mutations (spawn publication, join, resume, exit
+    /// cleanup) hold `pending_pause` for their whole critical section so
+    /// they are mutually exclusive — an exit can never race a stop-path
+    /// join into dropping a completed mute.
     fn pause_if_playing_macos(&self) -> bool {
-        self.join_pending_pause();
+        let mut guard = self.pending_pause.lock();
+        self.join_pending_pause_locked(&mut guard);
         // Still holding a pause from the previous recording (user re-recorded
         // before resume): keep it — re-running the layers would either pause
         // a second time or flip the was-muted flag on our own mute.
@@ -362,12 +380,13 @@ impl MediaPauseController {
             return true;
         }
         let handle = std::thread::spawn(perform_layered_pause);
-        *self.pending_pause.lock() = Some(PendingPause { handle });
+        *guard = Some(PendingPause { handle });
         true
     }
 
     fn resume_macos(&self) -> bool {
-        self.join_pending_pause();
+        let mut guard = self.pending_pause.lock();
+        self.join_pending_pause_locked(&mut guard);
         let mechanism = self
             .pause_mechanism
             .swap(PAUSE_MECHANISM_NONE, Ordering::SeqCst);
@@ -384,19 +403,24 @@ impl MediaPauseController {
                 media_remote::send_command(media_remote::Command::Play)
             }
             PAUSE_MECHANISM_KEY => {
-                // Same guard as the command branch: if the user (or another
-                // player) is already playing, a toggle key press would PAUSE
-                // it — the reverse of what resume means.
-                if now_playing_snapshot_via_osascript()
-                    .and_then(|s| s.is_playing)
-                    .unwrap_or(false)
-                {
-                    log::debug!("Media already playing, skipping key resume");
-                    return false;
+                // The media key is a TOGGLE: only post it when now-playing
+                // is specifically Some(false). An unknown state must skip —
+                // toggling already-playing media would pause it.
+                match now_playing_snapshot_via_osascript().and_then(|s| s.is_playing) {
+                    Some(false) => {
+                        log::info!("🎵 Resuming media via media key event...");
+                        post_media_play_pause_key();
+                        true
+                    }
+                    Some(true) => {
+                        log::debug!("Media already playing, skipping key resume");
+                        false
+                    }
+                    None => {
+                        log::debug!("Now-playing state unknown; skipping key resume");
+                        false
+                    }
                 }
-                log::info!("🎵 Resuming media via media key event...");
-                post_media_play_pause_key();
-                true
             }
             PAUSE_MECHANISM_MUTE => {
                 if self.was_muted_before_recording.load(Ordering::SeqCst) {
@@ -427,12 +451,12 @@ impl MediaPauseController {
         }
     }
 
-    /// Resolve an in-flight pause (if any) into controller state without
-    /// resuming. Called before a new pause, before resume, and on reset so a
-    /// completed mute is never silently dropped.
-    fn join_pending_pause(&self) {
-        let pending = self.pending_pause.lock().take();
-        if let Some(pending) = pending {
+    /// Join and apply a pending pause while the lifecycle lock is held.
+    fn join_pending_pause_locked(
+        &self,
+        guard: &mut parking_lot::MutexGuard<'_, Option<PendingPause>>,
+    ) {
+        if let Some(pending) = guard.take() {
             match pending.handle.join() {
                 Ok(outcome) => self.apply_outcome(outcome),
                 Err(_) => log::warn!("⚠️ Media pause worker panicked"),
