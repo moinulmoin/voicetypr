@@ -189,9 +189,13 @@ pub struct CaptureAudioMetrics {
     /// but pushes this well above room tone — the no-speech gate's guard
     /// against deleting real speech.
     pub max_window_rms: f32,
-    /// How many callback windows exceeded the no-speech floor. Real speech
-    /// spans tens of windows (~10ms each); a mic wake-up pop or click is
-    /// 1-2. This count is what separates a transient from a word.
+    /// How many milliseconds of audio sat in callback windows above the
+    /// no-speech floor. Real speech spans >= tens of ms above it; a mic
+    /// wake-up pop or click is a few ms. Duration — not callback count —
+    /// so the discriminator is independent of the device buffer size.
+    pub ms_above_rms_floor: u64,
+    /// How many callback windows exceeded the no-speech floor (telemetry
+    /// only; decisions use `ms_above_rms_floor`).
     pub windows_above_rms_floor: u32,
     pub sample_rate: u32,
     pub channels: u16,
@@ -204,6 +208,7 @@ struct CaptureMetricsAccumulator {
     sum_squares_bits: AtomicU64,
     peak_bits: AtomicU32,
     max_window_rms_bits: AtomicU32,
+    samples_above_rms_floor: AtomicU64,
     windows_above_rms_floor: AtomicU32,
 }
 impl CaptureMetricsAccumulator {
@@ -230,6 +235,8 @@ impl CaptureMetricsAccumulator {
             atomic_max_f32(&self.peak_bits, peak);
             atomic_max_f32(&self.max_window_rms_bits, window_rms);
             if window_rms > crate::audio::speech_evidence::NO_SPEECH_WINDOW_RMS_FLOOR {
+                self.samples_above_rms_floor
+                    .fetch_add(samples.len() as u64, Ordering::Relaxed);
                 self.windows_above_rms_floor.fetch_add(1, Ordering::Relaxed);
             }
         }
@@ -255,12 +262,20 @@ impl CaptureMetricsAccumulator {
             (sum_squares / sample_count as f64).sqrt()
         };
 
+        let samples_above = self.samples_above_rms_floor.load(Ordering::Relaxed);
+        let above_frames = samples_above / u64::from(channels.max(1));
+        let ms_above_rms_floor = above_frames
+            .saturating_mul(1000)
+            .checked_div(u64::from(sample_rate.max(1)))
+            .unwrap_or(0);
+
         CaptureAudioMetrics {
             sample_count,
             duration_ms,
             rms,
             peak: f32::from_bits(self.peak_bits.load(Ordering::Relaxed)),
             max_window_rms: f32::from_bits(self.max_window_rms_bits.load(Ordering::Relaxed)),
+            ms_above_rms_floor,
             windows_above_rms_floor: self.windows_above_rms_floor.load(Ordering::Relaxed),
             sample_rate,
             channels,
@@ -1462,6 +1477,7 @@ mod tests {
             peak: 0.2,
             max_window_rms: 0.1,
             windows_above_rms_floor: 0,
+            ms_above_rms_floor: 0,
             sample_rate: 16_000,
             channels: 1,
             speech_detected: true,
@@ -1488,6 +1504,7 @@ mod tests {
             peak: 0.2,
             max_window_rms: 0.1,
             windows_above_rms_floor: 0,
+            ms_above_rms_floor: 0,
             sample_rate: 16_000,
             channels: 1,
             speech_detected: false,
