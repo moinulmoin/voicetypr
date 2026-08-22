@@ -3,7 +3,7 @@
 //! Pauses system media when recording starts and resumes when recording stops.
 //! Only resumes if WE paused it (not if user manually paused during recording).
 
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 
 #[cfg(target_os = "windows")]
 use parking_lot::Mutex;
@@ -133,9 +133,20 @@ pub struct MediaPauseController {
     /// Tracks if we paused the media (so we know whether to resume)
     was_playing_before_recording: AtomicBool,
 
-    /// On Windows, track which media session we paused so we only resume the same session.
-    #[cfg(target_os = "windows")]
-    paused_session_source_app_user_model_id: Mutex<Option<String>>,
+    /// How the current pause was achieved on macOS, so resume inverts the
+    /// same mechanism (command vs. media key vs. output mute).
+    #[cfg(target_os = "macos")]
+    pause_mechanism: AtomicU8,
+
+    /// True when the output device was already muted before we muted it
+    /// (never unmute a device the user muted themselves).
+    #[cfg(target_os = "macos")]
+    was_muted_before_recording: AtomicBool,
+
+    /// In-flight layered pause started at recording begin (macOS only, so
+    /// the ~300ms layered logic stays off the `Starting` critical path).
+    #[cfg(target_os = "macos")]
+    pending_pause: parking_lot::Mutex<Option<PendingPause>>,
 }
 
 impl Default for MediaPauseController {
@@ -148,6 +159,12 @@ impl MediaPauseController {
     pub fn new() -> Self {
         Self {
             was_playing_before_recording: AtomicBool::new(false),
+            #[cfg(target_os = "macos")]
+            pause_mechanism: AtomicU8::new(PAUSE_MECHANISM_NONE),
+            #[cfg(target_os = "macos")]
+            was_muted_before_recording: AtomicBool::new(false),
+            #[cfg(target_os = "macos")]
+            pending_pause: parking_lot::Mutex::new(None),
             #[cfg(target_os = "windows")]
             paused_session_source_app_user_model_id: Mutex::new(None),
         }
@@ -176,6 +193,12 @@ impl MediaPauseController {
     /// Resume media if we paused it. Call when recording stops.
     /// Returns true if media was resumed.
     pub fn resume_if_we_paused(&self) -> bool {
+        // Resolve an in-flight pause first: a very short recording can stop
+        // before the pause worker finished, and its outcome must be applied
+        // before the resume decision below.
+        #[cfg(target_os = "macos")]
+        self.join_pending_pause();
+
         if self
             .was_playing_before_recording
             .swap(false, Ordering::SeqCst)
@@ -202,8 +225,19 @@ impl MediaPauseController {
     /// Reset state without resuming (e.g., if app is closing)
     #[allow(dead_code)]
     pub fn reset(&self) {
+        #[cfg(target_os = "macos")]
+        self.join_pending_pause();
+
         self.was_playing_before_recording
             .store(false, Ordering::SeqCst);
+
+        #[cfg(target_os = "macos")]
+        {
+            self.pause_mechanism
+                .store(PAUSE_MECHANISM_NONE, Ordering::SeqCst);
+            self.was_muted_before_recording
+                .store(false, Ordering::SeqCst);
+        }
 
         #[cfg(target_os = "windows")]
         {
@@ -213,81 +247,328 @@ impl MediaPauseController {
 }
 
 // ============================================
+// macOS implementation: layered pause with verification.
+//
+// Layer 1 — MediaRemote `pause` command via the `media-remote` crate.
+//   Works for native players that accept remote commands (Music, Spotify…).
+// Layer 2 — NX_KEYTYPE_PLAY system-defined HID event (what the F8 media key
+//   produces). Reaches players that ignore MediaRemote but obey the key
+//   (e.g. Plexamp).
+// Layer 3 — Mute the default output device via CoreAudio. The only layer a
+//   browser-based player cannot ignore; this is the documented fallback for
+//   browsers (verified live: a Chromium-embedded player accepted layers 1–2
+//   with "success" while still playing).
+// Every layer is verified through now-playing state before being trusted,
+// and resume inverts exactly the mechanism that worked.
+#[cfg(target_os = "macos")]
+const PAUSE_MECHANISM_NONE: u8 = 0;
+#[cfg(target_os = "macos")]
+const PAUSE_MECHANISM_COMMAND: u8 = 1;
+#[cfg(target_os = "macos")]
+const PAUSE_MECHANISM_KEY: u8 = 2;
+#[cfg(target_os = "macos")]
+const PAUSE_MECHANISM_MUTE: u8 = 3;
+
+#[cfg(target_os = "macos")]
+enum PauseOutcome {
+    NotPlaying,
+    Command,
+    Key,
+    Mute { was_muted_before: bool },
+    Failed,
+}
+
+#[cfg(target_os = "macos")]
+struct PendingPause {
+    handle: std::thread::JoinHandle<PauseOutcome>,
+}
+
 #[cfg(target_os = "macos")]
 impl MediaPauseController {
+    /// Kick off the layered pause off the recording-start critical path.
+    /// The layered logic can cost ~300ms (state check + verification polls);
+    /// running it on a worker keeps `Starting` latency untouched. The stop
+    /// and cancel paths join the pending pause before resuming.
     fn pause_if_playing_macos(&self) -> bool {
-        let snapshot = now_playing_snapshot_via_osascript();
-        let is_playing = snapshot
-            .as_ref()
-            .and_then(|s| s.is_playing)
-            .unwrap_or(false);
-
-        if !is_playing {
-            log::debug!("No media playing, nothing to pause");
-            self.was_playing_before_recording
-                .store(false, Ordering::SeqCst);
-            return false;
+        self.join_pending_pause();
+        // Still holding a pause from the previous recording (user re-recorded
+        // before resume): keep it — re-running the layers would either pause
+        // a second time or flip the was-muted flag on our own mute.
+        if self.pause_mechanism.load(Ordering::SeqCst) != PAUSE_MECHANISM_NONE {
+            log::debug!("Media already paused by previous recording; keeping it paused");
+            return true;
         }
-
-        log::info!("🎵 Media is playing, pausing for recording...");
-
-        if toggle_media_playback_via_osascript() {
-            log::info!("✅ Media paused successfully");
-            self.was_playing_before_recording
-                .store(true, Ordering::SeqCst);
-            true
-        } else {
-            log::warn!("⚠️ Failed to pause media");
-            self.was_playing_before_recording
-                .store(false, Ordering::SeqCst);
-            false
-        }
+        let handle = std::thread::spawn(perform_layered_pause);
+        *self.pending_pause.lock() = Some(PendingPause { handle });
+        true
     }
 
     fn resume_macos(&self) -> bool {
-        if now_playing_snapshot_via_osascript()
-            .and_then(|s| s.is_playing)
-            .unwrap_or(false)
-        {
-            log::debug!("Media already playing (osascript), skipping resume");
-            return false;
+        self.join_pending_pause();
+        let mechanism = self
+            .pause_mechanism
+            .swap(PAUSE_MECHANISM_NONE, Ordering::SeqCst);
+        match mechanism {
+            PAUSE_MECHANISM_COMMAND => {
+                if now_playing_snapshot_via_osascript()
+                    .and_then(|s| s.is_playing)
+                    .unwrap_or(false)
+                {
+                    log::debug!("Media already playing, skipping resume");
+                    return false;
+                }
+                log::info!("🎵 Resuming media via MediaRemote play...");
+                media_remote::send_command(media_remote::Command::Play)
+            }
+            PAUSE_MECHANISM_KEY => {
+                log::info!("🎵 Resuming media via media key event...");
+                post_media_play_pause_key();
+                true
+            }
+            PAUSE_MECHANISM_MUTE => {
+                if self
+                    .was_muted_before_recording
+                    .swap(false, Ordering::SeqCst)
+                {
+                    log::debug!("Output was muted before recording; leaving muted");
+                    return true;
+                }
+                log::info!("🎵 Unmuting default output...");
+                match set_default_output_muted(false) {
+                    Ok(_) => true,
+                    Err(err) => {
+                        log::warn!("⚠️ Failed to unmute output: {}", err);
+                        false
+                    }
+                }
+            }
+            _ => false,
         }
+    }
 
-        log::info!("🎵 Resuming media playback...");
-        if toggle_media_playback_via_osascript() {
-            log::info!("✅ Media resumed successfully");
-            true
-        } else {
-            log::warn!("⚠️ Failed to resume media");
-            false
+    /// Resolve an in-flight pause (if any) into controller state without
+    /// resuming. Called before a new pause, before resume, and on reset so a
+    /// completed mute is never silently dropped.
+    fn join_pending_pause(&self) {
+        let pending = self.pending_pause.lock().take();
+        if let Some(pending) = pending {
+            match pending.handle.join() {
+                Ok(outcome) => self.apply_outcome(outcome),
+                Err(_) => log::warn!("⚠️ Media pause worker panicked"),
+            }
+        }
+    }
+
+    fn apply_outcome(&self, outcome: PauseOutcome) {
+        match outcome {
+            PauseOutcome::NotPlaying => {
+                log::debug!("No media playing, nothing to pause");
+                self.clear_pause_state();
+            }
+            PauseOutcome::Command => {
+                log::info!("✅ Media paused via MediaRemote command");
+                self.set_pause_state(PAUSE_MECHANISM_COMMAND, false);
+            }
+            PauseOutcome::Key => {
+                log::info!("✅ Media paused via media key event");
+                self.set_pause_state(PAUSE_MECHANISM_KEY, false);
+            }
+            PauseOutcome::Mute { was_muted_before } => {
+                log::info!("✅ Media muted via CoreAudio (player ignored pause commands)");
+                self.set_pause_state(PAUSE_MECHANISM_MUTE, was_muted_before);
+            }
+            PauseOutcome::Failed => {
+                log::warn!("⚠️ All media pause layers failed");
+                self.clear_pause_state();
+            }
+        }
+    }
+
+    fn set_pause_state(&self, mechanism: u8, was_muted_before: bool) {
+        self.was_playing_before_recording
+            .store(true, Ordering::SeqCst);
+        self.pause_mechanism.store(mechanism, Ordering::SeqCst);
+        self.was_muted_before_recording
+            .store(was_muted_before, Ordering::SeqCst);
+    }
+
+    fn clear_pause_state(&self) {
+        self.was_playing_before_recording
+            .store(false, Ordering::SeqCst);
+        self.pause_mechanism
+            .store(PAUSE_MECHANISM_NONE, Ordering::SeqCst);
+        self.was_muted_before_recording
+            .store(false, Ordering::SeqCst);
+    }
+}
+
+/// The layered pause, as a free function so it can run on a worker thread
+/// without borrowing the controller.
+#[cfg(target_os = "macos")]
+fn perform_layered_pause() -> PauseOutcome {
+    let is_playing = now_playing_snapshot_via_osascript()
+        .and_then(|s| s.is_playing)
+        .unwrap_or(false);
+    if !is_playing {
+        return PauseOutcome::NotPlaying;
+    }
+
+    log::info!("🎵 Media is playing, pausing for recording...");
+
+    // Layer 1: MediaRemote pause command.
+    if media_remote::send_command(media_remote::Command::Pause) && wait_until_paused(250) {
+        return PauseOutcome::Command;
+    }
+
+    // Layer 2: hardware media-key event.
+    post_media_play_pause_key();
+    if wait_until_paused(250) {
+        return PauseOutcome::Key;
+    }
+
+    // Layer 3: mute the default output device.
+    match set_default_output_muted(true) {
+        Ok(was_muted_before) => PauseOutcome::Mute { was_muted_before },
+        Err(err) => {
+            log::warn!("⚠️ Mute fallback failed: {}", err);
+            PauseOutcome::Failed
         }
     }
 }
 
+/// Poll now-playing state until it reports paused, or `timeout_ms` elapses.
 #[cfg(target_os = "macos")]
-fn toggle_media_playback_via_osascript() -> bool {
-    let output = ProcessCommand::new("/usr/bin/osascript")
-        .arg("-e")
-        .arg("tell application \"System Events\" to key code 100")
-        .output();
+fn wait_until_paused(timeout_ms: u64) -> bool {
+    let mut waited = 0u64;
+    while waited <= timeout_ms {
+        match now_playing_snapshot_via_osascript() {
+            Some(snapshot) => match snapshot.is_playing {
+                Some(false) => return true,
+                Some(true) => {}
+                None => return false,
+            },
+            None => return false,
+        }
+        std::thread::sleep(std::time::Duration::from_millis(50));
+        waited += 50;
+    }
+    false
+}
 
-    match output {
-        Ok(output) if output.status.success() => true,
-        Ok(output) => {
-            let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
-            let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
-            log::warn!(
-                "osascript media toggle failed | status={:?} stdout={:?} stderr={:?}",
-                output.status,
-                stdout,
-                stderr
-            );
-            false
+/// Post the hardware play/pause media-key event (NX_KEYTYPE_PLAY = 16) as a
+/// system-defined event — the same HID event the physical F8 key produces,
+/// and the same technique VoiceInk and Hammerspoon use.
+#[cfg(target_os = "macos")]
+fn post_media_play_pause_key() {
+    const NSEVENT_TYPE_SYSTEM_DEFINED: usize = 14;
+    const NX_SUBTYPE_AUX_CONTROL_BUTTONS: i16 = 8;
+    const NX_KEYTYPE_PLAY: isize = 16;
+    const K_CGHID_EVENT_TAP: u32 = 0;
+
+    extern "C" {
+        fn CGEventPost(tap: u32, event: *const std::ffi::c_void);
+    }
+
+    unsafe {
+        let class = objc2::runtime::AnyClass::get(c"NSEvent").expect("NSEvent class");
+        let origin = objc2_foundation::NSPoint::new(0.0, 0.0);
+        for down in [true, false] {
+            let state: isize = if down { 0xa } else { 0xb };
+            let flags: usize = if down { 0xa00 } else { 0xb00 };
+            let event: *mut objc2::runtime::AnyObject = objc2::msg_send![
+                class,
+                otherEventWithType: NSEVENT_TYPE_SYSTEM_DEFINED,
+                location: origin,
+                modifierFlags: flags,
+                timestamp: 0f64,
+                windowNumber: 0isize,
+                context: std::ptr::null_mut::<objc2::runtime::AnyObject>(),
+                subtype: NX_SUBTYPE_AUX_CONTROL_BUTTONS,
+                data1: (NX_KEYTYPE_PLAY << 16) | (state << 8),
+                data2: -1isize,
+            ];
+            if event.is_null() {
+                log::warn!("Failed to create media key NSEvent");
+                return;
+            }
+            let cg_event: *const std::ffi::c_void = objc2::msg_send![event, CGEvent];
+            if cg_event.is_null() {
+                log::warn!("Media key NSEvent had no CGEvent");
+                return;
+            }
+            CGEventPost(K_CGHID_EVENT_TAP, cg_event);
+            std::thread::sleep(std::time::Duration::from_millis(20));
         }
-        Err(err) => {
-            log::warn!("Failed to execute osascript media toggle: {}", err);
-            false
+    }
+}
+
+/// Mute or unmute the default output device. Returns the previous mute state
+/// on success so callers can avoid unmuting a user-muted device.
+#[cfg(target_os = "macos")]
+fn set_default_output_muted(mute: bool) -> Result<bool, String> {
+    use coreaudio_sys::{
+        kAudioDevicePropertyMute, kAudioDevicePropertyScopeOutput,
+        kAudioHardwarePropertyDefaultOutputDevice, kAudioObjectPropertyElementMain,
+        kAudioObjectPropertyScopeGlobal, kAudioObjectSystemObject, AudioObjectGetPropertyData,
+        AudioObjectHasProperty, AudioObjectPropertyAddress, AudioObjectSetPropertyData,
+    };
+
+    unsafe {
+        let mut device: u32 = 0;
+        let mut size: u32 = std::mem::size_of::<u32>() as u32;
+        let default_addr = AudioObjectPropertyAddress {
+            mSelector: kAudioHardwarePropertyDefaultOutputDevice,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain,
+        };
+        let status = AudioObjectGetPropertyData(
+            kAudioObjectSystemObject,
+            &default_addr,
+            0,
+            std::ptr::null(),
+            &mut size,
+            &mut device as *mut u32 as *mut std::ffi::c_void,
+        );
+        if status != 0 {
+            return Err(format!("default output device lookup failed: {}", status));
         }
+
+        let mute_addr = AudioObjectPropertyAddress {
+            mSelector: kAudioDevicePropertyMute,
+            mScope: kAudioDevicePropertyScopeOutput,
+            mElement: kAudioObjectPropertyElementMain,
+        };
+        if AudioObjectHasProperty(device, &mute_addr) == 0 {
+            return Err("output device has no mute property".to_string());
+        }
+
+        let mut previous: u32 = 0;
+        let status = AudioObjectGetPropertyData(
+            device,
+            &mute_addr,
+            0,
+            std::ptr::null(),
+            &mut size,
+            &mut previous as *mut u32 as *mut std::ffi::c_void,
+        );
+        if status != 0 {
+            return Err(format!("mute state read failed: {}", status));
+        }
+
+        let value: u32 = if mute { 1 } else { 0 };
+        let status = AudioObjectSetPropertyData(
+            device,
+            &mute_addr,
+            0,
+            std::ptr::null(),
+            std::mem::size_of::<u32>() as u32,
+            &value as *const u32 as *const std::ffi::c_void,
+        );
+        if status != 0 {
+            return Err(format!("mute set failed: {}", status));
+        }
+
+        Ok(previous != 0)
     }
 }
 
@@ -633,6 +914,73 @@ mod tests {
         assert!(!controller
             .was_playing_before_recording
             .load(Ordering::SeqCst));
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn test_new_controller_has_no_pause_mechanism() {
+        let controller = MediaPauseController::new();
+        assert_eq!(
+            controller.pause_mechanism.load(Ordering::SeqCst),
+            PAUSE_MECHANISM_NONE
+        );
+        assert!(!controller.was_muted_before_recording.load(Ordering::SeqCst));
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn test_resume_without_mechanism_is_noop() {
+        let controller = MediaPauseController::new();
+        controller
+            .was_playing_before_recording
+            .store(true, Ordering::SeqCst);
+        // mechanism == NONE: resume must not touch any OS API and report false.
+        assert!(!controller.resume_macos());
+        assert_eq!(
+            controller.pause_mechanism.load(Ordering::SeqCst),
+            PAUSE_MECHANISM_NONE
+        );
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn test_resume_mute_preserves_user_muted_device() {
+        // User muted the device themselves before recording: resume must keep
+        // it muted and report success without touching CoreAudio.
+        let controller = MediaPauseController::new();
+        controller
+            .was_playing_before_recording
+            .store(true, Ordering::SeqCst);
+        controller
+            .pause_mechanism
+            .store(PAUSE_MECHANISM_MUTE, Ordering::SeqCst);
+        controller
+            .was_muted_before_recording
+            .store(true, Ordering::SeqCst);
+        assert!(controller.resume_macos());
+        // mechanism consumed
+        assert_eq!(
+            controller.pause_mechanism.load(Ordering::SeqCst),
+            PAUSE_MECHANISM_NONE
+        );
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn test_reset_clears_mechanism() {
+        let controller = MediaPauseController::new();
+        controller
+            .pause_mechanism
+            .store(PAUSE_MECHANISM_COMMAND, Ordering::SeqCst);
+        controller
+            .was_muted_before_recording
+            .store(true, Ordering::SeqCst);
+        controller.reset();
+        assert_eq!(
+            controller.pause_mechanism.load(Ordering::SeqCst),
+            PAUSE_MECHANISM_NONE
+        );
+        assert!(!controller.was_muted_before_recording.load(Ordering::SeqCst));
     }
 
     #[test]
