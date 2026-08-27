@@ -542,5 +542,6 @@ global_shortcut path is untouched, so 2.0.0 ships regardless.
       (e) quit the app while a muted recording is active → output unmutes on exit;
       (f) nothing playing → no phantom media action.
 - [ ] **058-S2** Windows (v2.0.6-beta.7): media pause via SMTC — Spotify + a Chrome tab video pause on record, resume on stop; verify the paused-session ledger resumes only the session we paused.
-- [ ] **059-S1** Packaged macOS (v2.0.6-beta.7): hotkey with silence → pill "No speech detected", nothing inserted, no engine/polish in logs (`skipped_no_speech` in SPEECH_EVIDENCE); quiet whisper still transcribes; cloud STT path same behavior as local.
+- [ ] **059-S1** Packaged macOS (`v2.0.6-beta.8`): hotkey with silence and a mic activation pop → pill "No speech detected", nothing inserted, no engine/polish in logs (`skipped_no_speech` in `SPEECH_EVIDENCE`); a 31–100ms soft utterance, quiet whisper, and deliberately dictated punctuation still transcribe; cloud STT path behaves like local.
+  - [ ] **059-S2** Packaged Windows (`v2.0.6-beta.8`): repeat 059-S1 with mono/stereo 44.1/48kHz devices and both small/large WASAPI callback buffers; stop during the final syllable keeps speech; local/cloud/remote routes remain fail-open for uncertain audio.
 

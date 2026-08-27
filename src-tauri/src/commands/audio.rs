@@ -1130,7 +1130,7 @@ fn desktop_failure_from_transcription_error(
 }
 
 fn is_non_speech_transcript(raw: &str) -> bool {
-    if matches!(
+    matches!(
         raw.trim().to_ascii_lowercase().as_str(),
         "" | "[blank_audio]"
             | "[sound]"
@@ -1140,18 +1140,7 @@ fn is_non_speech_transcript(raw: &str) -> bool {
             | "(silence)"
             | "(music)"
             | "(noise)"
-    ) {
-        return true;
-    }
-    // Narrow hallucination suppression: engines emit short pure-punctuation
-    // output (". ", "-") from transients and room tone. Deliberate symbol
-    // dictation ("@", "#", emoji) still passes — only punctuation marks
-    // qualify, and only up to 4 characters.
-    let trimmed = raw.trim();
-    trimmed.chars().count() <= 4
-        && trimmed
-            .chars()
-            .all(|c| matches!(c, '.' | ',' | '-' | '?' | '!' | '…'))
+    )
 }
 
 pub(crate) fn parakeet_segments_to_transcription_segments(
@@ -1917,21 +1906,10 @@ mod tests {
     }
 
     #[test]
-    fn is_non_speech_transcript_suppresses_short_punctuation_hallucinations() {
-        assert!(is_non_speech_transcript("."));
-        assert!(is_non_speech_transcript(". "));
-        assert!(is_non_speech_transcript("-"));
-        assert!(is_non_speech_transcript("..."));
-        assert!(is_non_speech_transcript(" ?, "));
-    }
-
-    #[test]
-    fn is_non_speech_transcript_preserves_symbols_emoji_and_numbers() {
-        assert!(!is_non_speech_transcript("@"));
-        assert!(!is_non_speech_transcript("#"));
-        assert!(!is_non_speech_transcript("✅"));
-        assert!(!is_non_speech_transcript("42"));
-        assert!(!is_non_speech_transcript("....."));
+    fn is_non_speech_transcript_preserves_deliberate_punctuation_and_symbols() {
+        for transcript in [".", ". ", "-", "...", "?,", "@", "#", "✅", "42", "....."] {
+            assert!(!is_non_speech_transcript(transcript));
+        }
     }
     #[test]
     fn remote_transcription_result_preserves_server_metadata() {

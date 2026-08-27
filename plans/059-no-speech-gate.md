@@ -1,6 +1,6 @@
 # Plan 059 — No-speech gate ("said nothing → nothing happens")
 
-**Status:** TODO
+**Status:** CODE COMPLETE — beta.8 candidate; packaged macOS/Windows smoke pending
 **Priority:** P0 (recurring user-reported pain)
 **Effort:** S
 **Depends on:** — (independent; shares 058's stop-path context)

@@ -202,27 +202,74 @@ pub struct CaptureAudioMetrics {
     pub speech_detected: bool,
 }
 
-#[derive(Debug, Default)]
+const SPEECH_EVIDENCE_WINDOW_MS: u64 = 5;
+
+#[derive(Debug)]
 struct CaptureMetricsAccumulator {
     sample_count: AtomicU64,
     sum_squares_bits: AtomicU64,
     peak_bits: AtomicU32,
     max_window_rms_bits: AtomicU32,
+    evidence_window_samples: u64,
+    evidence_window_sum_squares_bits: AtomicU64,
+    evidence_window_sample_count: AtomicU64,
     samples_above_rms_floor: AtomicU64,
     windows_above_rms_floor: AtomicU32,
 }
+
 impl CaptureMetricsAccumulator {
-    /// Observe one CPAL callback buffer and return its RMS. This is the callback's
-    /// only sample traversal; the returned RMS feeds the existing level/silence path.
+    fn new(sample_rate: u32, channels: u16) -> Self {
+        let frames_per_window = u64::from(sample_rate.max(1))
+            .saturating_mul(SPEECH_EVIDENCE_WINDOW_MS)
+            .checked_div(1000)
+            .unwrap_or(0)
+            .max(1);
+        Self {
+            sample_count: AtomicU64::new(0),
+            sum_squares_bits: AtomicU64::new(0),
+            peak_bits: AtomicU32::new(0),
+            max_window_rms_bits: AtomicU32::new(0),
+            evidence_window_samples: frames_per_window.saturating_mul(u64::from(channels.max(1))),
+            evidence_window_sum_squares_bits: AtomicU64::new(0),
+            evidence_window_sample_count: AtomicU64::new(0),
+            samples_above_rms_floor: AtomicU64::new(0),
+            windows_above_rms_floor: AtomicU32::new(0),
+        }
+    }
+
+    /// Observe one CPAL callback buffer and return its RMS. Recording-wide
+    /// metrics and fixed 10ms evidence windows share this single sample traversal.
     fn observe(&self, samples: &[f32]) -> f32 {
         let mut callback_sum_squares = 0.0f32;
         let mut aggregate_sum_squares = 0.0f64;
         let mut peak = 0.0f32;
+        let mut evidence_sum_squares = f64::from_bits(
+            self.evidence_window_sum_squares_bits
+                .load(Ordering::Relaxed),
+        );
+        let mut evidence_sample_count = self.evidence_window_sample_count.load(Ordering::Relaxed);
+        let mut samples_above_floor = 0u64;
+        let mut windows_above_floor = 0u32;
+
         for &sample in samples {
             callback_sum_squares += sample * sample;
             let sample_f64 = sample as f64;
-            aggregate_sum_squares += sample_f64 * sample_f64;
+            let sample_square = sample_f64 * sample_f64;
+            aggregate_sum_squares += sample_square;
             peak = peak.max(sample.abs());
+
+            evidence_sum_squares += sample_square;
+            evidence_sample_count += 1;
+            if evidence_sample_count == self.evidence_window_samples {
+                let evidence_rms =
+                    (evidence_sum_squares / evidence_sample_count as f64).sqrt() as f32;
+                if evidence_rms > crate::audio::speech_evidence::NO_SPEECH_WINDOW_RMS_FLOOR {
+                    samples_above_floor = samples_above_floor.saturating_add(evidence_sample_count);
+                    windows_above_floor = windows_above_floor.saturating_add(1);
+                }
+                evidence_sum_squares = 0.0;
+                evidence_sample_count = 0;
+            }
         }
 
         // Bit-exact legacy formula (including NaN on empty slices) — the
@@ -234,11 +281,14 @@ impl CaptureMetricsAccumulator {
             atomic_add_f64(&self.sum_squares_bits, aggregate_sum_squares);
             atomic_max_f32(&self.peak_bits, peak);
             atomic_max_f32(&self.max_window_rms_bits, window_rms);
-            if window_rms > crate::audio::speech_evidence::NO_SPEECH_WINDOW_RMS_FLOOR {
-                self.samples_above_rms_floor
-                    .fetch_add(samples.len() as u64, Ordering::Relaxed);
-                self.windows_above_rms_floor.fetch_add(1, Ordering::Relaxed);
-            }
+            self.evidence_window_sum_squares_bits
+                .store(evidence_sum_squares.to_bits(), Ordering::Relaxed);
+            self.evidence_window_sample_count
+                .store(evidence_sample_count, Ordering::Relaxed);
+            self.samples_above_rms_floor
+                .fetch_add(samples_above_floor, Ordering::Relaxed);
+            self.windows_above_rms_floor
+                .fetch_add(windows_above_floor, Ordering::Relaxed);
         }
         window_rms
     }
@@ -262,11 +312,26 @@ impl CaptureMetricsAccumulator {
             (sum_squares / sample_count as f64).sqrt()
         };
 
-        let samples_above = self.samples_above_rms_floor.load(Ordering::Relaxed);
+        let mut samples_above = self.samples_above_rms_floor.load(Ordering::Relaxed);
+        let mut windows_above = self.windows_above_rms_floor.load(Ordering::Relaxed);
+        let partial_sample_count = self.evidence_window_sample_count.load(Ordering::Relaxed);
+        if partial_sample_count > 0 {
+            let partial_sum_squares = f64::from_bits(
+                self.evidence_window_sum_squares_bits
+                    .load(Ordering::Relaxed),
+            );
+            let partial_rms = (partial_sum_squares / partial_sample_count as f64).sqrt() as f32;
+            if partial_rms > crate::audio::speech_evidence::NO_SPEECH_WINDOW_RMS_FLOOR {
+                samples_above = samples_above.saturating_add(partial_sample_count);
+                windows_above = windows_above.saturating_add(1);
+            }
+        }
         let above_frames = samples_above / u64::from(channels.max(1));
+        let rate = u64::from(sample_rate.max(1));
         let ms_above_rms_floor = above_frames
             .saturating_mul(1000)
-            .checked_div(u64::from(sample_rate.max(1)))
+            .saturating_add(rate.saturating_sub(1))
+            .checked_div(rate)
             .unwrap_or(0);
 
         CaptureAudioMetrics {
@@ -276,11 +341,18 @@ impl CaptureMetricsAccumulator {
             peak: f32::from_bits(self.peak_bits.load(Ordering::Relaxed)),
             max_window_rms: f32::from_bits(self.max_window_rms_bits.load(Ordering::Relaxed)),
             ms_above_rms_floor,
-            windows_above_rms_floor: self.windows_above_rms_floor.load(Ordering::Relaxed),
+            windows_above_rms_floor: windows_above,
             sample_rate,
             channels,
             speech_detected,
         }
+    }
+}
+
+#[cfg(test)]
+impl Default for CaptureMetricsAccumulator {
+    fn default() -> Self {
+        Self::new(100, 1)
     }
 }
 
@@ -472,7 +544,10 @@ impl AudioRecorder {
 
             // Initialize silence detector and level meter
             let silence_detector = Arc::new(Mutex::new(SilenceDetector::new()));
-            let capture_metrics = Arc::new(CaptureMetricsAccumulator::default());
+            let capture_metrics = Arc::new(CaptureMetricsAccumulator::new(
+                config.sample_rate().0,
+                config.channels(),
+            ));
             let level_meter = Arc::new(Mutex::new(
                 AudioLevelMeter::new(
                     config.sample_rate().0,
@@ -1442,6 +1517,73 @@ mod tests {
         assert!((snapshot.rms - 0.395_284_707_521_047_44).abs() < 1e-12);
         assert!((snapshot.peak - 0.5).abs() < f32::EPSILON);
         assert!(snapshot.speech_detected);
+    }
+
+    #[test]
+    fn evidence_duration_uses_fixed_windows_across_callback_boundaries() {
+        let samples: Vec<f32> = std::iter::repeat_n(0.004, 50)
+            .chain(std::iter::repeat_n(0.0007, 50))
+            .collect();
+        let one_callback = CaptureMetricsAccumulator::new(1_000, 1);
+        one_callback.observe(&samples);
+        let one_snapshot = one_callback.snapshot(1_000, 1, false);
+
+        let split_callbacks = CaptureMetricsAccumulator::new(1_000, 1);
+        for chunk in samples.chunks(7) {
+            split_callbacks.observe(chunk);
+        }
+        let split_snapshot = split_callbacks.snapshot(1_000, 1, false);
+
+        assert_eq!(one_snapshot.ms_above_rms_floor, 50);
+        assert_eq!(one_snapshot.windows_above_rms_floor, 10);
+        assert_eq!(
+            split_snapshot.ms_above_rms_floor,
+            one_snapshot.ms_above_rms_floor
+        );
+        assert_eq!(
+            split_snapshot.windows_above_rms_floor,
+            one_snapshot.windows_above_rms_floor
+        );
+    }
+
+    #[test]
+    fn evidence_duration_counts_a_short_transient_not_its_host_callback() {
+        let samples: Vec<f32> = std::iter::repeat_n(0.02, 5)
+            .chain(std::iter::repeat_n(0.0007, 95))
+            .collect();
+        let metrics = CaptureMetricsAccumulator::new(1_000, 1);
+        metrics.observe(&samples);
+
+        let snapshot = metrics.snapshot(1_000, 1, false);
+        assert_eq!(snapshot.ms_above_rms_floor, 5);
+        assert_eq!(snapshot.windows_above_rms_floor, 1);
+    }
+
+    #[test]
+    fn evidence_duration_rounds_up_past_transient_boundary() {
+        let metrics = CaptureMetricsAccumulator::new(48_000, 1);
+        let samples = vec![0.004; 961];
+        metrics.observe(&samples);
+
+        let snapshot = metrics.snapshot(48_000, 1, false);
+        assert_eq!(snapshot.ms_above_rms_floor, 21);
+    }
+
+    #[test]
+    fn soft_speech_survives_fixed_window_phase_alignment() {
+        let metrics = CaptureMetricsAccumulator::new(2_000, 1);
+        let samples: Vec<f32> = std::iter::repeat_n(0.0007, 5)
+            .chain(std::iter::repeat_n(0.004, 62))
+            .chain(std::iter::repeat_n(0.0007, 133))
+            .collect();
+        metrics.observe(&samples);
+
+        let snapshot = metrics.snapshot(2_000, 1, false);
+        assert!(
+            snapshot.ms_above_rms_floor > 20,
+            "31ms soft speech measured only {}ms above floor",
+            snapshot.ms_above_rms_floor
+        );
     }
 
     #[test]

@@ -172,13 +172,12 @@ pub fn classify_speech_evidence(
     }
 
     // Calibrated from SPEECH_EVIDENCE telemetry (dev logs 2026-08-20/21):
-    // pure silence sits at rms ~0.0007 with every window under the floor,
-    // while real speech — even a 200ms quiet word — drives tens of callback
-    // windows above it. A mic wake-up pop or click drives only 1-2. The
-    // window COUNT is the transient discriminator: aggregate floors alone
-    // would reject a quiet word buried in long silence, and a window MAX
-    // alone lets a single pop through (observed live: 746ms "silent" capture
-    // with a transient window, engine hallucinated 2 chars, pasted).
+    // pure silence sits at rms ~0.0007 with every fixed window under the
+    // floor, while real speech — even a 200ms quiet word — sustains many
+    // above-floor milliseconds. A mic wake-up pop or click is only a few.
+    // Aggregate floors alone would reject a quiet word buried in long silence,
+    // and a window maximum alone lets a single pop through (observed live:
+    // 746ms "silent" capture with a transient, engine hallucinated 2 chars).
     if !capture.speech_detected
         && capture.rms.is_finite()
         && capture.peak.is_finite()
@@ -208,14 +207,13 @@ pub const NO_SPEECH_PEAK_CEILING: f32 = 0.05;
 /// windows well above 0.003 (calibrated, see plan 059).
 pub const NO_SPEECH_WINDOW_RMS_FLOOR: f32 = 0.003;
 
-/// How many milliseconds of above-floor audio a "silent" capture may contain
-/// and still be classified no-speech. Duration-based (not callback-count) so
-/// the discriminator is independent of the device buffer size: a mic wake-up
-/// pop is a few ms regardless of how the audio stacks into callbacks, while
-/// any real word — even a short quiet one — is tens of ms. Observed live
-/// 2026-08-22: a 746ms silent capture whose brief transient let a
-/// hallucinated 2-char transcript through the window-max guard.
-pub const NO_SPEECH_MAX_TRANSIENT_MS: u64 = 30;
+/// How many measured milliseconds of above-floor audio a "silent" capture may
+/// contain and still be classified no-speech. Fixed 5ms windows are independent
+/// of device callback size but may lose up to one partial window at each speech
+/// boundary, so the 20ms measured limit conservatively protects actual speech
+/// longer than 30ms. Observed live 2026-08-22: a 746ms silent capture whose brief
+/// transient let a hallucinated 2-char transcript through the window-max guard.
+pub const NO_SPEECH_MAX_TRANSIENT_MS: u64 = 20;
 
 fn finite_f64(value: f64) -> Option<f64> {
     value.is_finite().then_some(value)
@@ -376,17 +374,18 @@ mod tests {
         assert_eq!(
             classify_speech_evidence(
                 Some(capture_with_windows(
-                    71_680, 0.000_795, 0.007_48, false, 0.004, 30
+                    71_680, 0.000_795, 0.007_48, false, 0.004, 20
                 )),
                 None
             ),
             SpeechEvidenceClass::HighConfidenceNoSpeech
         );
-        // 31ms of above-floor audio is speech-shaped: transcribe.
+        // 21 measured milliseconds can represent >30ms after accounting for
+        // fixed-window boundary uncertainty, so it must transcribe.
         assert_eq!(
             classify_speech_evidence(
                 Some(capture_with_windows(
-                    71_680, 0.000_795, 0.007_48, false, 0.004, 31
+                    71_680, 0.000_795, 0.007_48, false, 0.004, 21
                 )),
                 None
             ),
