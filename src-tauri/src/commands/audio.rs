@@ -1904,6 +1904,13 @@ mod tests {
             "The intro has [MUSIC] before speech."
         ));
     }
+
+    #[test]
+    fn is_non_speech_transcript_preserves_deliberate_punctuation_and_symbols() {
+        for transcript in [".", ". ", "-", "...", "?,", "@", "#", "✅", "42", "....."] {
+            assert!(!is_non_speech_transcript(transcript));
+        }
+    }
     #[test]
     fn remote_transcription_result_preserves_server_metadata() {
         let job = build_transcription_job(

@@ -1,6 +1,6 @@
 # Plan 059 — No-speech gate ("said nothing → nothing happens")
 
-**Status:** TODO
+**Status:** CODE COMPLETE — beta.8 candidate; packaged macOS/Windows smoke pending
 **Priority:** P0 (recurring user-reported pain)
 **Effort:** S
 **Depends on:** — (independent; shares 058's stop-path context)
@@ -89,8 +89,37 @@ floor stays Uncertain and transcribes. Enforcement shipped default-on.
    detected", nothing inserted, no polish request in logs; quiet whisper still
    transcribes; cloud STT path shows same behavior as local.
 4. Beta gating: enforcement lands flag-default-on only after threshold
-   calibration is written into this file with the queried numbers.
 
+## Phase 2 — engine/VAD-layer noise discrimination (filed 2026-08-23 after external validation)
+
+Live noise testing showed the energy gate's ceiling: loud or sustained
+non-speech (breath/hum/rumble) is energy-indistinguishable from quiet real
+speech, and parakeet hallucinates short transcripts from it. Independent
+design review confirmed no existing in-repo signal can separate these
+(envelope, modulation, latch all exhausted). External research found the
+industry answer, cheapest first:
+
+1. **Sidecar confidence (S)**: FluidAudio `AsrManager.transcribe` already
+   returns an aggregate `confidence`; the Swift sidecar drops it (uses only
+   text + duration — sidecar/parakeet-swift/Sources/main.swift:108-119,
+   446-523). Serialize it in `TranscriptionResponse` and post-filter
+   low-confidence short transcripts. FluidAudio docs:
+   https://github.com/FluidInference/FluidAudio/blob/main/Documentation/API.md
+2. **FluidAudio VAD pre-gate (M)**: the same library ships `VadManager`
+   (Silero CoreML, ANE-optimized, 256ms chunks, threshold .85 default;
+   noisy environments .3-.6). Wire into the sidecar before transcription.
+   Industry precedent: faster-whisper defaults vad_filter=True; whisper.cpp
+   mainline Silero VAD; Superwhisper "Remove Silence"; VoiceInk VAD toggle.
+3. **Whisper post-filter (S, whisper path only)**: whisper-rs 0.16 exposes
+   `WhisperSegment::no_speech_probability()`; docs mark `set_no_speech_thold`
+   as NOT implemented (our call at transcriber.rs:557-596 is likely a no-op).
+   Correct approach: post-hoc drop segments where no_speech_prob > .6 and
+   avg token plog < -1 (whisper.cpp semantics).
+4. Rust-side Silero (silero-vad-rust / voice_activity_detector crates) only
+   if the recorder layer itself needs speech-probability — heavier dep (ort).
+
+Shadow-first per repo rule: log confidence/VAD decisions alongside
+SPEECH_EVIDENCE for one beta before enforcement.
 ## STOP conditions
 
 - If telemetry corpus cannot separate speech/no-speech cleanly (false-negative
