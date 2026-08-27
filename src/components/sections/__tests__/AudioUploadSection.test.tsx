@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, act } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { AudioUploadSection } from "../AudioUploadSection";
@@ -37,7 +37,7 @@ vi.mock("@/contexts/ModelAvailabilityContext", async () => {
 });
 
 import { invoke } from "@tauri-apps/api/core";
-import { open } from "@tauri-apps/plugin-dialog";
+import { open, save } from "@tauri-apps/plugin-dialog";
 import { listen } from "@tauri-apps/api/event";
 import { toast } from "sonner";
 
@@ -640,6 +640,80 @@ describe("AudioUploadSection - Essential User Flows", () => {
       // Result appears
       await waitFor(() => {
         expect(screen.getByText("Transcription result")).toBeInTheDocument();
+      });
+    });
+
+    it("keeps the original file when a native drop arrives during processing", async () => {
+      const user = userEvent.setup();
+      type NativeListener = (event: { payload: unknown }) => void;
+      const listeners = new Map<string, NativeListener>();
+      let resolveTranscription: ((value: { text: string; words: null }) => void) | undefined;
+      const transcription = new Promise<{ text: string; words: null }>((resolve) => {
+        resolveTranscription = resolve;
+      });
+
+      vi.mocked(listen).mockImplementation(async (eventName, handler) => {
+        listeners.set(eventName, handler as unknown as NativeListener);
+        return () => {};
+      });
+      vi.mocked(open).mockResolvedValue("/audio/meeting-a.mp3");
+      vi.mocked(save).mockResolvedValue("/exports/meeting-a.txt");
+      vi.mocked(invoke).mockImplementation(async (cmd) => {
+        if (cmd === "get_model_status") return { models: [readyLocalModel] };
+        if (cmd === "get_active_remote_server") return null;
+        if (cmd === "get_recognition_availability_snapshot") {
+          return { whisper_available: true, remote_available: false };
+        }
+        if (cmd === "list_remote_servers") return [];
+        if (cmd === "transcribe_audio_file") return transcription;
+        return null;
+      });
+
+      render(<AudioUploadSection />);
+
+      await user.click(await screen.findByRole("button", { name: /select file/i }));
+      await waitFor(() => screen.getByText(/meeting-a.mp3/));
+      await user.click(await screen.findByRole("button", { name: /transcribe/i }));
+      await waitFor(() => {
+        expect(useUploadStore.getState().status).toBe("processing");
+      });
+
+      await act(async () => {
+        listeners.get("tauri://drag-hover")?.({ payload: null });
+        listeners.get("tauri://drag-drop")?.({
+          payload: {
+            paths: ["/audio/meeting-b.mp3"],
+            position: { x: 0, y: 0 },
+          },
+        });
+      });
+
+      expect(useUploadStore.getState().selectedFile).toEqual({
+        path: "/audio/meeting-a.mp3",
+        name: "meeting-a.mp3",
+      });
+      expect(screen.queryByText(/meeting-b.mp3/)).not.toBeInTheDocument();
+      useUploadStore.getState().clearSelection();
+      expect(useUploadStore.getState().selectedFile?.path).toBe("/audio/meeting-a.mp3");
+
+      resolveTranscription!({ text: "Transcript for A", words: null });
+      await waitFor(() => {
+        expect(screen.getByText("Transcript for A")).toBeInTheDocument();
+      });
+
+      expect(useUploadStore.getState().selectedFile?.path).toBe("/audio/meeting-a.mp3");
+      expect(useUploadStore.getState().resultText).toBe("Transcript for A");
+      expect(screen.getByText("meeting-a.mp3")).toBeInTheDocument();
+
+      await user.click(screen.getByRole("button", { name: /save/i }));
+      await waitFor(() => {
+        expect(save).toHaveBeenCalledWith(
+          expect.objectContaining({ defaultPath: "meeting-a.txt" }),
+        );
+      });
+      expect(invoke).toHaveBeenCalledWith("save_transcript_file", {
+        path: "/exports/meeting-a.txt",
+        content: "Transcript for A",
       });
     });
 

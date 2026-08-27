@@ -51,6 +51,8 @@ export const useUploadStore = create<UploadState>((set, get) => ({
   diarized: false,
 
   select: (path: string) => {
+    if (get().status === "processing") return;
+
     const name = path.split(/[\\/]/).pop() || "audio file";
     set({
       selectedFile: { path, name },
@@ -62,8 +64,11 @@ export const useUploadStore = create<UploadState>((set, get) => ({
     });
   },
 
-  clearSelection: () =>
-    set({ selectedFile: null, speakerSegments: [], diarizationError: null, diarized: false }),
+  clearSelection: () => {
+    if (get().status === "processing") return;
+
+    set({ selectedFile: null, speakerSegments: [], diarizationError: null, diarized: false });
+  },
 
   start: async (modelName: string, modelEngine: string | null, historyModelName?: string) => {
     const { selectedFile, status } = get();
@@ -120,7 +125,9 @@ export const useUploadStore = create<UploadState>((set, get) => ({
     }
   },
 
-  reset: () =>
+  reset: () => {
+    if (get().status === "processing") return;
+
     set({
       selectedFile: null,
       status: "idle",
@@ -129,5 +136,6 @@ export const useUploadStore = create<UploadState>((set, get) => ({
       speakerSegments: [],
       diarizationError: null,
       diarized: false,
-    }),
+    });
+  },
 }));

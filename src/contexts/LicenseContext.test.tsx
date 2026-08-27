@@ -23,6 +23,29 @@ const licensedStatus: LicenseStatus = {
   expires_at: "2027-01-01T00:00:00Z",
 };
 
+function createDeferred<T>() {
+  let resolve!: (value: T | PromiseLike<T>) => void;
+  const promise = new Promise<T>((resolvePromise) => {
+    resolve = resolvePromise;
+  });
+  return { promise, resolve };
+}
+
+function LoadingProbe() {
+  const { isLoading, revalidateLicense, deactivateLicense } = useLicense();
+  return (
+    <>
+      <span data-testid="license-loading">{String(isLoading)}</span>
+      <button type="button" onClick={deactivateLicense}>
+        Deactivate
+      </button>
+      <button type="button" onClick={revalidateLicense}>
+        Revalidate
+      </button>
+    </>
+  );
+}
+
 function Probe() {
   useLicense();
   return null;
@@ -103,5 +126,52 @@ describe("LicenseContext", () => {
 
     await waitFor(() => expect(invoke).toHaveBeenCalledWith("revalidate_license"));
     expect(await screen.findByText("verified")).toBeInTheDocument();
+  });
+
+  it("keeps loading while stale revalidation completes after deactivation", async () => {
+    const initialStatus: LicenseStatus = { ...licensedStatus, verification_state: "offline_grace" };
+    const deactivateRequest = createDeferred<undefined>();
+    const staleRevalidationRequest = createDeferred<LicenseStatus>();
+    const latestCheckRequest = createDeferred<LicenseStatus>();
+    let statusCheckCount = 0;
+
+    vi.mocked(invoke).mockImplementation((command) => {
+      if (command === "check_license_status") {
+        statusCheckCount += 1;
+        return statusCheckCount === 1 ? Promise.resolve(initialStatus) : latestCheckRequest.promise;
+      }
+      if (command === "deactivate_license") return deactivateRequest.promise;
+      if (command === "revalidate_license") return staleRevalidationRequest.promise;
+      throw new Error(`Unexpected command: ${command}`);
+    });
+
+    render(
+      <LicenseProvider>
+        <LoadingProbe />
+      </LicenseProvider>,
+    );
+
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith("check_license_status"));
+    await waitFor(() => expect(screen.getByTestId("license-loading").textContent).toBe("false"));
+
+    fireEvent.click(screen.getByRole("button", { name: "Deactivate" }));
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith("deactivate_license"));
+
+    fireEvent.click(screen.getByRole("button", { name: "Revalidate" }));
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith("revalidate_license"));
+    await waitFor(() => expect(screen.getByTestId("license-loading").textContent).toBe("true"));
+
+    deactivateRequest.resolve(undefined);
+    await waitFor(() =>
+      expect(
+        vi.mocked(invoke).mock.calls.filter(([command]) => command === "check_license_status"),
+      ).toHaveLength(2),
+    );
+
+    staleRevalidationRequest.resolve({ ...licensedStatus, verification_state: "verified" });
+    await waitFor(() => expect(screen.getByTestId("license-loading").textContent).toBe("true"));
+
+    latestCheckRequest.resolve({ ...licensedStatus, verification_state: "verified" });
+    await waitFor(() => expect(screen.getByTestId("license-loading").textContent).toBe("false"));
   });
 });

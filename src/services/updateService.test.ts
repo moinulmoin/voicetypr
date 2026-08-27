@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { invoke } from "@tauri-apps/api/core";
 import { ask } from "@tauri-apps/plugin-dialog";
+import { relaunch } from "@tauri-apps/plugin-process";
 import { toast } from "sonner";
 
 // Mock Tauri plugins before importing the module under test
@@ -229,6 +230,33 @@ describe("UpdateService update checks", () => {
     expect(invoke).toHaveBeenCalledWith("install_app_update", {
       expectedVersion: "2.0.0-beta.2",
     });
+  });
+
+  it("preserves the update marker when automatic relaunch fails", async () => {
+    mockDirectDistribution({
+      version: "2.0.0-beta.3",
+      body: "Beta notes",
+      channel: "beta",
+    });
+    vi.mocked(ask).mockResolvedValue(true);
+    vi.mocked(relaunch).mockRejectedValue(new Error("relaunch failed"));
+
+    await service.checkForUpdatesManually();
+    expect(relaunch).toHaveBeenCalledTimes(1);
+
+    expect(invoke).toHaveBeenCalledWith("install_app_update", {
+      expectedVersion: "2.0.0-beta.3",
+    });
+    expect(localStorage.getItem(JUST_UPDATED_KEY)).toBe("2.0.0-beta.3");
+    expect(service.getJustUpdatedVersion()).toBeNull();
+    expect(localStorage.getItem(JUST_UPDATED_KEY)).toBe("2.0.0-beta.3");
+
+    // A fresh service instance represents the post-restart process and consumes the marker.
+    // @ts-expect-error accessing private static for test isolation
+    UpdateService.instance = undefined;
+    const freshService = UpdateService.getInstance();
+    expect(freshService.getJustUpdatedVersion()).toBe("2.0.0-beta.3");
+    expect(localStorage.getItem(JUST_UPDATED_KEY)).toBeNull();
   });
 
   it("deduplicates concurrent distribution info requests", async () => {

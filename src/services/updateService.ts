@@ -79,8 +79,6 @@ export class UpdateService {
     try {
       await relaunch();
     } catch (error) {
-      // Rollback: remove marker since relaunch failed
-      localStorage.removeItem(JUST_UPDATED_KEY);
       log.error("Relaunch failed:", error);
       toast.error("Update installed. Please restart the app manually.", {
         duration: 10000,
@@ -100,6 +98,9 @@ export class UpdateService {
     }
 
     const version = localStorage.getItem(JUST_UPDATED_KEY);
+    if (version === this.pendingUpdateVersion) {
+      return null;
+    }
     if (version) {
       localStorage.removeItem(JUST_UPDATED_KEY);
     }

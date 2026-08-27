@@ -222,6 +222,8 @@ export function useAudioUploadSection() {
 
   useEffect(() => {
     const handleFileDrop = (filePath: string) => {
+      if (useUploadStore.getState().status === "processing") return;
+
       const supportedExtensions = ["wav", "mp3", "m4a", "flac", "ogg", "mp4", "webm"];
       const fileExtension = filePath.split(".").pop()?.toLowerCase();
 
@@ -235,6 +237,7 @@ export function useAudioUploadSection() {
 
     const unlisten = listen("tauri://drag-drop", (event) => {
       setIsDragging(false);
+      if (useUploadStore.getState().status === "processing") return;
 
       const payload = event.payload as { paths: string[]; position: { x: number; y: number } };
       if (payload.paths && payload.paths.length > 0) {
@@ -243,7 +246,7 @@ export function useAudioUploadSection() {
     });
 
     const unlistenHover = listen("tauri://drag-hover", () => {
-      setIsDragging(true);
+      if (useUploadStore.getState().status !== "processing") setIsDragging(true);
     });
 
     const unlistenLeave = listen("tauri://drag-leave", () => {
@@ -260,7 +263,7 @@ export function useAudioUploadSection() {
   return {
     copied,
     setCopied,
-    isDragging,
+    isDragging: isDragging && !isProcessing,
     selectedFile,
     status,
     resultText,
