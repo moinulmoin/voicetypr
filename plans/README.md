@@ -49,6 +49,7 @@ Verification commands used across all plans: `pnpm typecheck`, `pnpm lint`,
 | 045  | Privacy-safe PostHog product analytics | P1 | L | 031 | DONE (code) — NEEDS-SMOKE 045-S1..S6; full gate, release compile, local dev UI smoke, and adversarial reviews passed 2026-08-06 |
 | 046  | Polish workflow alignment — natural punctuation, Saved Text, app-first mode resolution | P1 | S | 016, 027, 040 | DONE (code) — NEEDS-SMOKE 046-S1..S6; full gate and local native/browser UI smokes passed 2026-08-09 |
 | 047  | Silent failures — Soniox storage lifecycle, alertable failure events, report diagnostics | P0 | L | 031 (pivot), 019 seam | DONE (code) — NEEDS-SMOKE 047-S1..S5 (branch fix/047-silent-failures); auto-delete on all exits + storage-limit self-heal, LimitExceeded mapping + cleanup UI, telemetry funnel/traces removed in favor of failure events (031 pivot, PostHog journeys preserved), specs swallow surfaced, DEBUG ring attached to reports, dead deps removed (env_logger + 5 npm) |
+| 048  | Finalize Voicetypr app-icon system | P1 | S | — | IN PROGRESS — claimed Codex 2026-08-27; approval master only, shipping integration deferred |
 
 ## Code-done, awaiting batched manual smoke (`plans/SMOKE.md`)
 
