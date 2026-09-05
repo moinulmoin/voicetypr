@@ -146,31 +146,42 @@ fn active_transcription_ids() -> std::collections::HashSet<String> {
 /// rate limit, timeout — retains the file: the record may still exist and
 /// reference it, and deleting the file would fail the live job with
 /// `file_not_found`. Failures are logged and never fatal; leftover records
-/// are reaped by the backlog drains.
+/// are reaped by the backlog drains. A landed record delete frees record
+/// capacity and counts toward the self-heal's record wake; a 404 frees
+/// nothing and must not count.
 async fn cleanup_stored_records(
     client: &reqwest::Client,
     key: &str,
     transcription_id: Option<&str>,
     file_id: &str,
 ) {
-    let (url, what) = match transcription_id {
-        Some(tid) => (
-            format!("{}/transcriptions/{tid}", base_url()),
-            "transcription",
-        ),
-        None => (format!("{}/files/{file_id}", base_url()), "file"),
+    let Some(tid) = transcription_id else {
+        delete_file_best_effort(client, key, file_id).await;
+        return;
     };
-    let attempt = client.delete(&url).bearer_auth(key).send();
-    match tokio::time::timeout(std::time::Duration::from_secs(10), attempt).await {
-        Ok(Ok(resp)) if resp.status().is_success() => {}
-        Ok(Ok(resp)) => {
-            log::warn!(
-                "Soniox cleanup: delete {what} returned HTTP {} ({url})",
-                resp.status()
-            )
+    let url = format!("{}/transcriptions/{tid}", base_url());
+    let attempt = tokio::time::timeout(
+        std::time::Duration::from_secs(10),
+        delete_one(client, key, &url),
+    )
+    .await;
+    match attempt {
+        Ok(Ok(DeleteOutcome::Deleted)) => {
+            bump_record_freed_progress();
+            delete_file_best_effort(client, key, file_id).await;
         }
-        Ok(Err(e)) => log::warn!("Soniox cleanup: delete {what} request failed: {e}"),
-        Err(_) => log::warn!("Soniox cleanup: delete {what} timed out ({url})"),
+        Ok(Ok(DeleteOutcome::AlreadyGone)) => {
+            delete_file_best_effort(client, key, file_id).await;
+        }
+        Ok(Ok(DeleteOutcome::SkippedProcessing)) => {
+            log::info!(
+                "Soniox cleanup: transcription {tid} still processing; file {file_id} stays until the job finishes"
+            );
+        }
+        Ok(Err(e)) => log::warn!(
+            "Soniox cleanup: delete transcription {tid} failed: {e}; file {file_id} left for backlog cleanup"
+        ),
+        Err(_) => log::warn!("Soniox cleanup: delete transcription timed out ({url})"),
     }
 }
 
@@ -542,6 +553,78 @@ async fn drain_stored_records(
             }
         }
         tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+    }
+
+    // Pass 2 — fresh listings under the write gate. The fresh transcription
+    // listing closes the post-pass-1 gap: jobs created while pass 1 was
+    // deleting, whose guard then dropped, still reference their files and
+    // appear here. A file is deletable only when no surviving record and no
+    // in-flight flow references it.
+    if !files_fail_closed {
+        let mut protected = protected_files;
+        let mut file_items: Vec<ListedFile> = Vec::new();
+        {
+            let _drain_gate = LISTING_GATE.write().await;
+            let (fresh_transcriptions, fresh_skipped) =
+                list_pages::<ListedTranscription>(client, key, "transcriptions")
+                    .await
+                    .map_err(|e| e.message("Soniox"))?;
+            for file_id in fresh_transcriptions.iter().filter_map(|t| t.known_file()) {
+                protected.insert(file_id.to_string());
+            }
+            if fresh_skipped > 0 {
+                files_fail_closed = true;
+                result.errors.push(format!(
+                    "{fresh_skipped} transcription records had incomplete metadata; file cleanup skipped"
+                ));
+            }
+            if !files_fail_closed {
+                let (items, skipped_files) =
+                    list_pages::<ListedFile>(client, key, "files")
+                        .await
+                        .map_err(|e| e.message("Soniox"))?;
+                if skipped_files > 0 {
+                    files_fail_closed = true;
+                    result.errors.push(format!(
+                        "{skipped_files} file records had incomplete metadata; file cleanup skipped"
+                    ));
+                } else {
+                    file_items = items;
+                }
+            }
+            // Registry snapshot under the same gate as the listings.
+            protected.extend(active_file_ids());
+        }
+        if !files_fail_closed {
+            total_ops += file_items.len() as u64;
+            for item in &file_items {
+                done_ops += 1;
+                if protected.contains(&item.id) {
+                    result.skipped_active += 1;
+                } else {
+                    let url = format!("{}/files/{}", base_url(), item.id);
+                    match delete_one(client, key, &url).await {
+                        Ok(DeleteOutcome::Deleted) => {
+                            result.deleted_files += 1;
+                            bump_auto_cleanup_progress();
+                        }
+                        Ok(DeleteOutcome::AlreadyGone) => {}
+                        // Files have no processing state; a 409 here is
+                        // unexpected.
+                        Ok(DeleteOutcome::SkippedProcessing) => {
+                            result.errors.push(format!("file {}: HTTP 409", item.id))
+                        }
+                        Err(e) => result.errors.push(format!("file {}: {e}", item.id)),
+                    }
+                }
+                if done_ops % 25 == 0 {
+                    if let Some(report) = report {
+                        report(done_ops, total_ops);
+                    }
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+            }
+        }
     }
     if let Some(report) = report {
         report(done_ops, total_ops);
@@ -1795,9 +1878,10 @@ mod tests {
             let total = get_total(&client, "k", "transcriptions").await.unwrap();
             assert_eq!(total, 3);
 
-            let items = list_pages::<ListedTranscription>(&client, "k", "transcriptions")
-                .await
-                .unwrap();
+            let (items, _skipped) =
+                list_pages::<ListedTranscription>(&client, "k", "transcriptions")
+                    .await
+                    .unwrap();
             let ids: Vec<String> = items.into_iter().map(|item| item.id).collect();
             assert_eq!(ids, vec!["t1", "t2", "t3"]);
 

@@ -910,4 +910,90 @@ mod tests {
         warm_origin(&server.uri()).await;
         assert_eq!(server.received_requests().await.unwrap().len(), 1);
     }
+
+    #[test]
+    fn soniox_429_subcauses_split_rate_from_storage_quota() {
+        // Actual documented JSON shapes (docs "Errors" reference): the
+        // per-minute rate example must stay transient, the retained-storage
+        // examples classify file-storage, the stored-transcription count
+        // classifies record-capacity.
+        let rate_rpm = r#"{"status_code":429,"error_type":"limit_exceeded","message":"Requests per minute limit for async transcription has been exceeded for your organization."}"#;
+        assert_eq!(super::soniox_limit_is_file_storage(rate_rpm), None);
+
+        let rate_file_mgmt = r#"{"status_code":429,"error_type":"limit_exceeded","message":"Requests per minute limit for file management has been exceeded for your organization."}"#;
+        assert_eq!(super::soniox_limit_is_file_storage(rate_file_mgmt), None);
+
+        let storage_files = r#"{"status_code":429,"error_type":"limit_exceeded","message":"Total file count limit has been exceeded for your organization. Please delete some."}"#;
+        assert_eq!(super::soniox_limit_is_file_storage(storage_files), Some(true));
+
+        // Documented limit identifiers must classify even when the wording
+        // changes around them.
+        let storage_slug = r#"{"error_type":"limit_exceeded","message":"Adding this file would put the organization over its files_total_size_gb cap."}"#;
+        assert_eq!(super::soniox_limit_is_file_storage(storage_slug), Some(true));
+
+        let storage_transcriptions = r#"{"error_type":"limit_exceeded","message":"transcribe_async_total_num_files limit has been exceeded."}"#;
+        assert_eq!(
+            super::soniox_limit_is_file_storage(storage_transcriptions),
+            Some(false)
+        );
+
+        // The transient "pending file count" wall mentions "file count" but
+        // not a retained-storage cap — it must stay transient.
+        let pending = r#"{"error_type":"limit_exceeded","message":"Pending file count limit has been exceeded. Wait for in-flight transcriptions to complete."}"#;
+        assert_eq!(super::soniox_limit_is_file_storage(pending), None);
+
+        // Unknown 429 wording stays transient — never a destructive cleanup.
+        let unknown = r#"{"error_type":"limit_exceeded","message":"Some future limit you have never seen."}"#;
+        assert_eq!(super::soniox_limit_is_file_storage(unknown), None);
+
+        // Different error_type / non-JSON / missing message: not a quota wall.
+        assert_eq!(
+            super::soniox_limit_is_file_storage(
+                r#"{"error_type":"unauthenticated","message":"Total file count limit exceeded"}"#
+            ),
+            None
+        );
+        assert_eq!(super::soniox_limit_is_file_storage("not json at all"), None);
+        assert_eq!(
+            super::soniox_limit_is_file_storage(r#"{"error_type":"limit_exceeded"}"#),
+            None
+        );
+    }
+    #[tokio::test]
+    async fn log_http_body_maps_soniox_429_json_paths_to_typed_quota_kinds() {
+        for (body, expected_label, expected_storage) in [
+            (
+                r#"{"status_code":429,"error_type":"limit_exceeded","message":"Requests per minute limit for file management has been exceeded for your organization."}"#,
+                "RateLimited",
+                None,
+            ),
+            (
+                r#"{"status_code":429,"error_type":"limit_exceeded","message":"Total file count limit has been exceeded for your organization. Please delete some."}"#,
+                "LimitExceeded",
+                Some(true),
+            ),
+            (
+                r#"{"status_code":429,"error_type":"limit_exceeded","message":"transcribe_async_total_num_files limit has been exceeded."}"#,
+                "LimitExceeded",
+                Some(false),
+            ),
+        ] {
+            let server = MockServer::start().await;
+            Mock::given(method("GET"))
+                .respond_with(ResponseTemplate::new(429).set_body_string(body))
+                .expect(1)
+                .mount(&server)
+                .await;
+            let resp = reqwest::get(server.uri()).await.unwrap();
+            let err = super::log_http_body(resp, "Soniox classification").await;
+            // The file_storage FIELD is part of the contract: a
+            // discriminant-only compare could pass {true} vs {false}.
+            let kind = match &err {
+                SttError::RateLimited => ("RateLimited", None),
+                SttError::LimitExceeded { file_storage } => ("LimitExceeded", Some(*file_storage)),
+                other => unreachable!("unexpected classification {other:?}"),
+            };
+            assert_eq!(kind, (expected_label, expected_storage));
+        }
+    }
 }

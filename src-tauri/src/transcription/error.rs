@@ -97,7 +97,7 @@ pub(crate) fn from_stt_error(err: &SttError, source: TranscriptionSource) -> Tra
         E::Auth => TranscriptionErrorCode::Unauthorized,
         E::ModelUnavailable => TranscriptionErrorCode::ModelUnavailable,
         E::RateLimited | E::Network => TranscriptionErrorCode::TransportFailed,
-        E::LimitExceeded => TranscriptionErrorCode::StorageLimitExceeded,
+        E::LimitExceeded { .. } => TranscriptionErrorCode::StorageLimitExceeded,
         E::Timeout => TranscriptionErrorCode::Timeout,
         E::Server => TranscriptionErrorCode::EngineFailed,
         E::BadResponse => TranscriptionErrorCode::ResponseInvalid,
@@ -279,7 +279,7 @@ mod tests {
                 true,
             ),
             (
-                SttError::LimitExceeded,
+                SttError::LimitExceeded { file_storage: true },
                 TranscriptionErrorCode::StorageLimitExceeded,
                 false,
             ),
