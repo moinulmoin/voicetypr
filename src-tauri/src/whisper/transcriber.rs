@@ -1,4 +1,20 @@
 use std::path::Path;
+
+tokio::task_local! {
+    /// Backend selected for this transcription attempt, recorded before initialization.
+    /// A failed initialization retains its attempted backend; unrelated tasks cannot
+    /// overwrite it. Reads outside the recording's scope return `None`.
+    pub(crate) static ATTEMPT_BACKEND: std::cell::Cell<Option<&'static str>>;
+}
+
+pub(crate) fn record_attempt_backend(backend: &'static str) {
+    let _ = ATTEMPT_BACKEND.try_with(|slot| slot.set(Some(backend)));
+}
+
+pub(crate) fn attempt_backend() -> Option<&'static str> {
+    ATTEMPT_BACKEND.try_with(|slot| slot.get()).ok().flatten()
+}
+
 use std::time::Instant;
 use whisper_rs::{
     convert_integer_to_float_audio, convert_stereo_to_mono_audio, FullParams, SamplingStrategy,
@@ -12,8 +28,10 @@ use crate::utils::system_monitor;
 pub struct Transcriber {
     context: WhisperContext,
     cpu_profile: bool,
+    /// Acceleration this loaded instance serves ("cpu" | "metal"); the
+    /// attempt records it when the instance is used (plan 060.1).
+    backend: &'static str,
 }
-
 #[derive(Debug, Clone, PartialEq)]
 pub struct WhisperTranscriptionOutput {
     pub raw_text: String,
@@ -24,6 +42,11 @@ pub struct WhisperTranscriptionOutput {
 }
 
 impl Transcriber {
+    /// Acceleration label this loaded instance serves (plan 060.1).
+    pub(crate) fn backend(&self) -> &'static str {
+        self.backend
+    }
+
     pub fn new(model_path: &Path) -> Result<Self, String> {
         let init_start = Instant::now();
         let model_path_str = model_path
@@ -134,9 +157,11 @@ impl Transcriber {
                         &[("backend", backend_type), ("model_path", model_path_str)],
                     );
 
+                    let backend = if cpu_profile { "cpu" } else { "metal" };
                     return Ok(Self {
                         context: ctx,
                         cpu_profile,
+                        backend,
                     });
                 }
                 Err(gpu_err) => {
@@ -231,6 +256,7 @@ impl Transcriber {
         Ok(Self {
             context: ctx,
             cpu_profile: true,
+            backend: "cpu",
         })
     }
 
@@ -863,5 +889,47 @@ mod tests {
         let audio = vec![1.0, 2.0];
         let result = convert_multichannel_to_mono(&audio, 0);
         assert!(result.is_err());
+    }
+    #[test]
+    fn attempt_backend_is_none_outside_any_scope() {
+        // A failure event emitted without a scoped attempt (the scope wraps
+        // the spawned decode future) must observe NO backend — never a
+        // previous task's — so the report omits the tag instead of guessing.
+        assert_eq!(attempt_backend(), None);
+        record_attempt_backend("sidecar"); // no-op: no scope on this task
+        assert_eq!(attempt_backend(), None);
+    }
+
+    #[tokio::test]
+    async fn concurrent_scoped_attempts_have_isolated_tags() {
+        // Two overlapping transcription attempts must never observe each
+        // other's backend: the tag is task-local state, not process-global.
+        let first = tokio::spawn(ATTEMPT_BACKEND.scope(std::cell::Cell::new(None), async {
+            record_attempt_backend("sidecar");
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+            attempt_backend()
+        }));
+        let second = tokio::spawn(ATTEMPT_BACKEND.scope(std::cell::Cell::new(None), async {
+            record_attempt_backend("cpu");
+            attempt_backend()
+        }));
+
+        assert_eq!(first.await.unwrap(), Some("sidecar"));
+        assert_eq!(second.await.unwrap(), Some("cpu"));
+    }
+
+    #[tokio::test]
+    async fn scoped_attempt_starts_empty_and_records_before_read() {
+        // The scope initialises the slot empty; only an explicit record makes
+        // a backend observable — a wrapper that never records (failed init)
+        // leaves the tag omitted.
+        let outcome = ATTEMPT_BACKEND
+            .scope(std::cell::Cell::new(None), async {
+                let before = attempt_backend();
+                record_attempt_backend("metal");
+                (before, attempt_backend())
+            })
+            .await;
+        assert_eq!(outcome, (None, Some("metal")));
     }
 }

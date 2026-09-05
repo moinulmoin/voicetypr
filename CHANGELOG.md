@@ -16,6 +16,13 @@
 * **licensing:** preserve paid access through temporary verification outages, retry validation three times, repair stale device activation automatically, show a revalidation warning instead of `Trial expired`, and keep loading owned by the latest overlapping status request
 * **support:** replace the cramped problem-report modal with a dedicated page that collects a reply email, previews attached system configuration, gathers diagnostics automatically, and keeps copy/support-email fallbacks
 * **updater:** default direct-install prerelease builds to the Beta update channel when no channel preference has been saved, and preserve the post-update announcement when automatic relaunch fails
+* **recording:** include final recorder buffers in speech evidence and restore paused or muted media even when stopping a recording fails
+* **ai:** preserve standalone “Sure” and other user-authored text, refresh CLI capabilities and model lists, and allow ready CLI providers to be enabled from tray and shortcut controls
+* **soniox:** delete transcription records and uploaded files independently, protect active/shared references during cleanup, and retry storage failures only after the relevant capacity is freed or cleanup finishes
+* **licensing:** preserve unreadable saved licenses and credentials instead of deleting them or treating them as absent; report recovery errors without exposing stored contents
+* **diagnostics:** isolate backend attribution per recording, show restart requirements when enabling crash reporting, and retain collected diagnostics in copied report fallbacks
+* **settings:** complete Polish initialization under React StrictMode and restore model-picker refresh behavior
+* **release:** pin the Tauri CLI to 2.6.2 and restore the changelog command used by the local release script
 
 ## [2.0.4](https://github.com/moinulmoin/voicetypr/compare/v2.0.3...v2.0.4) (2026-07-01)
 

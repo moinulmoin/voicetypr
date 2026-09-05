@@ -8,11 +8,15 @@ use once_cell::sync::OnceCell;
 use pbkdf2::pbkdf2_hmac;
 use rand::Rng;
 use sha2::Sha256;
+use std::path::Path;
 use tauri::{AppHandle, Runtime};
-use tauri_plugin_store::StoreExt;
+use tauri_plugin_store::{resolve_store_path, StoreExt};
 
 // Encryption key storage - OnceCell ensures thread-safe single initialization
 static ENCRYPTION_KEY: OnceCell<[u8; 32]> = OnceCell::new();
+
+/// Store file (relative to the app data directory) managed via tauri-plugin-store.
+const SECURE_STORE_FILE: &str = "secure.dat";
 
 /// Initialize the encryption key using the device hash with PBKDF2
 pub fn initialize_encryption_key() -> Result<(), String> {
@@ -58,8 +62,11 @@ pub fn initialize_encryption_key() -> Result<(), String> {
 /// Check if migration from keychain is needed (for future use)
 #[allow(dead_code)]
 pub fn check_migration_needed<R: Runtime>(app: &AppHandle<R>) -> bool {
-    // Check if secure.dat exists
-    let store_exists = app.store("secure.dat").is_ok();
+    // Read-only existence check: never call `app.store()` here — building a
+    // store registers it (and the plugin saves registered stores on exit).
+    let store_exists = resolve_store_path(app, SECURE_STORE_FILE)
+        .map(|path| path.exists())
+        .unwrap_or(false);
 
     // For now, we don't migrate automatically
     // This is here for future use if needed
@@ -130,7 +137,7 @@ pub fn secure_set<R: Runtime>(app: &AppHandle<R>, key: &str, value: &str) -> Res
     let encrypted = encrypt_value(value)?;
 
     let store = app
-        .store("secure.dat")
+        .store(SECURE_STORE_FILE)
         .map_err(|e| format!("Failed to access store: {}", e))?;
 
     store.set(key, encrypted);
@@ -141,63 +148,100 @@ pub fn secure_set<R: Runtime>(app: &AppHandle<R>, key: &str, value: &str) -> Res
     Ok(())
 }
 
-/// Get and decrypt a value from the store with corruption recovery
-pub fn secure_get<R: Runtime>(app: &AppHandle<R>, key: &str) -> Result<Option<String>, String> {
-    // Try to access the store with recovery on failure
-    let store = match app.store("secure.dat") {
-        Ok(store) => store,
-        Err(e) => {
-            log::warn!("Store access failed: {}. This is normal on first run.", e);
-            // Store doesn't exist or is inaccessible - this is OK, return None
-            return Ok(None);
-        }
+/// Read-only inspection of the store FILE on disk.
+///
+/// Unlike `Store::reload` this never touches the shared in-memory store
+/// cache, so it cannot clobber a concurrent `secure_set` whose save has not
+/// landed yet. A missing file is a fresh installation (`Ok(None)`); anything
+/// present but unreadable is a distinct error.
+fn read_store_file(
+    path: &Path,
+) -> Result<Option<serde_json::Map<String, serde_json::Value>>, String> {
+    let bytes = match std::fs::read(path) {
+        Ok(bytes) => bytes,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(e) => return Err(format!("Secure store file could not be read: {}", e)),
     };
+    serde_json::from_slice(&bytes).map(Some).map_err(|e| {
+        // serde_json errors can embed the unexpected payload for scalar
+        // values — log only the classification/position and return a
+        // payload-free message.
+        log::warn!(
+            "Secure store file parse failed: {:?} at line {} column {}",
+            e.classify(),
+            e.line(),
+            e.column()
+        );
+        "Secure store file could not be read (it may be corrupted)".to_string()
+    })
+}
 
-    match store.get(key) {
-        Some(value) => {
-            if let Some(encrypted) = value.as_str() {
-                // Try to decrypt, but handle corruption gracefully
-                match decrypt_value(encrypted) {
-                    Ok(decrypted) => Ok(Some(decrypted)),
-                    Err(e) => {
-                        log::error!(
-                            "Decryption failed for key '{}': {}. Data may be corrupted.",
-                            key,
-                            e
-                        );
+/// Decrypt a raw stored entry. Read failures never mutate anything: the saved
+/// record stays exactly as-is for recovery (re-entering the value, activation,
+/// or an explicit reset).
+fn decrypt_raw_entry(key: &str, raw: Option<&serde_json::Value>) -> Result<Option<String>, String> {
+    let encrypted = match raw {
+        None => return Ok(None),
+        Some(value) => value.as_str().ok_or_else(|| {
+            log::error!(
+                "Stored value for key '{}' has an unexpected format (expected encrypted text). The saved entry was preserved.",
+                key
+            );
+            format!(
+                "Stored value for '{}' has an unexpected format; the saved entry was preserved",
+                key
+            )
+        })?,
+    };
+    decrypt_value(encrypted).map(Some).map_err(|e| {
+        log::error!(
+            "Stored value for key '{}' could not be decrypted: {}. The saved entry was preserved.",
+            key,
+            e
+        );
+        format!(
+            "Stored value for '{}' could not be decrypted ({}); the saved entry was preserved",
+            key, e
+        )
+    })
+}
 
-                        // Delete just this corrupted entry, not the whole store
-                        store.delete(key);
-                        if let Err(save_err) = store.save() {
-                            log::error!(
-                                "Failed to save store after removing corrupted key: {}",
-                                save_err
-                            );
-                        }
+/// Get and decrypt a value from the store.
+///
+/// Strictly read-only: it never registers a store, creates the file, or
+/// mutates the shared cache. Read failures are distinct from a missing entry —
+/// an undecryptable value, an entry with an unexpected type, or an unreadable
+/// store file return an error while the saved record stays untouched on disk.
+///
+/// Once the store is open, its cache is authoritative: a miss there is a real
+/// absence (e.g. a just-completed delete) and is never backfilled from disk,
+/// so an in-flight `secure_delete` cannot briefly resurrect the old value.
+pub fn secure_get<R: Runtime>(app: &AppHandle<R>, key: &str) -> Result<Option<String>, String> {
+    // Already-open store: serve from its cache. `get_store` has no side
+    // effects (unlike `app.store()`, which registers the store). No disk
+    // fallback on miss — see the cache-authoritative note above.
+    if let Some(store) = app.get_store(SECURE_STORE_FILE) {
+        return decrypt_raw_entry(key, store.get(key).as_ref());
+    }
 
-                        // Return None - treat as missing data
-                        Ok(None)
-                    }
-                }
-            } else {
-                log::error!(
-                    "Invalid value type in store for key '{}' - expected string",
-                    key
-                );
-                // Remove the corrupted entry
-                store.delete(key);
-                let _ = store.save();
-                Ok(None)
-            }
-        }
+    // Store not open: inspect the store FILE directly — read-only. Do NOT
+    // call `app.store()` here: building a store registers it, and the plugin
+    // saves every registered store on app exit, so registering against an
+    // unreadable file would let exit overwrite the on-disk bytes with an
+    // empty cache.
+    let path = resolve_store_path(app, SECURE_STORE_FILE)
+        .map_err(|e| format!("Secure store is unavailable: {}", e))?;
+    match read_store_file(&path)? {
+        // No file yet: fresh installation, nothing stored.
         None => Ok(None),
+        Some(disk) => decrypt_raw_entry(key, disk.get(key)),
     }
 }
 
 /// Delete a value from the secure store
 pub fn secure_delete<R: Runtime>(app: &AppHandle<R>, key: &str) -> Result<(), String> {
     let store = app
-        .store("secure.dat")
+        .store(SECURE_STORE_FILE)
         .map_err(|e| format!("Failed to access store: {}", e))?;
 
     store.delete(key);
@@ -208,33 +252,19 @@ pub fn secure_delete<R: Runtime>(app: &AppHandle<R>, key: &str) -> Result<(), St
     Ok(())
 }
 
-/// Check if a key exists in the secure store
+/// Check if a key exists in the secure store AND is readable (decryptable).
+///
+/// Like `secure_get`, store-level failures (unreadable file) are errors, not a
+/// silent `false`; reads never mutate stored data.
 pub fn secure_has<R: Runtime>(app: &AppHandle<R>, key: &str) -> Result<bool, String> {
-    let store = match app.store("secure.dat") {
-        Ok(store) => store,
-        Err(_) => {
-            // Store doesn't exist - key definitely doesn't exist
-            return Ok(false);
-        }
-    };
-
-    // Check if key exists AND is valid (can be decrypted)
-    Ok(match store.get(key) {
-        Some(value) => {
-            if let Some(encrypted) = value.as_str() {
-                // Only return true if we can successfully decrypt it
-                decrypt_value(encrypted).is_ok()
-            } else {
-                false
-            }
-        }
-        None => false,
-    })
+    secure_get(app, key).map(|value| value.is_some())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
+    use tempfile::TempDir;
 
     #[test]
     fn test_encryption_decryption() {
@@ -276,5 +306,153 @@ mod tests {
         // Test with valid base64 but corrupted data
         let result = decrypt_value("dGVzdA=="); // Just "test" in base64
         assert!(result.is_err());
+    }
+
+    /// Flip one ciphertext byte (after the 12-byte nonce): same payload
+    /// length, but AES-GCM authentication now fails — the same signature a
+    /// wrong key derivation or on-disk corruption produces.
+    fn tamper_ciphertext(encrypted: &str) -> String {
+        let mut combined = general_purpose::STANDARD.decode(encrypted).unwrap();
+        let last = combined.len() - 1;
+        combined[last] ^= 0xFF;
+        general_purpose::STANDARD.encode(&combined)
+    }
+
+    fn write_store_file(dir: &TempDir, contents: &serde_json::Value) -> std::path::PathBuf {
+        let path = dir.path().join(SECURE_STORE_FILE);
+        fs::write(&path, serde_json::to_vec(contents).unwrap()).unwrap();
+        path
+    }
+
+    fn read_back(path: &std::path::Path) -> Vec<u8> {
+        fs::read(path).unwrap()
+    }
+
+    #[test]
+    fn tamper_is_a_valid_length_gcm_auth_failure_not_a_decode_error() {
+        initialize_encryption_key().unwrap();
+        let tampered = tamper_ciphertext(&encrypt_value("VTLICENSE-ABCD-1234").unwrap());
+
+        let err = decrypt_value(&tampered).unwrap_err();
+
+        assert_eq!(err, "Decryption failed", "auth failure, not base64/length");
+    }
+
+    #[test]
+    fn missing_store_file_reads_as_absent_fresh_install() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join(SECURE_STORE_FILE); // never created
+
+        assert_eq!(read_store_file(&path).unwrap(), None);
+    }
+
+    #[test]
+    fn unreadable_store_file_is_distinct_from_missing_entry() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join(SECURE_STORE_FILE);
+        fs::write(&path, b"{ not valid json").unwrap();
+
+        let result = read_store_file(&path);
+
+        assert!(result.is_err(), "corrupt file must not read as absent");
+        assert!(result.unwrap_err().contains("Secure store"));
+    }
+
+    #[test]
+    fn parse_error_never_discloses_file_payload() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join(SECURE_STORE_FILE);
+        // A scalar top-level payload (e.g. a mistakenly pasted secret) must
+        // never appear in the returned error: serde_json's `invalid type`
+        // text would embed it verbatim.
+        let secret = "VTPASTED-SECRET-KEY-9f8e7d6c";
+        fs::write(&path, serde_json::to_string(&secret).unwrap()).unwrap();
+
+        let message = read_store_file(&path).unwrap_err();
+
+        assert!(
+            message.contains("Secure store"),
+            "unexpected message: {message}"
+        );
+        assert!(
+            !message.contains(secret),
+            "payload leaked into error: {message}"
+        );
+        assert!(
+            !message.contains("invalid type"),
+            "raw serde error leaked: {message}"
+        );
+    }
+
+    #[test]
+    fn corrupt_value_read_preserves_saved_record_and_reports_error() {
+        initialize_encryption_key().unwrap();
+        let dir = TempDir::new().unwrap();
+        let tampered = tamper_ciphertext(&encrypt_value("VTLICENSE-ABCD-1234").unwrap());
+        let path = write_store_file(&dir, &serde_json::json!({ "license": tampered }));
+        let before = read_back(&path);
+
+        let disk = read_store_file(&path).unwrap().expect("file parses");
+        let result = decrypt_raw_entry("license", disk.get("license"));
+
+        assert!(result.is_err(), "corrupt value must not read as absent");
+        let message = result.unwrap_err();
+        assert!(
+            message.contains("could not be decrypted") && message.contains("preserved"),
+            "unexpected message: {message}"
+        );
+        // The saved record is byte-identical after the failed read.
+        assert_eq!(read_back(&path), before);
+    }
+
+    #[test]
+    fn repeat_read_keeps_preserved_record_and_same_error() {
+        initialize_encryption_key().unwrap();
+        let dir = TempDir::new().unwrap();
+        let tampered = tamper_ciphertext(&encrypt_value("VTLICENSE-ABCD-1234").unwrap());
+        let path = write_store_file(&dir, &serde_json::json!({ "license": tampered }));
+        let before = read_back(&path);
+
+        let first_disk = read_store_file(&path).unwrap().expect("file parses");
+        let first = decrypt_raw_entry("license", first_disk.get("license")).unwrap_err();
+        let second_disk = read_store_file(&path).unwrap().expect("file parses");
+        let second = decrypt_raw_entry("license", second_disk.get("license")).unwrap_err();
+
+        assert_eq!(first, second);
+        assert_eq!(read_back(&path), before);
+    }
+
+    #[test]
+    fn invalid_value_type_preserves_saved_record() {
+        let dir = TempDir::new().unwrap();
+        let path = write_store_file(&dir, &serde_json::json!({ "license": 12345 }));
+        let before = read_back(&path);
+
+        let disk = read_store_file(&path).unwrap().expect("file parses");
+        let result = decrypt_raw_entry("license", disk.get("license"));
+
+        assert!(result.is_err(), "invalid type must not read as absent");
+        assert!(result.unwrap_err().contains("unexpected format"));
+        assert_eq!(read_back(&path), before);
+    }
+
+    #[test]
+    fn valid_license_roundtrip_reads_back_from_file() {
+        initialize_encryption_key().unwrap();
+        let dir = TempDir::new().unwrap();
+        let encrypted = encrypt_value("VTLICENSE-ABCD-1234").unwrap();
+        let path = write_store_file(&dir, &serde_json::json!({ "license": encrypted }));
+
+        let disk = read_store_file(&path).unwrap().expect("file parses");
+
+        assert_eq!(
+            decrypt_raw_entry("license", disk.get("license")).unwrap(),
+            Some("VTLICENSE-ABCD-1234".to_string())
+        );
+        // A key that is not in the file reads as absent, not as an error.
+        assert_eq!(
+            decrypt_raw_entry("other_key", disk.get("other_key")).unwrap(),
+            None
+        );
     }
 }

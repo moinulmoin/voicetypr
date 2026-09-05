@@ -49,6 +49,11 @@ export function ModelsSection({
   });
   const [sourceFilter, setSourceFilter] = useState<"local" | "cloud" | "remote">("local");
 
+  // Plan 044: when a Soniox storage-limit escalation lands the dashboard
+  // here, the cloud cards (and the Soniox stored-files cleanup card) must be
+  // visible even if the user had filtered to local/remote sources.
+  useTauriEvent("soniox-storage-limit", () => setSourceFilter("cloud"));
+
   const { availableToUse, availableToSetup } = useMemo(() => {
     const useList: typeof models = [];
     const setupList: typeof models = [];

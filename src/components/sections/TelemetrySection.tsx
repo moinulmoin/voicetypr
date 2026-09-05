@@ -18,6 +18,13 @@ interface AnalyticsStatus {
   consent_required: boolean;
 }
 
+/// Mirrors the Rust `TelemetryConsentResult`.
+interface TelemetryConsentResult {
+  enabled: boolean;
+  /** Opt-in only wires the Sentry client on the next launch; opt-out is immediate. */
+  restart_required: boolean;
+}
+
 type PendingControl = "diagnostics" | "analytics" | null;
 
 export function TelemetrySection() {
@@ -48,9 +55,19 @@ export function TelemetrySection() {
   const updateDiagnostics = async (enabled: boolean) => {
     setPending("diagnostics");
     try {
-      await invoke("set_telemetry_consent", { enabled });
-      setDiagnostics((current) => (current ? { ...current, enabled } : current));
-      toast.success(enabled ? "Crash reporting turned on." : "Crash reporting turned off.");
+      const result = await invoke<TelemetryConsentResult>("set_telemetry_consent", {
+        enabled,
+      });
+      setDiagnostics((current) => (current ? { ...current, enabled: result.enabled } : current));
+      // Enabling mid-session cannot wire the Sentry client until the next
+      // launch, so say so instead of claiming reporting is live.
+      toast.success(
+        result.restart_required
+          ? "Crash reporting will turn on after you restart VoiceTypr."
+          : enabled
+            ? "Crash reporting turned on."
+            : "Crash reporting turned off.",
+      );
     } catch (error) {
       log.error("Failed to update crash reporting:", error);
       toast.error("Could not update crash reporting.");
