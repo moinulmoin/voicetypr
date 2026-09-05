@@ -255,34 +255,41 @@ fn is_wrapped_in_quotes(text: &str) -> Option<(usize, usize)> {
     })
 }
 
+/// Normalize a candidate first line for preamble handling: trim whitespace,
+/// strip wrapping quotes, drop trailing colons. Case-insensitive comparison
+/// is applied by the caller. Shared by the ownership guard and the known-list
+/// lookup so both agree on what "the same line" means.
+fn normalize_preamble_line(line: &str) -> &str {
+    line.trim()
+        .trim_matches(|ch: char| ch == '"' || ch == '\'' || ch.is_whitespace())
+        .trim_end_matches(':')
+        .trim()
+}
+
 fn strip_known_preamble<'a>(output: &'a str, input: &str) -> &'a str {
-    // The first line is only a strip candidate if the input does not itself
-    // begin with that line. When it does, the line is user content even if
-    // the rest was polished ("Sure\nI will send it." -> "Sure\nI'll send
-    // it."): stripping it would delete the user's words. BOTH sides get the
-    // same quote/colon/trim + case normalization the strip candidate uses —
-    // punctuation polish may add terminal punctuation to the echo
-    // ("Sure" -> "Sure:"), and only an equivalent comparison proves the line
-    // belongs to the input rather than to the model.
-    let normalize_first_line = |line: &str| -> String {
-        line.split('\n')
-            .next()
-            .unwrap_or(line)
-            .trim()
-            .trim_matches(|ch: char| ch == '"' || ch == '\'' || ch.is_whitespace())
-            .trim_end_matches(':')
-            .trim()
-            .to_ascii_lowercase()
-    };
-    let output_first_line = normalize_first_line(output);
-    let input_first_line = normalize_first_line(input);
-    if !output_first_line.is_empty() && output_first_line == input_first_line {
-        return output;
-    }
+    // Single-line output has no preamble; the common case returns before any
+    // guard work.
     let Some((first_line, rest)) = output.split_once('\n') else {
         return output;
     };
-    let normalized = normalize_first_line(first_line);
+    // The first line is only a strip candidate if the input does not itself
+    // begin with that line. When it does, the line is user content even if
+    // the rest was polished ("Sure\nI will send it." -> "Sure:\nI'll send
+    // it."): stripping it would delete the user's words. Both sides go
+    // through the same borrowed normalizer as the known-list lookup below
+    // (whitespace, wrapping quotes, trailing colons, then ASCII
+    // case-insensitive compare), so a punctuation-fiddled echo still counts
+    // as user content.
+    let candidate = normalize_preamble_line(first_line);
+    let input_first_line = normalize_preamble_line(input.split('\n').next().unwrap_or(input));
+    if !candidate.is_empty() && candidate.eq_ignore_ascii_case(input_first_line) {
+        return output;
+    }
+    // NOTE: no bare "sure" entry. A standalone greeting/acknowledgement is
+    // plausibly the user's own dictated content ("Sure!\nI will send it
+    // tomorrow.", or reflowed to "Sure\nI'll send it tomorrow."), so
+    // stripping it deletes user words. Only an explicit "Here is the …"
+    // wrapper phrase counts as a removable preamble.
     let known = [
         "here is the fixed text",
         "here's the fixed text",
@@ -300,10 +307,8 @@ fn strip_known_preamble<'a>(output: &'a str, input: &str) -> &'a str {
         "sure, here's the corrected text",
         "sure, here is the polished text",
         "sure, here's the polished text",
-        "sure",
     ];
-
-    if known.contains(&normalized.as_str()) {
+    if known.iter().any(|entry| entry.eq_ignore_ascii_case(candidate)) {
         rest.trim()
     } else {
         output
@@ -464,12 +469,38 @@ mod tests {
     }
 
     #[test]
-    fn validate_strips_sure_preamble_when_output_is_not_the_input() {
-        // The identity guard must not swallow genuine model wrappers: a
-        // model-added "Sure" on a transformed payload is still stripped.
-        let output = "Sure\nMeet me at 4.";
+    fn validate_preserves_standalone_sure_despite_punctuation_variant() {
+        // Regression: input "Sure!\n…" echoed with different punctuation
+        // ("Sure:") used to normalize to the (since removed) bare "sure"
+        // preamble entry and delete the user's first line.
+        let input = "Sure!\nI will send it tomorrow.";
+        let output = "Sure:\nI\u{2019}ll send it tomorrow.";
+        assert_eq!(validate_ai_output(output, input).unwrap(), output);
+    }
+
+    #[test]
+    fn validate_preserves_sure_when_model_reflows_first_line_onto_newline() {
+        // Regression: the model moved "Sure," onto its own line while
+        // polishing the rest; stripping it deleted the user's opener.
+        let input = "Sure, I will send it tomorrow.";
+        let output = "Sure\nI\u{2019}ll send it tomorrow.";
+        assert_eq!(validate_ai_output(output, input).unwrap(), output);
+    }
+
+    #[test]
+    fn validate_strips_explicit_here_is_wrapper_when_output_is_not_the_input() {
+        // The preamble stripper still removes genuine explicit wrappers —
+        // with or without a "Sure," lead-in — on transformed payloads.
         assert_eq!(
-            validate_ai_output(output, "meet me at four").unwrap(),
+            validate_ai_output("Here is the fixed text:\nMeet me at 4.", "meet me at four").unwrap(),
+            "Meet me at 4."
+        );
+        assert_eq!(
+            validate_ai_output(
+                "Sure, here is the polished text:\nMeet me at 4.",
+                "meet me at four"
+            )
+            .unwrap(),
             "Meet me at 4."
         );
     }
@@ -496,18 +527,6 @@ mod tests {
         // A case-fiddled echo of the input's first line is still user content.
         let input = "SURE\nSend it tomorrow.";
         let output = "sure\nSend it tomorrow.";
-        assert_eq!(validate_ai_output(output, input).unwrap(), output);
-    }
-
-    #[test]
-    fn validate_keeps_punctuation_polished_input_first_line_when_rest_is_polished() {
-        // Regression: punctuation polish may append terminal punctuation to
-        // the echoed first line ("Sure" -> "Sure:"). The guard must apply the
-        // SAME quote/colon/trim normalization to both first lines BEFORE
-        // deciding the line is user content — otherwise the normalizer
-        // strips the user's word as a model wrapper.
-        let input = "Sure\nI will send it tomorrow";
-        let output = "Sure:\nI will send it tomorrow.";
         assert_eq!(validate_ai_output(output, input).unwrap(), output);
     }
 
