@@ -187,10 +187,10 @@ fn should_retry(error: &AiProviderError) -> bool {
 
 fn validate_ai_output(output: &str, input: &str) -> Result<String, AiProviderError> {
     let cleaned = strip_wrapping_quotes(
-        strip_known_preamble(strip_wrapping_quotes(
-            strip_markdown_fence(output).trim(),
+        strip_known_preamble(
+            strip_wrapping_quotes(strip_markdown_fence(output).trim(), input),
             input,
-        )),
+        ),
         input,
     )
     .trim()
@@ -255,7 +255,19 @@ fn is_wrapped_in_quotes(text: &str) -> Option<(usize, usize)> {
     })
 }
 
-fn strip_known_preamble(output: &str) -> &str {
+fn strip_known_preamble<'a>(output: &'a str, input: &str) -> &'a str {
+    // The first line is only a strip candidate if the input does not itself
+    // begin with that line. When it does, the line is user content even if
+    // the rest was polished ("Sure\nI will send it." -> "Sure\nI'll send
+    // it."): stripping it would delete the user's words. Comparison is
+    // trimmed and case-insensitive so a case-fiddled echo still counts.
+    let output_first_line = output.split('\n').next().unwrap_or(output).trim();
+    let input_first_line = input.split('\n').next().unwrap_or(input).trim();
+    if !output_first_line.is_empty()
+        && output_first_line.eq_ignore_ascii_case(input_first_line)
+    {
+        return output;
+    }
     let Some((first_line, rest)) = output.split_once('\n') else {
         return output;
     };
@@ -425,6 +437,59 @@ mod tests {
     fn validate_keeps_identity_output_unchanged() {
         let output = "Already clean.";
         assert_eq!(validate_ai_output(output, output).unwrap(), output);
+    }
+
+    #[test]
+    fn validate_preserves_identity_output_whose_first_line_looks_like_a_preamble() {
+        // Regression: an identity echo whose first line matches a known
+        // preamble ("Sure") used to have that line deleted — the model
+        // repeated the input verbatim, so "Sure" is user content, not a
+        // model wrapper.
+        let input = "Sure\nI will send it tomorrow.";
+        assert_eq!(validate_ai_output(input, input).unwrap(), input);
+    }
+
+    #[test]
+    fn validate_preserves_identity_echo_delivered_in_a_markdown_fence() {
+        let input = "Sure\nI will send it tomorrow.";
+        let output = "```\nSure\nI will send it tomorrow.\n```";
+        assert_eq!(validate_ai_output(output, input).unwrap(), input);
+    }
+
+    #[test]
+    fn validate_strips_sure_preamble_when_output_is_not_the_input() {
+        // The identity guard must not swallow genuine model wrappers: a
+        // model-added "Sure" on a transformed payload is still stripped.
+        let output = "Sure\nMeet me at 4.";
+        assert_eq!(
+            validate_ai_output(output, "meet me at four").unwrap(),
+            "Meet me at 4."
+        );
+    }
+
+    #[test]
+    fn validate_identity_guard_does_not_bypass_refusal_check() {
+        let refusal = "I'm sorry, I can't help with that.";
+        let error = validate_ai_output(refusal, refusal).unwrap_err();
+        assert!(matches!(error, AiProviderError::BadResponse));
+    }
+
+    #[test]
+    fn validate_preserves_input_first_line_even_when_rest_is_polished() {
+        // Regression: the model echoed the input's literal first line ("Sure")
+        // and polished only the rest. Full-output identity equality missed
+        // this — the line is input content, so it must survive.
+        let input = "Sure\nI will send it tomorrow.";
+        let output = "Sure\nI\u{2019}ll send it tomorrow.";
+        assert_eq!(validate_ai_output(output, input).unwrap(), output);
+    }
+
+    #[test]
+    fn validate_first_line_guard_is_case_insensitive_on_echoed_preamble() {
+        // A case-fiddled echo of the input's first line is still user content.
+        let input = "SURE\nSend it tomorrow.";
+        let output = "sure\nSend it tomorrow.";
+        assert_eq!(validate_ai_output(output, input).unwrap(), output);
     }
 
     #[test]

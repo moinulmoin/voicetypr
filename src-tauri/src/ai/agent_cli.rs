@@ -43,7 +43,8 @@ use std::ffi::{OsStr, OsString};
 use std::future::Future;
 use std::path::{Path, PathBuf};
 use std::process::{ExitStatus, Stdio};
-use std::sync::OnceLock;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{LazyLock, OnceLock};
 use std::time::{Duration, Instant};
 use tempfile::TempDir;
 use tokio::io::AsyncWriteExt;
@@ -725,11 +726,30 @@ async fn terminate_process_group(child: &mut ProcessGroupGuard) -> std::io::Resu
 }
 
 /// Capture result from an isolated child. Both streams are always drained
-/// concurrently, even when only stdout is needed.
 struct ProcessCapture {
     status: ExitStatus,
     stdout: Vec<u8>,
+    /// True when stdout exceeded [`MAX_CAPTURE_BYTES`] and the drain dropped
+    /// the tail. The retained bytes are a partial payload.
+    stdout_truncated: bool,
     stderr: Vec<u8>,
+}
+
+impl ProcessCapture {
+    /// stdout of a successful, complete capture. A capture that hit the
+    /// ceiling holds a partial payload — parsing it could paste half a
+    /// polish result or half a JSONL stream — so it is refused even though
+    /// the child exited successfully.
+    fn complete_stdout(&self) -> Result<&[u8], MappedAiProviderError> {
+        if self.stdout_truncated {
+            log::warn!(
+                "CLI stdout exceeded the {} KiB capture ceiling; refusing partial output",
+                MAX_CAPTURE_BYTES / 1024
+            );
+            return Err(MappedAiProviderError::new(AiProviderError::BadResponse));
+        }
+        Ok(&self.stdout)
+    }
 }
 
 #[derive(Debug)]
@@ -828,7 +848,7 @@ async fn run_isolated_command(
             .expect("stdout drain task must be present before joining");
         tokio::time::timeout_at(deadline, task).await
     };
-    let stdout = match stdout_result {
+    let (stdout, stdout_truncated) = match stdout_result {
         Err(_) => {
             kill_and_reap(&mut child, stdout_task.take(), stderr_task.take()).await;
             return Err(ProcessFailure::Timeout);
@@ -838,7 +858,7 @@ async fn run_isolated_command(
             // handling the result so cleanup cannot await it a second time.
             let _ = stdout_task.take();
             match joined {
-                Ok(Ok(stdout)) => stdout,
+                Ok(Ok(captured)) => captured,
                 Ok(Err(error)) => {
                     kill_and_reap(&mut child, stdout_task.take(), stderr_task.take()).await;
                     return Err(ProcessFailure::Io(error));
@@ -859,7 +879,9 @@ async fn run_isolated_command(
             .expect("stderr drain task must be present before joining");
         tokio::time::timeout_at(deadline, task).await
     };
-    let stderr = match stderr_result {
+    // stderr stays a bounded diagnostic: a dropped tail only trims error
+    // context, so its overflow flag is intentionally not surfaced.
+    let (stderr, _stderr_truncated) = match stderr_result {
         Err(_) => {
             kill_and_reap(&mut child, stdout_task.take(), stderr_task.take()).await;
             return Err(ProcessFailure::Timeout);
@@ -868,7 +890,7 @@ async fn run_isolated_command(
             // As above, this completed handle must not be handed to cleanup.
             let _ = stderr_task.take();
             match joined {
-                Ok(Ok(stderr)) => stderr,
+                Ok(Ok(captured)) => captured,
                 Ok(Err(error)) => return Err(ProcessFailure::Io(error)),
                 Err(_) => {
                     return Err(ProcessFailure::Io(std::io::Error::other(
@@ -879,17 +901,21 @@ async fn run_isolated_command(
         }
     };
     let _ = terminate_process_group(&mut child).await;
-
-    drop(temp_dir);
     Ok(ProcessCapture {
         status,
         stdout,
+        stdout_truncated,
         stderr,
     })
 }
 
 /// Drain an entire pipe while retaining only a bounded prefix.
-async fn drain_bounded<R>(mut reader: R) -> std::io::Result<Vec<u8>>
+///
+/// Draining always runs to EOF so the child can never block on a full pipe
+/// (which would deadlock the capture). Returns the retained bytes plus
+/// whether anything beyond [`MAX_CAPTURE_BYTES`] was dropped — a set flag
+/// means callers must not parse the prefix as a complete payload.
+async fn drain_bounded<R>(mut reader: R) -> std::io::Result<(Vec<u8>, bool)>
 where
     R: tokio::io::AsyncRead + Unpin,
 {
@@ -897,23 +923,25 @@ where
 
     let mut retained = Vec::with_capacity(MAX_CAPTURE_BYTES.min(8192));
     let mut chunk = [0_u8; 8192];
+    let mut truncated = false;
     loop {
         let read = reader.read(&mut chunk).await?;
         if read == 0 {
             break;
         }
-        if retained.len() < MAX_CAPTURE_BYTES {
-            let take = (MAX_CAPTURE_BYTES - retained.len()).min(read);
-            retained.extend_from_slice(&chunk[..take]);
+        let take = (MAX_CAPTURE_BYTES - retained.len()).min(read);
+        retained.extend_from_slice(&chunk[..take]);
+        if read > take {
+            truncated = true;
         }
     }
-    Ok(retained)
+    Ok((retained, truncated))
 }
 
 async fn kill_and_reap(
     child: &mut ProcessGroupGuard,
-    stdout_task: Option<tokio::task::JoinHandle<std::io::Result<Vec<u8>>>>,
-    stderr_task: Option<tokio::task::JoinHandle<std::io::Result<Vec<u8>>>>,
+    stdout_task: Option<tokio::task::JoinHandle<std::io::Result<(Vec<u8>, bool)>>>,
+    stderr_task: Option<tokio::task::JoinHandle<std::io::Result<(Vec<u8>, bool)>>>,
 ) {
     let _ = terminate_process_group(child).await;
     for task in [stdout_task, stderr_task].into_iter().flatten() {
@@ -925,21 +953,47 @@ async fn kill_and_reap(
 /// Run a bounded `--help` capability probe. Claude falls back conservatively
 /// when this optional probe fails; pi/omp then fail mandatory-capability checks.
 type CachedCapabilities = (ClaudeCapabilities, Vec<u8>);
-static POLISH_CAPABILITY_CACHE: OnceLock<Mutex<HashMap<&'static str, CachedCapabilities>>> =
-    OnceLock::new();
+static POLISH_CAPABILITY_CACHE: LazyLock<Mutex<HashMap<&'static str, CachedCapabilities>>> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
+
+/// Bumped on every capability invalidation. An in-flight `--help` probe
+/// snapshots the epoch before probing and only repopulates the cache if the
+/// epoch still matches, so a probe that started before a public Refresh
+/// cannot defeat the invalidation with a stale result.
+static POLISH_CAPABILITY_EPOCH: AtomicU64 = AtomicU64::new(0);
+
+/// Drop cached `--help` capabilities for a provider. The public provider
+/// Refresh runs this: it must not leave the polish runtime serving
+/// capabilities learned from a binary that has since been updated or
+/// replaced on PATH.
+pub async fn invalidate_polish_capabilities(provider: &str) {
+    let Some(spec) = spec_for(provider) else {
+        return;
+    };
+    // Bump the epoch and drop the entry under the SAME cache lock so the
+    // invalidation is atomic for every cache reader: an in-flight probe
+    // that snapshotted the previous epoch can never repopulate stale
+    // capabilities after this completes.
+    let cache = &*POLISH_CAPABILITY_CACHE;
+    let mut guard = cache.lock().await;
+    POLISH_CAPABILITY_EPOCH.fetch_add(1, Ordering::SeqCst);
+    guard.remove(spec.provider_id);
+}
 
 async fn discover_capabilities_for_polish(
     binary_path: &Path,
     spec: &'static AgentCliSpec,
     refresh: bool,
 ) -> (ClaudeCapabilities, Vec<u8>, bool) {
-    let cache = POLISH_CAPABILITY_CACHE.get_or_init(|| Mutex::new(HashMap::new()));
+    let cache = &*POLISH_CAPABILITY_CACHE;
     let mut cached = cache.lock().await;
     if refresh {
+        POLISH_CAPABILITY_EPOCH.fetch_add(1, Ordering::SeqCst);
         cached.remove(spec.provider_id);
     } else if let Some((capabilities, help)) = cached.get(spec.provider_id).cloned() {
         return (capabilities, help, true);
     }
+    let epoch = POLISH_CAPABILITY_EPOCH.load(Ordering::SeqCst);
     drop(cached);
 
     let mut command = Command::new(binary_path);
@@ -948,16 +1002,19 @@ async fn discover_capabilities_for_polish(
     command.env("ZSH_TMUX_AUTOSTART", "false");
     apply_no_window(&mut command);
     match run_isolated_command(command, None, Duration::from_secs(3)).await {
-        Ok(capture) if capture.status.success() => {
+        // A help payload that hit the capture ceiling is unusable; fall back
+        // to conservative defaults exactly like a failed probe.
+        Ok(capture) if capture.status.success() && !capture.stdout_truncated => {
             let mut help = capture.stdout;
             if !capture.stderr.is_empty() {
                 help.extend_from_slice(&capture.stderr);
             }
             let capabilities = claude_capabilities_from_help(&help);
-            cache
-                .lock()
-                .await
-                .insert(spec.provider_id, (capabilities, help.clone()));
+            let mut guard = cache.lock().await;
+            if POLISH_CAPABILITY_EPOCH.load(Ordering::SeqCst) == epoch {
+                guard.insert(spec.provider_id, (capabilities, help.clone()));
+            }
+            drop(guard);
             (capabilities, help, false)
         }
         _ => (ClaudeCapabilities::default(), Vec::new(), false),
@@ -1079,7 +1136,7 @@ async fn cold_spawn_and_collect(
         )));
     }
 
-    parse_cli_output(output, &capture.stdout)
+    parse_cli_output(output, capture.complete_stdout()?)
 }
 
 fn map_process_failure(failure: ProcessFailure) -> MappedAiProviderError {
@@ -1625,7 +1682,9 @@ async fn resolve_login_shell_path() -> Option<String> {
     let capture = run_isolated_command(command, None, LOGIN_SHELL_PATH_TIMEOUT)
         .await
         .ok()?;
-    if !capture.status.success() {
+    if !capture.status.success() || capture.stdout_truncated {
+        // A truncated env dump may have lost the closing marker or the PATH
+        // line itself; fall back to the inherited PATH instead.
         return None;
     }
     let stdout = String::from_utf8_lossy(&capture.stdout);
@@ -1766,6 +1825,12 @@ pub async fn probe(provider: &str, refresh_path: bool) -> AgentCliProbe {
     let Some(spec) = spec_for(provider) else {
         return AgentCliProbe::unavailable(AgentCliProbeState::Missing);
     };
+    // An explicit Refresh re-hydrates PATH below; it must also drop the
+    // cached polish capabilities so the next polish run re-probes `--help`
+    // against the binary that is installed NOW, not the one seen earlier.
+    if refresh_path {
+        invalidate_polish_capabilities(provider).await;
+    }
     let resolution = resolve_binary_state(spec.binary, refresh_path).await;
     if resolution == BinaryResolution::Missing {
         log::debug!(
@@ -2369,10 +2434,12 @@ async fn run_model_list_command(
             "The CLI could not list models.".to_string(),
         )));
     }
-    if !capture.stdout.is_empty() {
-        Ok(capture.stdout)
+    // Truncated model-list output would only yield broken JSON parsers.
+    let stdout = capture.complete_stdout()?;
+    if !stdout.is_empty() {
+        Ok(stdout.to_vec())
     } else if !capture.stderr.is_empty() {
-        Ok(capture.stderr)
+        Ok(capture.stderr.clone())
     } else {
         Err(MappedAiProviderError::new(AiProviderError::BadResponse))
     }
@@ -2597,6 +2664,7 @@ mod tests {
 
     #[cfg(unix)]
     #[tokio::test]
+    #[serial_test::serial]
     async fn capability_refresh_reprobes_an_updated_binary() {
         use std::os::unix::fs::PermissionsExt;
 
@@ -2607,7 +2675,7 @@ mod tests {
         permissions.set_mode(0o755);
         std::fs::set_permissions(&binary, permissions).unwrap();
 
-        let cache = POLISH_CAPABILITY_CACHE.get_or_init(|| Mutex::new(HashMap::new()));
+        let cache = &*POLISH_CAPABILITY_CACHE;
         cache.lock().await.remove(CLAUDE_CODE_SPEC.provider_id);
 
         let (_, first_help, first_cached) =
@@ -2631,6 +2699,7 @@ mod tests {
 
     #[cfg(unix)]
     #[tokio::test]
+    #[serial_test::serial]
     async fn prefetch_fills_the_capability_cache_the_polish_path_reads() {
         use std::os::unix::fs::PermissionsExt;
 
@@ -2641,7 +2710,7 @@ mod tests {
         permissions.set_mode(0o755);
         std::fs::set_permissions(&binary, permissions).unwrap();
 
-        let cache = POLISH_CAPABILITY_CACHE.get_or_init(|| Mutex::new(HashMap::new()));
+        let cache = &*POLISH_CAPABILITY_CACHE;
         cache.lock().await.remove(CLAUDE_CODE_SPEC.provider_id);
 
         prefetch_capabilities_with_binary(&CLAUDE_CODE_SPEC, &binary).await;
@@ -2652,6 +2721,179 @@ mod tests {
         assert_eq!(help, b"prefetched-help\n");
 
         cache.lock().await.remove(CLAUDE_CODE_SPEC.provider_id);
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn successful_stdout_overflow_is_flagged_and_refused() {
+        // A real child emits 160 KiB on stdout and exits successfully. The
+        // drain must keep draining (no deadlock), retain the bounded prefix,
+        // report the overflow — and the polish capture must refuse to parse
+        // the partial payload instead of pasting it.
+        let mut command = Command::new("/bin/sh");
+        command.args(["-c", "yes a | head -c 160000"]);
+        let capture = run_isolated_command(command, None, Duration::from_secs(30))
+            .await
+            .expect("overflowing child must be captured without deadlock");
+
+        assert!(capture.status.success());
+        assert!(
+            capture.stdout_truncated,
+            "160 KiB exceeds the 128 KiB capture ceiling"
+        );
+        assert_eq!(capture.stdout.len(), MAX_CAPTURE_BYTES);
+        let error = capture.complete_stdout().unwrap_err();
+        assert!(
+            matches!(error.error, AiProviderError::BadResponse),
+            "partial stdout must never reach a plaintext/JSONL parser"
+        );
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn successful_stdout_within_cap_completes() {
+        let mut command = Command::new("/bin/sh");
+        command.args(["-c", "printf 'polished text'"]);
+        let capture = run_isolated_command(command, None, Duration::from_secs(30))
+            .await
+            .unwrap();
+
+        assert!(capture.status.success());
+        assert!(!capture.stdout_truncated);
+        assert_eq!(capture.complete_stdout().unwrap(), b"polished text");
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn stderr_overflow_stays_a_bounded_diagnostic() {
+        // stderr policy: keep draining, keep the bounded prefix, never fail
+        // the capture over dropped diagnostics, and never grow unbounded.
+        let mut command = Command::new("/bin/sh");
+        command.args(["-c", "yes noise | head -c 160000 >&2; printf 'done'"]);
+        let capture = run_isolated_command(command, None, Duration::from_secs(30))
+            .await
+            .unwrap();
+
+        assert!(capture.status.success());
+        assert_eq!(capture.stderr.len(), MAX_CAPTURE_BYTES);
+        assert!(!capture.stdout_truncated);
+        assert_eq!(capture.complete_stdout().unwrap(), b"done");
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    #[serial_test::serial]
+    async fn public_probe_refresh_invalidates_cached_polish_capabilities() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = tempfile::TempDir::new().unwrap();
+        let binary = dir.path().join("claude");
+        std::fs::write(&binary, b"#!/bin/sh\nprintf 'stale-help\\n'\n").unwrap();
+        let mut permissions = std::fs::metadata(&binary).unwrap().permissions();
+        permissions.set_mode(0o755);
+        std::fs::set_permissions(&binary, permissions).unwrap();
+
+        let cache = &*POLISH_CAPABILITY_CACHE;
+        cache.lock().await.remove(CLAUDE_CODE_SPEC.provider_id);
+
+        let (_, _, populated) =
+            discover_capabilities_for_polish(&binary, &CLAUDE_CODE_SPEC, false).await;
+        assert!(!populated);
+        let (_, _, cached) =
+            discover_capabilities_for_polish(&binary, &CLAUDE_CODE_SPEC, false).await;
+        assert!(cached, "precondition: capabilities are cached");
+
+        // Ordinary detection (no refresh) must leave the cache alone.
+        let _ = probe(PROVIDER_CLAUDE_CODE, false).await;
+        assert!(
+            cache.lock().await.contains_key(CLAUDE_CODE_SPEC.provider_id),
+            "non-refresh detection must keep cached capabilities"
+        );
+
+        // The public Refresh path must drop them so polish re-probes --help.
+        let _ = probe(PROVIDER_CLAUDE_CODE, true).await;
+        assert!(
+            !cache.lock().await.contains_key(CLAUDE_CODE_SPEC.provider_id),
+            "public refresh must invalidate cached polish capabilities"
+        );
+
+        cache.lock().await.remove(CLAUDE_CODE_SPEC.provider_id);
+    }
+
+    #[cfg(unix)]
+    #[serial_test::serial]
+    #[tokio::test]
+    async fn inflight_capability_probe_cannot_repopulate_after_public_refresh() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = tempfile::TempDir::new().unwrap();
+        let started = dir.path().join("probe-started");
+        let release = dir.path().join("release-probe");
+        let binary = dir.path().join("claude");
+        // The fake CLI signals when the probe has actually started (so the
+        // cache check and epoch snapshot have passed), then blocks until the
+        // test releases it — ordering is explicit, not sleep-raced.
+        std::fs::write(
+            &binary,
+            format!(
+                "#!/bin/sh\ntouch '{}'\nwhile [ ! -f '{}' ]; do sleep 0.02; done\nprintf 'late-help\\n'\n",
+                started.display(),
+                release.display()
+            ),
+        )
+        .unwrap();
+        let mut permissions = std::fs::metadata(&binary).unwrap().permissions();
+        permissions.set_mode(0o755);
+        std::fs::set_permissions(&binary, permissions).unwrap();
+
+        let cache = &*POLISH_CAPABILITY_CACHE;
+        cache.lock().await.remove(CLAUDE_CODE_SPEC.provider_id);
+        let probe_task = tokio::spawn(async move {
+            discover_capabilities_for_polish(&probe_binary, &CLAUDE_CODE_SPEC, false).await
+        });
+        // Barrier 1: the child is running, so the probe has passed its cache
+        // check and captured the pre-refresh epoch.
+        wait_for_path(&started, Duration::from_secs(10)).await;
+
+        // Refresh through the PUBLIC probe path (what the settings Refresh
+        // button invokes), not the private helper.
+        let _ = probe(PROVIDER_CLAUDE_CODE, true).await;
+
+        // Barrier 2: deterministic release; the probe completes AFTER the
+        // invalidation landed.
+        std::fs::write(&release, b"").unwrap();
+        let (_, help, cached) = probe_task.await.unwrap();
+        assert_eq!(help, b"late-help\n");
+        assert!(!cached);
+        assert!(
+            !cache.lock().await.contains_key(CLAUDE_CODE_SPEC.provider_id),
+            "a probe that started before the refresh must not repopulate stale capabilities"
+        );
+
+        // The next polish probe re-runs --help instead of trusting the stale
+        // pre-refresh run.
+        let (_, help_after, cached_after) =
+            discover_capabilities_for_polish(&binary, &CLAUDE_CODE_SPEC, false).await;
+        assert!(!cached_after);
+        assert_eq!(help_after, b"late-help\n");
+
+        cache.lock().await.remove(CLAUDE_CODE_SPEC.provider_id);
+    }
+
+    /// Bounded, event-driven wait for a readiness marker a fake child writes
+    /// when it starts. Replaces fixed sleeps: the test proceeds as soon as
+    /// (and only after) the observed event happens, or fails loudly.
+    #[cfg(unix)]
+    async fn wait_for_path(path: &Path, deadline: Duration) {
+        let expiry = tokio::time::Instant::now() + deadline;
+        while !path.exists() {
+            assert!(
+                tokio::time::Instant::now() < expiry,
+                "readiness marker {:?} never appeared",
+                path
+            );
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
     }
 
     #[test]
