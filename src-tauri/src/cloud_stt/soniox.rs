@@ -38,11 +38,115 @@ fn set_base_url_override(base: Option<String>) {
     BASE_OVERRIDE.with(|cell| *cell.borrow_mut() = base);
 }
 
-/// Best-effort cleanup of Soniox stored records (plan 044): deleting a
-/// transcription cascades to its file; if creation never succeeded the
-/// uploaded file is orphaned and is deleted directly. A 409 means the job is
-/// still processing (poll-timeout path) — the record lingers until Soniox's
-/// ~30-day purge or the settings cleanup action drains it; never fatal.
+// --- Active-job ownership and drain gating ------------------------------------
+//
+// Backlog drains (settings action + storage-wall auto-heal) must never delete
+// the records of in-flight dictation flows: Soniox documents that deleting a
+// file still referenced by a not-yet-processing transcription fails that job
+// with `file_not_found`, and a queued/completed-but-not-yet-extracted
+// transcription can be deleted server-side, which would kill a healthy
+// dictation mid-flight.
+//
+// Two primitives make that decision race-free:
+//
+//   * LISTING_GATE — a short-lived async gate. A flow holds a READ guard only
+//     across its upload request (until the file id is registered) and across
+//     its create request (until the transcription id is attached). This
+//     closes the visibility window: a record becomes server-side list-visible
+//     BEFORE its id reaches the client, so a drain listing taken while an id
+//     is still in flight could see the record without the registration. A
+//     drain takes a WRITE guard only around each listing + protection
+//     snapshot — writes wait for in-flight upload/create windows, and flows
+//     starting afterwards list absent records. Never held across a poll or
+//     a whole dictation.
+//   * ACTIVE_JOBS — RAII registry of app-owned uploads (file_id →
+//     Option<transcription_id>). Drains snapshot it under the gate and skip
+//     protected records in BOTH passes. Guards deregister on drop, so a
+//     cancelled dictation cannot leak protection; its leftovers fall back to
+//     ordinary backlog ownership and the next drain reaps them.
+
+static LISTING_GATE: tokio::sync::RwLock<()> = tokio::sync::RwLock::const_new(());
+
+static ACTIVE_JOBS: std::sync::LazyLock<
+    std::sync::Mutex<std::collections::HashMap<String, Option<String>>>,
+> = std::sync::LazyLock::new(|| std::sync::Mutex::new(std::collections::HashMap::new()));
+
+/// RAII ownership of one flow's uploaded file and, once created, its
+/// transcription. Dropping the guard releases the protection — cancellation
+/// cannot leak it.
+struct ActiveJobGuard(String);
+
+impl ActiveJobGuard {
+    fn register(file_id: &str) -> Self {
+        ACTIVE_JOBS
+            .lock()
+            .expect("active-jobs registry poisoned")
+            .insert(file_id.to_string(), None);
+        Self(file_id.to_string())
+    }
+}
+
+impl Drop for ActiveJobGuard {
+    fn drop(&mut self) {
+        ACTIVE_JOBS
+            .lock()
+            .expect("active-jobs registry poisoned")
+            .remove(&self.0);
+    }
+}
+
+/// Attaches a created transcription to its already-registered upload. Called
+/// under the gate's read guard inside the create window. If the upload entry
+/// is somehow gone, the pair is still recorded so the drain cannot delete
+/// either record out from under the flow.
+fn attach_transcription(file_id: &str, transcription_id: &str) {
+    ACTIVE_JOBS
+        .lock()
+        .expect("active-jobs registry poisoned")
+        .insert(file_id.to_string(), Some(transcription_id.to_string()));
+}
+
+/// Snapshot of files owned by in-flight flows. The lock is never held across
+/// an await point.
+fn active_file_ids() -> std::collections::HashSet<String> {
+    ACTIVE_JOBS
+        .lock()
+        .expect("active-jobs registry poisoned")
+        .keys()
+        .cloned()
+        .collect()
+}
+
+/// Snapshot of transcription ids owned by in-flight flows.
+fn active_transcription_ids() -> std::collections::HashSet<String> {
+    ACTIVE_JOBS
+        .lock()
+        .expect("active-jobs registry poisoned")
+        .values()
+        .filter_map(|tid| tid.clone())
+        .collect()
+}
+
+/// Best-effort cleanup of the Soniox records owned by one dictation flow.
+/// Soniox documents that deleting a transcription does NOT cascade to its
+/// uploaded file — `DELETE /files/{id}` is a separate call. Therefore:
+///
+///   * transcription present → delete it; only once the delete lands (2xx)
+///     or the record is already gone (404 — e.g. a backlog drain raced us
+///     and owns the file too) is the file unreferenced, so delete it too.
+///   * 409 → the job is still processing (poll-timeout path). The file is
+///     still referenced by that live job — deleting it now would fail the
+///     job with `file_not_found` — so BOTH records linger for a later
+///     drain. A processing 409 is never permission to delete the file.
+///   * no transcription (creation never succeeded) → the file is a pure
+///     orphan and is deleted directly.
+///
+/// A 404 on the file delete itself is success: the goal state is "file
+/// gone", whoever deleted it. ANY failed transcription delete — 409, 5xx,
+/// rate limit, timeout — retains the file: the record may still exist and
+/// reference it, and deleting the file would fail the live job with
+/// `file_not_found`. Failures are logged and never fatal; leftover records
+/// are reaped by the backlog drains.
 async fn cleanup_stored_records(
     client: &reqwest::Client,
     key: &str,
@@ -107,6 +211,13 @@ pub(crate) struct SonioxCleanupResult {
     pub deleted_transcriptions: u64,
     pub deleted_files: u64,
     pub skipped_processing: u64,
+    /// Files kept because an in-flight dictation flow owns them or a live
+    /// (still-processing) job references them — see the active-job
+    /// ownership notes on [`drain_stored_records`].
+    pub skipped_active: u64,
+    /// Transcription records kept because an in-flight dictation flow owns
+    /// them (possibly queued or completed-but-not-yet-extracted).
+    pub skipped_active_jobs: u64,
     pub errors: Vec<String>,
 }
 
@@ -137,15 +248,33 @@ async fn get_total(
     Ok(json.get("total").and_then(|v| v.as_u64()).unwrap_or(0))
 }
 
-/// Cursor-paginated id listing for a collection ("files" | "transcriptions").
-/// Defensively accepts `items`/`data` array keys; Soniox documents
-/// `next_page_cursor` and a 1000 item page cap.
-async fn list_record_ids(
+/// Minimal typed metadata for a listed transcription: only the fields the
+/// drain needs, so no full provider JSON pages are retained while paging
+/// through up to 100k records.
+#[derive(serde::Deserialize)]
+struct ListedTranscription {
+    id: String,
+    #[serde(default)]
+    file_id: Option<String>,
+}
+
+/// Minimal typed metadata for a listed file.
+#[derive(serde::Deserialize)]
+struct ListedFile {
+    id: String,
+}
+
+/// Cursor-paginated typed listing for a collection ("files" |
+/// "transcriptions"). Defensively accepts `items`/`data` array keys; Soniox
+/// documents `next_page_cursor` and a 1000-item page cap. Each page decodes
+/// item-by-item into the minimal `T` (malformed items are skipped, matching
+/// the previous defensive id extraction) and only typed metadata is kept.
+async fn list_pages<T: serde::de::DeserializeOwned>(
     client: &reqwest::Client,
     key: &str,
     collection: &str,
-) -> Result<Vec<String>, common::SttError> {
-    let mut ids = Vec::new();
+) -> Result<Vec<T>, common::SttError> {
+    let mut items = Vec::new();
     let mut cursor: Option<String> = None;
     loop {
         let mut url = format!("{}/{collection}?limit=1000", base_url());
@@ -167,14 +296,14 @@ async fn list_record_ids(
             .map_err(|_| common::SttError::BadResponse)?;
         let items = json
             .get(collection)
+            .or_else(|| json.get("items"))
+            .or_else(|| json.get("data"))
             .and_then(|v| v.as_array())
-            .or_else(|| json.get("items").and_then(|v| v.as_array()))
-            .or_else(|| json.get("data").and_then(|v| v.as_array()));
-        if let Some(items) = items {
-            for item in items {
-                if let Some(id) = item.get("id").and_then(|v| v.as_str()) {
-                    ids.push(id.to_string());
-                }
+            .cloned()
+            .unwrap_or_default();
+        for item in page {
+            if let Ok(typed) = serde_json::from_value::<T>(item) {
+                items.push(typed);
             }
         }
         cursor = json
@@ -186,7 +315,7 @@ async fn list_record_ids(
             break;
         }
     }
-    Ok(ids)
+    Ok(items)
 }
 
 /// One paced delete: 409 = record still processing (skipped), 429 = file-
@@ -262,13 +391,33 @@ pub(crate) async fn cleanup_stored(app: &AppHandle) -> Result<SonioxCleanupResul
     drain_stored_records(&client, &key, Some(&report)).await
 }
 
-/// Deletes every stored transcription record (each cascading to its file),
-/// then lists files AGAIN and deletes only the true orphans — listing before
-/// the transcription pass would issue guaranteed-404 deletes for every
-/// cascaded file, wasting the rate-limited file-management API and reporting
-/// phantom errors. Pacing: Soniox's file-management RPM is real but its
-/// numeric limit is undocumented. Shared by the settings clean-up command
-/// (progress events) and the background auto-clean (counter only).
+/// Drains stored Soniox records so retained files free capacity promptly:
+/// each transcription record whose delete lands has its file deleted
+/// immediately (transcription deletion does NOT cascade server-side —
+/// docs), so the storage-wall self-heal only needs the first delete
+/// (~tens of ms) instead of a full backlog pass before upload capacity
+/// frees. The final fresh file listing then reaps whatever remains:
+/// pre-existing orphans, files whose inline delete was deferred or failed,
+/// and files whose owning record no longer exists.
+///
+/// Both listing passes run under the drain gate's WRITE guard, which makes
+/// the protection snapshot exact (see the module-level ownership notes):
+/// flows hold READ guards only across upload→register and
+/// create→attach, so any record a listing can see is either already
+/// registered in ACTIVE_JOBS or was created after the listing and is
+/// therefore absent from it. Neither pass deletes:
+///   * records/files registered by in-flight dictation flows — including
+///     queued or completed-but-not-yet-extracted jobs, whose records the
+///     API would happily delete;
+///   * files referenced by records whose delete was refused (409 still
+///     processing, or a transient failure): the record still exists and
+///     its live job still needs the file.
+///
+/// Pacing: Soniox's file-management RPM is real but its numeric limit is
+/// undocumented. Shared by the settings clean-up command (progress events)
+/// and the background auto-clean (counter only); only FILE deletions bump
+/// the auto-heal progress counter, since file-count/size walls gate the
+/// retried upload and transcription deletions free no file capacity.
 async fn drain_stored_records(
     client: &reqwest::Client,
     key: &str,
@@ -276,52 +425,115 @@ async fn drain_stored_records(
 ) -> Result<SonioxCleanupResult, String> {
     let mut result = SonioxCleanupResult::default();
 
-    let transcription_ids = list_record_ids(client, key, "transcriptions")
-        .await
-        .map_err(|e| e.message("Soniox"))?;
-    // Placeholder until the post-transcription listing replaces it.
-    let mut total_ops = transcription_ids.len() as u64;
+    // Pass 1 — transcription records. Listing + protection snapshot under
+    // the write gate; deletes run outside it.
+    let (transcriptions, mut protected_files) = {
+        let _drain_gate = LISTING_GATE.write().await;
+        let transcriptions = list_pages::<ListedTranscription>(client, key, "transcriptions")
+            .await
+            .map_err(|e| e.message("Soniox"))?;
+        let active_tids = active_transcription_ids();
+        let mut protected_files = std::collections::HashSet::new();
+        for item in &transcriptions {
+            if active_tids.contains(&item.id) {
+                if let Some(file_id) = &item.file_id {
+                    protected_files.insert(file_id.clone());
+                }
+            }
+        }
+        (transcriptions, protected_files)
+    };
+    let mut total_ops = transcriptions.len() as u64;
     let mut done_ops: u64 = 0;
 
-    for id in &transcription_ids {
-        let url = format!("{}/transcriptions/{id}", base_url());
-        match delete_one(client, key, &url).await {
-            Ok(DeleteOutcome::Deleted) => {
-                result.deleted_transcriptions += 1;
-                bump_auto_cleanup_progress();
+    for item in &transcriptions {
+        // App-owned job — the gate normally keeps these out of the snapshot
+        // path entirely; this re-check covers attaches that raced between
+        // the pass-1 snapshot and this delete. Never delete the record, and
+        // keep its file protected for the file pass.
+        if active_transcription_ids().contains(&item.id) {
+            result.skipped_active_jobs += 1;
+            if let Some(file_id) = &item.file_id {
+                protected_files.insert(file_id.clone());
             }
-            Ok(DeleteOutcome::SkippedProcessing) => result.skipped_processing += 1,
-            Ok(DeleteOutcome::AlreadyGone) => {}
-            Err(e) => result.errors.push(format!("transcription {id}: {e}")),
+            continue;
         }
-        done_ops += 1;
-        if done_ops % 25 == 0 {
-            if let Some(report) = report {
-                report(done_ops, total_ops);
+        let url = format!("{}/transcriptions/{}", base_url(), item.id);
+        match delete_one(client, key, &url).await {
+            Ok(DeleteOutcome::SkippedProcessing) => {
+                result.skipped_processing += 1;
+                if let Some(file_id) = &item.file_id {
+                    protected_files.insert(file_id.clone());
+                }
+            }
+            Err(e) => {
+                result.errors.push(format!("transcription {}: {e}", item.id));
+                // The record still exists and references its file — the
+                // file pass must not break the live job.
+                if let Some(file_id) = &item.file_id {
+                    protected_files.insert(file_id.clone());
+                }
+            }
+            outcome => {
+                // Deleted or AlreadyGone: the record is gone, so its file is
+                // unreferenced — free it inline so capacity frees without
+                // waiting for the whole backlog pass.
+                if matches!(outcome, Ok(DeleteOutcome::Deleted)) {
+                    result.deleted_transcriptions += 1;
+                }
+                if let Some(file_id) = &item.file_id {
+                    if !active_file_ids().contains(file_id) {
+                        let file_url = format!("{}/files/{file_id}", base_url());
+                        match delete_one(client, key, &file_url).await {
+                            Ok(DeleteOutcome::Deleted) => {
+                                result.deleted_files += 1;
+                                bump_auto_cleanup_progress();
+                            }
+                            // AlreadyGone: freed elsewhere, nothing to
+                            // report; anything else: leave it for the
+                            // pass-2 fresh listing.
+                            _ => {}
+                        }
+                    }
+                }
             }
         }
         tokio::time::sleep(std::time::Duration::from_millis(25)).await;
     }
 
-    // Fresh listing AFTER the transcription deletes: cascaded files are
-    // already gone server-side, so only genuine orphans remain to delete.
-    let file_ids = list_record_ids(client, key, "files")
-        .await
-        .map_err(|e| e.message("Soniox"))?;
-    total_ops += file_ids.len() as u64;
-    for id in &file_ids {
-        let url = format!("{}/files/{id}", base_url());
-        match delete_one(client, key, &url).await {
-            Ok(DeleteOutcome::Deleted) => {
-                result.deleted_files += 1;
-                bump_auto_cleanup_progress();
+    // Pass 2 — fresh listing + snapshot under the write gate: pre-existing
+    // orphans, files whose inline delete was deferred (still registered by
+    // a flow at the time) or failed, all show up here; files already freed
+    // inline no longer do.
+    let (file_items, protected) = {
+        let _drain_gate = LISTING_GATE.write().await;
+        let file_items = list_pages::<ListedFile>(client, key, "files")
+            .await
+            .map_err(|e| e.message("Soniox"))?;
+        let mut protected = active_file_ids();
+        protected.extend(protected_files);
+        (file_items, protected)
+    };
+    total_ops += file_items.len() as u64;
+
+    for item in &file_items {
+        done_ops += 1;
+        if protected.contains(&item.id) {
+            result.skipped_active += 1;
+        } else {
+            let url = format!("{}/files/{}", base_url(), item.id);
+            match delete_one(client, key, &url).await {
+                Ok(DeleteOutcome::Deleted) => {
+                    result.deleted_files += 1;
+                    bump_auto_cleanup_progress();
+                }
+                Ok(DeleteOutcome::AlreadyGone) => {}
+                // Files have no processing state; a 409 here is unexpected.
+                Ok(DeleteOutcome::SkippedProcessing) => {
+                    result.errors.push(format!("file {}: HTTP 409", item.id))
+                }
+                Err(e) => result.errors.push(format!("file {}: {e}", item.id)),
             }
-            Ok(DeleteOutcome::AlreadyGone) => {}
-            // Files have no processing state; a 409 here is unexpected.
-            Ok(DeleteOutcome::SkippedProcessing) => {
-                result.errors.push(format!("file {id}: HTTP 409"))
-            }
-            Err(e) => result.errors.push(format!("file {id}: {e}")),
         }
         done_ops += 1;
         if done_ops % 25 == 0 {
@@ -366,10 +578,12 @@ fn spawn_auto_cleanup(client: reqwest::Client, key: String) {
         log::info!("Soniox storage limit hit: background cleanup started");
         match drain_stored_records(&client, &key, None).await {
             Ok(totals) => log::info!(
-                "Soniox background cleanup finished: {} transcriptions + {} files deleted, {} skipped, {} errors",
+                "Soniox background cleanup finished: {} transcriptions + {} files deleted, {} processing-skipped, {} active-protected files, {} active-protected jobs, {} errors",
                 totals.deleted_transcriptions,
                 totals.deleted_files,
                 totals.skipped_processing,
+                totals.skipped_active,
+                totals.skipped_active_jobs,
                 totals.errors.len()
             ),
             Err(e) => log::warn!("Soniox background cleanup failed: {e}"),
@@ -533,6 +747,11 @@ async fn attempt_typed_once(
         .unwrap_or("audio.wav")
         .to_string();
     let upload_url = format!("{}/files", base_url());
+    // The gate's read guard spans exactly the window in which the upload
+    // becomes server-side list-visible (during the POST) but its id is not
+    // yet registered — a drain listing cannot interleave here. Released
+    // right after registration; never held across poll/extract.
+    let _upload_gate = LISTING_GATE.read().await;
     let upload_resp = common::with_retry(|| {
         let client = client.clone();
         let filename = filename.clone();
@@ -569,6 +788,11 @@ async fn attempt_typed_once(
         .and_then(|v| v.as_str())
         .ok_or(common::SttError::BadResponse)?
         .to_string();
+    // Own the upload for the rest of this attempt: drains must never see
+    // it as unreferenced backlog. Dropped on return or cancellation, so
+    // protection cannot leak; unowned leftovers are reaped by later drains.
+    let _active_file = ActiveJobGuard::register(&file_id);
+    drop(_upload_gate);
 
     let (transcription_id, result) =
         run_typed_transcription(client, key, model, &file_id, language, soniox_context).await;
@@ -596,38 +820,46 @@ async fn run_typed_transcription(
     let payload = build_create_payload(model, file_id, language, soniox_context, false);
 
     let create_url = format!("{}/transcriptions", base_url());
-    let create_resp = common::with_retry(|| {
-        let client = client.clone();
-        let create_url = create_url.clone();
-        let payload = payload.clone();
-        async move {
-            let resp = client
-                .post(&create_url)
-                .bearer_auth(key)
-                .header("Content-Type", "application/json")
-                .json(&payload)
-                .send()
-                .await
-                .map_err(|e| common::classify_reqwest_err(&e))?;
-            if resp.status().is_success() {
-                Ok(resp)
-            } else {
-                Err(common::log_http_body(resp, "Soniox create transcription").await)
+    // Second short gate window: the transcription becomes list-visible
+    // during this POST, so the create and the registry attach must complete
+    // atomically against any drain's listing + snapshot.
+    let transcription_id = {
+        let _create_gate = LISTING_GATE.read().await;
+        let create_resp = common::with_retry(|| {
+            let client = client.clone();
+            let create_url = create_url.clone();
+            let payload = payload.clone();
+            async move {
+                let resp = client
+                    .post(&create_url)
+                    .bearer_auth(key)
+                    .header("Content-Type", "application/json")
+                    .json(&payload)
+                    .send()
+                    .await
+                    .map_err(|e| common::classify_reqwest_err(&e))?;
+                if resp.status().is_success() {
+                    Ok(resp)
+                } else {
+                    Err(common::log_http_body(resp, "Soniox create transcription").await)
+                }
             }
-        }
-    })
-    .await;
-    let create_resp = match create_resp {
-        Ok(resp) => resp,
-        Err(e) => return (None, Err(e)),
-    };
-    let create_json: serde_json::Value = match create_resp.json().await {
-        Ok(v) => v,
-        Err(_) => return (None, Err(common::SttError::BadResponse)),
-    };
-    let transcription_id = match create_json.get("id").and_then(|v| v.as_str()) {
-        Some(id) => id.to_string(),
-        None => return (None, Err(common::SttError::BadResponse)),
+        })
+        .await;
+        let create_resp = match create_resp {
+            Ok(resp) => resp,
+            Err(e) => return (None, Err(e)),
+        };
+        let create_json: serde_json::Value = match create_resp.json().await {
+            Ok(v) => v,
+            Err(_) => return (None, Err(common::SttError::BadResponse)),
+        };
+        let transcription_id = match create_json.get("id").and_then(|v| v.as_str()) {
+            Some(id) => id.to_string(),
+            None => return (None, Err(common::SttError::BadResponse)),
+        };
+        attach_transcription(file_id, &transcription_id);
+        transcription_id
     };
 
     let result = async {
@@ -816,6 +1048,10 @@ async fn attempt_diarized_once(
         .unwrap_or("audio.wav")
         .to_string();
     let upload_url = format!("{}/files", base_url());
+    // Gate window 1 (mirrors the typed flow): upload POST until the file id
+    // is registered — a drain listing cannot interleave with the
+    // list-visible-before-registered gap.
+    let _upload_gate = LISTING_GATE.read().await;
     let upload_resp = common::with_retry(|| {
         let client = client.clone();
         let filename = filename.clone();
@@ -851,6 +1087,11 @@ async fn attempt_diarized_once(
         .and_then(|v| v.as_str())
         .ok_or(common::SttError::BadResponse)?
         .to_string();
+    // Own the upload for the rest of this attempt (mirrors the typed flow):
+    // drains must never see it as unreferenced backlog, and dropping the
+    // guard on return/cancellation cannot leak the protection.
+    let _active_file = ActiveJobGuard::register(&file_id);
+    drop(_upload_gate);
 
     let (transcription_id, result) =
         run_diarized_transcription(client, key, model, &file_id, language, soniox_context).await;
@@ -876,38 +1117,45 @@ async fn run_diarized_transcription(
     let payload = build_create_payload(model, file_id, language, soniox_context, true);
 
     let create_url = format!("{}/transcriptions", base_url());
-    let create_resp = common::with_retry(|| {
-        let client = client.clone();
-        let create_url = create_url.clone();
-        let payload = payload.clone();
-        async move {
-            let resp = client
-                .post(&create_url)
-                .bearer_auth(key)
-                .header("Content-Type", "application/json")
-                .json(&payload)
-                .send()
-                .await
-                .map_err(|e| common::classify_reqwest_err(&e))?;
-            if resp.status().is_success() {
-                Ok(resp)
-            } else {
-                Err(common::log_http_body(resp, "Soniox create transcription (diarized)").await)
+    // Gate window 2 (mirrors the typed flow): create POST until the
+    // transcription id is attached to the registered upload.
+    let transcription_id = {
+        let _create_gate = LISTING_GATE.read().await;
+        let create_resp = common::with_retry(|| {
+            let client = client.clone();
+            let create_url = create_url.clone();
+            let payload = payload.clone();
+            async move {
+                let resp = client
+                    .post(&create_url)
+                    .bearer_auth(key)
+                    .header("Content-Type", "application/json")
+                    .json(&payload)
+                    .send()
+                    .await
+                    .map_err(|e| common::classify_reqwest_err(&e))?;
+                if resp.status().is_success() {
+                    Ok(resp)
+                } else {
+                    Err(common::log_http_body(resp, "Soniox create transcription (diarized)").await)
+                }
             }
-        }
-    })
-    .await;
-    let create_resp = match create_resp {
-        Ok(resp) => resp,
-        Err(e) => return (None, Err(e)),
-    };
-    let create_json: serde_json::Value = match create_resp.json().await {
-        Ok(v) => v,
-        Err(_) => return (None, Err(common::SttError::BadResponse)),
-    };
-    let transcription_id = match create_json.get("id").and_then(|v| v.as_str()) {
-        Some(id) => id.to_string(),
-        None => return (None, Err(common::SttError::BadResponse)),
+        })
+        .await;
+        let create_resp = match create_resp {
+            Ok(resp) => resp,
+            Err(e) => return (None, Err(e)),
+        };
+        let create_json: serde_json::Value = match create_resp.json().await {
+            Ok(v) => v,
+            Err(_) => return (None, Err(common::SttError::BadResponse)),
+        };
+        let transcription_id = match create_json.get("id").and_then(|v| v.as_str()) {
+            Some(id) => id.to_string(),
+            None => return (None, Err(common::SttError::BadResponse)),
+        };
+        attach_transcription(file_id, &transcription_id);
+        transcription_id
     };
 
     let result = async {
@@ -1346,14 +1594,20 @@ mod tests {
                 .expect(2)
                 .mount(&server)
                 .await;
-            // Background auto-cleanup: one old transcription + the attempt-1
-            // orphan file (f-old listed alongside f1).
+            // Background auto-cleanup: one old transcription (carrying its
+            // file reference) + the attempt-1 orphan file (f1). The drain
+            // frees t-old's file f-old INLINE right after the record delete
+            // — capacity frees without waiting for a full backlog pass.
             Mock::given(method("GET"))
                 .and(path("/v1/transcriptions"))
                 .and(wiremock::matchers::query_param_is_missing("cursor"))
                 .respond_with(
                     ResponseTemplate::new(200).set_body_json(
-                        serde_json::json!({ "transcriptions": [ { "id": "t-old" } ] }),
+                        serde_json::json!({
+                            "transcriptions": [
+                                { "id": "t-old", "file_id": "f-old" }
+                            ]
+                        }),
                     ),
                 )
                 .mount(&server)
@@ -1364,15 +1618,20 @@ mod tests {
                 .expect(1)
                 .mount(&server)
                 .await;
+            // Fresh file listing after pass 1: f-old was already freed
+            // inline, so only the attempt-1 orphan f1 remains.
             Mock::given(method("GET"))
                 .and(path("/v1/files"))
                 .respond_with(ResponseTemplate::new(200).set_body_json(
-                    serde_json::json!({ "files": [ { "id": "f-old" }, { "id": "f1" } ] }),
+                    serde_json::json!({ "files": [ { "id": "f1" } ] }),
                 ))
                 .mount(&server)
                 .await;
             // f1 is deleted twice — by attempt 1's orphan cleanup and again
-            // by the background drain's file listing — both legitimate.
+            // by the background drain's file listing — both legitimate. The
+            // self-heal wait unblocks on the first FILE deletion (f-old,
+            // freed inline in pass 1), the only deletion that frees upload
+            // capacity.
             for (file, expected) in [("f-old", 1), ("f1", 2)] {
                 Mock::given(method("DELETE"))
                     .and(path(format!("/v1/files/{file}")))
@@ -1406,6 +1665,7 @@ mod tests {
             let text = transcribe_typed_with_autoheal(
                 &client,
                 "k",
+                "stt-async-v5",
                 &wav,
                 b"RIFF....WAVEfmt ".to_vec(),
                 None,
@@ -1535,9 +1795,10 @@ mod tests {
             let total = get_total(&client, "k", "transcriptions").await.unwrap();
             assert_eq!(total, 3);
 
-            let ids = list_record_ids(&client, "k", "transcriptions")
+            let items = list_pages::<ListedTranscription>(&client, "k", "transcriptions")
                 .await
                 .unwrap();
+            let ids: Vec<String> = items.into_iter().map(|item| item.id).collect();
             assert_eq!(ids, vec!["t1", "t2", "t3"]);
 
             for id in &ids {
@@ -1549,6 +1810,461 @@ mod tests {
                     assert!(matches!(outcome, DeleteOutcome::Deleted));
                 }
             }
+            server.verify().await;
+        }
+
+        #[tokio::test]
+        async fn processing_transcription_409_keeps_its_file() {
+            // Poll-timeout path: the job is still processing, so the delete
+            // of the transcription 409s. Soniox documents that a file still
+            // referenced by a transcription that has not finished processing
+            // must NOT be deleted (the job would fail `file_not_found`) — a
+            // processing 409 is never permission to delete the active file.
+            let server = MockServer::start().await;
+            let _guard = BaseOverrideGuard::install(&server);
+            let client = common::http_client();
+
+            Mock::given(method("DELETE"))
+                .and(path("/v1/transcriptions/t1"))
+                .respond_with(ResponseTemplate::new(409))
+                .expect(1)
+                .mount(&server)
+                .await;
+
+            cleanup_stored_records(&client, "k", Some("t1"), "f1").await;
+
+            let deletes: Vec<String> = server
+                .received_requests()
+                .await
+                .unwrap()
+                .iter()
+                .filter(|r| r.method.as_str() == "DELETE")
+                .map(|r| r.url.path().to_string())
+                .collect();
+            assert_eq!(
+                deletes,
+                vec!["/v1/transcriptions/t1"],
+                "file delete must not be attempted while the job is processing"
+            );
+            server.verify().await;
+        }
+
+        #[tokio::test]
+        async fn cleanup_treats_missing_records_as_success() {
+            // Racing a drain (or a previous attempt) that already deleted
+            // the records must still be a success: 404 is the goal state for
+            // both the transcription and the file, and the file delete is
+            // still attempted after the transcription 404.
+            let server = MockServer::start().await;
+            let _guard = BaseOverrideGuard::install(&server);
+            let client = common::http_client();
+
+            Mock::given(method("DELETE"))
+                .and(path("/v1/transcriptions/t1"))
+                .respond_with(ResponseTemplate::new(404))
+                .expect(1)
+                .mount(&server)
+                .await;
+            Mock::given(method("DELETE"))
+                .and(path("/v1/files/f1"))
+                .respond_with(ResponseTemplate::new(404))
+                .expect(1)
+                .mount(&server)
+                .await;
+
+            cleanup_stored_records(&client, "k", Some("t1"), "f1").await;
+            server.verify().await;
+        }
+
+        #[tokio::test]
+        async fn backlog_drain_never_deletes_active_or_live_job_files() {
+            // Storage-wall auto-heal / manual backlog drain: files owned by
+            // in-flight dictation flows (registered active) and files still
+            // referenced by records that could not be deleted because they
+            // are processing (409) must survive the drain; only genuinely
+            // unreferenced files are deleted.
+            let server = MockServer::start().await;
+            let _guard = BaseOverrideGuard::install(&server);
+            let client = common::http_client();
+
+            // A transcription still processing (409 on delete) referencing
+            // f-live.
+            Mock::given(method("GET"))
+                .and(path("/v1/transcriptions"))
+                .and(wiremock::matchers::query_param_is_missing("cursor"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(
+                    serde_json::json!({
+                        "transcriptions": [
+                            { "id": "t-live", "status": "transcribing", "file_id": "f-live" }
+                        ]
+                    }),
+                ))
+                .mount(&server)
+                .await;
+            Mock::given(method("DELETE"))
+                .and(path("/v1/transcriptions/t-live"))
+                .respond_with(ResponseTemplate::new(409))
+                .expect(1)
+                .mount(&server)
+                .await;
+            Mock::given(method("GET"))
+                .and(path("/v1/files"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(
+                    serde_json::json!({
+                        "files": [
+                            { "id": "f-live" },
+                            { "id": "f-active" },
+                            { "id": "f-orphan" }
+                        ]
+                    }),
+                ))
+                .mount(&server)
+                .await;
+            Mock::given(method("DELETE"))
+                .and(path("/v1/files/f-orphan"))
+                .respond_with(ResponseTemplate::new(204))
+                .expect(1)
+                .mount(&server)
+                .await;
+
+            // A concurrent dictation flow owns f-active (registered until
+            // its guard drops — cancellation cannot leak the protection).
+            let _active = ActiveJobGuard::register("f-active");
+
+            let result = drain_stored_records(&client, "k", None).await.unwrap();
+            assert_eq!(result.skipped_processing, 1);
+            assert_eq!(result.skipped_active, 1);
+            assert_eq!(result.deleted_files, 1);
+            assert_eq!(result.deleted_transcriptions, 0);
+            assert!(result.errors.is_empty(), "{:?}", result.errors);
+
+            let deletes: Vec<String> = server
+                .received_requests()
+                .await
+                .unwrap()
+                .iter()
+                .filter(|r| r.method.as_str() == "DELETE")
+                .map(|r| r.url.path().to_string())
+                .collect();
+            assert_eq!(
+                deletes,
+                vec!["/v1/transcriptions/t-live", "/v1/files/f-orphan"],
+                "active upload and live-job file must not be deleted"
+            );
+            server.verify().await;
+        }
+
+        #[tokio::test]
+        async fn active_file_protection_ends_when_guard_drops() {
+            // Cancellation contract: dropping the flow's guard releases the
+            // protection immediately, so the NEXT drain reaps the leftover
+            // upload (cleanup ownership returns to the backlog drain).
+            let server = MockServer::start().await;
+            let _guard = BaseOverrideGuard::install(&server);
+            let client = common::http_client();
+
+            Mock::given(method("GET"))
+                .and(path("/v1/transcriptions"))
+                .respond_with(ResponseTemplate::new(200)
+                    .set_body_json(serde_json::json!({ "transcriptions": [] })))
+                .mount(&server)
+                .await;
+            Mock::given(method("GET"))
+                .and(path("/v1/files"))
+                .respond_with(ResponseTemplate::new(200)
+                    .set_body_json(serde_json::json!({ "files": [ { "id": "f-guard" } ] })))
+                .mount(&server)
+                .await;
+            Mock::given(method("DELETE"))
+                .and(path("/v1/files/f-guard"))
+                .respond_with(ResponseTemplate::new(204))
+                .expect(1)
+                .mount(&server)
+                .await;
+
+            let active = ActiveJobGuard::register("f-guard");
+            let first = drain_stored_records(&client, "k", None).await.unwrap();
+            assert_eq!(first.deleted_files, 0);
+            assert_eq!(first.skipped_active, 1);
+
+            drop(active);
+            let second = drain_stored_records(&client, "k", None).await.unwrap();
+            assert_eq!(second.deleted_files, 1);
+            assert_eq!(second.skipped_active, 0);
+
+            server.verify().await;
+        }
+
+        #[tokio::test]
+        async fn transient_rate_limit_429_stays_rate_limited_without_destructive_drain() {
+            // A per-minute file-management RPM wall uses the SAME
+            // `error_type: "limit_exceeded"` as retained-storage walls, but
+            // its documented message names the per-minute rate. It must
+            // surface as the transient RateLimited — NOT trigger the
+            // storage self-heal (no whole-library drain, no storage nag).
+            let server = MockServer::start().await;
+            let _guard = BaseOverrideGuard::install(&server);
+            let client = common::http_client();
+
+            Mock::given(method("POST"))
+                .and(path("/v1/files"))
+                .respond_with(ResponseTemplate::new(429).set_body_json(
+                    serde_json::json!({
+                        "status_code": 429,
+                        "error_type": "limit_exceeded",
+                        "message": "Requests per minute limit for file management has been exceeded for your organization."
+                    }),
+                ))
+                // Exactly two uploads: the shared transient retry, nothing
+                // more — no storage-wall restart from upload.
+                .expect(2)
+                .mount(&server)
+                .await;
+
+            let dir = tempfile::tempdir().unwrap();
+            let wav = dir.path().join("audio.wav");
+            std::fs::write(&wav, b"RIFF....WAVEfmt ").unwrap();
+
+            let error = transcribe_typed_with_autoheal(
+                &client,
+                "k",
+                "stt-async-v5",
+                &wav,
+                b"RIFF....WAVEfmt ".to_vec(),
+                None,
+                None,
+            )
+            .await
+            .unwrap_err();
+            assert!(
+                matches!(error, common::SttError::RateLimited),
+                "expected RateLimited, got {error:?}"
+            );
+
+            // No DELETE may reach the server: a rate limit must never
+            // destroy stored records.
+            let deletes = server
+                .received_requests()
+                .await
+                .unwrap()
+                .iter()
+                .filter(|r| r.method.as_str() == "DELETE")
+                .count();
+            assert_eq!(deletes, 0, "transient 429 must not spawn a cleanup drain");
+            server.verify().await;
+        }
+
+        #[tokio::test]
+        async fn drain_listings_wait_out_in_flight_upload_registration() {
+            // Delayed-visibility regression: a file becomes server-side
+            // list-visible during the upload POST, BEFORE the response
+            // delivers the id and the flow can register it. While an
+            // upload window (gate read guard) is open, a drain must not
+            // list — otherwise it could see the file unregistered, delete
+            // it, and fail the job with `file_not_found`.
+            let server = MockServer::start().await;
+            let _guard = BaseOverrideGuard::install(&server);
+            let client = common::http_client();
+
+            Mock::given(method("GET"))
+                .and(path("/v1/transcriptions"))
+                .respond_with(ResponseTemplate::new(200)
+                    .set_body_json(serde_json::json!({ "transcriptions": [] })))
+                .mount(&server)
+                .await;
+            Mock::given(method("GET"))
+                .and(path("/v1/files"))
+                .respond_with(ResponseTemplate::new(200)
+                    .set_body_json(serde_json::json!({ "files": [ { "id": "f1" } ] })))
+                .mount(&server)
+                .await;
+            Mock::given(method("DELETE"))
+                .and(path("/v1/files/f1"))
+                .respond_with(ResponseTemplate::new(204))
+                .mount(&server)
+                .await;
+
+            // Simulate the upload window: gate read guard held, response
+            // not yet processed, nothing registered.
+            let _upload_window = LISTING_GATE.read().await;
+            let drain_client = client.clone();
+            let drain = tokio::spawn(async move {
+                drain_stored_records(&drain_client, "k", None).await
+            });
+            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+
+            // The drain must still be parked on the gate: no listing
+            // request has been issued while the id was unregistered.
+            let listings_so_far = server
+                .received_requests()
+                .await
+                .unwrap()
+                .iter()
+                .filter(|r| r.method.as_str() == "GET" && r.url.path() == "/v1/files")
+                .count();
+            assert_eq!(
+                listings_so_far, 0,
+                "drain listed files while an upload was still unregistered"
+            );
+
+            // The upload response lands and the flow registers the id —
+            // exactly what attempt_typed_once does before dropping the
+            // gate. Only then may the drain proceed.
+            let _registered = ActiveJobGuard::register("f1");
+            drop(_upload_window);
+
+            let result = drain.await.unwrap().unwrap();
+            assert_eq!(result.skipped_active, 1, "registered upload must survive");
+            assert_eq!(result.deleted_files, 0);
+        }
+
+        #[tokio::test]
+        async fn drain_pass_one_never_deletes_app_owned_jobs() {
+            // A queued or completed-but-not-yet-extracted transcription of
+            // an in-flight flow can be deleted server-side — pass 1 must
+            // skip app-owned records entirely and keep their file
+            // protected in pass 2.
+            let server = MockServer::start().await;
+            let _guard = BaseOverrideGuard::install(&server);
+            let client = common::http_client();
+
+            Mock::given(method("GET"))
+                .and(path("/v1/transcriptions"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(
+                    serde_json::json!({
+                        "transcriptions": [
+                            { "id": "t-app", "status": "queued", "file_id": "f-app" }
+                        ]
+                    }),
+                ))
+                .mount(&server)
+                .await;
+            Mock::given(method("GET"))
+                .and(path("/v1/files"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(
+                    serde_json::json!({ "files": [ { "id": "f-app" } ] }),
+                ))
+                .mount(&server)
+                .await;
+
+            let _owner = ActiveJobGuard::register("f-app");
+            attach_transcription("f-app", "t-app");
+
+            let result = drain_stored_records(&client, "k", None).await.unwrap();
+            assert_eq!(result.skipped_active_jobs, 1);
+            assert_eq!(result.skipped_active, 1);
+            assert_eq!(result.deleted_transcriptions, 0);
+            assert_eq!(result.deleted_files, 0);
+
+            let deletes: Vec<String> = server
+                .received_requests()
+                .await
+                .unwrap()
+                .iter()
+                .filter(|r| r.method.as_str() == "DELETE")
+                .map(|r| r.url.path().to_string())
+                .collect();
+            assert!(
+                deletes.is_empty(),
+                "app-owned records must not be drained: {deletes:?}"
+            );
+        }
+
+        #[tokio::test]
+        async fn failed_transcription_delete_keeps_file_ref() {
+            // Beyond the processing 409: ANY failed record delete (here a
+            // transient 500) must retain the file — the record still
+            // exists and its job still needs it. Deleting the file on a
+            // failed record delete would fail the job with
+            // `file_not_found`.
+            let server = MockServer::start().await;
+            let _guard = BaseOverrideGuard::install(&server);
+            let client = common::http_client();
+
+            Mock::given(method("DELETE"))
+                .and(path("/v1/transcriptions/t1"))
+                .respond_with(ResponseTemplate::new(500))
+                .expect(1)
+                .mount(&server)
+                .await;
+
+            cleanup_stored_records(&client, "k", Some("t1"), "f1").await;
+
+            let deletes: Vec<String> = server
+                .received_requests()
+                .await
+                .unwrap()
+                .iter()
+                .filter(|r| r.method.as_str() == "DELETE")
+                .map(|r| r.url.path().to_string())
+                .collect();
+            assert_eq!(
+                deletes,
+                vec!["/v1/transcriptions/t1"],
+                "file delete must not follow a failed record delete"
+            );
+            server.verify().await;
+        }
+
+        #[tokio::test]
+        async fn drain_frees_terminal_record_file_without_full_backlog_pass() {
+            // Capacity-awareness regression: the self-heal retry waits for
+            // FILE capacity, so a terminal record's file must be freed
+            // inline in pass 1 — before the (possibly huge) file listing —
+            // not deferred until every record has been drained.
+            let server = MockServer::start().await;
+            let _guard = BaseOverrideGuard::install(&server);
+            let client = common::http_client();
+
+            Mock::given(method("GET"))
+                .and(path("/v1/transcriptions"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(
+                    serde_json::json!({
+                        "transcriptions": [
+                            { "id": "t-done", "status": "completed", "file_id": "f-done" }
+                        ]
+                    }),
+                ))
+                .mount(&server)
+                .await;
+            Mock::given(method("DELETE"))
+                .and(path("/v1/transcriptions/t-done"))
+                .respond_with(ResponseTemplate::new(204))
+                .expect(1)
+                .mount(&server)
+                .await;
+            Mock::given(method("DELETE"))
+                .and(path("/v1/files/f-done"))
+                .respond_with(ResponseTemplate::new(204))
+                .expect(1)
+                .mount(&server)
+                .await;
+            Mock::given(method("GET"))
+                .and(path("/v1/files"))
+                .respond_with(ResponseTemplate::new(200)
+                    .set_body_json(serde_json::json!({ "files": [] })))
+                .mount(&server)
+                .await;
+
+            let result = drain_stored_records(&client, "k", None).await.unwrap();
+            assert_eq!(result.deleted_transcriptions, 1);
+            assert_eq!(result.deleted_files, 1);
+
+            // The file delete must have landed BEFORE the pass-2 file
+            // listing: inline freeing, not end-of-drain freeing.
+            let requests = server.received_requests().await.unwrap();
+            let delete_index = requests
+                .iter()
+                .position(|r| r.method.as_str() == "DELETE" && r.url.path() == "/v1/files/f-done")
+                .expect("inline file delete missing");
+            let files_list_index = requests
+                .iter()
+                .position(|r| r.method.as_str() == "GET" && r.url.path() == "/v1/files")
+                .expect("pass-2 file listing missing");
+            assert!(
+                delete_index < files_list_index,
+                "file must be freed inline (at {delete_index}) before the pass-2 listing (at {files_list_index})"
+            );
             server.verify().await;
         }
     }
