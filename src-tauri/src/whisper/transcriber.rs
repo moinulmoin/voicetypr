@@ -11,7 +11,7 @@ use std::path::Path;
 /// transcription task — and after a failed init, where no backend was
 /// ever established — the read is `None` and the report omits the tag.
 tokio::task_local! {
-    static ATTEMPT_BACKEND: std::cell::Cell<Option<&'static str>>;
+    pub(crate) static ATTEMPT_BACKEND: std::cell::Cell<Option<&'static str>>;
 }
 
 pub(crate) fn record_attempt_backend(backend: &'static str) {
@@ -896,5 +896,47 @@ mod tests {
         let audio = vec![1.0, 2.0];
         let result = convert_multichannel_to_mono(&audio, 0);
         assert!(result.is_err());
+    }
+    #[test]
+    fn attempt_backend_is_none_outside_any_scope() {
+        // A failure event emitted without a scoped attempt (the scope wraps
+        // the spawned decode future) must observe NO backend — never a
+        // previous task's — so the report omits the tag instead of guessing.
+        assert_eq!(attempt_backend(), None);
+        record_attempt_backend("sidecar"); // no-op: no scope on this task
+        assert_eq!(attempt_backend(), None);
+    }
+
+    #[tokio::test]
+    async fn concurrent_scoped_attempts_have_isolated_tags() {
+        // Two overlapping transcription attempts must never observe each
+        // other's backend: the tag is task-local state, not process-global.
+        let first = tokio::spawn(ATTEMPT_BACKEND.scope(std::cell::Cell::new(None), async {
+            record_attempt_backend("sidecar");
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+            attempt_backend()
+        }));
+        let second = tokio::spawn(ATTEMPT_BACKEND.scope(std::cell::Cell::new(None), async {
+            record_attempt_backend("cpu");
+            attempt_backend()
+        }));
+
+        assert_eq!(first.await.unwrap(), Some("sidecar"));
+        assert_eq!(second.await.unwrap(), Some("cpu"));
+    }
+
+    #[tokio::test]
+    async fn scoped_attempt_starts_empty_and_records_before_read() {
+        // The scope initialises the slot empty; only an explicit record makes
+        // a backend observable — a wrapper that never records (failed init)
+        // leaves the tag omitted.
+        let outcome = ATTEMPT_BACKEND
+            .scope(std::cell::Cell::new(None), async {
+                let before = attempt_backend();
+                record_attempt_backend("metal");
+                (before, attempt_backend())
+            })
+            .await;
+        assert_eq!(outcome, (None, Some("metal")));
     }
 }

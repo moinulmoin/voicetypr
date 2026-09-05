@@ -5465,7 +5465,10 @@ pub async fn stop_recording(
     let speech_evidence_attempt_for_task = speech_evidence_attempt;
     // Spawn and track the transcription task
     let app_for_task = app.clone();
-    let task_handle = tokio::spawn(async move {
+    let task_handle = tokio::spawn(
+        crate::whisper::transcriber::ATTEMPT_BACKEND.scope(
+            std::cell::Cell::new(None),
+            async move {
         let mut speech_evidence_attempt = speech_evidence_attempt_for_task;
         log::debug!("Transcription task started");
 
@@ -6435,7 +6438,9 @@ pub async fn stop_recording(
                 }
             }
         }
-    });
+            },
+        ),
+    );
 
     // Track the transcription task
     let app_state = app.state::<AppState>();
