@@ -1,6 +1,6 @@
 import { render, screen, fireEvent, waitFor, within, act } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { afterEach, describe, it, expect, vi, beforeEach } from "vitest";
 import { EnhancementsSection } from "../EnhancementsSection";
 import { invoke } from "@tauri-apps/api/core";
 import { toast } from "sonner";
@@ -420,6 +420,18 @@ describe("EnhancementsSection", () => {
     );
   });
 
+  // Tests that simulate an external CLI account change swap the shared
+  // provider catalog; restore it (and the default fetch implementation)
+  // so later tests keep seeing the pristine fixtures.
+  let claudeCodeModelsRestore: (() => void) | undefined;
+  afterEach(() => {
+    claudeCodeModelsRestore?.();
+    claudeCodeModelsRestore = undefined;
+    modelDiscovery.fetchModels.mockImplementation(
+      (providerId: string) => Promise.resolve(providerModels[providerId] || []),
+    );
+  });
+
   it("renders cloud providers in the provider setup tabs", async () => {
     renderWithProviders();
     const providersPanel = await getProviderSetupPanel();
@@ -601,10 +613,18 @@ describe("EnhancementsSection", () => {
     expect(within(providersPanel).getByRole("tab", { name: "Cloud API" })).toBeInTheDocument();
 
     await user.click(within(providersPanel).getByRole("button", { name: /close/i }));
-    // jsdom never finishes the exit animation, so assert the closed state
-    // instead of unmount.
-    expect(screen.getByRole("dialog")).toHaveAttribute("data-closed");
+    // Base UI unmounts the dialog once the close settles (jsdom has no Web
+    // Animations, so completion is immediate).
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    // The persisted selection survives close…
     expect(launcher).toHaveTextContent("OpenAI · GPT-5 Mini");
+    expect(launcher).toHaveTextContent("Active");
+    // …and reopening the launcher shows the same provider and model.
+    await user.click(launcher);
+    const reopenedPanel = await screen.findByRole("dialog");
+    expect(within(reopenedPanel).getByRole("combobox", { name: "Model for OpenAI" })).toHaveValue(
+      "GPT-5 Mini",
+    );
   });
 
   it("does not expand then collapse while configured settings load", async () => {
@@ -689,6 +709,96 @@ describe("EnhancementsSection", () => {
     });
   });
 
+  it("shows the refreshed CLI account's models in the picker after a ready Refresh", async () => {
+    agentCliProbeResponse = {
+      state: "ready",
+    };
+    const user = userEvent.setup();
+    renderWithProviders();
+    const providersPanel = await getProviderSetupPanel();
+    await user.click(within(providersPanel).getByRole("tab", { name: "Local Agents" }));
+    expect(
+      await within(providersPanel).findByRole("heading", {
+        name: "Claude Code",
+      }),
+    ).toBeInTheDocument();
+    // Let the initial probes settle so the Refresh click reaches probeAgentCli.
+    await waitFor(() => {
+      expect(within(providersPanel).getAllByText("Installed").length).toBeGreaterThan(0);
+    });
+
+    // The CLI account changed outside the app. A ready Refresh must reload the
+    // model cache, so the picker offers the new account's models instead of
+    // the ones captured before the Refresh.
+    const previousModels = providerModels["claude-code"];
+    const refreshedAccountModels = [
+      { id: "", name: "Default", recommended: true, cliDefault: true },
+      { id: "sonnet-4-5", name: "Sonnet 4.5", recommended: false },
+    ];
+    claudeCodeModelsRestore = () => {
+      providerModels["claude-code"] = previousModels;
+    };
+    modelDiscovery.fetchModels.mockImplementation(async (providerId: string) => {
+      if (providerId === "claude-code") {
+        providerModels["claude-code"] = refreshedAccountModels;
+      }
+      return providerModels[providerId] || [];
+    });
+
+    await user.click(
+      within(providersPanel).getByRole("button", {
+        name: "Refresh Claude Code status",
+      }),
+    );
+
+    await user.click(
+      within(providersPanel).getByRole("button", { name: "Model for Claude Code" }),
+    );
+    const picker = await screen.findByRole("dialog", { name: "Choose a Claude Code model" });
+    expect(
+      within(picker).getByRole("button", { name: /^Sonnet 4\.5.*claude-code\/sonnet-4-5/i }),
+    ).toBeInTheDocument();
+    expect(within(picker).queryByRole("button", { name: /^Haiku/i })).not.toBeInTheDocument();
+    expect(within(picker).queryByRole("button", { name: /^Opus/i })).not.toBeInTheDocument();
+  });
+
+  it("keeps the previous model list in the picker when a Refresh fails", async () => {
+    agentCliProbeResponse = {
+      state: "ready",
+    };
+    const user = userEvent.setup();
+    renderWithProviders();
+    const providersPanel = await getProviderSetupPanel();
+    await user.click(within(providersPanel).getByRole("tab", { name: "Local Agents" }));
+    expect(
+      await within(providersPanel).findByRole("heading", {
+        name: "Claude Code",
+      }),
+    ).toBeInTheDocument();
+    // Let the initial probes settle so the CLI starts out ready and the
+    // picker is enabled with the cached list.
+    await waitFor(() => {
+      expect(within(providersPanel).getAllByText("Installed").length).toBeGreaterThan(0);
+    });
+
+    // The Refresh probe itself fails; the previously probed status and the
+    // cached model list must survive it.
+    agentCliProbeHandler = () => Promise.reject(new Error("probe failed"));
+    await user.click(
+      within(providersPanel).getByRole("button", {
+        name: "Refresh Claude Code status",
+      }),
+    );
+
+    await user.click(
+      within(providersPanel).getByRole("button", { name: "Model for Claude Code" }),
+    );
+    const picker = await screen.findByRole("dialog", { name: "Choose a Claude Code model" });
+    expect(within(picker).getByRole("button", { name: /^Haiku/i })).toBeInTheDocument();
+    expect(within(picker).getByRole("button", { name: /^Sonnet/i })).toBeInTheDocument();
+    expect(within(picker).getByRole("button", { name: /^Opus/i })).toBeInTheDocument();
+  });
+
   it("opens the API key modal from a cloud provider row", async () => {
     const user = userEvent.setup();
     renderWithProviders();
@@ -736,7 +846,7 @@ describe("EnhancementsSection", () => {
       within(providersPanel).getAllByRole("button", { name: /refresh/i }).length,
     ).toBeGreaterThan(0);
     await user.click(within(providersPanel).getByRole("button", { name: /close/i }));
-    expect(screen.getByRole("dialog")).toHaveAttribute("data-closed");
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
     expect(screen.queryByLabelText("API Key")).not.toBeInTheDocument();
   });
 

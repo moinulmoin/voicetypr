@@ -212,6 +212,10 @@ export function useAiProviderSettings({
 
       const state = getAgentCliProbeState(probe);
       if (state === "ready") {
+        // The CLI account behind the binary can change outside the app, so the
+        // picker must reload models (populated or default-only cache) from the
+        // probed installation instead of trusting the pre-refresh cache.
+        await fetchModels(provider.id);
         toast.success(`${provider.name}: installed`);
       } else if (state === "missing") {
         toast.info(
@@ -225,7 +229,7 @@ export function useAiProviderSettings({
         toast.info(`${provider.name}: status unavailable. Try Refresh again.`);
       }
     },
-    [probeAgentCli],
+    [probeAgentCli, fetchModels],
   );
 
   useEffect(() => {
