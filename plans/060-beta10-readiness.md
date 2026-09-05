@@ -1,4 +1,10 @@
-# Plan 047 — Silent failures: Soniox storage lifecycle, alertable failure events, report diagnostics
+# Plan 060 — Beta10 release remediation (silent-failures work migrated from PR 047)
+
+Renumbered from PR 140's `plans/047-silent-failures-soniox-alerts-diagnostics.md`
+to free 047 for main's landed `polish-provider-ux-audio-fast-path.md` (via #136).
+This file is now the beta10 remediation umbrella: the migrated silent-failures
+plan below, plus the six concurrent beta10 remediation slices reviewed against
+main `4f9e497d` + PR 140 `eace981b`. Upstream plans 044–059 are untouched.
 
 Baseline: working tree 2026-08-20 (post v2.0.5). Trigger: paid-user bug report
 (Windows, v2.0.5, 2026-08-19) — Soniox transcription permanently failing with
@@ -86,6 +92,28 @@ Remove the six dead deps listed above (manifest removals only; transitive
 availability unchanged where relevant). Out of scope: cpal 0.16→0.18 upgrade
 (realtime RT-priority callbacks) — separate plan + device smoke; whisper-rs
 already latest (0.16.0).
+
+## Beta10 remediation slices (concurrent; Main gates after barrier)
+
+Integration branch `fix/060-beta10-readiness` (worktree
+`/tmp/voicetypr-beta10-integration`) = PR 140 `eace981b` merged with main
+`4f9e497d`. Workers own disjoint files on their own branches; IntegrationOwner
+cherry-picks only on Main's instruction. No validation mid-flight (Main runs the
+consolidated gate); no remote pushes; user WIP (`agent/`, `videos/`,
+`plans/032-*.md`) untouched.
+
+| Slice | Owner / base | Scope (review-proven defects) | Acceptance |
+|-------|--------------|-------------------------------|------------|
+| 060.1 recorder/audio integration | IntegrationOwner, main after merge; `src-tauri/src/audio/recorder.rs`, `src-tauri/src/commands/audio.rs` | Final WAV drain branch bypasses speech-evidence observe (dropped/unwritten audio must not fabricate evidence; no second scan, no RT-callback allocations); no-speech gate must not delete recordings with only uncertain absence evidence; `stop_recording()` error must restore media via `MEDIA_CONTROLLER.resume_if_we_paused` before propagation (ESC/custom + normal-stop paths); Windows sidecar backend tag must record the actual attempt (pre-await) and CPU on fallback, attempt-local, no global stale attribution | Focused regressions per transition in owned test files; commit `fix: preserve final speech and restore media on cancellation errors` |
+| 060.2 Soniox | SonioxFixes, PR HEAD `eace981b`; soniox.rs seam + its tests | Remaining Soniox silent-failure defects from the beta10 review (storage lifecycle / alertable-failure seam) | Focused fixes + regressions on their branch; validated at Main's consolidated gate |
+| 060.3 Report diagnostics | DiagnosticsFixes, PR HEAD `eace981b`; ReportProblemSection + crash-report consumers | Remaining report/diagnostics defects from the beta10 review (specs swallow seam, DEBUG ring attachment) preserving extracted components | Focused fixes + regressions on their branch |
+| 060.4 Release tooling | ReleaseToolingFixes, main `4f9e497d`; workflow + packaging files | Release-workflow/tooling defects from the beta10 review (42 fast-path, pins, caches) | Focused fixes + regressions on their branch |
+| 060.5 Polish workflow | PolishFixes, main `4f9e497d`; polish seam files | Polish-workflow defects from the beta10 review; `classify_polish_outcome`, model selection, prefetch preserved | Focused fixes + regressions on their branch |
+| 060.6 Frontend state | FrontendFixes, main `4f9e497d`; extracted hooks/state files | Frontend-state defects from the beta10 review; extracted hooks, PostHog journeys/consent preserved | Focused fixes + regressions on their branch |
+
+Smoke for 060.1 additions rides the renumbered section below (`060-S1..S5`) and
+`SMOKE.md`; hardware smoke (Windows sidecar tag, macOS media restore) batches
+after the premerge gate per Main.
 
 ## Verification
 

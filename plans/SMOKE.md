@@ -9,34 +9,40 @@ Run on a real macOS machine via `pnpm tauri:dev` (item 16-S8 needs a Windows
 build). Check each box with date + result; on failure, file the failure
 against the named plan instead of hot-fixing inline.
 
-## Plan 047 — Soniox lifecycle, failure events, report diagnostics (NEEDS-SMOKE)
+## Plan 060 — Soniox lifecycle, failure events, report diagnostics + beta10 remediation (NEEDS-SMOKE)
 
 Needs a real Soniox account with stored-file backlog plus the GlitchTip
-project's Discord alert wired. macOS first; 047-S4 needs a Windows build
+project's Discord alert wired. macOS first; 060-S4 needs a Windows build
 (sidecar backend tag only exists there).
 
-- [ ] 047-S1 Soniox dictation with a key that has stored records →
+- [ ] 060-S1 Soniox dictation with a key that has stored records →
       transcription succeeds AND `Settings → Cloud transcription → Soniox
       stored files` counts do not grow (auto-delete fired); Soniox console
       shows the new records gone.
-- [ ] 047-S2 Fill the Soniox org to its file cap (or use an at-cap account)
+- [ ] 060-S2 Fill the Soniox org to its file cap (or use an at-cap account)
       → first dictation self-heals: background cleanup runs, the dictation
       retries automatically and succeeds (no error visible, single 429 in
       the log); if the retry still hits the wall, the dashboard is focused
       on the Models page with the Soniox card visible (any source filter is
       reset) and an inline toast explains the cleanup; the cleanup button
       drains counts to zero and dictation works again.
-- [ ] 047-S3 Force a failure (e.g. invalid Groq key set to Groq engine, or
+- [ ] 060-S3 Force a failure (e.g. invalid Groq key set to Groq engine, or
       pull network during local whisper) → GlitchTip issue appears with
       message `flow.transcription.failed.<class>` and tags
       engine/model/backend/failure_class, Discord alert fires; verify NO
       structured logs/transactions arrive anymore (logs view stays empty).
-- [ ] 047-S4 Windows with GPU sidecar active → failure event carries
+- [ ] 060-S4 Windows with GPU sidecar active → failure event carries
       `backend=sidecar`; with GPU off/fallback → `backend=cpu`.
-- [ ] 047-S5 Report Bug from a release build → report contains the System
+- [ ] 060-S5 Report Bug from a release build → report contains the System
       section (or an explicit collection-failed line) and a `## Debug (most
       in-memory ring)` section with redacted DEBUG lines; verify no DEBUG
       lines appear in the on-disk voicetypr-*.log file in release.
+- [ ] 060-S6 Media-restore regression (with 058-S1/S2): dictation where
+      stop fails (force recorder error) or ESC during `Starting` → media
+      still resumes (no stuck-pause after an error path).
+- [ ] 060-S7 Windows: force sidecar spawn failure → failure event tags
+      `backend=cpu` (the attempted backend), then success tags
+      `backend=sidecar`; no stale backend on the next event.
 
 ## Plan 030 — Windows crash dependencies (NEEDS-SMOKE)
 
