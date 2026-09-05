@@ -35,9 +35,9 @@ export function SonioxStorageCard() {
   );
 
   const loadCounts = useCallback(async () => {
-    setCountError(null);
     try {
       setCounts(await invoke<SonioxStorageCounts>("get_soniox_storage_counts"));
+      setCountError(null);
     } catch (error) {
       setCounts(null);
       setCountError(error instanceof Error ? error.message : String(error));
