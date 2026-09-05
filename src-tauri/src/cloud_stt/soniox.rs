@@ -2351,5 +2351,328 @@ mod tests {
             );
             server.verify().await;
         }
+
+        #[tokio::test]
+        async fn inline_free_skips_shared_file_when_sibling_delete_failed() {
+            // The API permits several transcriptions to reference one file.
+            // If tA deletes fine but tB's delete fails (500), the shared
+            // file still has a surviving reference: it must NOT be freed
+            // inline after tA, and pass 2 must keep it protected.
+            let server = MockServer::start().await;
+            let _guard = BaseOverrideGuard::install(&server);
+            let client = common::http_client();
+
+            Mock::given(method("GET"))
+                .and(path("/v1/transcriptions"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(
+                    serde_json::json!({
+                        "transcriptions": [
+                            { "id": "t-a", "file_id": "f-shared" },
+                            { "id": "t-b", "file_id": "f-shared" }
+                        ]
+                    }),
+                ))
+                .mount(&server)
+                .await;
+            Mock::given(method("DELETE"))
+                .and(path("/v1/transcriptions/t-a"))
+                .respond_with(ResponseTemplate::new(204))
+                .expect(1)
+                .mount(&server)
+                .await;
+            Mock::given(method("DELETE"))
+                .and(path("/v1/transcriptions/t-b"))
+                .respond_with(ResponseTemplate::new(500))
+                .expect(1)
+                .mount(&server)
+                .await;
+            Mock::given(method("GET"))
+                .and(path("/v1/files"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(
+                    serde_json::json!({ "files": [ { "id": "f-shared" } ] }),
+                ))
+                .mount(&server)
+                .await;
+
+            let result = drain_stored_records(&client, "k", None).await.unwrap();
+            assert_eq!(result.deleted_transcriptions, 1);
+            assert_eq!(result.deleted_files, 0);
+            assert_eq!(result.skipped_active, 1, "shared file stays protected");
+
+            let deletes: Vec<String> = server
+                .received_requests()
+                .await
+                .unwrap()
+                .iter()
+                .filter(|r| r.method.as_str() == "DELETE")
+                .map(|r| r.url.path().to_string())
+                .collect();
+            assert_eq!(
+                deletes,
+                vec!["/v1/transcriptions/t-a", "/v1/transcriptions/t-b"],
+                "shared file must not be freed while a sibling record survives"
+            );
+        }
+
+        #[tokio::test]
+        async fn pass_two_keeps_files_of_jobs_created_between_passes() {
+            // A flow that uploaded+created its job AFTER pass 1 snapshotted
+            // and was then cancelled (guard dropped before pass 2) has no
+            // registry entry and was absent from the pass-1 listing. The
+            // pass-2 FRESH transcription listing still references its file,
+            // which must therefore survive.
+            let server = MockServer::start().await;
+            let _guard = BaseOverrideGuard::install(&server);
+            let client = common::http_client();
+
+            let listings = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+            let listings_for_mock = listings.clone();
+            Mock::given(method("GET"))
+                .and(path("/v1/transcriptions"))
+                .respond_with(move |_req: &wiremock::Request| {
+                    let n = listings_for_mock.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                    ResponseTemplate::new(200).set_body_json(if n == 0 {
+                        serde_json::json!({
+                            "transcriptions": [ { "id": "t-old", "file_id": "f-old" } ]
+                        })
+                    } else {
+                        serde_json::json!({
+                            "transcriptions": [ { "id": "t-new", "file_id": "f-new" } ]
+                        })
+                    })
+                })
+                .mount(&server)
+                .await;
+            Mock::given(method("DELETE"))
+                .and(path("/v1/transcriptions/t-old"))
+                .respond_with(ResponseTemplate::new(204))
+                .expect(1)
+                .mount(&server)
+                .await;
+            Mock::given(method("DELETE"))
+                .and(path("/v1/files/f-old"))
+                .respond_with(ResponseTemplate::new(204))
+                .expect(1)
+                .mount(&server)
+                .await;
+            Mock::given(method("GET"))
+                .and(path("/v1/files"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(
+                    serde_json::json!({ "files": [ { "id": "f-new" } ] }),
+                ))
+                .mount(&server)
+                .await;
+
+            let result = drain_stored_records(&client, "k", None).await.unwrap();
+            assert_eq!(result.deleted_transcriptions, 1);
+            assert_eq!(result.deleted_files, 1, "only f-old is freed");
+            assert_eq!(result.skipped_active, 1, "f-new is referenced and kept");
+
+            let deletes: Vec<String> = server
+                .received_requests()
+                .await
+                .unwrap()
+                .iter()
+                .filter(|r| r.method.as_str() == "DELETE")
+                .map(|r| r.url.path().to_string())
+                .collect();
+            assert_eq!(
+                deletes,
+                vec!["/v1/transcriptions/t-old", "/v1/files/f-old"],
+                "between-passes job file must not be deleted"
+            );
+        }
+
+        #[tokio::test]
+        async fn incomplete_metadata_fails_file_cleanup_closed() {
+            // Fail-closed schema regression: a record whose file_id is
+            // MISSING (not an explicit documented null) has an unknown
+            // reference state. File cleanup must abort for the whole run —
+            // no file may be classified as an orphan on incomplete data.
+            let server = MockServer::start().await;
+            let _guard = BaseOverrideGuard::install(&server);
+            let client = common::http_client();
+
+            Mock::given(method("GET"))
+                .and(path("/v1/transcriptions"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(
+                    serde_json::json!({
+                        "transcriptions": [
+                            { "id": "t-ok", "file_id": "f-ok" },
+                            { "id": "t-corrupt" }
+                        ]
+                    }),
+                ))
+                .mount(&server)
+                .await;
+            Mock::given(method("DELETE"))
+                .and(path("/v1/transcriptions/t-ok"))
+                .respond_with(ResponseTemplate::new(204))
+                .expect(1)
+                .mount(&server)
+                .await;
+
+            let result = drain_stored_records(&client, "k", None).await.unwrap();
+            assert_eq!(result.deleted_transcriptions, 1);
+            assert_eq!(result.deleted_files, 0);
+            assert!(
+                result
+                    .errors
+                    .iter()
+                    .any(|e| e.contains("incomplete metadata; file cleanup skipped")),
+                "fail-closed reason must be reported: {:?}",
+                result.errors
+            );
+
+            let requests = server.received_requests().await.unwrap();
+            assert!(
+                !requests
+                    .iter()
+                    .any(|r| r.method.as_str() == "DELETE" && r.url.path().starts_with("/v1/files")),
+                "no file may be deleted on incomplete metadata"
+            );
+            assert!(
+                !requests
+                    .iter()
+                    .any(|r| r.method.as_str() == "GET" && r.url.path() == "/v1/files"),
+                "file listing must not even run in fail-closed mode"
+            );
+        }
+
+        #[tokio::test]
+        async fn record_count_wall_wakes_on_record_deletions_not_file_frees() {
+            // A stored-transcription count wall (backlog records with an
+            // explicit file_id: null — URL-based jobs) frees NO files, so a
+            // file-capacity wake could never fire here: the self-heal must
+            // wake on RECORD deletions (the typed quota kind) and the flow
+            // must return well under the 8s budget. A broken wake that
+            // waited on file frees would burn the whole budget (>= 8s) and
+            // fail the elapsed assertion below.
+            let server = MockServer::start().await;
+            let _guard = BaseOverrideGuard::install(&server);
+            let client = common::http_client();
+
+            let uploads = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+            let uploads_for_mock = uploads.clone();
+            Mock::given(method("POST"))
+                .and(path("/v1/files"))
+                .respond_with(move |_req: &wiremock::Request| {
+                    let n = uploads_for_mock.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                    ResponseTemplate::new(201).set_body_json(
+                        serde_json::json!({ "id": format!("f{n}") }),
+                    )
+                })
+                .expect(2)
+                .mount(&server)
+                .await;
+            let creates = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+            let creates_for_mock = creates.clone();
+            Mock::given(method("POST"))
+                .and(path("/v1/transcriptions"))
+                .respond_with(move |_req: &wiremock::Request| {
+                    let n = creates_for_mock.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                    if n == 0 {
+                        ResponseTemplate::new(429).set_body_json(serde_json::json!({
+                            "status_code": 429,
+                            "error_type": "limit_exceeded",
+                            "message": "transcribe_async_total_num_files limit has been exceeded."
+                        }))
+                    } else {
+                        ResponseTemplate::new(201)
+                            .set_body_json(serde_json::json!({ "id": "t1", "status": "queued" }))
+                    }
+                })
+                .expect(2)
+                .mount(&server)
+                .await;
+            // Backlog: one old URL-based record with an explicit null
+            // file reference — deleting it frees RECORD capacity only.
+            Mock::given(method("GET"))
+                .and(path("/v1/transcriptions"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(
+                    serde_json::json!({
+                        "transcriptions": [ { "id": "t-old", "file_id": null } ]
+                    }),
+                ))
+                .mount(&server)
+                .await;
+            Mock::given(method("DELETE"))
+                .and(path("/v1/transcriptions/t-old"))
+                .respond_with(ResponseTemplate::new(204))
+                .expect(1)
+                .mount(&server)
+                .await;
+            Mock::given(method("GET"))
+                .and(path("/v1/files"))
+                .respond_with(ResponseTemplate::new(200)
+                    .set_body_json(serde_json::json!({ "files": [] })))
+                .mount(&server)
+                .await;
+            // Attempt 2 completes normally; terminal exits delete both
+            // records explicitly (no server-side cascade).
+            Mock::given(method("GET"))
+                .and(path("/v1/transcriptions/t1"))
+                .respond_with(ResponseTemplate::new(200)
+                    .set_body_json(serde_json::json!({ "status": "completed" })))
+                .mount(&server)
+                .await;
+            Mock::given(method("GET"))
+                .and(path("/v1/transcriptions/t1/transcript"))
+                .respond_with(ResponseTemplate::new(200)
+                    .set_body_json(serde_json::json!({ "text": "record-healed" })))
+                .mount(&server)
+                .await;
+            Mock::given(method("DELETE"))
+                .and(path("/v1/transcriptions/t1"))
+                .respond_with(ResponseTemplate::new(204))
+                .expect(1)
+                .mount(&server)
+                .await;
+            Mock::given(method("DELETE"))
+                .and(path("/v1/files/f1"))
+                .respond_with(ResponseTemplate::new(204))
+                .expect(1)
+                .mount(&server)
+                .await;
+
+            let dir = tempfile::tempdir().unwrap();
+            let wav = dir.path().join("audio.wav");
+            std::fs::write(&wav, b"RIFF....WAVEfmt ").unwrap();
+
+            let started = std::time::Instant::now();
+
+            let text = transcribe_typed_with_autoheal(
+                &client,
+                "k",
+                &wav,
+                b"RIFF....WAVEfmt ".to_vec(),
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+            let elapsed = started.elapsed();
+            assert_eq!(text, "record-healed");
+            // Typed-wake proof: far under the 8s budget, yet the only
+            // capacity freed since the baselines was RECORD capacity.
+            assert!(
+                elapsed < std::time::Duration::from_secs(5),
+                "flow took {elapsed:?}; a non-record wake burns the full budget"
+            );
+            // Global-state hygiene: the background drain (spawned inside
+            // the flow) must be awaited before the test ends, so its
+            // statics/gate are quiet for sibling tests.
+            for _ in 0..100 {
+                if !AUTO_CLEANUP_RUNNING.load(std::sync::atomic::Ordering::SeqCst) {
+                    break;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+            }
+            assert!(
+                !AUTO_CLEANUP_RUNNING.load(std::sync::atomic::Ordering::SeqCst),
+                "background drain did not finish"
+            );
+            server.verify().await;
+        }
     }
 }
