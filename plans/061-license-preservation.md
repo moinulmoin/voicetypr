@@ -37,7 +37,7 @@ today all collapse to "absent":
 | Value present, wrong JSON type | **delete + `Ok(None)`** | `Err("… unexpected format …")`, **no mutation** |
 | `app.store()` access error | `Ok(None)` | `Err("Secure store is unavailable: …")` |
 
-Mechanics (revision 2): `secure_get` is strictly read-only and **never
+Mechanics (revision 3): `secure_get` is strictly read-only and **never
 registers the store**. `app.store()` builds+registers a store whose cache is
 empty when the disk file is malformed (plugin `build_inner` discards load
 errors), and the plugin saves every registered store on app exit — that empty
@@ -45,11 +45,21 @@ cache would overwrite the (possibly recoverable) file. So:
 
 1. Serve cache hits from an already-open store via side-effect-free
    `get_store` (sees unsaved in-flight `secure_set` values; no disk IO).
-2. On miss, resolve the path with the plugin's `resolve_store_path` and read
-   the file directly (`fs::read` + `serde_json` map parse): missing →
-   `Ok(None)` (fresh install, nothing registered/created); IO error or bad
-   JSON → distinct Err with the store never opened. No `Store::reload`
-   anywhere — reads cannot clobber a concurrent `secure_set` before its save.
+2. Store not open: resolve the path with the plugin's `resolve_store_path`
+   and read the file directly (`fs::read` + `serde_json` map parse):
+   missing → `Ok(None)` (fresh install, nothing registered/created); IO
+   error or bad JSON → distinct Err with the store never opened. No
+   `Store::reload` anywhere — reads cannot clobber a concurrent `secure_set`
+   before its save.
+3. Once a store IS open, its cache is authoritative: a miss is a real
+   absence and is **never backfilled from disk**, so an in-flight
+   `secure_delete` (cache deleted, save not yet landed) cannot briefly
+   resurrect the old credential; a failed `secure_delete` save leaves disk
+   untouched and the caller already received the error.
+4. Parse failures never interpolate `serde_json::Error` into user-visible
+   messages (its `invalid type` text can embed a scalar payload, e.g. a
+   mistakenly pasted key); only classification + line/column are logged and
+   the returned message is payload-free.
 
 Reads never call `delete`/`save`; `secure_delete`, deactivation, and Reset
 keep their explicit user-action semantics (and `secure_delete`'s

@@ -164,7 +164,18 @@ fn read_store_file(
     };
     serde_json::from_slice(&bytes)
         .map(Some)
-        .map_err(|e| format!("Secure store file could not be read (it may be corrupted): {}", e))
+        .map_err(|e| {
+            // serde_json errors can embed the unexpected payload for scalar
+            // values — log only the classification/position and return a
+            // payload-free message.
+            log::warn!(
+                "Secure store file parse failed: {} at line {} column {}",
+                e.classify(),
+                e.line(),
+                e.column()
+            );
+            "Secure store file could not be read (it may be corrupted)".to_string()
+        })
 }
 
 /// Decrypt a raw stored entry. Read failures never mutate anything: the saved
@@ -206,20 +217,23 @@ fn decrypt_raw_entry(
 /// mutates the shared cache. Read failures are distinct from a missing entry —
 /// an undecryptable value, an entry with an unexpected type, or an unreadable
 /// store file return an error while the saved record stays untouched on disk.
+///
+/// Once the store is open, its cache is authoritative: a miss there is a real
+/// absence (e.g. a just-completed delete) and is never backfilled from disk,
+/// so an in-flight `secure_delete` cannot briefly resurrect the old value.
 pub fn secure_get<R: Runtime>(app: &AppHandle<R>, key: &str) -> Result<Option<String>, String> {
-    // Prefer an already-open store's cache: it sees unsaved in-flight values
-    // from `secure_set` and skips disk access on the hot path. `get_store`
-    // has no side effects (unlike `app.store()`, which registers the store).
+    // Already-open store: serve from its cache. `get_store` has no side
+    // effects (unlike `app.store()`, which registers the store). No disk
+    // fallback on miss — see the cache-authoritative note above.
     if let Some(store) = app.get_store(SECURE_STORE_FILE) {
-        if let Some(raw) = store.get(key) {
-            return decrypt_raw_entry(key, Some(&raw));
-        }
+        return decrypt_raw_entry(key, store.get(key).as_ref());
     }
 
-    // Otherwise inspect the store FILE directly — read-only. Do NOT call
-    // `app.store()` here: building a store registers it, and the plugin saves
-    // every registered store on app exit, so registering against an unreadable
-    // file would let exit overwrite the on-disk bytes with an empty cache.
+    // Store not open: inspect the store FILE directly — read-only. Do NOT
+    // call `app.store()` here: building a store registers it, and the plugin
+    // saves every registered store on app exit, so registering against an
+    // unreadable file would let exit overwrite the on-disk bytes with an
+    // empty cache.
     let path = resolve_store_path(app, SECURE_STORE_FILE)
         .map_err(|e| format!("Secure store is unavailable: {}", e))?;
     match read_store_file(&path)? {
@@ -347,6 +361,23 @@ mod tests {
 
         assert!(result.is_err(), "corrupt file must not read as absent");
         assert!(result.unwrap_err().contains("Secure store"));
+    }
+
+    #[test]
+    fn parse_error_never_discloses_file_payload() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join(SECURE_STORE_FILE);
+        // A scalar top-level payload (e.g. a mistakenly pasted secret) must
+        // never appear in the returned error: serde_json's `invalid type`
+        // text would embed it verbatim.
+        let secret = "VTPASTED-SECRET-KEY-9f8e7d6c";
+        fs::write(&path, serde_json::to_string(&secret).unwrap()).unwrap();
+
+        let message = read_store_file(&path).unwrap_err();
+
+        assert!(message.contains("Secure store"), "unexpected message: {message}");
+        assert!(!message.contains(secret), "payload leaked into error: {message}");
+        assert!(!message.contains("invalid type"), "raw serde error leaked: {message}");
     }
 
     #[test]
