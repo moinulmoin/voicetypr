@@ -1,5 +1,8 @@
 # Plan 060 — Beta10 release remediation (silent-failures work migrated from PR 047)
 
+**Status:** CODE COMPLETE / NEEDS-SMOKE. Local automated gates pass; this
+candidate has not been pushed, merged, or released.
+
 Renumbered from PR 140's `plans/047-silent-failures-soniox-alerts-diagnostics.md`
 to free 047 for main's landed `polish-provider-ux-audio-fast-path.md` (via #136).
 This file is now the beta10 remediation umbrella: the migrated silent-failures
@@ -14,39 +17,42 @@ Whisper large-v3-turbo failing on CPU-only fallback; user saw only
 GlitchTip raised nothing because handled failures are curated *logs*, never
 issues.
 
-Research (2026-08-20, source-verified):
+Corrected release contract (2026-09-05):
 
-- Soniox: `DELETE /v1/transcriptions/{id}` cascades to its file; transcriptions
-  have their OWN org cap (2,000 total / 100 pending) in addition to files
-  (1,000 / 10 GB); `GET /v1/files/count` + `GET /v1/transcriptions/count`
-  exist; file-management RPM limit exists (numeric value undocumented); no
-  non-storing REST transcribe path (WebSocket is a separate architecture).
-- Seam map: verified call sites listed per work item below.
-- Dependency audit rider: `env_logger` (Cargo), `@radix-ui/react-collapsible`,
-  `@radix-ui/react-slot`, `@tauri-apps/plugin-updater` (JS),
-  `tauri-plugin-macos-permissions-api` (JS), `conventional-changelog-cli` are
-  dead (verified; knip false positives on 8/12 flags were excluded).
+- Soniox transcription deletion does **not** cascade to the uploaded file.
+  Delete each resource explicitly, without deleting files still needed by
+  active or surviving records. Storage counts use paginated listings.
+- Retained-file capacity and retained-transcription capacity are separate.
+  RPM, concurrency, pending-job, and unknown limits remain rate-limit errors;
+  they never authorize automatic backlog deletion.
+- File-management RPM is undocumented; cleanup uses paced requests and a
+  bounded backoff. The existing REST architecture remains unchanged.
+- The earlier dependency rider incorrectly removed `conventional-changelog-cli`:
+  `scripts/release-separate.sh` still needs it. It is restored at 5.0.0 and
+  invoked through `pnpm exec`; the Tauri CLI is pinned exactly to 2.6.2.
 
 ## A — Soniox storage lifecycle (P0, customer-blocked)
 
-1. After terminal poll status in both flows (`soniox.rs` typed + diarized),
-   fire-and-forget `DELETE {BASE}/transcriptions/{id}` (best-effort; ignore
-   404/429/network; log at warn). Covers all exits: completed, error, timeout.
-2. Parse `error_type=limit_exceeded` in `common.rs::log_http_body` → new
-   `SttError::LimitExceeded` (non-transient: excluded from `is_transient` so
-   `with_retry` stops retrying terminal limit 429s) with honest message:
-   storage/quota limit reached — clean up stored files (see 3) or raise cap in
-   Soniox console. No raw provider bodies in user-facing text (019 bar).
-3. Map `LimitExceeded` through `transcription/error.rs` to a distinct
-   `TranscriptionErrorCode` + actionable `user_message_for_code` text.
-4. Settings UI (Soniox selected + key validated): stored-files count +
-   transcriptions count (`GET /files/count`, `/transcriptions/count`) and a
-   "Clean up stored files" action → backend command listing + deleting
-   transcription records (paced sequential deletes, back off on 429; progress
-   state; skip while any transcription is processing → 409).
-5. Tests: wiremock limit-429 → LimitExceeded (no retry); delete-called-on-
-   terminal-status (typed + diarized); error-mapping contract test update
-   (`error.rs` tests pin RateLimited→TransportFailed today).
+1. Typed and diarized terminal paths explicitly clean up the transcription
+   and its uploaded file. A processing refusal or failed record deletion
+   retains the referenced file; failed creates clean up orphan uploads.
+   Interrupted flows release their ownership guard for later backlog cleanup.
+2. Classify only recognized retained-storage walls as
+   `SttError::LimitExceeded { file_storage }`. Separate file and record
+   deletion counters wake the relevant quota waiter; capture baselines before
+   starting cleanup. Wait at most eight seconds, or until cleanup finishes,
+   then retry the complete flow once.
+3. Map a remaining storage wall to the existing actionable storage-limit
+   error. Never expose raw provider response bodies.
+4. Backlog cleanup protects active uploads/jobs and shared file references.
+   Re-list references under the coordination gate before the file pass.
+   Missing or malformed reference metadata fails file deletion closed;
+   documented `file_id: null` URL records remain valid. Report processed work,
+   actual deletions, skipped items, and errors honestly.
+5. HTTP regressions cover terminal cleanup, storage-vs-rate classification,
+   shared/active references, between-pass changes, incomplete metadata, and
+   record-capacity wakeup while another deletion keeps cleanup running.
+   Flow fixtures serialize their shared production cleanup state.
 
 ## B — Telemetry: alertable failure events, funnel removal (P0)
 
@@ -65,9 +71,10 @@ Add `capture_failure_event(message, tags)` (fixed strings only):
   pre-spawn at `5237-5238`).
 - `flow.model_load.failed` — `whisper/cache.rs:99-102`.
 - `flow.remote.failed` — `audio.rs:6023-6055`.
-- backend tag: global set at whisper init (`transcriber.rs:62-168`,
-  `gpu_sidecar.rs` effective_backend) — `ActiveEngineSelection::Whisper`
-  carries no backend field today.
+- backend tag: task-local state scoped to the recording's spawned future,
+  recorded before backend initialization and updated on CPU fallback.
+  Preloads, remote initialization, and earlier recordings cannot overwrite it;
+  a failure with no selected backend omits the tag.
 
 ## C — Bug-report system specs swallow (P1)
 
@@ -88,10 +95,9 @@ toggle. Also: fix rotated `.log.N` files never being cleaned
 
 ## E — Dependency cleanup rider (P2)
 
-Remove the six dead deps listed above (manifest removals only; transitive
-availability unchanged where relevant). Out of scope: cpal 0.16→0.18 upgrade
-(realtime RT-priority callbacks) — separate plan + device smoke; whisper-rs
-already latest (0.16.0).
+Retain only verified dependency removals. The release-script changelog dependency
+is restored rather than assumed dead from a static dependency scan. CPAL
+upgrades and other unrelated dependency work remain outside this remediation.
 
 ## Beta10 remediation slices (concurrent; Main gates after barrier)
 
@@ -111,15 +117,40 @@ consolidated gate); no remote pushes; user WIP (`agent/`, `videos/`,
 | 060.5 Polish workflow | PolishFixes, main `4f9e497d`; polish seam files | Polish-workflow defects from the beta10 review; `classify_polish_outcome`, model selection, prefetch preserved | Focused fixes + regressions on their branch |
 | 060.6 Frontend state | FrontendFixes, main `4f9e497d`; extracted hooks/state files | Frontend-state defects from the beta10 review; extracted hooks, PostHog journeys/consent preserved | Focused fixes + regressions on their branch |
 
-Smoke for 060.1 additions rides the renumbered section below (`060-S1..S5`) and
-`SMOKE.md`; hardware smoke (Windows sidecar tag, macOS media restore) batches
-after the premerge gate per Main.
+Packaged smoke is tracked in `SMOKE.md` under 060-S1–S10, with license
+preservation in 061-S1/S2. Existing 045-S1–S6, 050-S1–S3, 058-S1/S2 and
+059-S1/S2 remain unverified; earlier beta observations are not proof for the
+new candidate.
 
 ## Verification
 
-`cargo fmt --check`, `cargo clippy -- -D warnings`, `cd src-tauri && cargo
-test`, `pnpm typecheck`, `pnpm lint`, `pnpm exec vitest run`, `pnpm
-quality-gate`.
+Local macOS verification:
+
+- `pnpm typecheck`, `pnpm lint`: pass.
+- `pnpm exec vitest run --dir src`: 684 passed across 64 files.
+- `pnpm build`: pass; existing large-chunk and future Vite config-loader
+  warnings remain non-blocking.
+- `cargo test --workspace --quiet`: 1,509 passed, 16 ignored.
+- `cargo clippy --workspace --all-targets -- -D warnings`: pass.
+- Scoped `rustfmt` ran only on changed Rust files, with `skip_children=true`.
+- Executed CLI versions: Tauri 2.6.2; conventional-changelog 5.0.0.
+- Independent reviews cleared the final integrated Soniox, license, and
+  attempt-backend contracts after corrections. The integration compile gate
+  caught and resolved incomplete merge hunks before acceptance.
+
+No Windows runtime, real-account cleanup, consent/alert delivery, or published
+beta smoke is claimed. A copied Swift module cache needed a local clean rebuild;
+that was a build-cache relocation issue, not a product change.
+
+Local native smoke: the development bundle built with
+`com.ideaplexa.voicetypr.dev`, ad-hoc signing, and no notarization credentials.
+It completed startup and loaded the cached Parakeet model. Its saved menubar
+mode kept the dashboard hidden; the native automation tools could not resolve
+that hidden window's AX surface and refused background input. Navigation was
+not performed, no foreground escalation was attempted, and the owned process
+was stopped. This is startup evidence only, not published-beta or UI-flow proof.
+The inherited release signing identity was ambiguous locally; an explicit
+ad-hoc identity resolved the development bundle without changing release code.
 
 ## NEEDS-SMOKE (after code freeze)
 

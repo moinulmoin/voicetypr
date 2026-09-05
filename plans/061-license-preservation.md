@@ -1,6 +1,6 @@
 # Plan 061 — License preservation — non-destructive secure-store reads
 
-**Status:** IN PROGRESS
+**Status:** CODE COMPLETE / NEEDS-SMOKE (061-S1/S2); not released
 **Priority:** P0
 **Effort:** S
 **Depends on:** 060 (release remediation wave; independent file ownership)
@@ -14,8 +14,8 @@ returned `Ok(None)`. Consequence chain:
 1. `check_license_status_impl` (`commands/license.rs:441`) only enters the paid
    branch on `Some`; `None` falls into the trial branch → server trial check →
    expired trial → recording blocked.
-2. The license record was destroyed on disk, so the damage is permanent for the
-   user (no in-app recovery; re-entering the key is the only path).
+2. The saved entry was removed from the local store. This fix cannot restore
+   already-deleted bytes; recovery through backups or support is separate.
 3. The same deletion applies to corrupt **API-key** entries (cloud STT / AI
    providers), silently discarding recoverable credentials.
 
@@ -35,7 +35,7 @@ today all collapse to "absent":
 | Store file unreadable/corrupt (whole file) | `Ok(None)` (store build silently drops the load error) | `Err("Secure store file could not be read: …")` |
 | Value present, decrypt fails (auth/length/UTF-8) | **delete + save + `Ok(None)`** | `Err("… could not be decrypted … the saved entry was preserved")`, **no mutation** |
 | Value present, wrong JSON type | **delete + `Ok(None)`** | `Err("… unexpected format …")`, **no mutation** |
-| `app.store()` access error | `Ok(None)` | `Err("Secure store is unavailable: …")` |
+| Store path cannot be resolved | Store access failure could collapse to absent | Distinct error; no mutation |
 
 Mechanics (revision 3): `secure_get` is strictly read-only and **never
 registers the store**. `app.store()` builds+registers a store whose cache is
@@ -106,18 +106,28 @@ fake trait is needed; preservation is asserted by comparing file bytes):
 6. `invalid_value_type_preserves_saved_record` → Err, file bytes unchanged.
 7. `valid_license_roundtrip_reads_back_from_file` (+ absent key in a valid
    file → `Ok(None)`).
+8. A malformed top-level scalar cannot disclose its synthetic secret through
+   the returned parse error; logging contains only category and position.
 
 `secure_get` itself is thin glue over these (side-effect-free `get_store` +
 `resolve_store_path`); the no-registration/no-write guarantee is structural —
 the read path has no `Store` write surface at all.
+
+Local macOS workspace verification: 1,509 Rust tests passed, 16 ignored;
+Clippy with warnings denied passed. Independent security review cleared the
+integrated read path and error redaction. These tests exercise real files and
+AES-GCM, not an `AppHandle`, plugin exit/autosave, or Windows identity changes.
+Those boundaries remain explicitly unchecked in `SMOKE.md`.
 
 ## Out of scope / explicit non-goals
 
 - No `device.rs`, PBKDF2, or device-hash changes; no new key-migration scheme.
 - No entitlement bypass or auto-activation; unreadable ≠ licensed.
 - Server-revocation behavior (`should_delete_invalid_license`) untouched.
-- Already-deleted licenses are **not** recoverable by this fix (data is gone).
-- Residual unknown: why decryption failed (wrong key vs. corruption). Safe user
-  guidance: license record preserved → update/reinstall the app, retry; if the
-  error persists, re-enter the license key (server re-activation) or contact
-  support; do not delete `secure.dat` manually (other keys live there).
+- Already-deleted licenses are not restored by this fix.
+- The initiating decryption failure remains unexplained. Before any recovery
+  write, preserve `secure.dat` and relevant logs. Do not reset app data, delete
+  the file, deactivate, or repeatedly activate. Support should verify the
+  entitlement and coordinate recovery with the original license key.
+- Retrying a read in the fixed build preserves the evidence; explicit writes
+  can replace unreadable data and are not covered by the read-only guarantee.

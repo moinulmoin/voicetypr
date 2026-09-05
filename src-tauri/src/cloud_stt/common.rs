@@ -16,9 +16,16 @@ pub(crate) enum SttError {
     Auth,
     ModelUnavailable,
     RateLimited,
-    /// Provider-side storage/quota wall (e.g. Soniox `limit_exceeded`):
-    /// permanent until stored records are deleted — never a retry candidate.
-    LimitExceeded,
+    /// Provider-side quota wall (e.g. Soniox `limit_exceeded`): permanent
+    /// until whatever it caps is relieved — never a retry candidate.
+    /// `file_storage`: `true` for retained-audio caps (stored file
+    /// count/size — only file deletions free them), `false` for
+    /// stored-transcription count caps (record deletions free them). The
+    /// storage-wall self-heal uses this to wait on capacity that actually
+    /// freed before retrying.
+    LimitExceeded {
+        file_storage: bool,
+    },
     Timeout,
     Network,
     Server,
@@ -36,7 +43,7 @@ impl SttError {
             Self::RateLimited => {
                 format!("{} rate limit reached. Try again shortly.", provider_name)
             }
-            Self::LimitExceeded => format!(
+            Self::LimitExceeded { .. } => format!(
                 "{provider} storage quota exceeded — delete stored files/transcriptions and retry",
                 provider = provider_name
             ),
@@ -187,29 +194,61 @@ where
     }
 }
 
+/// Classify a Soniox `limit_exceeded` 429 body by which documented cap it
+/// names: `Some(true)` = retained-audio storage (stored file count/size —
+/// freed only by file deletions), `Some(false)` = stored-transcription
+/// count (freed by record deletions). Soniox folds per-minute request
+/// rate, concurrency, pending-file and storage walls into this single
+/// `error_type`; per the API docs the `message` names which limit was hit,
+/// so the classification anchors on the documented limit identifiers
+/// (`files_total_count`, `files_total_size_gb`,
+/// `transcribe_async_total_num_files`) and their plain-English example
+/// wording. `total` anchors the storage phrases so the transient "pending
+/// file count" wall can never match. Any other wording — per-minute rate,
+/// concurrency, pending, or future unknown limits — is `None`: transient
+/// (`RateLimited`), never a destructive cleanup.
+fn soniox_limit_is_file_storage(body: &str) -> Option<bool> {
+    let Ok(v) = serde_json::from_str::<serde_json::Value>(body) else {
+        return None;
+    };
+    if v.get("error_type").and_then(|t| t.as_str()) != Some("limit_exceeded") {
+        return None;
+    }
+    let message = v.get("message").and_then(|m| m.as_str())?;
+    let message = message.to_ascii_lowercase();
+    if message.contains("transcribe_async_total_num_files") {
+        return Some(false);
+    }
+    if message.contains("files_total_count")
+        || message.contains("files_total_size_gb")
+        || message.contains("total file count")
+        || message.contains("total file size")
+    {
+        return Some(true);
+    }
+    None
+}
+
 pub(super) async fn log_http_body(resp: reqwest::Response, label: &str) -> SttError {
     let status = resp.status();
     let mut err = classify_status(status);
     // Body holds err_msg + a request id, never the key — safe to log, needed to diagnose.
     let body = resp.text().await.unwrap_or_default();
-    // Soniox quota walls (stored files / stored transcriptions) surface as
-    // HTTP 429 with `error_type: "limit_exceeded"`. Those are permanent
-    // until records are deleted, so they must not be retried or shown as a
-    // transient rate limit (plan 044). The top-level snake_case
-    // `error_type` field is Soniox's catalog shape; other providers' 429s
-    // keep the transient `RateLimited` classification.
-    if matches!(err, SttError::RateLimited)
-        && serde_json::from_str::<serde_json::Value>(&body)
-            .ok()
-            .and_then(|v| {
-                v.get("error_type")
-                    .and_then(|t| t.as_str())
-                    .map(str::to_owned)
-            })
-            .as_deref()
-            == Some("limit_exceeded")
-    {
-        err = SttError::LimitExceeded;
+    // Soniox folds many distinct limits into one HTTP 429
+    // `error_type: "limit_exceeded"` (per-minute request rate, concurrency,
+    // stored-file count/size, stored-transcription count, pending files).
+    // The docs instruct clients to read `message` for the sub-cause: only
+    // retained-storage walls are permanent until records are deleted, so
+    // only those may become the non-retryable quota error (plan 044) —
+    // typed by which capacity was hit so the self-heal waits on capacity
+    // that actually freed. Every other 429 — including unrecognized
+    // wording — stays the transient `RateLimited`; we never guess a
+    // destructive cleanup from an unrecognized message and never surface
+    // the raw body to the user.
+    if matches!(err, SttError::RateLimited) {
+        if let Some(file_storage) = soniox_limit_is_file_storage(&body) {
+            err = SttError::LimitExceeded { file_storage };
+        }
     }
     let snippet: String = body.chars().take(500).collect();
     if snippet.trim().is_empty() {
@@ -924,12 +963,18 @@ mod tests {
         assert_eq!(super::soniox_limit_is_file_storage(rate_file_mgmt), None);
 
         let storage_files = r#"{"status_code":429,"error_type":"limit_exceeded","message":"Total file count limit has been exceeded for your organization. Please delete some."}"#;
-        assert_eq!(super::soniox_limit_is_file_storage(storage_files), Some(true));
+        assert_eq!(
+            super::soniox_limit_is_file_storage(storage_files),
+            Some(true)
+        );
 
         // Documented limit identifiers must classify even when the wording
         // changes around them.
         let storage_slug = r#"{"error_type":"limit_exceeded","message":"Adding this file would put the organization over its files_total_size_gb cap."}"#;
-        assert_eq!(super::soniox_limit_is_file_storage(storage_slug), Some(true));
+        assert_eq!(
+            super::soniox_limit_is_file_storage(storage_slug),
+            Some(true)
+        );
 
         let storage_transcriptions = r#"{"error_type":"limit_exceeded","message":"transcribe_async_total_num_files limit has been exceeded."}"#;
         assert_eq!(
@@ -943,7 +988,8 @@ mod tests {
         assert_eq!(super::soniox_limit_is_file_storage(pending), None);
 
         // Unknown 429 wording stays transient — never a destructive cleanup.
-        let unknown = r#"{"error_type":"limit_exceeded","message":"Some future limit you have never seen."}"#;
+        let unknown =
+            r#"{"error_type":"limit_exceeded","message":"Some future limit you have never seen."}"#;
         assert_eq!(super::soniox_limit_is_file_storage(unknown), None);
 
         // Different error_type / non-JSON / missing message: not a quota wall.

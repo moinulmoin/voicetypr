@@ -1,48 +1,83 @@
 # Pending manual smoke — consolidated checklist
 
-All code below is implemented, gate-green, and committed. The ONLY remaining
-work is interactive desktop smoke, batched (per product owner) to run once at
-the end of the current feature push, before release. Do NOT re-implement
-anything here; executors and agents treat these plans as code-frozen.
+Unchecked rows are unverified, regardless of green automated checks.
+Use the packaged candidate for the named platform and record its exact version,
+date, result, and evidence. Development runs help diagnosis but do not establish
+beta-to-beta proof. Do not silently re-implement code-frozen plans; report a
+reproduced failure against the named plan.
 
-Run on a real macOS machine via `pnpm tauri:dev` (item 16-S8 needs a Windows
-build). Check each box with date + result; on failure, file the failure
-against the named plan instead of hot-fixing inline.
+The 060/061 candidate has local automated proof only and is not released.
+Windows hardware, real-provider cleanup, and consent/alert delivery remain
+unchecked. Existing 045-S1–S6, 050-S1–S3, 058-S1/S2 and 059-S1/S2 must also be
+verified against the new candidate rather than inherited from older betas.
+
+Local 060/061 development-bundle observation: build and startup succeeded under
+the separate `.dev` identity; cached Parakeet loading completed. The dashboard
+remained hidden in menubar mode and background AX input was refused. No
+foreground navigation, recording, consent change, or report submission was
+initiated; the owned process was stopped. This does not check any release row.
 
 ## Plan 060 — Soniox lifecycle, failure events, report diagnostics + beta10 remediation (NEEDS-SMOKE)
 
-Needs a real Soniox account with stored-file backlog plus the GlitchTip
-project's Discord alert wired. macOS first; 060-S4 needs a Windows build
-(sidecar backend tag only exists there).
+Use a dedicated Soniox test account and the configured GlitchTip/Discord test
+route. Obtain approval before creating/deleting provider records or changing
+diagnostic consent. macOS first; 060-S4/S7 also require real Windows hardware.
 
 - [ ] 060-S1 Soniox dictation with a key that has stored records →
       transcription succeeds AND `Settings → Cloud transcription → Soniox
       stored files` counts do not grow (auto-delete fired); Soniox console
       shows the new records gone.
-- [ ] 060-S2 Fill the Soniox org to its file cap (or use an at-cap account)
-      → first dictation self-heals: background cleanup runs, the dictation
-      retries automatically and succeeds (no error visible, single 429 in
-      the log); if the retry still hits the wall, the dashboard is focused
-      on the Models page with the Soniox card visible (any source filter is
-      reset) and an inline toast explains the cleanup; the cleanup button
-      drains counts to zero and dictation works again.
-- [ ] 060-S3 Force a failure (e.g. invalid Groq key set to Groq engine, or
-      pull network during local whisper) → GlitchTip issue appears with
+- [ ] 060-S2 Exercise both retained-file and retained-transcription caps in
+      the test account, including URL-based records without uploaded files.
+      Cleanup frees the relevant capacity and dictation retries once. A
+      remaining wall shows the honest storage error and Models cleanup route.
+      Manual cleanup removes eligible backlog but preserves active/shared
+      references; counts and errors reflect what actually remains.
+- [ ] 060-S3 Force a failure with an invalid test Groq key, or disconnect
+      networking during cloud transcription → GlitchTip issue appears with
       message `flow.transcription.failed.<class>` and tags
       engine/model/backend/failure_class, Discord alert fires; verify NO
       structured logs/transactions arrive anymore (logs view stays empty).
 - [ ] 060-S4 Windows with GPU sidecar active → failure event carries
       `backend=sidecar`; with GPU off/fallback → `backend=cpu`.
-- [ ] 060-S5 Report Bug from a release build → report contains the System
-      section (or an explicit collection-failed line) and a `## Debug (most
-      in-memory ring)` section with redacted DEBUG lines; verify no DEBUG
-      lines appear in the on-disk voicetypr-*.log file in release.
+- [ ] 060-S5 A release-build report contains System specs (or a visible
+      collection failure) and the redacted DEBUG ring. A failed submission's
+      Copy Details fallback retains both. Release log files contain no DEBUG
+      entries.
 - [ ] 060-S6 Media-restore regression (with 058-S1/S2): dictation where
       stop fails (force recorder error) or ESC during `Starting` → media
       still resumes (no stuck-pause after an error path).
-- [ ] 060-S7 Windows: force sidecar spawn failure → failure event tags
-      `backend=cpu` (the attempted backend), then success tags
-      `backend=sidecar`; no stale backend on the next event.
+- [ ] 060-S7 Windows: a terminal failure reports the backend actually
+      attempted. If CPU fallback is attempted and fails, report `cpu`; if the
+      terminal attempt is the GPU sidecar, report `sidecar`. Concurrent
+      preload/remote work and previous recordings cannot replace that tag.
+      A recovered success must not emit a terminal-failure event.
+- [ ] 060-S8 Polish: a ready CLI provider can be enabled from tray/shortcut
+      controls; Refresh updates capabilities and the model picker after an
+      external CLI change. Failed refresh retains the previous usable list.
+      Standalone “Sure” survives punctuation changes and line reflow.
+- [ ] 060-S9 On macOS and Windows, short/quiet speech ending at hotkey release
+      remains intact; final callback buffers must not turn speech into a
+      no-speech rejection. Re-run 059-S1/S2 and the media restoration checks.
+- [ ] 060-S10 Polish settings finish loading after reopening the window;
+      opt-in crash reporting shows restart guidance when required. Opt-out
+      takes effect immediately. Change consent only with explicit approval.
+
+## Plan 061 — Unreadable license preservation (NEEDS-SMOKE)
+
+Use a disposable app-data/user profile with synthetic malformed JSON and
+valid-length but unauthenticatable ciphertext, never a customer's real store.
+Preserve fixtures before starting. Do not activate/deactivate an entitlement
+or reset existing app data as part of this check.
+
+- [ ] 061-S1 Windows packaged candidate: unreadable license data produces a
+      recovery error, not an expired-trial fallback. Account Retry is reachable.
+      Repeated reads and a full exit/relaunch preserve the fixture; no paid
+      validation or trial request is triggered by that storage failure.
+- [ ] 061-S2 macOS packaged candidate: repeat the preservation/exit checks.
+      A missing store still follows normal unlicensed handling; a valid test
+      store still reads normally. Parse errors and diagnostics contain no
+      synthetic secret, ciphertext, or device fingerprint.
 
 ## Plan 030 — Windows crash dependencies (NEEDS-SMOKE)
 

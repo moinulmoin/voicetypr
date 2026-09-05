@@ -938,10 +938,12 @@ where
     Ok((retained, truncated))
 }
 
+type BoundedReadTask = tokio::task::JoinHandle<std::io::Result<(Vec<u8>, bool)>>;
+
 async fn kill_and_reap(
     child: &mut ProcessGroupGuard,
-    stdout_task: Option<tokio::task::JoinHandle<std::io::Result<(Vec<u8>, bool)>>>,
-    stderr_task: Option<tokio::task::JoinHandle<std::io::Result<(Vec<u8>, bool)>>>,
+    stdout_task: Option<BoundedReadTask>,
+    stderr_task: Option<BoundedReadTask>,
 ) {
     let _ = terminate_process_group(child).await;
     for task in [stdout_task, stderr_task].into_iter().flatten() {
@@ -2806,14 +2808,20 @@ mod tests {
         // Ordinary detection (no refresh) must leave the cache alone.
         let _ = probe(PROVIDER_CLAUDE_CODE, false).await;
         assert!(
-            cache.lock().await.contains_key(CLAUDE_CODE_SPEC.provider_id),
+            cache
+                .lock()
+                .await
+                .contains_key(CLAUDE_CODE_SPEC.provider_id),
             "non-refresh detection must keep cached capabilities"
         );
 
         // The public Refresh path must drop them so polish re-probes --help.
         let _ = probe(PROVIDER_CLAUDE_CODE, true).await;
         assert!(
-            !cache.lock().await.contains_key(CLAUDE_CODE_SPEC.provider_id),
+            !cache
+                .lock()
+                .await
+                .contains_key(CLAUDE_CODE_SPEC.provider_id),
             "public refresh must invalidate cached polish capabilities"
         );
 
@@ -2872,7 +2880,10 @@ mod tests {
         assert_eq!(help, b"late-help\n");
         assert!(!cached);
         assert!(
-            !cache.lock().await.contains_key(CLAUDE_CODE_SPEC.provider_id),
+            !cache
+                .lock()
+                .await
+                .contains_key(CLAUDE_CODE_SPEC.provider_id),
             "a probe that started before the refresh must not repopulate stale capabilities"
         );
 

@@ -1,16 +1,9 @@
 use std::path::Path;
 
-/// Whisper acceleration actually in use (plan 044 failure-event tag):
-/// "cpu" | "metal" | "sidecar".
-///
-/// Attempt-owned state (plan 060.1): the value lives in a task-local scoped
-/// to the CURRENT transcription task. The acceleration wrapper records it
-/// before each await and the loaded Transcriber exposes its own label, so a
-/// failure event can neither inherit a previous recording's backend nor be
-/// overwritten by a concurrent preload/remote init. Outside a scoped
-/// transcription task — and after a failed init, where no backend was
-/// ever established — the read is `None` and the report omits the tag.
 tokio::task_local! {
+    /// Backend selected for this transcription attempt, recorded before initialization.
+    /// A failed initialization retains its attempted backend; unrelated tasks cannot
+    /// overwrite it. Reads outside the recording's scope return `None`.
     pub(crate) static ATTEMPT_BACKEND: std::cell::Cell<Option<&'static str>>;
 }
 

@@ -901,7 +901,6 @@ mod tests {
         }
     }
 
-
     #[test]
     fn consent_transport_drops_envelopes_after_opt_out() {
         #[derive(Default)]

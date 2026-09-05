@@ -8,9 +8,9 @@ use once_cell::sync::OnceCell;
 use pbkdf2::pbkdf2_hmac;
 use rand::Rng;
 use sha2::Sha256;
+use std::path::Path;
 use tauri::{AppHandle, Runtime};
 use tauri_plugin_store::{resolve_store_path, StoreExt};
-use std::path::Path;
 
 // Encryption key storage - OnceCell ensures thread-safe single initialization
 static ENCRYPTION_KEY: OnceCell<[u8; 32]> = OnceCell::new();
@@ -162,29 +162,24 @@ fn read_store_file(
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
         Err(e) => return Err(format!("Secure store file could not be read: {}", e)),
     };
-    serde_json::from_slice(&bytes)
-        .map(Some)
-        .map_err(|e| {
-            // serde_json errors can embed the unexpected payload for scalar
-            // values — log only the classification/position and return a
-            // payload-free message.
-            log::warn!(
-                "Secure store file parse failed: {:?} at line {} column {}",
-                e.classify(),
-                e.line(),
-                e.column()
-            );
-            "Secure store file could not be read (it may be corrupted)".to_string()
-        })
+    serde_json::from_slice(&bytes).map(Some).map_err(|e| {
+        // serde_json errors can embed the unexpected payload for scalar
+        // values — log only the classification/position and return a
+        // payload-free message.
+        log::warn!(
+            "Secure store file parse failed: {:?} at line {} column {}",
+            e.classify(),
+            e.line(),
+            e.column()
+        );
+        "Secure store file could not be read (it may be corrupted)".to_string()
+    })
 }
 
 /// Decrypt a raw stored entry. Read failures never mutate anything: the saved
 /// record stays exactly as-is for recovery (re-entering the value, activation,
 /// or an explicit reset).
-fn decrypt_raw_entry(
-    key: &str,
-    raw: Option<&serde_json::Value>,
-) -> Result<Option<String>, String> {
+fn decrypt_raw_entry(key: &str, raw: Option<&serde_json::Value>) -> Result<Option<String>, String> {
     let encrypted = match raw {
         None => return Ok(None),
         Some(value) => value.as_str().ok_or_else(|| {
@@ -375,9 +370,18 @@ mod tests {
 
         let message = read_store_file(&path).unwrap_err();
 
-        assert!(message.contains("Secure store"), "unexpected message: {message}");
-        assert!(!message.contains(secret), "payload leaked into error: {message}");
-        assert!(!message.contains("invalid type"), "raw serde error leaked: {message}");
+        assert!(
+            message.contains("Secure store"),
+            "unexpected message: {message}"
+        );
+        assert!(
+            !message.contains(secret),
+            "payload leaked into error: {message}"
+        );
+        assert!(
+            !message.contains("invalid type"),
+            "raw serde error leaked: {message}"
+        );
     }
 
     #[test]
@@ -446,6 +450,9 @@ mod tests {
             Some("VTLICENSE-ABCD-1234".to_string())
         );
         // A key that is not in the file reads as absent, not as an error.
-        assert_eq!(decrypt_raw_entry("other_key", disk.get("other_key")).unwrap(), None);
+        assert_eq!(
+            decrypt_raw_entry("other_key", disk.get("other_key")).unwrap(),
+            None
+        );
     }
 }

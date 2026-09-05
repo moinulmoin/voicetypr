@@ -308,7 +308,10 @@ fn strip_known_preamble<'a>(output: &'a str, input: &str) -> &'a str {
         "sure, here is the polished text",
         "sure, here's the polished text",
     ];
-    if known.iter().any(|entry| entry.eq_ignore_ascii_case(candidate)) {
+    if known
+        .iter()
+        .any(|entry| entry.eq_ignore_ascii_case(candidate))
+    {
         rest.trim()
     } else {
         output
@@ -492,7 +495,8 @@ mod tests {
         // The preamble stripper still removes genuine explicit wrappers —
         // with or without a "Sure," lead-in — on transformed payloads.
         assert_eq!(
-            validate_ai_output("Here is the fixed text:\nMeet me at 4.", "meet me at four").unwrap(),
+            validate_ai_output("Here is the fixed text:\nMeet me at 4.", "meet me at four")
+                .unwrap(),
             "Meet me at 4."
         );
         assert_eq!(

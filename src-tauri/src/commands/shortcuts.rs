@@ -784,4 +784,3 @@ fn shortcut_action_definitions() -> Vec<ShortcutActionDefinition> {
         },
     ]
 }
-

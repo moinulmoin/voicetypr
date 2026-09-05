@@ -96,14 +96,17 @@ impl Drop for ActiveJobGuard {
 }
 
 /// Attaches a created transcription to its already-registered upload. Called
-/// under the gate's read guard inside the create window. If the upload entry
-/// is somehow gone, the pair is still recorded so the drain cannot delete
-/// either record out from under the flow.
+/// under the gate's read guard inside the create window; the flow always
+/// registered the file first, so the entry exists. A no-op when it does not
+/// (direct helper use in tests) — unregistered files are not app-owned.
 fn attach_transcription(file_id: &str, transcription_id: &str) {
-    ACTIVE_JOBS
+    if let Some(slot) = ACTIVE_JOBS
         .lock()
         .expect("active-jobs registry poisoned")
-        .insert(file_id.to_string(), Some(transcription_id.to_string()));
+        .get_mut(file_id)
+    {
+        *slot = Some(transcription_id.to_string());
+    }
 }
 
 /// Snapshot of files owned by in-flight flows. The lock is never held across
@@ -185,6 +188,28 @@ async fn cleanup_stored_records(
     }
 }
 
+/// Deletes a flow-owned uploaded file. 404 counts as success (idempotent
+/// goal state); 409 is unexpected — files have no processing state. A
+/// successful delete frees real org storage capacity, so it counts as
+/// progress for the storage-wall self-heal waiters.
+async fn delete_file_best_effort(client: &reqwest::Client, key: &str, file_id: &str) {
+    let url = format!("{}/files/{file_id}", base_url());
+    match tokio::time::timeout(
+        std::time::Duration::from_secs(10),
+        delete_one(client, key, &url),
+    )
+    .await
+    {
+        Ok(Ok(DeleteOutcome::Deleted)) => bump_auto_cleanup_progress(),
+        Ok(Ok(DeleteOutcome::AlreadyGone)) => {}
+        Ok(Ok(DeleteOutcome::SkippedProcessing)) => {
+            log::warn!("Soniox cleanup: unexpected 409 deleting file {file_id} ({url})")
+        }
+        Ok(Err(e)) => log::warn!("Soniox cleanup: delete file {file_id} failed: {e}"),
+        Err(_) => log::warn!("Soniox cleanup: delete file timed out ({url})"),
+    }
+}
+
 /// Writing-settings context for transcription hints; failures degrade to no
 /// context rather than failing the dictation.
 fn load_soniox_context(
@@ -259,14 +284,35 @@ async fn get_total(
     Ok(json.get("total").and_then(|v| v.as_u64()).unwrap_or(0))
 }
 
+/// A transcription's file reference, exactly as documented: present for
+/// uploaded-file jobs, explicit `null` for jobs without one (e.g. URL-based
+/// transcriptions). A MISSING or malformed `file_id` fails the item's
+/// decode — the record is counted unparseable and destructive file work
+/// fails closed instead of guessing the reference state.
+#[derive(serde::Deserialize)]
+#[serde(untagged)]
+enum TranscriptionFileRef {
+    File(String),
+    NoFile,
+}
+
 /// Minimal typed metadata for a listed transcription: only the fields the
 /// drain needs, so no full provider JSON pages are retained while paging
 /// through up to 100k records.
 #[derive(serde::Deserialize)]
 struct ListedTranscription {
     id: String,
-    #[serde(default)]
-    file_id: Option<String>,
+    file_id: TranscriptionFileRef,
+}
+
+impl ListedTranscription {
+    /// The known uploaded-file reference, if this job has one.
+    fn known_file(&self) -> Option<&str> {
+        match &self.file_id {
+            TranscriptionFileRef::File(file_id) => Some(file_id),
+            TranscriptionFileRef::NoFile => None,
+        }
+    }
 }
 
 /// Minimal typed metadata for a listed file.
@@ -277,15 +323,18 @@ struct ListedFile {
 
 /// Cursor-paginated typed listing for a collection ("files" |
 /// "transcriptions"). Defensively accepts `items`/`data` array keys; Soniox
-/// documents `next_page_cursor` and a 1000-item page cap. Each page decodes
-/// item-by-item into the minimal `T` (malformed items are skipped, matching
-/// the previous defensive id extraction) and only typed metadata is kept.
+/// documents `next_page_cursor` and a 1000-item page cap. Returns the
+/// decoded items plus the number of undecodable items — callers MUST treat
+/// any skipped item as unknown reference state and fail destructive work
+/// closed. A response without a recognized record array is an error, never
+/// an empty page.
 async fn list_pages<T: serde::de::DeserializeOwned>(
     client: &reqwest::Client,
     key: &str,
     collection: &str,
-) -> Result<Vec<T>, common::SttError> {
+) -> Result<(Vec<T>, usize), common::SttError> {
     let mut items = Vec::new();
+    let mut skipped = 0;
     let mut cursor: Option<String> = None;
     loop {
         let mut url = format!("{}/{collection}?limit=1000", base_url());
@@ -305,16 +354,19 @@ async fn list_pages<T: serde::de::DeserializeOwned>(
             .json()
             .await
             .map_err(|_| common::SttError::BadResponse)?;
-        let items = json
+        let Some(page) = json
             .get(collection)
             .or_else(|| json.get("items"))
             .or_else(|| json.get("data"))
             .and_then(|v| v.as_array())
             .cloned()
-            .unwrap_or_default();
+        else {
+            return Err(common::SttError::BadResponse);
+        };
         for item in page {
-            if let Ok(typed) = serde_json::from_value::<T>(item) {
-                items.push(typed);
+            match serde_json::from_value::<T>(item) {
+                Ok(typed) => items.push(typed),
+                Err(_) => skipped += 1,
             }
         }
         cursor = json
@@ -322,11 +374,11 @@ async fn list_pages<T: serde::de::DeserializeOwned>(
             .and_then(|v| v.as_str())
             .map(str::to_string)
             .filter(|c| !c.is_empty());
-        if cursor.is_none() || ids.len() > 100_000 {
+        if cursor.is_none() || items.len() + skipped > 100_000 {
             break;
         }
     }
-    Ok(items)
+    Ok((items, skipped))
 }
 
 /// One paced delete: 409 = record still processing (skipped), 429 = file-
@@ -336,8 +388,8 @@ enum DeleteOutcome {
     Deleted,
     /// 409: record still processing — leave it for a later pass.
     SkippedProcessing,
-    /// 404: already gone (e.g. cascaded by a transcription delete, or raced
-    /// with another cleanup) — the goal state, not an error.
+    /// 404: already gone (raced with another cleanup, or a drain beat us) —
+    /// the goal state, not an error. Soniox never cascades deletes.
     AlreadyGone,
 }
 
@@ -407,7 +459,7 @@ pub(crate) async fn cleanup_stored(app: &AppHandle) -> Result<SonioxCleanupResul
 /// immediately (transcription deletion does NOT cascade server-side —
 /// docs), so the storage-wall self-heal only needs the first delete
 /// (~tens of ms) instead of a full backlog pass before upload capacity
-/// frees. The final fresh file listing then reaps whatever remains:
+/// frees. The final fresh listings then reap whatever remains:
 /// pre-existing orphans, files whose inline delete was deferred or failed,
 /// and files whose owning record no longer exists.
 ///
@@ -416,19 +468,29 @@ pub(crate) async fn cleanup_stored(app: &AppHandle) -> Result<SonioxCleanupResul
 /// flows hold READ guards only across upload→register and
 /// create→attach, so any record a listing can see is either already
 /// registered in ACTIVE_JOBS or was created after the listing and is
-/// therefore absent from it. Neither pass deletes:
-///   * records/files registered by in-flight dictation flows — including
-///     queued or completed-but-not-yet-extracted jobs, whose records the
-///     API would happily delete;
-///   * files referenced by records whose delete was refused (409 still
+/// therefore absent from it. Nothing is deleted that
+///   * is registered to an in-flight dictation flow — including queued or
+///     completed-but-not-yet-extracted jobs, whose records the API would
+///     happily delete;
+///   * is referenced by a record whose delete was refused (409 still
 ///     processing, or a transient failure): the record still exists and
-///     its live job still needs the file.
+///     its live job still needs the file;
+///   * is referenced by ANY record surviving into the fresh pass-2
+///     transcription listing — this closes the gap for jobs created after
+///     pass 1 whose guard dropped before pass 2;
+///   * inline: shares its file with another listed record (API files may
+///     back several transcriptions) — only a sole surviving reference may
+///     be freed inline, everything else waits for pass 2.
+///
+/// File cleanup FAILS CLOSED on incomplete metadata: any undecodable
+/// record/file item, or a response without the documented array, aborts
+/// all file deletion for the run instead of guessing a reference state.
 ///
 /// Pacing: Soniox's file-management RPM is real but its numeric limit is
 /// undocumented. Shared by the settings clean-up command (progress events)
-/// and the background auto-clean (counter only); only FILE deletions bump
-/// the auto-heal progress counter, since file-count/size walls gate the
-/// retried upload and transcription deletions free no file capacity.
+/// and the background auto-clean: FILE deletions bump the file-capacity
+/// counter and record deletions the record-capacity counter, so the
+/// storage-wall retry wakes on capacity that actually freed.
 async fn drain_stored_records(
     client: &reqwest::Client,
     key: &str,
@@ -438,22 +500,35 @@ async fn drain_stored_records(
 
     // Pass 1 — transcription records. Listing + protection snapshot under
     // the write gate; deletes run outside it.
-    let (transcriptions, mut protected_files) = {
+    let (transcriptions, skipped_records, mut protected_files, ref_counts) = {
         let _drain_gate = LISTING_GATE.write().await;
-        let transcriptions = list_pages::<ListedTranscription>(client, key, "transcriptions")
-            .await
-            .map_err(|e| e.message("Soniox"))?;
+        let (transcriptions, skipped_records) =
+            list_pages::<ListedTranscription>(client, key, "transcriptions")
+                .await
+                .map_err(|e| e.message("Soniox"))?;
         let active_tids = active_transcription_ids();
         let mut protected_files = std::collections::HashSet::new();
+        let mut ref_counts: std::collections::HashMap<String, u64> =
+            std::collections::HashMap::new();
         for item in &transcriptions {
-            if active_tids.contains(&item.id) {
-                if let Some(file_id) = &item.file_id {
-                    protected_files.insert(file_id.clone());
+            if let Some(file_id) = item.known_file() {
+                *ref_counts.entry(file_id.to_string()).or_insert(0) += 1;
+                if active_tids.contains(&item.id) {
+                    protected_files.insert(file_id.to_string());
                 }
             }
         }
-        (transcriptions, protected_files)
+        (transcriptions, skipped_records, protected_files, ref_counts)
     };
+    // Fail closed: undecodable records have unknown file references, so no
+    // file may be classified as unreferenced this run. Record deletes of
+    // fully parsed items can still proceed.
+    let mut files_fail_closed = skipped_records > 0;
+    if files_fail_closed {
+        result.errors.push(format!(
+            "{skipped_records} transcription records had incomplete metadata; file cleanup skipped"
+        ));
+    }
     let mut total_ops = transcriptions.len() as u64;
     let mut done_ops: u64 = 0;
 
@@ -464,8 +539,8 @@ async fn drain_stored_records(
         // keep its file protected for the file pass.
         if active_transcription_ids().contains(&item.id) {
             result.skipped_active_jobs += 1;
-            if let Some(file_id) = &item.file_id {
-                protected_files.insert(file_id.clone());
+            if let Some(file_id) = item.known_file() {
+                protected_files.insert(file_id.to_string());
             }
             continue;
         }
@@ -473,81 +548,55 @@ async fn drain_stored_records(
         match delete_one(client, key, &url).await {
             Ok(DeleteOutcome::SkippedProcessing) => {
                 result.skipped_processing += 1;
-                if let Some(file_id) = &item.file_id {
-                    protected_files.insert(file_id.clone());
+                if let Some(file_id) = item.known_file() {
+                    protected_files.insert(file_id.to_string());
                 }
             }
             Err(e) => {
-                result.errors.push(format!("transcription {}: {e}", item.id));
+                result
+                    .errors
+                    .push(format!("transcription {}: {e}", item.id));
                 // The record still exists and references its file — the
                 // file pass must not break the live job.
-                if let Some(file_id) = &item.file_id {
-                    protected_files.insert(file_id.clone());
+                if let Some(file_id) = item.known_file() {
+                    protected_files.insert(file_id.to_string());
                 }
             }
             outcome => {
                 // Deleted or AlreadyGone: the record is gone, so its file is
                 // unreferenced — free it inline so capacity frees without
-                // waiting for the whole backlog pass.
+                // waiting for the whole backlog pass. Only when this was the
+                // record's SOLE listed reference, no failed/processing
+                // record retains the file, no flow owns it, and no metadata
+                // was undecodable (unknown refs possible).
                 if matches!(outcome, Ok(DeleteOutcome::Deleted)) {
                     result.deleted_transcriptions += 1;
+                    bump_record_freed_progress();
                 }
-                if let Some(file_id) = &item.file_id {
-                    if !active_file_ids().contains(file_id) {
+                if let Some(file_id) = item.known_file() {
+                    if !files_fail_closed
+                        && ref_counts.get(file_id).copied() == Some(1)
+                        && !protected_files.contains(file_id)
+                        && !active_file_ids().contains(file_id)
+                    {
                         let file_url = format!("{}/files/{file_id}", base_url());
-                        match delete_one(client, key, &file_url).await {
-                            Ok(DeleteOutcome::Deleted) => {
-                                result.deleted_files += 1;
-                                bump_auto_cleanup_progress();
-                            }
-                            // AlreadyGone: freed elsewhere, nothing to
-                            // report; anything else: leave it for the
-                            // pass-2 fresh listing.
-                            _ => {}
+                        // AlreadyGone freed no capacity here; other outcomes
+                        // leave the file for the fresh pass-2 listing.
+                        if let Ok(DeleteOutcome::Deleted) = delete_one(client, key, &file_url).await
+                        {
+                            result.deleted_files += 1;
+                            // Inline work is real work: keep the
+                            // progress counts monotonic and truthful.
+                            done_ops += 1;
+                            total_ops += 1;
+                            bump_auto_cleanup_progress();
                         }
                     }
                 }
             }
         }
-        tokio::time::sleep(std::time::Duration::from_millis(25)).await;
-    }
-
-    // Pass 2 — fresh listing + snapshot under the write gate: pre-existing
-    // orphans, files whose inline delete was deferred (still registered by
-    // a flow at the time) or failed, all show up here; files already freed
-    // inline no longer do.
-    let (file_items, protected) = {
-        let _drain_gate = LISTING_GATE.write().await;
-        let file_items = list_pages::<ListedFile>(client, key, "files")
-            .await
-            .map_err(|e| e.message("Soniox"))?;
-        let mut protected = active_file_ids();
-        protected.extend(protected_files);
-        (file_items, protected)
-    };
-    total_ops += file_items.len() as u64;
-
-    for item in &file_items {
         done_ops += 1;
-        if protected.contains(&item.id) {
-            result.skipped_active += 1;
-        } else {
-            let url = format!("{}/files/{}", base_url(), item.id);
-            match delete_one(client, key, &url).await {
-                Ok(DeleteOutcome::Deleted) => {
-                    result.deleted_files += 1;
-                    bump_auto_cleanup_progress();
-                }
-                Ok(DeleteOutcome::AlreadyGone) => {}
-                // Files have no processing state; a 409 here is unexpected.
-                Ok(DeleteOutcome::SkippedProcessing) => {
-                    result.errors.push(format!("file {}: HTTP 409", item.id))
-                }
-                Err(e) => result.errors.push(format!("file {}: {e}", item.id)),
-            }
-        }
-        done_ops += 1;
-        if done_ops % 25 == 0 {
+        if done_ops.is_multiple_of(25) {
             if let Some(report) = report {
                 report(done_ops, total_ops);
             }
@@ -579,10 +628,9 @@ async fn drain_stored_records(
                 ));
             }
             if !files_fail_closed {
-                let (items, skipped_files) =
-                    list_pages::<ListedFile>(client, key, "files")
-                        .await
-                        .map_err(|e| e.message("Soniox"))?;
+                let (items, skipped_files) = list_pages::<ListedFile>(client, key, "files")
+                    .await
+                    .map_err(|e| e.message("Soniox"))?;
                 if skipped_files > 0 {
                     files_fail_closed = true;
                     result.errors.push(format!(
@@ -617,7 +665,7 @@ async fn drain_stored_records(
                         Err(e) => result.errors.push(format!("file {}: {e}", item.id)),
                     }
                 }
-                if done_ops % 25 == 0 {
+                if done_ops.is_multiple_of(25) {
                     if let Some(report) = report {
                         report(done_ops, total_ops);
                     }
@@ -643,15 +691,38 @@ async fn drain_stored_records(
 
 static AUTO_CLEANUP_RUNNING: std::sync::atomic::AtomicBool =
     std::sync::atomic::AtomicBool::new(false);
-static AUTO_CLEANUP_DELETED: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+static AUTO_CLEANUP_FILES_FREED: std::sync::atomic::AtomicU64 =
+    std::sync::atomic::AtomicU64::new(0);
+static AUTO_CLEANUP_RECORDS_FREED: std::sync::atomic::AtomicU64 =
+    std::sync::atomic::AtomicU64::new(0);
 
+/// Progress counters for the storage-wall self-heal. FILE deletions free
+/// retained-audio capacity (file-count/size walls gate the retried
+/// upload); record deletions free transcription-count capacity (they gate
+/// the retried create). Soniox does not cascade, and old records may carry
+/// no file at all, so each kind is tracked separately and the retry waits
+/// on the kind its wall actually capped.
 fn bump_auto_cleanup_progress() {
-    AUTO_CLEANUP_DELETED.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    AUTO_CLEANUP_FILES_FREED.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
 }
 
-/// Starts the background drain unless one is already running. Each deletion
-/// immediately frees org capacity, so a blocked dictation only needs the
-/// FIRST deletion before retrying.
+fn bump_record_freed_progress() {
+    AUTO_CLEANUP_RECORDS_FREED.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+}
+
+/// Baselines for [`wait_for_cleanup_progress`]. MUST be captured before
+/// `spawn_auto_cleanup` so the drain's first deletion can never be missed.
+fn auto_cleanup_progress_baselines() -> (u64, u64) {
+    use std::sync::atomic::Ordering;
+    (
+        AUTO_CLEANUP_FILES_FREED.load(Ordering::SeqCst),
+        AUTO_CLEANUP_RECORDS_FREED.load(Ordering::SeqCst),
+    )
+}
+
+/// Starts the background drain unless one is already running. Each deleted
+/// file immediately frees org storage capacity, so a blocked dictation only
+/// needs the FIRST relevant deletion before retrying.
 fn spawn_auto_cleanup(client: reqwest::Client, key: String) {
     use std::sync::atomic::Ordering;
     if AUTO_CLEANUP_RUNNING.swap(true, Ordering::SeqCst) {
@@ -675,15 +746,29 @@ fn spawn_auto_cleanup(client: reqwest::Client, key: String) {
     });
 }
 
-/// Waits (polled, bounded) until the auto-cleanup has freed at least one
-/// record since the wait started, or `budget` elapses. The retry attempt is
-/// the source of truth either way.
-async fn wait_for_cleanup_progress(budget: std::time::Duration) {
+/// Waits (polled, bounded) until the capacity kind the wall capped has
+/// actually been freed: file-storage walls wake on FILE deletions,
+/// record-count walls wake on transcription deletions — unblocking on the
+/// wrong kind would retry straight into the same wall. Also returns as
+/// soon as the owned drain FINISHES (everything it can free has been
+/// freed; the retry attempt is the source of truth) or when `budget`
+/// elapses. Baselines must come from `auto_cleanup_progress_baselines`
+/// captured BEFORE the drain was spawned.
+async fn wait_for_cleanup_progress(
+    file_storage: bool,
+    files_baseline: u64,
+    records_baseline: u64,
+    budget: std::time::Duration,
+) {
     use std::sync::atomic::Ordering;
     let start = std::time::Instant::now();
-    let baseline = AUTO_CLEANUP_DELETED.load(Ordering::SeqCst);
     while start.elapsed() < budget {
-        if AUTO_CLEANUP_DELETED.load(Ordering::SeqCst) > baseline {
+        let freed = if file_storage {
+            AUTO_CLEANUP_FILES_FREED.load(Ordering::SeqCst) > files_baseline
+        } else {
+            AUTO_CLEANUP_RECORDS_FREED.load(Ordering::SeqCst) > records_baseline
+        };
+        if freed || !AUTO_CLEANUP_RUNNING.load(Ordering::SeqCst) {
             return;
         }
         tokio::time::sleep(std::time::Duration::from_millis(200)).await;
@@ -766,18 +851,20 @@ pub(super) async fn transcribe_typed(
         soniox_context,
     )
     .await;
-    if matches!(result, Err(common::SttError::LimitExceeded)) {
+    if matches!(result, Err(common::SttError::LimitExceeded { .. })) {
         notify_storage_limit(app).await;
     }
     result
 }
 
 /// Upload → transcribe → delete-records with the plan-044 storage-limit
-/// self-heal: on `LimitExceeded`, a background cleanup drains stored records
-/// (each deletion immediately frees capacity); once the first record is gone
-/// the WHOLE flow restarts from upload — the just-uploaded file may itself
-/// have been deleted by the cleanup, so the create step must not be reused.
-/// One retry; a second limit wall is terminal.
+/// self-heal: on `LimitExceeded`, a background cleanup drains stored
+/// records (each deleted file immediately frees upload capacity); once the
+/// first FILE is gone the WHOLE flow restarts from upload — the
+/// just-uploaded file may itself have been deleted by the cleanup, so the
+/// create step must not be reused. The retry's fresh upload is registered
+/// as active, so the still-running drain cannot delete it out from under
+/// its transcription. One retry; a second limit wall is terminal.
 async fn transcribe_typed_with_autoheal(
     client: &reqwest::Client,
     key: &str,
@@ -801,9 +888,18 @@ async fn transcribe_typed_with_autoheal(
         .await
         {
             Ok(text) => return Ok(text),
-            Err(e) if matches!(e, common::SttError::LimitExceeded) && attempt < LIMIT_ATTEMPTS => {
+            Err(common::SttError::LimitExceeded { file_storage }) if attempt < LIMIT_ATTEMPTS => {
+                // Baselines BEFORE spawn: the drain's first deletion must
+                // never be missed by the wait.
+                let (files_baseline, records_baseline) = auto_cleanup_progress_baselines();
                 spawn_auto_cleanup(client.clone(), key.to_string());
-                wait_for_cleanup_progress(std::time::Duration::from_secs(8)).await;
+                wait_for_cleanup_progress(
+                    file_storage,
+                    files_baseline,
+                    records_baseline,
+                    std::time::Duration::from_secs(8),
+                )
+                .await;
             }
             Err(e) => return Err(e),
         }
@@ -811,7 +907,8 @@ async fn transcribe_typed_with_autoheal(
     unreachable!("attempt loop always returns within LIMIT_ATTEMPTS")
 }
 
-/// One full attempt: upload + create/poll/extract + record cleanup.
+/// One full attempt: upload + create/poll/extract + record cleanup. The
+/// uploaded file is registered as an active upload until cleanup finishes.
 async fn attempt_typed_once(
     client: &reqwest::Client,
     key: &str,
@@ -881,8 +978,10 @@ async fn attempt_typed_once(
         run_typed_transcription(client, key, model, &file_id, language, soniox_context).await;
 
     // Soniox stores every uploaded file + transcription record against the
-    // org's caps (1k files / 2k transcriptions). Delete-after-extract on ALL
-    // exits — success included (plan 044).
+    // org's caps (1k files / 2k transcriptions). Delete-after-extract on
+    // ALL exits — success included (plan 044). The transcription delete
+    // does NOT cascade to the file server-side, so terminal exits delete
+    // the file explicitly; a processing job keeps both records.
     cleanup_stored_records(client, key, transcription_id.as_deref(), &file_id).await;
     result
 }
@@ -1071,14 +1170,15 @@ pub(super) async fn transcribe_typed_diarized(
         soniox_context,
     )
     .await;
-    if matches!(result, Err(common::SttError::LimitExceeded)) {
+    if matches!(result, Err(common::SttError::LimitExceeded { .. })) {
         notify_storage_limit(app).await;
     }
     result
 }
 
 /// Diarized twin of [`transcribe_typed_with_autoheal`] — same storage-limit
-/// self-heal: background cleanup, one full restart from upload.
+/// self-heal: background cleanup waits for the first FILE deletion, then
+/// one full restart from upload with the fresh upload registered active.
 async fn transcribe_diarized_with_autoheal(
     client: &reqwest::Client,
     key: &str,
@@ -1102,9 +1202,17 @@ async fn transcribe_diarized_with_autoheal(
         .await
         {
             Ok(transcript) => return Ok(transcript),
-            Err(e) if matches!(e, common::SttError::LimitExceeded) && attempt < LIMIT_ATTEMPTS => {
+            Err(common::SttError::LimitExceeded { file_storage }) if attempt < LIMIT_ATTEMPTS => {
+                // Baselines BEFORE spawn (mirrors the typed flow).
+                let (files_baseline, records_baseline) = auto_cleanup_progress_baselines();
                 spawn_auto_cleanup(client.clone(), key.to_string());
-                wait_for_cleanup_progress(std::time::Duration::from_secs(8)).await;
+                wait_for_cleanup_progress(
+                    file_storage,
+                    files_baseline,
+                    records_baseline,
+                    std::time::Duration::from_secs(8),
+                )
+                .await;
             }
             Err(e) => return Err(e),
         }
@@ -1112,7 +1220,9 @@ async fn transcribe_diarized_with_autoheal(
     unreachable!("attempt loop always returns within LIMIT_ATTEMPTS")
 }
 
-/// One full diarized attempt: upload + create/poll/extract + record cleanup.
+/// One full diarized attempt: upload + create/poll/extract + record
+/// cleanup. The uploaded file is registered as an active upload until
+/// cleanup finishes.
 async fn attempt_diarized_once(
     client: &reqwest::Client,
     key: &str,
@@ -1441,7 +1551,6 @@ mod tests {
         let payload = build_create_payload("custom-model", "fid", None, None, false);
         assert_eq!(payload["model"].as_str(), Some("custom-model"));
     }
-
     #[test]
     fn parse_soniox_token_with_speaker_produces_speaker_id() {
         let t = serde_json::json!({
@@ -1492,12 +1601,19 @@ mod tests {
         use wiremock::matchers::{method, path};
         use wiremock::{Mock, MockServer, ResponseTemplate};
 
-        struct BaseOverrideGuard;
+        // Flow tests share the production cleanup flag, counters and ownership
+        // registry even though each mock-server URL is thread-local.
+        static FLOW_TEST_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
+        struct BaseOverrideGuard {
+            _lock: tokio::sync::MutexGuard<'static, ()>,
+        }
 
         impl BaseOverrideGuard {
-            fn install(server: &MockServer) -> Self {
+            async fn install(server: &MockServer) -> Self {
+                let lock = FLOW_TEST_LOCK.lock().await;
                 set_base_url_override(Some(format!("{}/v1", server.uri())));
-                BaseOverrideGuard
+                Self { _lock: lock }
             }
         }
 
@@ -1516,9 +1632,9 @@ mod tests {
         }
 
         #[tokio::test]
-        async fn typed_flow_deletes_transcription_after_success() {
+        async fn typed_flow_deletes_transcription_and_file_after_success() {
             let server = MockServer::start().await;
-            let _guard = BaseOverrideGuard::install(&server);
+            let _guard = BaseOverrideGuard::install(&server).await;
             let client = common::http_client();
 
             Mock::given(method("POST"))
@@ -1554,6 +1670,14 @@ mod tests {
                 .expect(1)
                 .mount(&server)
                 .await;
+            // Soniox does NOT cascade: terminal transcription removal must
+            // be followed by an explicit delete of the uploaded file.
+            Mock::given(method("DELETE"))
+                .and(path("/v1/files/f1"))
+                .respond_with(ResponseTemplate::new(204))
+                .expect(1)
+                .mount(&server)
+                .await;
 
             let (tid, result) =
                 run_typed_transcription(&client, "k", "stt-async-v5", "f1", Some("en"), None).await;
@@ -1565,9 +1689,9 @@ mod tests {
         }
 
         #[tokio::test]
-        async fn typed_flow_cleans_up_after_job_error() {
+        async fn typed_flow_deletes_transcription_and_file_after_job_error() {
             let server = MockServer::start().await;
-            let _guard = BaseOverrideGuard::install(&server);
+            let _guard = BaseOverrideGuard::install(&server).await;
             let client = common::http_client();
 
             Mock::given(method("POST"))
@@ -1592,6 +1716,14 @@ mod tests {
                 .expect(1)
                 .mount(&server)
                 .await;
+            // Job ended in `error` (terminal) — the uploaded file must go
+            // with the transcription record.
+            Mock::given(method("DELETE"))
+                .and(path("/v1/files/f1"))
+                .respond_with(ResponseTemplate::new(204))
+                .expect(1)
+                .mount(&server)
+                .await;
 
             let (tid, result) =
                 run_typed_transcription(&client, "k", "stt-async-v5", "f1", None, None).await;
@@ -1605,7 +1737,7 @@ mod tests {
         #[tokio::test]
         async fn create_limit_exceeded_is_terminal_no_retry_and_deletes_orphan_file() {
             let server = MockServer::start().await;
-            let _guard = BaseOverrideGuard::install(&server);
+            let _guard = BaseOverrideGuard::install(&server).await;
             let client = common::http_client();
 
             // Terminal quota wall: exactly ONE create request proves the
@@ -1627,7 +1759,7 @@ mod tests {
             let (tid, result) =
                 run_typed_transcription(&client, "k", "stt-async-v5", "f1", None, None).await;
             assert!(
-                matches!(result, Err(common::SttError::LimitExceeded)),
+                matches!(result, Err(common::SttError::LimitExceeded { .. })),
                 "expected LimitExceeded, got {result:?}"
             );
             assert!(tid.is_none());
@@ -1639,7 +1771,7 @@ mod tests {
         #[tokio::test]
         async fn storage_limit_self_heals_via_background_cleanup_and_retry() {
             let server = MockServer::start().await;
-            let _guard = BaseOverrideGuard::install(&server);
+            let _guard = BaseOverrideGuard::install(&server).await;
             let client = common::http_client();
 
             // Attempt 1 upload -> f1; attempt 2 (after auto-cleanup) -> f2:
@@ -1684,15 +1816,11 @@ mod tests {
             Mock::given(method("GET"))
                 .and(path("/v1/transcriptions"))
                 .and(wiremock::matchers::query_param_is_missing("cursor"))
-                .respond_with(
-                    ResponseTemplate::new(200).set_body_json(
-                        serde_json::json!({
-                            "transcriptions": [
-                                { "id": "t-old", "file_id": "f-old" }
-                            ]
-                        }),
-                    ),
-                )
+                .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                    "transcriptions": [
+                        { "id": "t-old", "file_id": "f-old" }
+                    ]
+                })))
                 .mount(&server)
                 .await;
             Mock::given(method("DELETE"))
@@ -1705,9 +1833,10 @@ mod tests {
             // inline, so only the attempt-1 orphan f1 remains.
             Mock::given(method("GET"))
                 .and(path("/v1/files"))
-                .respond_with(ResponseTemplate::new(200).set_body_json(
-                    serde_json::json!({ "files": [ { "id": "f1" } ] }),
-                ))
+                .respond_with(
+                    ResponseTemplate::new(200)
+                        .set_body_json(serde_json::json!({ "files": [ { "id": "f1" } ] })),
+                )
                 .mount(&server)
                 .await;
             // f1 is deleted twice — by attempt 1's orphan cleanup and again
@@ -1740,6 +1869,20 @@ mod tests {
                 )
                 .mount(&server)
                 .await;
+            // Attempt 2 terminal exits delete BOTH records explicitly —
+            // there is no server-side cascade.
+            Mock::given(method("DELETE"))
+                .and(path("/v1/transcriptions/t1"))
+                .respond_with(ResponseTemplate::new(204))
+                .expect(1)
+                .mount(&server)
+                .await;
+            Mock::given(method("DELETE"))
+                .and(path("/v1/files/f2"))
+                .respond_with(ResponseTemplate::new(204))
+                .expect(1)
+                .mount(&server)
+                .await;
 
             let dir = tempfile::tempdir().unwrap();
             let wav = dir.path().join("audio.wav");
@@ -1758,16 +1901,19 @@ mod tests {
             .unwrap();
             assert_eq!(text, "healed");
 
-            // The background cleanup task runs concurrently; give it a
-            // moment to finish its deletions before verifying expectations.
+            // The background cleanup task runs concurrently; wait until
+            // BOTH f1 deletes (attempt-1 orphan cleanup + the drain's file
+            // pass) have landed before verifying expectations — attempt-1's
+            // own delete alone doesn't prove the drain finished.
             for _ in 0..50 {
-                if server
+                let f1_deletes = server
                     .received_requests()
                     .await
                     .unwrap()
                     .iter()
-                    .any(|r| r.method.as_str() == "DELETE" && r.url.path() == "/v1/files/f1")
-                {
+                    .filter(|r| r.method.as_str() == "DELETE" && r.url.path() == "/v1/files/f1")
+                    .count();
+                if f1_deletes >= 2 {
                     break;
                 }
                 tokio::time::sleep(std::time::Duration::from_millis(100)).await;
@@ -1776,9 +1922,9 @@ mod tests {
         }
 
         #[tokio::test]
-        async fn diarized_flow_deletes_transcription_after_success() {
+        async fn diarized_flow_deletes_transcription_and_file_after_success() {
             let server = MockServer::start().await;
-            let _guard = BaseOverrideGuard::install(&server);
+            let _guard = BaseOverrideGuard::install(&server).await;
             let client = common::http_client();
 
             Mock::given(method("POST"))
@@ -1811,6 +1957,14 @@ mod tests {
                 .expect(1)
                 .mount(&server)
                 .await;
+            // Diarized terminal exit: explicit file delete after the
+            // transcription record is gone (no cascade server-side).
+            Mock::given(method("DELETE"))
+                .and(path("/v1/files/f1"))
+                .respond_with(ResponseTemplate::new(204))
+                .expect(1)
+                .mount(&server)
+                .await;
 
             let (tid, result) =
                 run_diarized_transcription(&client, "k", "stt-async-v5", "f1", None, None).await;
@@ -1823,7 +1977,7 @@ mod tests {
         #[tokio::test]
         async fn storage_management_internals_count_list_and_delete() {
             let server = MockServer::start().await;
-            let _guard = BaseOverrideGuard::install(&server);
+            let _guard = BaseOverrideGuard::install(&server).await;
             let client = common::http_client();
 
             Mock::given(method("GET"))
@@ -1839,7 +1993,10 @@ mod tests {
                 .and(path("/v1/transcriptions"))
                 .and(wiremock::matchers::query_param_is_missing("cursor"))
                 .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
-                    "transcriptions": [ { "id": "t1" }, { "id": "t2" } ],
+                    "transcriptions": [
+                        { "id": "t1", "file_id": null },
+                        { "id": "t2", "file_id": null }
+                    ],
                     "next_page_cursor": "c1"
                 })))
                 .expect(1)
@@ -1849,7 +2006,7 @@ mod tests {
                 .and(path("/v1/transcriptions"))
                 .and(wiremock::matchers::query_param("cursor", "c1"))
                 .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
-                    "transcriptions": [ { "id": "t3" } ],
+                    "transcriptions": [ { "id": "t3", "file_id": null } ],
                     "next_page_cursor": null
                 })))
                 .expect(1)
@@ -1905,7 +2062,7 @@ mod tests {
             // must NOT be deleted (the job would fail `file_not_found`) — a
             // processing 409 is never permission to delete the active file.
             let server = MockServer::start().await;
-            let _guard = BaseOverrideGuard::install(&server);
+            let _guard = BaseOverrideGuard::install(&server).await;
             let client = common::http_client();
 
             Mock::given(method("DELETE"))
@@ -1940,7 +2097,7 @@ mod tests {
             // both the transcription and the file, and the file delete is
             // still attempted after the transcription 404.
             let server = MockServer::start().await;
-            let _guard = BaseOverrideGuard::install(&server);
+            let _guard = BaseOverrideGuard::install(&server).await;
             let client = common::http_client();
 
             Mock::given(method("DELETE"))
@@ -1968,7 +2125,7 @@ mod tests {
             // are processing (409) must survive the drain; only genuinely
             // unreferenced files are deleted.
             let server = MockServer::start().await;
-            let _guard = BaseOverrideGuard::install(&server);
+            let _guard = BaseOverrideGuard::install(&server).await;
             let client = common::http_client();
 
             // A transcription still processing (409 on delete) referencing
@@ -1976,13 +2133,11 @@ mod tests {
             Mock::given(method("GET"))
                 .and(path("/v1/transcriptions"))
                 .and(wiremock::matchers::query_param_is_missing("cursor"))
-                .respond_with(ResponseTemplate::new(200).set_body_json(
-                    serde_json::json!({
-                        "transcriptions": [
-                            { "id": "t-live", "status": "transcribing", "file_id": "f-live" }
-                        ]
-                    }),
-                ))
+                .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                    "transcriptions": [
+                        { "id": "t-live", "status": "transcribing", "file_id": "f-live" }
+                    ]
+                })))
                 .mount(&server)
                 .await;
             Mock::given(method("DELETE"))
@@ -1993,15 +2148,13 @@ mod tests {
                 .await;
             Mock::given(method("GET"))
                 .and(path("/v1/files"))
-                .respond_with(ResponseTemplate::new(200).set_body_json(
-                    serde_json::json!({
-                        "files": [
-                            { "id": "f-live" },
-                            { "id": "f-active" },
-                            { "id": "f-orphan" }
-                        ]
-                    }),
-                ))
+                .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                    "files": [
+                        { "id": "f-live" },
+                        { "id": "f-active" },
+                        { "id": "f-orphan" }
+                    ]
+                })))
                 .mount(&server)
                 .await;
             Mock::given(method("DELETE"))
@@ -2017,7 +2170,7 @@ mod tests {
 
             let result = drain_stored_records(&client, "k", None).await.unwrap();
             assert_eq!(result.skipped_processing, 1);
-            assert_eq!(result.skipped_active, 1);
+            assert_eq!(result.skipped_active, 2);
             assert_eq!(result.deleted_files, 1);
             assert_eq!(result.deleted_transcriptions, 0);
             assert!(result.errors.is_empty(), "{:?}", result.errors);
@@ -2044,19 +2197,23 @@ mod tests {
             // protection immediately, so the NEXT drain reaps the leftover
             // upload (cleanup ownership returns to the backlog drain).
             let server = MockServer::start().await;
-            let _guard = BaseOverrideGuard::install(&server);
+            let _guard = BaseOverrideGuard::install(&server).await;
             let client = common::http_client();
 
             Mock::given(method("GET"))
                 .and(path("/v1/transcriptions"))
-                .respond_with(ResponseTemplate::new(200)
-                    .set_body_json(serde_json::json!({ "transcriptions": [] })))
+                .respond_with(
+                    ResponseTemplate::new(200)
+                        .set_body_json(serde_json::json!({ "transcriptions": [] })),
+                )
                 .mount(&server)
                 .await;
             Mock::given(method("GET"))
                 .and(path("/v1/files"))
-                .respond_with(ResponseTemplate::new(200)
-                    .set_body_json(serde_json::json!({ "files": [ { "id": "f-guard" } ] })))
+                .respond_with(
+                    ResponseTemplate::new(200)
+                        .set_body_json(serde_json::json!({ "files": [ { "id": "f-guard" } ] })),
+                )
                 .mount(&server)
                 .await;
             Mock::given(method("DELETE"))
@@ -2087,7 +2244,7 @@ mod tests {
             // surface as the transient RateLimited — NOT trigger the
             // storage self-heal (no whole-library drain, no storage nag).
             let server = MockServer::start().await;
-            let _guard = BaseOverrideGuard::install(&server);
+            let _guard = BaseOverrideGuard::install(&server).await;
             let client = common::http_client();
 
             Mock::given(method("POST"))
@@ -2147,19 +2304,23 @@ mod tests {
             // list — otherwise it could see the file unregistered, delete
             // it, and fail the job with `file_not_found`.
             let server = MockServer::start().await;
-            let _guard = BaseOverrideGuard::install(&server);
+            let _guard = BaseOverrideGuard::install(&server).await;
             let client = common::http_client();
 
             Mock::given(method("GET"))
                 .and(path("/v1/transcriptions"))
-                .respond_with(ResponseTemplate::new(200)
-                    .set_body_json(serde_json::json!({ "transcriptions": [] })))
+                .respond_with(
+                    ResponseTemplate::new(200)
+                        .set_body_json(serde_json::json!({ "transcriptions": [] })),
+                )
                 .mount(&server)
                 .await;
             Mock::given(method("GET"))
                 .and(path("/v1/files"))
-                .respond_with(ResponseTemplate::new(200)
-                    .set_body_json(serde_json::json!({ "files": [ { "id": "f1" } ] })))
+                .respond_with(
+                    ResponseTemplate::new(200)
+                        .set_body_json(serde_json::json!({ "files": [ { "id": "f1" } ] })),
+                )
                 .mount(&server)
                 .await;
             Mock::given(method("DELETE"))
@@ -2172,9 +2333,8 @@ mod tests {
             // not yet processed, nothing registered.
             let _upload_window = LISTING_GATE.read().await;
             let drain_client = client.clone();
-            let drain = tokio::spawn(async move {
-                drain_stored_records(&drain_client, "k", None).await
-            });
+            let drain =
+                tokio::spawn(async move { drain_stored_records(&drain_client, "k", None).await });
             tokio::time::sleep(std::time::Duration::from_millis(100)).await;
 
             // The drain must still be parked on the gate: no listing
@@ -2209,25 +2369,24 @@ mod tests {
             // skip app-owned records entirely and keep their file
             // protected in pass 2.
             let server = MockServer::start().await;
-            let _guard = BaseOverrideGuard::install(&server);
+            let _guard = BaseOverrideGuard::install(&server).await;
             let client = common::http_client();
 
             Mock::given(method("GET"))
                 .and(path("/v1/transcriptions"))
-                .respond_with(ResponseTemplate::new(200).set_body_json(
-                    serde_json::json!({
-                        "transcriptions": [
-                            { "id": "t-app", "status": "queued", "file_id": "f-app" }
-                        ]
-                    }),
-                ))
+                .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                    "transcriptions": [
+                        { "id": "t-app", "status": "queued", "file_id": "f-app" }
+                    ]
+                })))
                 .mount(&server)
                 .await;
             Mock::given(method("GET"))
                 .and(path("/v1/files"))
-                .respond_with(ResponseTemplate::new(200).set_body_json(
-                    serde_json::json!({ "files": [ { "id": "f-app" } ] }),
-                ))
+                .respond_with(
+                    ResponseTemplate::new(200)
+                        .set_body_json(serde_json::json!({ "files": [ { "id": "f-app" } ] })),
+                )
                 .mount(&server)
                 .await;
 
@@ -2262,7 +2421,7 @@ mod tests {
             // failed record delete would fail the job with
             // `file_not_found`.
             let server = MockServer::start().await;
-            let _guard = BaseOverrideGuard::install(&server);
+            let _guard = BaseOverrideGuard::install(&server).await;
             let client = common::http_client();
 
             Mock::given(method("DELETE"))
@@ -2297,18 +2456,16 @@ mod tests {
             // inline in pass 1 — before the (possibly huge) file listing —
             // not deferred until every record has been drained.
             let server = MockServer::start().await;
-            let _guard = BaseOverrideGuard::install(&server);
+            let _guard = BaseOverrideGuard::install(&server).await;
             let client = common::http_client();
 
             Mock::given(method("GET"))
                 .and(path("/v1/transcriptions"))
-                .respond_with(ResponseTemplate::new(200).set_body_json(
-                    serde_json::json!({
-                        "transcriptions": [
-                            { "id": "t-done", "status": "completed", "file_id": "f-done" }
-                        ]
-                    }),
-                ))
+                .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                    "transcriptions": [
+                        { "id": "t-done", "status": "completed", "file_id": "f-done" }
+                    ]
+                })))
                 .mount(&server)
                 .await;
             Mock::given(method("DELETE"))
@@ -2325,8 +2482,9 @@ mod tests {
                 .await;
             Mock::given(method("GET"))
                 .and(path("/v1/files"))
-                .respond_with(ResponseTemplate::new(200)
-                    .set_body_json(serde_json::json!({ "files": [] })))
+                .respond_with(
+                    ResponseTemplate::new(200).set_body_json(serde_json::json!({ "files": [] })),
+                )
                 .mount(&server)
                 .await;
 
@@ -2359,19 +2517,17 @@ mod tests {
             // file still has a surviving reference: it must NOT be freed
             // inline after tA, and pass 2 must keep it protected.
             let server = MockServer::start().await;
-            let _guard = BaseOverrideGuard::install(&server);
+            let _guard = BaseOverrideGuard::install(&server).await;
             let client = common::http_client();
 
             Mock::given(method("GET"))
                 .and(path("/v1/transcriptions"))
-                .respond_with(ResponseTemplate::new(200).set_body_json(
-                    serde_json::json!({
-                        "transcriptions": [
-                            { "id": "t-a", "file_id": "f-shared" },
-                            { "id": "t-b", "file_id": "f-shared" }
-                        ]
-                    }),
-                ))
+                .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                    "transcriptions": [
+                        { "id": "t-a", "file_id": "f-shared" },
+                        { "id": "t-b", "file_id": "f-shared" }
+                    ]
+                })))
                 .mount(&server)
                 .await;
             Mock::given(method("DELETE"))
@@ -2388,9 +2544,10 @@ mod tests {
                 .await;
             Mock::given(method("GET"))
                 .and(path("/v1/files"))
-                .respond_with(ResponseTemplate::new(200).set_body_json(
-                    serde_json::json!({ "files": [ { "id": "f-shared" } ] }),
-                ))
+                .respond_with(
+                    ResponseTemplate::new(200)
+                        .set_body_json(serde_json::json!({ "files": [ { "id": "f-shared" } ] })),
+                )
                 .mount(&server)
                 .await;
 
@@ -2422,7 +2579,7 @@ mod tests {
             // pass-2 FRESH transcription listing still references its file,
             // which must therefore survive.
             let server = MockServer::start().await;
-            let _guard = BaseOverrideGuard::install(&server);
+            let _guard = BaseOverrideGuard::install(&server).await;
             let client = common::http_client();
 
             let listings = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
@@ -2457,9 +2614,10 @@ mod tests {
                 .await;
             Mock::given(method("GET"))
                 .and(path("/v1/files"))
-                .respond_with(ResponseTemplate::new(200).set_body_json(
-                    serde_json::json!({ "files": [ { "id": "f-new" } ] }),
-                ))
+                .respond_with(
+                    ResponseTemplate::new(200)
+                        .set_body_json(serde_json::json!({ "files": [ { "id": "f-new" } ] })),
+                )
                 .mount(&server)
                 .await;
 
@@ -2490,19 +2648,17 @@ mod tests {
             // reference state. File cleanup must abort for the whole run —
             // no file may be classified as an orphan on incomplete data.
             let server = MockServer::start().await;
-            let _guard = BaseOverrideGuard::install(&server);
+            let _guard = BaseOverrideGuard::install(&server).await;
             let client = common::http_client();
 
             Mock::given(method("GET"))
                 .and(path("/v1/transcriptions"))
-                .respond_with(ResponseTemplate::new(200).set_body_json(
-                    serde_json::json!({
-                        "transcriptions": [
-                            { "id": "t-ok", "file_id": "f-ok" },
-                            { "id": "t-corrupt" }
-                        ]
-                    }),
-                ))
+                .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                    "transcriptions": [
+                        { "id": "t-ok", "file_id": "f-ok" },
+                        { "id": "t-corrupt" }
+                    ]
+                })))
                 .mount(&server)
                 .await;
             Mock::given(method("DELETE"))
@@ -2541,15 +2697,11 @@ mod tests {
 
         #[tokio::test]
         async fn record_count_wall_wakes_on_record_deletions_not_file_frees() {
-            // A stored-transcription count wall (backlog records with an
-            // explicit file_id: null — URL-based jobs) frees NO files, so a
-            // file-capacity wake could never fire here: the self-heal must
-            // wake on RECORD deletions (the typed quota kind) and the flow
-            // must return well under the 8s budget. A broken wake that
-            // waited on file frees would burn the whole budget (>= 8s) and
-            // fail the elapsed assertion below.
+            // Free record capacity while a later deletion keeps the drain
+            // running. Waiting for file capacity or drain completion must
+            // not satisfy this regression.
             let server = MockServer::start().await;
-            let _guard = BaseOverrideGuard::install(&server);
+            let _guard = BaseOverrideGuard::install(&server).await;
             let client = common::http_client();
 
             let uploads = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
@@ -2558,20 +2710,22 @@ mod tests {
                 .and(path("/v1/files"))
                 .respond_with(move |_req: &wiremock::Request| {
                     let n = uploads_for_mock.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-                    ResponseTemplate::new(201).set_body_json(
-                        serde_json::json!({ "id": format!("f{n}") }),
-                    )
+                    ResponseTemplate::new(201)
+                        .set_body_json(serde_json::json!({ "id": format!("f{n}") }))
                 })
                 .expect(2)
                 .mount(&server)
                 .await;
             let creates = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
             let creates_for_mock = creates.clone();
+            let record_freed = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+            let record_freed_for_create = record_freed.clone();
             Mock::given(method("POST"))
                 .and(path("/v1/transcriptions"))
                 .respond_with(move |_req: &wiremock::Request| {
                     let n = creates_for_mock.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-                    if n == 0 {
+                    if n == 0 || !record_freed_for_create.load(std::sync::atomic::Ordering::SeqCst)
+                    {
                         ResponseTemplate::new(429).set_body_json(serde_json::json!({
                             "status_code": 429,
                             "error_type": "limit_exceeded",
@@ -2585,41 +2739,57 @@ mod tests {
                 .expect(2)
                 .mount(&server)
                 .await;
-            // Backlog: one old URL-based record with an explicit null
-            // file reference — deleting it frees RECORD capacity only.
+            // Both backlog records are URL-based: neither owns a file.
             Mock::given(method("GET"))
                 .and(path("/v1/transcriptions"))
-                .respond_with(ResponseTemplate::new(200).set_body_json(
-                    serde_json::json!({
-                        "transcriptions": [ { "id": "t-old", "file_id": null } ]
-                    }),
-                ))
+                .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                    "transcriptions": [
+                        { "id": "t-old", "file_id": null },
+                        { "id": "t-slow", "file_id": null }
+                    ]
+                })))
                 .mount(&server)
                 .await;
             Mock::given(method("DELETE"))
                 .and(path("/v1/transcriptions/t-old"))
-                .respond_with(ResponseTemplate::new(204))
+                .respond_with(move |_req: &wiremock::Request| {
+                    record_freed.store(true, std::sync::atomic::Ordering::SeqCst);
+                    ResponseTemplate::new(204)
+                })
+                .expect(1)
+                .mount(&server)
+                .await;
+            Mock::given(method("DELETE"))
+                .and(path("/v1/transcriptions/t-slow"))
+                .respond_with(
+                    ResponseTemplate::new(204).set_delay(std::time::Duration::from_secs(3)),
+                )
                 .expect(1)
                 .mount(&server)
                 .await;
             Mock::given(method("GET"))
                 .and(path("/v1/files"))
-                .respond_with(ResponseTemplate::new(200)
-                    .set_body_json(serde_json::json!({ "files": [] })))
+                .respond_with(
+                    ResponseTemplate::new(200).set_body_json(serde_json::json!({ "files": [] })),
+                )
                 .mount(&server)
                 .await;
             // Attempt 2 completes normally; terminal exits delete both
             // records explicitly (no server-side cascade).
             Mock::given(method("GET"))
                 .and(path("/v1/transcriptions/t1"))
-                .respond_with(ResponseTemplate::new(200)
-                    .set_body_json(serde_json::json!({ "status": "completed" })))
+                .respond_with(
+                    ResponseTemplate::new(200)
+                        .set_body_json(serde_json::json!({ "status": "completed" })),
+                )
                 .mount(&server)
                 .await;
             Mock::given(method("GET"))
                 .and(path("/v1/transcriptions/t1/transcript"))
-                .respond_with(ResponseTemplate::new(200)
-                    .set_body_json(serde_json::json!({ "text": "record-healed" })))
+                .respond_with(
+                    ResponseTemplate::new(200)
+                        .set_body_json(serde_json::json!({ "text": "record-healed" })),
+                )
                 .mount(&server)
                 .await;
             Mock::given(method("DELETE"))
@@ -2639,26 +2809,18 @@ mod tests {
             let wav = dir.path().join("audio.wav");
             std::fs::write(&wav, b"RIFF....WAVEfmt ").unwrap();
 
-            let started = std::time::Instant::now();
-
-            let text = transcribe_typed_with_autoheal(
+            let result = transcribe_typed_with_autoheal(
                 &client,
                 "k",
+                "stt-async-v5",
                 &wav,
                 b"RIFF....WAVEfmt ".to_vec(),
                 None,
                 None,
             )
-            .await
-            .unwrap();
-            let elapsed = started.elapsed();
-            assert_eq!(text, "record-healed");
-            // Typed-wake proof: far under the 8s budget, yet the only
-            // capacity freed since the baselines was RECORD capacity.
-            assert!(
-                elapsed < std::time::Duration::from_secs(5),
-                "flow took {elapsed:?}; a non-record wake burns the full budget"
-            );
+            .await;
+            let resumed_before_drain_finished =
+                AUTO_CLEANUP_RUNNING.load(std::sync::atomic::Ordering::SeqCst);
             // Global-state hygiene: the background drain (spawned inside
             // the flow) must be awaited before the test ends, so its
             // statics/gate are quiet for sibling tests.
@@ -2672,6 +2834,11 @@ mod tests {
                 !AUTO_CLEANUP_RUNNING.load(std::sync::atomic::Ordering::SeqCst),
                 "background drain did not finish"
             );
+            assert!(
+                resumed_before_drain_finished,
+                "record capacity must wake the flow before the slow drain finishes"
+            );
+            assert_eq!(result.unwrap(), "record-healed");
             server.verify().await;
         }
     }

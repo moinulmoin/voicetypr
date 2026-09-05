@@ -1707,9 +1707,7 @@ mod tests {
     }
     #[test]
     fn drain_final_callback_feeds_capture_evidence_from_the_final_buffer() {
-        use crate::audio::speech_evidence::{
-            classify_speech_evidence, SpeechEvidenceClass,
-        };
+        use crate::audio::speech_evidence::{classify_speech_evidence, SpeechEvidenceClass};
         // Plan 060.1: the stop boundary lands right after the last word — the
         // final buffer must contribute speech evidence, or the no-speech gate
         // deletes a recording whose speech the metrics never saw.
@@ -1821,8 +1819,15 @@ mod tests {
             &dropped,
         );
 
-        assert_eq!(dropped.load(Ordering::SeqCst), 1, "unwritable final buffer must count as dropped");
-        assert!(writer_rx.try_recv().is_err(), "nothing may reach the writer");
+        assert_eq!(
+            dropped.load(Ordering::SeqCst),
+            1,
+            "unwritable final buffer must count as dropped"
+        );
+        assert!(
+            writer_rx.try_recv().is_err(),
+            "nothing may reach the writer"
+        );
     }
 
     #[test]
@@ -1902,7 +1907,9 @@ mod tests {
             &dropped,
         );
         assert_eq!(dropped.load(Ordering::SeqCst), 1);
-        assert!(recycle_rx.try_recv().is_ok(), "Full(Chunk) returns its chunk to the pool");
+        assert!(
+            recycle_rx.try_recv().is_ok(),
+            "Full(Chunk) returns its chunk to the pool"
+        );
     }
 }
-
