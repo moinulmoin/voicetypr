@@ -107,6 +107,58 @@ fn next_writer_action(
     }
 }
 
+/// One final-callback drain step (plan 060.1), factored out so the evidence +
+/// integrity guarantees are unit-testable.
+///
+/// The stop boundary usually lands right after the last word, so the final
+/// buffer MUST feed the shared capture speech evidence — otherwise the
+/// no-speech gate can delete a recording whose speech the metrics never saw.
+/// And a final buffer that cannot reach the writer must be COUNTED as
+/// dropped, so the writer's integrity check fails the recording instead of
+/// presenting a silently truncated WAV (with clean-looking evidence) as
+/// complete. Single traversal, atomics only, no allocation — runs on the
+/// real-time callback thread.
+fn drain_final_callback(
+    f32_samples: &[f32],
+    i16_samples: &[i16],
+    capture_metrics: &CaptureMetricsAccumulator,
+    recycle_rx: &mpsc::Receiver<Vec<i16>>,
+    writer_tx: &SyncSender<WriterMsg>,
+    recycle_tx: &SyncSender<Vec<i16>>,
+    dropped_chunks: &AtomicU64,
+) {
+    // Evidence contribution shares the steady-state path's single traversal.
+    // Level meter / silence detector stay steady-state-only: they drive live
+    // UI, not evidence, and the stream is closing anyway.
+    capture_metrics.observe(f32_samples);
+
+    let Ok(mut chunk) = recycle_rx.try_recv() else {
+        // Pool exhausted: the final buffer cannot be written — count it so
+        // the integrity check fails the recording (never silently truncate).
+        dropped_chunks.fetch_add(1, Ordering::SeqCst);
+        return;
+    };
+    chunk.clear();
+    chunk.extend_from_slice(i16_samples);
+    match writer_tx.try_send(WriterMsg::Chunk(chunk)) {
+        Ok(()) => {}
+        Err(TrySendError::Full(WriterMsg::Chunk(mut chunk))) => {
+            dropped_chunks.fetch_add(1, Ordering::SeqCst);
+            chunk.clear();
+            // try_send: never blocks or allocates on the RT thread. By
+            // conservation (RECYCLE_CHANNEL_CAPACITY) the channel always
+            // has room; on the impossible full case the chunk is returned
+            // to the pool and the drop is counted above.
+            let _ = recycle_tx.try_send(chunk);
+        }
+        Err(TrySendError::Full(WriterMsg::Finalize)) | Err(TrySendError::Disconnected(_)) => {
+            // Writer already finalizing or gone: the final buffer is
+            // unwritten — same honesty rule, count the drop.
+            dropped_chunks.fetch_add(1, Ordering::SeqCst);
+        }
+    }
+}
+
 fn f32_to_i16(sample: f32) -> i16 {
     let clamped = sample.clamp(-1.0, 1.0);
     (clamped * 32767.0) as i16
@@ -713,25 +765,20 @@ impl AudioRecorder {
                         if stop_requested_clone.load(Ordering::SeqCst) {
                             // Only write on the first callback after stop; skip all subsequent ones
                             if !callback_drained_clone.load(Ordering::SeqCst) {
-                                if let Ok(mut chunk) = recycle_rx.try_recv() {
-                                    chunk.clear();
-                                    chunk.extend_from_slice(i16_samples);
-                                    match writer_tx_clone.try_send(WriterMsg::Chunk(chunk)) {
-                                        Ok(()) => {}
-                                        Err(TrySendError::Full(WriterMsg::Chunk(mut chunk))) => {
-                                            dropped_chunks_clone.fetch_add(1, Ordering::SeqCst);
-                                            chunk.clear();
-                                            // try_send: never blocks or allocates
-                                            // on the RT thread. By conservation
-                                            // (RECYCLE_CHANNEL_CAPACITY) the channel
-                                            // always has room; on the impossible
-                                            // full case the chunk is simply dropped.
-                                            let _ = recycle_tx_for_drop.try_send(chunk);
-                                        }
-                                        Err(TrySendError::Full(WriterMsg::Finalize)) => {}
-                                        Err(TrySendError::Disconnected(_)) => {}
-                                    }
-                                }
+                                // Plan 060.1: the final buffer contributes capture
+                                // speech evidence (no second scan, no allocation) and
+                                // an unwritable final buffer is counted as dropped so
+                                // the integrity check — not the no-speech gate — owns
+                                // the outcome.
+                                drain_final_callback(
+                                    f32_samples,
+                                    i16_samples,
+                                    &capture_metrics_clone,
+                                    &recycle_rx,
+                                    &writer_tx_clone,
+                                    &recycle_tx_for_drop,
+                                    &dropped_chunks_clone,
+                                );
                                 callback_drained_clone.store(true, Ordering::SeqCst);
                             }
                             return;
@@ -1658,4 +1705,171 @@ mod tests {
         assert_eq!(recorder.take_last_capture_metrics(), Some(expected));
         assert_eq!(recorder.take_last_capture_metrics(), None);
     }
+    #[test]
+    fn drain_final_callback_feeds_capture_evidence_from_the_final_buffer() {
+        // Plan 060.1: the stop boundary lands right after the last word — the
+        // final buffer must contribute speech evidence, or the no-speech gate
+        // deletes a recording whose speech the metrics never saw. Pre-fix the
+        // drain branch returned before `observe`, leaving a second of silence
+        // plus a loud final callback classified as high-confidence no-speech.
+        let metrics = CaptureMetricsAccumulator::new(16_000, 1);
+        metrics.observe(&vec![0.0; 16_000]); // one second of room silence
+        let loud: Vec<f32> = vec![0.2; 160]; // 10ms well above the window floor
+        let i16_samples: Vec<i16> = loud.iter().map(|&sample| f32_to_i16(sample)).collect();
+
+        let (_pool_tx, pool_rx) = mpsc::sync_channel::<Vec<i16>>(1);
+        let (writer_tx, _writer_rx) = mpsc::sync_channel::<WriterMsg>(1);
+        let (recycle_tx, _recycle_rx) = mpsc::sync_channel::<Vec<i16>>(1);
+        let dropped = AtomicU64::new(0);
+
+        drain_final_callback(
+            &loud,
+            &i16_samples,
+            &metrics,
+            &pool_rx,
+            &writer_tx,
+            &recycle_tx,
+            &dropped,
+        );
+
+        let snapshot = metrics.snapshot(16_000, 1, false);
+        assert_eq!(dropped.load(Ordering::SeqCst), 0);
+        assert!(
+            snapshot.ms_above_rms_floor >= 10,
+            "final buffer must count as above-floor evidence: {snapshot:?}"
+        );
+        assert!(snapshot.max_window_rms > crate::audio::speech_evidence::NO_SPEECH_WINDOW_RMS_FLOOR);
+    }
+
+    #[test]
+    fn drain_final_callback_writes_the_final_chunk_when_the_pool_has_room() {
+        let metrics = CaptureMetricsAccumulator::new(16_000, 1);
+        let samples = vec![0.2f32; 160];
+        let i16_samples: Vec<i16> = samples.iter().map(|&sample| f32_to_i16(sample)).collect();
+
+        let (pool_tx, pool_rx) = mpsc::sync_channel::<Vec<i16>>(1);
+        pool_tx.send(Vec::with_capacity(160)).unwrap();
+        let (writer_tx, writer_rx) = mpsc::sync_channel::<WriterMsg>(1);
+        let (recycle_tx, _recycle_rx) = mpsc::sync_channel::<Vec<i16>>(1);
+        let dropped = AtomicU64::new(0);
+
+        drain_final_callback(
+            &samples,
+            &i16_samples,
+            &metrics,
+            &pool_rx,
+            &writer_tx,
+            &recycle_tx,
+            &dropped,
+        );
+
+        assert_eq!(dropped.load(Ordering::SeqCst), 0);
+        let written = writer_rx.try_recv().ok();
+        assert!(
+            matches!(written.as_ref(), Some(WriterMsg::Chunk(chunk)) if *chunk == i16_samples),
+            "final chunk must reach the writer verbatim"
+        );
+    }
+
+    #[test]
+    fn drain_final_callback_counts_pool_exhaustion_as_dropped() {
+        // Pre-fix the empty-pool path silently discarded the final buffer: the
+        // WAV was truncated while the dropped counter stayed zero, so the
+        // integrity check passed and the no-speech gate judged (and could
+        // delete) a recording that never contained its own tail.
+        let metrics = CaptureMetricsAccumulator::new(16_000, 1);
+        let samples = vec![0.2f32; 160];
+        let i16_samples: Vec<i16> = samples.iter().map(|&sample| f32_to_i16(sample)).collect();
+
+        let (_pool_tx, pool_rx) = mpsc::sync_channel::<Vec<i16>>(1); // empty pool
+        let (writer_tx, writer_rx) = mpsc::sync_channel::<WriterMsg>(1);
+        let (recycle_tx, _recycle_rx) = mpsc::sync_channel::<Vec<i16>>(1);
+        let dropped = AtomicU64::new(0);
+
+        drain_final_callback(
+            &samples,
+            &i16_samples,
+            &metrics,
+            &pool_rx,
+            &writer_tx,
+            &recycle_tx,
+            &dropped,
+        );
+
+        assert_eq!(dropped.load(Ordering::SeqCst), 1, "unwritable final buffer must count as dropped");
+        assert!(writer_rx.try_recv().is_err(), "nothing may reach the writer");
+    }
+
+    #[test]
+    fn drain_final_callback_counts_queue_full_and_disconnected_writer_as_dropped() {
+        let metrics = CaptureMetricsAccumulator::new(16_000, 1);
+        let samples = vec![0.2f32; 160];
+        let i16_samples: Vec<i16> = samples.iter().map(|&sample| f32_to_i16(sample)).collect();
+
+        // Queue occupied by a Finalize (the Windows stream-drop-timeout case).
+        let (_pool_tx, pool_rx) = mpsc::sync_channel::<Vec<i16>>(1);
+        let (writer_tx, _writer_rx) = mpsc::sync_channel::<WriterMsg>(1);
+        writer_tx.send(WriterMsg::Finalize).unwrap();
+        let (recycle_tx, recycle_rx) = mpsc::sync_channel::<Vec<i16>>(1);
+        let dropped = AtomicU64::new(0);
+
+        drain_final_callback(
+            &samples,
+            &i16_samples,
+            &metrics,
+            &pool_rx,
+            &writer_tx,
+            &recycle_tx,
+            &dropped,
+        );
+        assert_eq!(dropped.load(Ordering::SeqCst), 1);
+        assert!(recycle_rx.try_recv().is_err(), "a Full(Finalize) buffer is not recycled");
+
+        // Disconnected writer (receiver dropped) with a pool chunk available:
+        // the send itself fails, and the drop is counted the same way.
+        let (pool_tx, pool_rx) = mpsc::sync_channel::<Vec<i16>>(1);
+        pool_tx.send(Vec::with_capacity(160)).unwrap();
+        let (writer_tx, writer_rx) = mpsc::sync_channel::<WriterMsg>(1);
+        drop(writer_rx);
+        let dropped = AtomicU64::new(0);
+        drain_final_callback(
+            &samples,
+            &i16_samples,
+            &metrics,
+            &pool_rx,
+            &writer_tx,
+            &recycle_tx,
+            &dropped,
+        );
+        assert_eq!(dropped.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn drain_final_callback_counts_full_writer_queue_as_dropped_and_recycles() {
+        // Queue occupied by a Chunk (the Full(Chunk) case): the buffer is
+        // counted dropped and the recycled chunk returns to the pool for the
+        // real-time thread.
+        let metrics = CaptureMetricsAccumulator::new(16_000, 1);
+        let samples = vec![0.2f32; 160];
+        let i16_samples: Vec<i16> = samples.iter().map(|&sample| f32_to_i16(sample)).collect();
+
+        let (_pool_tx, pool_rx) = mpsc::sync_channel::<Vec<i16>>(1);
+        let (writer_tx, _writer_rx) = mpsc::sync_channel::<WriterMsg>(1);
+        writer_tx.send(WriterMsg::Chunk(Vec::new())).unwrap(); // occupy the queue
+        let (recycle_tx, recycle_rx) = mpsc::sync_channel::<Vec<i16>>(1);
+        let dropped = AtomicU64::new(0);
+
+        drain_final_callback(
+            &samples,
+            &i16_samples,
+            &metrics,
+            &pool_rx,
+            &writer_tx,
+            &recycle_tx,
+            &dropped,
+        );
+        assert_eq!(dropped.load(Ordering::SeqCst), 1);
+        assert!(recycle_rx.try_recv().is_ok(), "Full(Chunk) returns its chunk to the pool");
+    }
 }
+

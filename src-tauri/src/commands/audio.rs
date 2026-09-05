@@ -1559,6 +1559,11 @@ where
         let should_try_gpu = mode == "gpu" || status.gpu_available != Some(false);
 
         if should_try_gpu {
+            // Plan 060.1: mark the ACTUAL attempt BEFORE the await. Success-only
+            // marking left the backend tag stale through the whole sidecar
+            // attempt, so a failure event (or a later read) could attribute this
+            // recording to whatever backend the PREVIOUS run used.
+            crate::whisper::transcriber::set_active_backend("sidecar");
             let gpu_result = gpu_client
                 .transcribe(
                     app,
@@ -1574,10 +1579,7 @@ where
                 .await;
 
             match gpu_result {
-                Ok(output) => {
-                    crate::whisper::transcriber::set_active_backend("sidecar");
-                    return Ok(output);
-                }
+                Ok(output) => return Ok(output),
                 Err(error)
                     if error == "Transcription cancelled"
                         || error == crate::whisper::gpu_sidecar::SIDECAR_ABORT_ERROR =>
@@ -1604,6 +1606,9 @@ where
         }
     }
 
+    // Plan 060.1: the CPU attempt's mark — placed BEFORE model init and the
+    // CPU transcription, so a failure anywhere below attributes "cpu" (or the
+    // sidecar above), never a previous recording's backend.
     #[cfg(target_os = "windows")]
     crate::whisper::transcriber::set_active_backend("cpu");
 
@@ -7448,39 +7453,46 @@ pub async fn cancel_recording(app: AppHandle) -> Result<(), String> {
     }
 
     // Stop recording if active
+    //
+    // Plan 060.1 — restoration before propagation: the stop outcome is
+    // COLLECTED, not propagated with `?`. Every cancellation cleanup below
+    // (media resume, ESC state, pill, state transitions) must run even when
+    // the recorder stop fails, and the error is surfaced only AFTER the
+    // user's paused media is restored — a failed ESC-cancel must never
+    // strand a paused track or a stuck recording state.
     let recorder_state = app.state::<RecorderState>();
-    let is_recording = {
-        let guard = recorder_state
+    let stop_error: Option<String> = (|| {
+        let mut guard = recorder_state
             .inner()
             .0
             .lock()
             .map_err(|e| format!("Failed to acquire recorder lock: {}", e))?;
-        guard.is_recording()
-    };
-
-    if is_recording {
+        if !guard.is_recording() {
+            return Ok(None);
+        }
         log::info!("Stopping recorder");
-        // Just stop the recorder, don't do full stop_recording flow
-        {
-            let mut recorder = recorder_state
-                .inner()
-                .0
-                .lock()
-                .map_err(|e| format!("Failed to acquire recorder lock: {}", e))?;
-            let _ = recorder.stop_recording()?;
-        }
+        // Just stop the recorder, don't do full stop_recording flow.
+        // A stop error keeps the WAV on disk for the orphan cleanup when the
+        // worker never finalized (same policy as stop_unfinalized); only a
+        // clean stop may delete the cancelled recording.
+        match guard.stop_recording() {
+            Ok(_) => {
+                // Clean up audio file if it exists
+                if let Ok(path_guard) = app_state.current_recording_path.lock() {
+                    if let Some(audio_path) = path_guard.as_ref() {
+                        log::info!("Removing cancelled recording file");
 
-        // Clean up audio file if it exists
-        if let Ok(path_guard) = app_state.current_recording_path.lock() {
-            if let Some(audio_path) = path_guard.as_ref() {
-                log::info!("Removing cancelled recording file");
-
-                if let Err(e) = std::fs::remove_file(audio_path) {
-                    log::warn!("Failed to remove cancelled recording: {}", e);
+                        if let Err(e) = std::fs::remove_file(audio_path) {
+                            log::warn!("Failed to remove cancelled recording: {}", e);
+                        }
+                    }
                 }
+                Ok(None)
             }
+            Err(e) => Err(e),
         }
-    }
+    })()
+    .err();
 
     // Resume system media if we paused it
     MEDIA_CONTROLLER.resume_if_we_paused();
@@ -7533,6 +7545,13 @@ pub async fn cancel_recording(app: AppHandle) -> Result<(), String> {
         }
     }
     crate::trigger::engine_host::rebuild_engine_bindings(&app);
+
+    // Plan 060.1: restoration is complete (media resumed, ESC state cleared,
+    // state machine landed on Idle/Error) — NOW surface the stop failure.
+    if let Some(e) = stop_error {
+        log::error!("Cancellation stop failed after cleanup: {}", e);
+        return Err(e);
+    }
 
     log::info!("=== CANCEL RECORDING COMPLETED ===");
     Ok(())
