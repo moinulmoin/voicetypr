@@ -82,6 +82,9 @@ describe("TelemetrySection", () => {
           consent_required: false,
         });
       }
+      if (command === "set_telemetry_consent") {
+        return Promise.resolve({ enabled: false, restart_required: false });
+      }
       return Promise.resolve(undefined);
     });
 
@@ -100,6 +103,14 @@ describe("TelemetrySection", () => {
       expect(mockInvoke).toHaveBeenCalledWith("set_telemetry_consent", {
         enabled: false,
       });
+      // Opt-out is live immediately even while reporting is unavailable:
+      // the switch flips off and no restart is mentioned.
+      const successMessages = vi.mocked(toast.success).mock.calls.map((call) => String(call[0]));
+      expect(successMessages.length).toBeGreaterThan(0);
+      expect(successMessages.some((message) => /restart/i.test(message))).toBe(false);
+      expect(
+        screen.getByRole("switch", { name: "Enable crash and error reporting" }),
+      ).not.toBeChecked();
     });
   });
 
