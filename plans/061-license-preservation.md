@@ -37,14 +37,33 @@ today all collapse to "absent":
 | Value present, wrong JSON type | **delete + `Ok(None)`** | `Err("… unexpected format …")`, **no mutation** |
 | `app.store()` access error | `Ok(None)` | `Err("Secure store is unavailable: …")` |
 
-Mechanics: extract `read_secure_value` over a minimal `SecureStoreBackend` seam
-(`raw_value` + `refresh`); `secure_get`/`secure_has` call it with the real
-plugin store. `refresh` = `store.reload()` with `ErrorKind::NotFound` mapped to
-"fresh install" — run only when the key is unknown to the cached view, so a
-missing entry is reported only after the file itself is readable. Reads never
-call `delete`/`save`; `secure_delete`, deactivation, and Reset keep their
-explicit user-action semantics (and `secure_delete`'s `"Failed to access store"`
-error prefix, which `reset.rs:101` matches on).
+Mechanics (revision 2): `secure_get` is strictly read-only and **never
+registers the store**. `app.store()` builds+registers a store whose cache is
+empty when the disk file is malformed (plugin `build_inner` discards load
+errors), and the plugin saves every registered store on app exit — that empty
+cache would overwrite the (possibly recoverable) file. So:
+
+1. Serve cache hits from an already-open store via side-effect-free
+   `get_store` (sees unsaved in-flight `secure_set` values; no disk IO).
+2. On miss, resolve the path with the plugin's `resolve_store_path` and read
+   the file directly (`fs::read` + `serde_json` map parse): missing →
+   `Ok(None)` (fresh install, nothing registered/created); IO error or bad
+   JSON → distinct Err with the store never opened. No `Store::reload`
+   anywhere — reads cannot clobber a concurrent `secure_set` before its save.
+
+Reads never call `delete`/`save`; `secure_delete`, deactivation, and Reset
+keep their explicit user-action semantics (and `secure_delete`'s
+`"Failed to access store"` error prefix, which `reset.rs:101` matches on).
+`secure_set` intentionally still overwrites unreadable entries: re-entering a
+value is the user-facing recovery for a corrupt record. `check_migration_needed`
+(dead code) also switched to a read-only existence check.
+
+Startup UI audit: on the storage error, `useAppReadiness.isLoading` stays true
+(`licenseStatus === null`) but **no component consumes `isLoading` as a
+blocker** — settings/Account navigation is independent. Recovery is reachable:
+AccountSection exposes `checkStatus`/`revalidateLicense`/`activateLicense`
+(re-entering the key overwrites the corrupt record) and Reset removes the
+file. No frontend change required.
 
 Consumer audit (all `secure_get`/`secure_has` callers, no changes needed):
 `license/keychain.rs` (`?` propagates → `check_license_status`/`restore`/
@@ -58,13 +77,29 @@ keeps `status = null` → app-not-ready; **no falsely expired / no-license state
 so no frontend change. Error messages carry key names and plugin error text
 only — never ciphertext, plaintext keys, or device fingerprints.
 
-## Tests (`secure_store.rs`, real AES-GCM boundary via the seam)
+## Tests (`secure_store.rs`, real temp-backed store files + real AES-GCM)
 
-1. Valid-length authentication failure (ciphertext byte flipped after the
-   nonce) → distinct Err, saved record unchanged, evidence survives repeat read.
-2. Invalid value type (non-string JSON) → distinct Err, record unchanged.
-3. Missing entry → `Ok(None)` normal path.
-4. Unreadable store file (`refresh` failure) → Err distinct from absent.
+`read_store_file` / `decrypt_raw_entry` are exercised against actual files in
+`tempfile` dirs (the read path takes a `&Path`/`&Value`, so no app handle or
+fake trait is needed; preservation is asserted by comparing file bytes):
+
+1. `tamper_is_a_valid_length_gcm_auth_failure_not_a_decode_error` — flipped
+   ciphertext byte → GCM auth failure ("Decryption failed"), the incident
+   signature.
+2. `missing_store_file_reads_as_absent_fresh_install` → `Ok(None)`.
+3. `unreadable_store_file_is_distinct_from_missing_entry` — malformed JSON →
+   Err containing "Secure store", not absent.
+4. `corrupt_value_read_preserves_saved_record_and_reports_error` → distinct
+   Err, file bytes unchanged.
+5. `repeat_read_keeps_preserved_record_and_same_error` → same Err twice, file
+   bytes unchanged.
+6. `invalid_value_type_preserves_saved_record` → Err, file bytes unchanged.
+7. `valid_license_roundtrip_reads_back_from_file` (+ absent key in a valid
+   file → `Ok(None)`).
+
+`secure_get` itself is thin glue over these (side-effect-free `get_store` +
+`resolve_store_path`); the no-registration/no-write guarantee is structural —
+the read path has no `Store` write surface at all.
 
 ## Out of scope / explicit non-goals
 
