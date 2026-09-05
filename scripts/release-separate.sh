@@ -566,9 +566,10 @@ if [[ "$BUILD_ONLY" == false ]]; then
         exit 1
     fi
 
-    # Generate changelog only after successful build/sign verification
-    echo -e "${YELLOW}Generating changelog...${NC}"
-    npx conventional-changelog -p angular -i CHANGELOG.md -s
+    # Generate changelog only after successful build/sign verification.
+    # Resolves the pinned local conventional-changelog-cli (no network fetch); -r 1 -u is
+    # required: without them the pre-tag run silently emits an empty changelog.
+    pnpm exec conventional-changelog -p angular -i CHANGELOG.md -s -r 1 -u
 
     # Commit, tag, push
     echo -e "${YELLOW}Committing and tagging...${NC}"
