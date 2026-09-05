@@ -34,14 +34,17 @@ export function SonioxStorageCard() {
     null
   );
 
-  const loadCounts = useCallback(async () => {
-    try {
-      setCounts(await invoke<SonioxStorageCounts>("get_soniox_storage_counts"));
-      setCountError(null);
-    } catch (error) {
-      setCounts(null);
-      setCountError(error instanceof Error ? error.message : String(error));
-    }
+  const loadCounts = useCallback(() => {
+    return invoke<SonioxStorageCounts>("get_soniox_storage_counts").then(
+      (nextCounts) => {
+        setCounts(nextCounts);
+        setCountError(null);
+      },
+      (error) => {
+        setCounts(null);
+        setCountError(error instanceof Error ? error.message : String(error));
+      },
+    );
   }, []);
 
   useEffect(() => {
