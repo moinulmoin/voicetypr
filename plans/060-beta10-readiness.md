@@ -1,7 +1,8 @@
 # Plan 060 — Beta10 release remediation (silent-failures work migrated from PR 047)
 
-**Status:** CODE COMPLETE / NEEDS-SMOKE. Local automated gates pass; this
-candidate has not been pushed, merged, or released.
+**Status:** CODE COMPLETE / NEEDS-SMOKE. Local automated gates pass.
+Candidate tracked in [PR #140](https://github.com/moinulmoin/voicetypr/pull/140);
+see the PR for its published head and CI status. Not merged or released.
 
 Renumbered from PR 140's `plans/047-silent-failures-soniox-alerts-diagnostics.md`
 to free 047 for main's landed `polish-provider-ux-audio-fast-path.md` (via #136).
