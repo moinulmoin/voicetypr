@@ -130,4 +130,31 @@ describe("SonioxStorageCard", () => {
       screen.getByRole("button", { name: /clean up stored files/i })
     ).not.toBeDisabled();
   });
+
+  it("surfaces the native message when cleanup rejects with a plain string", async () => {
+    const user = userEvent.setup();
+    invokeMock.mockImplementation(async (cmd: string) => {
+      if (cmd === "get_soniox_storage_counts") {
+        return { filesTotal: 5, transcriptionsTotal: 5 };
+      }
+      if (cmd === "cleanup_soniox_storage") {
+        // Tauri rejects Rust Result<_, String> errors as bare strings,
+        // not Error instances.
+        throw "cleanup failed: soniox storage unreachable";
+      }
+      return null;
+    });
+
+    render(<SonioxStorageCard />);
+
+    const button = await screen.findByRole("button", { name: /clean up stored files/i });
+    await user.click(button);
+
+    await waitFor(() => {
+      expect(toast.error).toHaveBeenCalledWith("cleanup failed: soniox storage unreachable");
+    });
+    expect(
+      screen.getByRole("button", { name: /clean up stored files/i })
+    ).not.toBeDisabled();
+  });
 });

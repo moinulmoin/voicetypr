@@ -1,6 +1,7 @@
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Spinner } from "@/components/ui/spinner";
+import { getErrorMessage } from "@/utils/error";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { HardDrive } from "lucide-react";
@@ -73,9 +74,7 @@ export function SonioxStorageCard() {
       );
       await loadCounts();
     } catch (error) {
-      toast.error(
-        error instanceof Error ? error.message : "Failed to clean up stored files"
-      );
+      toast.error(getErrorMessage(error, "Failed to clean up stored files"));
     } finally {
       setCleaning(false);
       setProgress(null);

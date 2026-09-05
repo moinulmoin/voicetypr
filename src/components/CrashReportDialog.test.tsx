@@ -117,6 +117,35 @@ describe("CrashReportDialog", () => {
     });
   });
 
+  it("retains collected diagnostics in the copied fallback details", async () => {
+    const user = userEvent.setup();
+    vi.mocked(gatherCrashReportData).mockResolvedValueOnce({
+      ...crashData,
+      logContent: "",
+      logStatusNote: "No log file found.",
+      debugRingContent: "DEBUG REC TIMING start=12ms",
+      systemSpecsError: "command get_system_specs panicked | in sysinfo",
+    });
+    vi.mocked(submitCrashReport).mockResolvedValueOnce({
+      success: false,
+      message: "Network unavailable",
+    });
+
+    render(<CrashReportDialog error={new Error("Boom")} isOpen onClose={vi.fn()} />);
+
+    expect(await screen.findByText("Boom")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: /submit/i }));
+    await user.click(await screen.findByRole("button", { name: /copy details/i }));
+
+    await waitFor(() => {
+      expect(writeTextMock).toHaveBeenCalledTimes(1);
+    });
+    const copied = writeTextMock.mock.calls[0][0];
+    expect(copied).toContain("DEBUG REC TIMING start=12ms");
+    expect(copied).toContain("command get_system_specs panicked | in sysinfo");
+    expect(copied).toContain("No log file found.");
+  });
+
   it("clears failed-submit fallback between dialog sessions", async () => {
     const user = userEvent.setup();
     vi.mocked(submitCrashReport).mockResolvedValueOnce({
