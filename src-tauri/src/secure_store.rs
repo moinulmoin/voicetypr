@@ -169,7 +169,7 @@ fn read_store_file(
             // values — log only the classification/position and return a
             // payload-free message.
             log::warn!(
-                "Secure store file parse failed: {} at line {} column {}",
+                "Secure store file parse failed: {:?} at line {} column {}",
                 e.classify(),
                 e.line(),
                 e.column()
