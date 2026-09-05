@@ -133,7 +133,8 @@ describe("CrashReportDialog", () => {
 
     render(<CrashReportDialog error={new Error("Boom")} isOpen onClose={vi.fn()} />);
 
-    expect(await screen.findByText("Boom")).toBeInTheDocument();
+    // Diagnostics readiness: Submit enables once the gathered crash data lands.
+    await waitFor(() => expect(screen.getByRole("button", { name: /submit/i })).toBeEnabled());
     await user.click(screen.getByRole("button", { name: /submit/i }));
     await user.click(await screen.findByRole("button", { name: /copy details/i }));
 
