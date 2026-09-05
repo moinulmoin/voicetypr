@@ -12,10 +12,10 @@
 
 * **ai:** reject truncated or nonzero-exit CLI output, preserve raw dictation on every CLI failure, kill entire CLI process groups on timeout or cancellation, and safely resolve native executables without running Windows script shims
 * **tray:** recover from transient system-tray startup failures, keep the dashboard reachable, expose retry help, and attach tray diagnostics to support reports
-* **uploads:** constrain long speaker timelines so Copy and Save remain reachable
-* **licensing:** preserve paid access through temporary verification outages, retry validation three times, repair stale device activation automatically, and show a revalidation warning instead of `Trial expired`.
+* **uploads:** constrain long speaker timelines so Copy and Save remain reachable, and keep an in-flight transcript bound to its original file when another file is dropped
+* **licensing:** preserve paid access through temporary verification outages, retry validation three times, repair stale device activation automatically, show a revalidation warning instead of `Trial expired`, and keep loading owned by the latest overlapping status request
 * **support:** replace the cramped problem-report modal with a dedicated page that collects a reply email, previews attached system configuration, gathers diagnostics automatically, and keeps copy/support-email fallbacks
-* **updater:** default direct-install prerelease builds to the Beta update channel when no channel preference has been saved
+* **updater:** default direct-install prerelease builds to the Beta update channel when no channel preference has been saved, and preserve the post-update announcement when automatic relaunch fails
 
 ## [2.0.4](https://github.com/moinulmoin/voicetypr/compare/v2.0.3...v2.0.4) (2026-07-01)
 

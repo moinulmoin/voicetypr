@@ -328,10 +328,9 @@ pub fn read_consent_from_path(path: &Path) -> (bool, Option<String>) {
 
 // --- Init + capture ----------------------------------------------------------
 
-/// Transport-level consent gate. Structured logs are batched by the SDK for up
-/// to five seconds, after `before_send_log` has run; checking again here drops
-/// that buffered envelope if diagnostics were disabled before the actual send.
-/// Events and transactions also pass through this final egress chokepoint.
+/// Transport-level consent gate: the final egress chokepoint for every
+/// envelope. Anything that reaches the SDK (panics, scrubbed frontend error
+/// events, failure events) is dropped here once diagnostics are opted out.
 struct ConsentTransport {
     inner: Arc<dyn sentry::Transport>,
 }
@@ -901,6 +900,7 @@ mod tests {
             _ => panic!("expected Symbolic image"),
         }
     }
+
 
     #[test]
     fn consent_transport_drops_envelopes_after_opt_out() {

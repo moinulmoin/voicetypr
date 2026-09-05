@@ -4,8 +4,6 @@ use super::common::{self, AuthScheme};
 use std::path::Path;
 use tauri::AppHandle;
 
-pub(super) const MODEL: &str = "stt-async-v5";
-
 const BASE: &str = "https://api.soniox.com/v1";
 
 pub(super) async fn validate_key(key: &str) -> Result<(), String> {
@@ -413,13 +411,14 @@ async fn notify_storage_limit(app: &AppHandle) {
 }
 
 fn build_create_payload(
+    model: &str,
     file_id: &str,
     language: Option<&str>,
     context: Option<crate::writing::SonioxContext>,
     diarize: bool,
 ) -> serde_json::Value {
     let mut payload = serde_json::json!({
-        "model": MODEL,
+        "model": model,
         "file_id": file_id,
     });
 
@@ -448,6 +447,7 @@ fn build_create_payload(
 pub(super) async fn transcribe_typed(
     app: &AppHandle,
     key: &str,
+    model: &str,
     wav_path: &Path,
     language: Option<&str>,
 ) -> Result<String, common::SttError> {
@@ -459,9 +459,16 @@ pub(super) async fn transcribe_typed(
     let client = common::http_client();
     let soniox_context = load_soniox_context(app, language);
 
-    let result =
-        transcribe_typed_with_autoheal(&client, key, wav_path, wav_bytes, language, soniox_context)
-            .await;
+    let result = transcribe_typed_with_autoheal(
+        &client,
+        key,
+        model,
+        wav_path,
+        wav_bytes,
+        language,
+        soniox_context,
+    )
+    .await;
     if matches!(result, Err(common::SttError::LimitExceeded)) {
         notify_storage_limit(app).await;
     }
@@ -477,6 +484,7 @@ pub(super) async fn transcribe_typed(
 async fn transcribe_typed_with_autoheal(
     client: &reqwest::Client,
     key: &str,
+    model: &str,
     wav_path: &Path,
     wav_bytes: Vec<u8>,
     language: Option<&str>,
@@ -487,6 +495,7 @@ async fn transcribe_typed_with_autoheal(
         match attempt_typed_once(
             client,
             key,
+            model,
             wav_path,
             &wav_bytes,
             language,
@@ -509,6 +518,7 @@ async fn transcribe_typed_with_autoheal(
 async fn attempt_typed_once(
     client: &reqwest::Client,
     key: &str,
+    model: &str,
     wav_path: &Path,
     wav_bytes: &[u8],
     language: Option<&str>,
@@ -561,7 +571,7 @@ async fn attempt_typed_once(
         .to_string();
 
     let (transcription_id, result) =
-        run_typed_transcription(client, key, &file_id, language, soniox_context).await;
+        run_typed_transcription(client, key, model, &file_id, language, soniox_context).await;
 
     // Soniox stores every uploaded file + transcription record against the
     // org's caps (1k files / 2k transcriptions). Delete-after-extract on ALL
@@ -577,12 +587,13 @@ async fn attempt_typed_once(
 async fn run_typed_transcription(
     client: &reqwest::Client,
     key: &str,
+    model: &str,
     file_id: &str,
     language: Option<&str>,
     soniox_context: Option<crate::writing::SonioxContext>,
 ) -> (Option<String>, Result<String, common::SttError>) {
     // 2) Create transcription -> transcription_id
-    let payload = build_create_payload(file_id, language, soniox_context, false);
+    let payload = build_create_payload(model, file_id, language, soniox_context, false);
 
     let create_url = format!("{}/transcriptions", base_url());
     let create_resp = common::with_retry(|| {
@@ -723,6 +734,7 @@ async fn run_typed_transcription(
 pub(super) async fn transcribe_typed_diarized(
     app: &AppHandle,
     key: &str,
+    model: &str,
     wav_path: &Path,
     language: Option<&str>,
 ) -> Result<super::CloudTranscript, common::SttError> {
@@ -737,6 +749,7 @@ pub(super) async fn transcribe_typed_diarized(
     let result = transcribe_diarized_with_autoheal(
         &client,
         key,
+        model,
         wav_path,
         wav_bytes,
         language,
@@ -754,6 +767,7 @@ pub(super) async fn transcribe_typed_diarized(
 async fn transcribe_diarized_with_autoheal(
     client: &reqwest::Client,
     key: &str,
+    model: &str,
     wav_path: &Path,
     wav_bytes: Vec<u8>,
     language: Option<&str>,
@@ -764,6 +778,7 @@ async fn transcribe_diarized_with_autoheal(
         match attempt_diarized_once(
             client,
             key,
+            model,
             wav_path,
             &wav_bytes,
             language,
@@ -786,6 +801,7 @@ async fn transcribe_diarized_with_autoheal(
 async fn attempt_diarized_once(
     client: &reqwest::Client,
     key: &str,
+    model: &str,
     wav_path: &Path,
     wav_bytes: &[u8],
     language: Option<&str>,
@@ -837,7 +853,7 @@ async fn attempt_diarized_once(
         .to_string();
 
     let (transcription_id, result) =
-        run_diarized_transcription(client, key, &file_id, language, soniox_context).await;
+        run_diarized_transcription(client, key, model, &file_id, language, soniox_context).await;
 
     cleanup_stored_records(client, key, transcription_id.as_deref(), &file_id).await;
     result
@@ -848,6 +864,7 @@ async fn attempt_diarized_once(
 async fn run_diarized_transcription(
     client: &reqwest::Client,
     key: &str,
+    model: &str,
     file_id: &str,
     language: Option<&str>,
     soniox_context: Option<crate::writing::SonioxContext>,
@@ -856,7 +873,7 @@ async fn run_diarized_transcription(
     Result<super::CloudTranscript, common::SttError>,
 ) {
     // 2) Create transcription with diarization -> transcription_id
-    let payload = build_create_payload(file_id, language, soniox_context, true);
+    let payload = build_create_payload(model, file_id, language, soniox_context, true);
 
     let create_url = format!("{}/transcriptions", base_url());
     let create_resp = common::with_retry(|| {
@@ -1026,6 +1043,7 @@ mod tests {
     #[test]
     fn create_payload_includes_language_and_structured_context() {
         let payload = build_create_payload(
+            "stt-async-v5",
             "file_123",
             Some(" en "),
             Some(SonioxContext {
@@ -1061,6 +1079,7 @@ mod tests {
     #[test]
     fn create_payload_omits_empty_optional_fields() {
         let payload = build_create_payload(
+            "stt-async-v5",
             "file_123",
             Some(" "),
             Some(SonioxContext {
@@ -1078,12 +1097,18 @@ mod tests {
 
     #[test]
     fn build_create_payload_diarize_flag_sets_field() {
-        let payload = build_create_payload("fid", None, None, true);
+        let payload = build_create_payload("stt-async-v5", "fid", None, None, true);
         assert_eq!(payload["enable_speaker_diarization"].as_bool(), Some(true));
-        let payload_no_diarize = build_create_payload("fid", None, None, false);
+        let payload_no_diarize = build_create_payload("stt-async-v5", "fid", None, None, false);
         assert!(payload_no_diarize
             .get("enable_speaker_diarization")
             .is_none());
+    }
+
+    #[test]
+    fn create_payload_uses_selected_model() {
+        let payload = build_create_payload("custom-model", "fid", None, None, false);
+        assert_eq!(payload["model"].as_str(), Some("custom-model"));
     }
 
     #[test]
@@ -1199,7 +1224,8 @@ mod tests {
                 .mount(&server)
                 .await;
 
-            let (tid, result) = run_typed_transcription(&client, "k", "f1", Some("en"), None).await;
+            let (tid, result) =
+                run_typed_transcription(&client, "k", "stt-async-v5", "f1", Some("en"), None).await;
             assert_eq!(result.unwrap(), "hello world");
             assert_eq!(tid.as_deref(), Some("t1"));
 
@@ -1236,7 +1262,8 @@ mod tests {
                 .mount(&server)
                 .await;
 
-            let (tid, result) = run_typed_transcription(&client, "k", "f1", None, None).await;
+            let (tid, result) =
+                run_typed_transcription(&client, "k", "stt-async-v5", "f1", None, None).await;
             assert!(matches!(result, Err(common::SttError::Server)));
             assert_eq!(tid.as_deref(), Some("t1"));
 
@@ -1266,7 +1293,8 @@ mod tests {
                 .mount(&server)
                 .await;
 
-            let (tid, result) = run_typed_transcription(&client, "k", "f1", None, None).await;
+            let (tid, result) =
+                run_typed_transcription(&client, "k", "stt-async-v5", "f1", None, None).await;
             assert!(
                 matches!(result, Err(common::SttError::LimitExceeded)),
                 "expected LimitExceeded, got {result:?}"
@@ -1441,7 +1469,8 @@ mod tests {
                 .mount(&server)
                 .await;
 
-            let (tid, result) = run_diarized_transcription(&client, "k", "f1", None, None).await;
+            let (tid, result) =
+                run_diarized_transcription(&client, "k", "stt-async-v5", "f1", None, None).await;
             assert_eq!(result.unwrap().text, "hi");
             assert_eq!(tid.as_deref(), Some("t9"));
 

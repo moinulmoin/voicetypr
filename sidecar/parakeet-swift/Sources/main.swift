@@ -481,6 +481,11 @@ struct ParakeetSidecar {
             return
         }
 
+        let languageHint = language.flatMap(Language.init(rawValue:))
+        if let language, languageHint == nil {
+            log("⚠️  Unsupported language hint: \(language)")
+        }
+
         do {
             log("🎙️ Starting transcription...")
             let startTime = Date()
@@ -488,7 +493,11 @@ struct ParakeetSidecar {
             // Transcribe the audio file (returns ASRResult)
             var decoderState = TdtDecoderState.make(decoderLayers: await manager.decoderLayerCount)
             let result = try await withLibraryStdoutRedirected {
-                try await manager.transcribe(fileURL, decoderState: &decoderState)
+                try await manager.transcribe(
+                    fileURL,
+                    decoderState: &decoderState,
+                    language: languageHint
+                )
             }
 
             let elapsed = Date().timeIntervalSince(startTime)

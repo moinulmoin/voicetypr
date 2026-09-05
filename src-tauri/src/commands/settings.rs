@@ -59,7 +59,7 @@ pub struct Settings {
     pub transcription_task: String,
     pub final_text_language: String,
     pub theme: String,
-    // Settings disclosure mode: "recommended" or "advanced"
+    // Settings disclosure mode. Post-cutover this is always "recommended".
     #[serde(default = "default_settings_mode")]
     pub settings_mode: String,
     pub transcription_cleanup_days: Option<u32>,
@@ -156,9 +156,10 @@ fn default_settings_mode() -> String {
 }
 
 fn normalize_settings_mode(value: Option<&str>) -> String {
+    // Legacy adopter contract: pre-cutover stores may carry "advanced"; normalize it to "recommended".
     match value {
-        Some("advanced") => "advanced".to_string(),
-        _ => default_settings_mode(),
+        Some("advanced") | Some("recommended") | None => default_settings_mode(),
+        Some(_) => default_settings_mode(),
     }
 }
 
@@ -1705,7 +1706,7 @@ mod tests {
 
     #[test]
     fn settings_mode_accepts_advanced_and_falls_back_to_recommended() {
-        assert_eq!(normalize_settings_mode(Some("advanced")), "advanced");
+        assert_eq!(normalize_settings_mode(Some("advanced")), "recommended");
         assert_eq!(normalize_settings_mode(Some("recommended")), "recommended");
         assert_eq!(normalize_settings_mode(Some("invalid")), "recommended");
         assert_eq!(normalize_settings_mode(None), "recommended");

@@ -17,22 +17,14 @@ export interface AIProviderModel {
   costOutput?: number | null;
 }
 
-export type AgentCliProbeState =
-  | "ready"
-  | "not_authenticated"
-  | "missing"
-  | "unsafe_launcher"
-  | "incompatible";
+export type AgentCliProbeState = "ready" | "missing" | "unsafe_launcher";
 
 export interface AgentCliProbe {
-  /** Explicit probe state; omitted only for compatibility with older payloads. */
-  state?: AgentCliProbeState;
-  installed: boolean;
-  authed: boolean;
-  /** The CLI's own auth-status message (its login guidance), shown on the
-   * sign-in badge when installed-but-not-authed. Empty when nothing useful was
-   * captured (fall back to the static hint). Mirrors the backend field. */
-  detail: string;
+  state: AgentCliProbeState;
+  /** Static reasoning levels supported by VoiceTypr's provider adapter. */
+  reasoningLevels: string[];
+  /** Whether VoiceTypr can invoke this CLI's native fast service mode. */
+  supportsFastMode: boolean;
 }
 
 // Mirrors Rust `crate::ai::contract::AiProvider`.
@@ -60,7 +52,6 @@ export interface AIProviderConfig extends AiProvider {
   installHint: string;
   isCustom: boolean;
 }
-
 
 const PROVIDER_UI_METADATA: Record<
   string,

@@ -1,17 +1,7 @@
 import { LanguageSelection } from "@/components/LanguageSelection";
 import { Button } from "@/components/ui/button";
 import { ButtonGroup } from "@/components/ui/button-group";
-import {
-  Collapsible,
-  CollapsibleContent,
-  CollapsibleTrigger,
-} from "@/components/ui/collapsible";
-import {
-  Empty,
-  EmptyDescription,
-  EmptyHeader,
-  EmptyTitle,
-} from "@/components/ui/empty";
+import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from "@/components/ui/empty";
 import {
   Field,
   FieldContent,
@@ -37,6 +27,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
+import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { presetDisplayLabel, presetRequiresAiFormatting, type EnhancementPreset } from "@/types/ai";
 import type {
   AppFormattingRule,
@@ -45,24 +36,16 @@ import type {
   TextReplacementRule,
   WritingSettings,
 } from "@/types/writing";
-import {
-  ChevronDown,
-  Globe,
-  Plus,
-  Trash2,
-} from "lucide-react";
-import type { ReactNode } from "react";
+import { Globe, Plus, Trash2 } from "lucide-react";
+import { useState, type ReactNode } from "react";
 
 interface EnhancementSettingsProps {
   preset: EnhancementPreset;
   finalTextLanguage: string;
   writingSettings: WritingSettings;
   aiFormattingEnabled: boolean;
-  polishControls: ReactNode;
-  polishSetupContent?: ReactNode;
-  advancedProviderContent: ReactNode;
-  advancedOpen: boolean;
-  onAdvancedOpenChange: (open: boolean) => void;
+  providerContent: ReactNode;
+  onPresetChange: (value: EnhancementPreset) => void;
   onFinalTextLanguageChange: (value: string) => void;
   onWritingSettingsChange: (settings: WritingSettings) => void;
   disabled?: boolean;
@@ -75,6 +58,47 @@ function updateItem<T>(items: T[], index: number, next: T): T[] {
 
 function removeItem<T>(items: T[], index: number): T[] {
   return items.filter((_, itemIndex) => itemIndex !== index);
+}
+
+const EMPTY_OBJECT_LIST: readonly object[] = [];
+const EMPTY_KEY_LIST: string[] = [];
+
+function useStableRowKeys(items: readonly object[]): string[] {
+  // Stable React keys for editable rows whose item references change on every
+  // keystroke. Keys are derived from the previous list (slot-aligned reuse),
+  // adjusted during render via state — no refs, safe under concurrent React.
+  const [state, setState] = useState<{
+    prev: readonly object[];
+    keys: string[];
+    nextId: number;
+  }>({ prev: EMPTY_OBJECT_LIST, keys: EMPTY_KEY_LIST, nextId: 0 });
+
+  let keys = state.keys;
+  if (state.prev !== items) {
+    const used = new Set<object>(items);
+    const taken = new Set<string>();
+    const nextKeys: string[] = [];
+    let nextId = state.nextId;
+    for (let index = 0; index < items.length; index++) {
+      const displaced = state.prev[index];
+      const slotReusable =
+        displaced !== undefined && displaced !== items[index] && !used.has(displaced);
+      let key =
+        state.prev[index] === items[index]
+          ? state.keys[index]
+          : slotReusable
+            ? state.keys[index]
+            : undefined;
+      if (!key || taken.has(key)) {
+        key = `row-${nextId++}`;
+      }
+      taken.add(key);
+      nextKeys.push(key);
+    }
+    keys = nextKeys;
+    setState({ prev: items, keys: nextKeys, nextId });
+  }
+  return keys;
 }
 const FORMATTING_MODES = [
   { id: "PersonalDictation" },
@@ -90,16 +114,19 @@ const FORMATTING_MODES = [
 const formattingModeLabel = (preset: EnhancementPreset) => presetDisplayLabel(preset);
 
 function AppFormattingRulesEditor({
+  preset,
   rules,
   onChange,
   disabled,
   aiFormattingEnabled,
 }: {
+  preset: EnhancementPreset;
   rules: AppFormattingRule[];
   onChange: (rules: AppFormattingRule[]) => void;
   disabled: boolean;
   aiFormattingEnabled: boolean;
 }) {
+  const rowKeys = useStableRowKeys(rules);
   const hasAiRequiredSelection =
     !aiFormattingEnabled && rules.some((rule) => presetRequiresAiFormatting(rule.preset));
 
@@ -107,10 +134,10 @@ function AppFormattingRulesEditor({
     <FieldSet className="mt-4 rounded-lg border border-border/60 bg-background/60 p-3">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
-          <FieldLegend className="mb-1 text-sm">App Rules</FieldLegend>
+          <FieldLegend className="mb-1 text-sm">Per-app modes</FieldLegend>
           <FieldDescription>
-            Switch preset when the active app matches. Uses the app name only — not URLs, titles, or
-            clipboard.
+            Override the default mode when dictation starts in a matched app. App identity is
+            captured locally for every desktop transcription.
           </FieldDescription>
         </div>
         <Button
@@ -118,31 +145,25 @@ function AppFormattingRulesEditor({
           size="sm"
           variant="outline"
           disabled={disabled}
-          onClick={() =>
-            onChange([
-              ...rules,
-              { app_name: "", preset: "PersonalDictation", enabled: true },
-            ])
-          }
+          onClick={() => onChange([...rules, { app_name: "", preset, enabled: true }])}
         >
           <Plus className="mr-2 h-4 w-4" />
-          Add rule
+          Add override
         </Button>
       </div>
 
       {!aiFormattingEnabled && hasAiRequiredSelection && (
         <div className="mt-3 rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-700 dark:text-amber-300">
-          One or more app rules use Polish presets. Turn on Polish with a selected provider model to activate them.
+          One or more overrides need Polish. Turn on Polish to activate them.
         </div>
       )}
 
       {rules.length === 0 ? (
         <Empty className="mt-3 border-border/60 bg-muted/20 p-4">
           <EmptyHeader className="max-w-none gap-1">
-            <EmptyTitle className="text-sm">No app rules yet</EmptyTitle>
+            <EmptyTitle className="text-sm">No app overrides yet</EmptyTitle>
             <EmptyDescription className="text-xs">
-              Example: when <span className="font-mono">Slack</span> is active, use{" "}
-              <span className="font-mono">Message</span> mode.
+              Example: use Message mode whenever Slack is active.
             </EmptyDescription>
           </EmptyHeader>
         </Empty>
@@ -152,10 +173,7 @@ function AppFormattingRulesEditor({
             const selectedMode = FORMATTING_MODES.find((mode) => mode.id === rule.preset);
 
             return (
-              <div
-                key={`app-rule-${index}`}
-                className="rounded-lg border border-border bg-card p-3"
-              >
+              <div key={rowKeys[index]} className="rounded-lg border border-border bg-card p-3">
                 <div className="flex flex-wrap items-center gap-2">
                   <InputGroup className="min-w-[10rem] flex-1">
                     <InputGroupAddon>
@@ -188,7 +206,7 @@ function AppFormattingRulesEditor({
                       )
                     }
                   >
-                    <SelectTrigger size="sm" className="w-[11rem]" aria-label="App rule preset">
+                    <SelectTrigger size="sm" className="w-[11rem]" aria-label="App mode">
                       <SelectValue placeholder="Preset">
                         {selectedMode ? formattingModeLabel(selectedMode.id) : rule.preset}
                       </SelectValue>
@@ -236,7 +254,6 @@ function AppFormattingRulesEditor({
                     </Button>
                   </div>
                 </div>
-
               </div>
             );
           })}
@@ -255,12 +272,16 @@ function ReplacementEditor({
   onChange: (replacements: TextReplacementRule[]) => void;
   disabled: boolean;
 }) {
+  const rowKeys = useStableRowKeys(replacements);
   return (
     <FieldSet className="rounded-xl border border-border/60 bg-card p-4">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
           <FieldLegend className="mb-1">Corrections</FieldLegend>
-          <FieldDescription>Find-and-replace rules. Always applied, with or without AI.</FieldDescription>
+          <FieldDescription>
+            Always applied after transcription. Whisper and Soniox can also use them while
+            recognizing speech.
+          </FieldDescription>
         </div>
         <Button
           type="button"
@@ -268,10 +289,7 @@ function ReplacementEditor({
           variant="outline"
           disabled={disabled}
           onClick={() =>
-            onChange([
-              ...replacements,
-              { from: "", to: "", language: null, enabled: true },
-            ])
+            onChange([...replacements, { from: "", to: "", language: null, enabled: true }])
           }
         >
           <Plus className="mr-2 h-4 w-4" />
@@ -292,7 +310,7 @@ function ReplacementEditor({
         <FieldGroup className="mt-3 gap-3">
           {replacements.map((rule, index) => (
             <FieldSet
-              key={`replacement-${index}`}
+              key={rowKeys[index]}
               className="rounded-lg border border-border/60 bg-background/60 p-3"
             >
               <div className="mb-3 flex items-center justify-between gap-3">
@@ -397,13 +415,15 @@ function CustomWordEditor({
   onChange: (customWords: CustomWord[]) => void;
   disabled: boolean;
 }) {
+  const rowKeys = useStableRowKeys(customWords);
   return (
     <FieldSet className="rounded-xl border border-border/60 bg-card p-4">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
-          <FieldLegend className="mb-1">Words & Names</FieldLegend>
+          <FieldLegend className="mb-1">Words &amp; names</FieldLegend>
           <FieldDescription>
-            Used to correct spelling; also improves recognition on Whisper, Parakeet, and Soniox.
+            Always corrects spelling. Whisper, Parakeet, Deepgram, and Soniox can also use these
+            terms while recognizing speech.
           </FieldDescription>
         </div>
         <Button
@@ -437,7 +457,7 @@ function CustomWordEditor({
         <FieldGroup className="mt-3 gap-3">
           {customWords.map((word, index) => (
             <FieldSet
-              key={`custom-word-${index}`}
+              key={rowKeys[index]}
               className="rounded-lg border border-border/60 bg-background/60 p-3"
             >
               <div className="mb-3 flex items-center justify-between gap-3">
@@ -542,14 +562,15 @@ function SnippetEditor({
   onChange: (snippets: Snippet[]) => void;
   disabled: boolean;
 }) {
+  const rowKeys = useStableRowKeys(snippets);
   return (
     <FieldSet className="rounded-xl border border-border/60 bg-card p-4">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
-          <FieldLegend className="mb-1">Saved Text</FieldLegend>
+          <FieldLegend className="mb-1">Saved text</FieldLegend>
           <FieldDescription>
-            Say a trigger phrase by itself to insert a saved signature, address, response, or
-            template. "Insert exactly" skips Polish.
+            Say “insert” followed by a trigger to add a saved signature, address, response, or
+            template.
           </FieldDescription>
         </div>
         <Button
@@ -588,7 +609,7 @@ function SnippetEditor({
         <FieldGroup className="mt-3 gap-3">
           {snippets.map((snippet, index) => (
             <FieldSet
-              key={`snippet-${index}`}
+              key={rowKeys[index]}
               className="rounded-lg border border-border/60 bg-background/60 p-3"
             >
               <div className="mb-3 flex items-center justify-between gap-3">
@@ -618,17 +639,19 @@ function SnippetEditor({
                 <Field>
                   <InputGroup>
                     <InputGroupAddon>
-                      <InputGroupText>Spoken trigger</InputGroupText>
+                      <InputGroupText>Insert</InputGroupText>
                     </InputGroupAddon>
                     <InputGroupInput
-                      placeholder="e.g. insert my signature"
-                      value={snippet.trigger}
+                      placeholder="my signature"
+                      value={snippet.trigger.replace(/^insert\s+/i, "")}
                       disabled={disabled}
                       onChange={(event) =>
                         onChange(
                           updateItem(snippets, index, {
                             ...snippet,
-                            trigger: event.target.value,
+                            trigger: event.target.value.trimStart()
+                              ? `insert ${event.target.value.trimStart()}`
+                              : "",
                           }),
                         )
                       }
@@ -693,7 +716,7 @@ function SnippetEditor({
                         }
                       />
                       <FieldContent>
-                        <FieldTitle className="text-xs">Insert exactly</FieldTitle>
+                        <FieldTitle className="text-xs">Keep text exact</FieldTitle>
                       </FieldContent>
                     </Field>
                   </FieldLabel>
@@ -712,11 +735,8 @@ export function EnhancementSettings({
   finalTextLanguage,
   writingSettings,
   aiFormattingEnabled,
-  polishControls,
-  polishSetupContent,
-  advancedProviderContent,
-  advancedOpen,
-  onAdvancedOpenChange,
+  providerContent,
+  onPresetChange,
   onFinalTextLanguageChange,
   onWritingSettingsChange,
   disabled = false,
@@ -727,132 +747,129 @@ export function EnhancementSettings({
     allowsSpecificFinalLanguage && finalTextLanguage !== "same_as_transcript";
 
   return (
-    <div className={`space-y-6 ${disabled ? "opacity-60" : ""}`}>
-      <section className="space-y-3">
-        <div className="flex flex-wrap items-start justify-between gap-4">
-          <div className="min-w-0">
-            <h2 className="text-base font-semibold">Polish</h2>
-            <p className="mt-1 text-sm text-muted-foreground">
-              Clean up grammar and punctuation while keeping your meaning.
-            </p>
-          </div>
-          {polishControls}
-        </div>
+    <div className={disabled ? "flex flex-col gap-5 opacity-60" : "flex flex-col gap-5"}>
+      <div className="flex min-w-0 max-w-4xl flex-col gap-5">
+        <section aria-label="Provider">{providerContent}</section>
 
-        {polishSetupContent}
-
-        <FieldSet className="rounded-xl border border-border/60 bg-card p-4">
-          <FieldLegend className="mb-1">Final Text Language</FieldLegend>
-          <FieldDescription className="mb-3">
-            Keep the transcript language, or pick a different written language. Changing it needs
-            Polish.
-          </FieldDescription>
-          {!aiFormattingEnabled && finalTextLanguage !== "same_as_transcript" && (
-            <div className="mb-3 rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-700 dark:text-amber-300">
-              Turn on Polish to use a final text language different from the transcript.
-            </div>
-          )}
-
-          <ButtonGroup className="w-full flex-wrap md:w-fit">
-            <Button
-              type="button"
-              variant={!usingSpecificLanguage ? "default" : "outline"}
-              size="sm"
-              disabled={disabled}
-              onClick={() => onFinalTextLanguageChange("same_as_transcript")}
+        <section aria-label="Modes" className="flex flex-col gap-5">
+          <FieldSet className="rounded-xl border border-border/60 bg-card p-4">
+            <FieldLegend className="mb-1">Default mode</FieldLegend>
+            <FieldDescription className="mb-3">
+              Applied unless a per-app override matches.
+            </FieldDescription>
+            <Tabs
+              value={preset}
+              onValueChange={(value) => onPresetChange(value as EnhancementPreset)}
             >
-              Same as transcript
-            </Button>
-            <Button
-              type="button"
-              variant={usingSpecificLanguage ? "default" : "outline"}
-              size="sm"
-              disabled={disabled || !allowsSpecificFinalLanguage}
-              onClick={() =>
-                onFinalTextLanguageChange(usingSpecificLanguage ? finalTextLanguage : "en")
-              }
-            >
-              Specific language
-            </Button>
-          </ButtonGroup>
+              <TabsList
+                aria-label="Default mode"
+                className="grid h-auto w-full grid-cols-3 sm:grid-cols-6"
+              >
+                {FORMATTING_MODES.map((mode) => {
+                  const requiresPolish =
+                    !aiFormattingEnabled && presetRequiresAiFormatting(mode.id);
+                  return (
+                    <TabsTrigger
+                      key={mode.id}
+                      value={mode.id}
+                      disabled={requiresPolish}
+                      className="gap-1.5 px-2 py-2 text-xs"
+                      title={requiresPolish ? "Requires Polish to be turned on" : undefined}
+                    >
+                      {formattingModeLabel(mode.id)}
+                    </TabsTrigger>
+                  );
+                })}
+              </TabsList>
+            </Tabs>
+          </FieldSet>
 
-          {usingSpecificLanguage && (
-            <div className="mt-3">
-              <LanguageSelection
-                value={finalTextLanguage}
-                onValueChange={onFinalTextLanguageChange}
-                className="w-full md:w-64"
-              />
-            </div>
-          )}
-        </FieldSet>
-      </section>
+          <FieldSet className="rounded-xl border border-border/60 bg-card p-4">
+            <FieldLegend className="mb-1">Final text language</FieldLegend>
+            <FieldDescription className="mb-3">
+              Keep the transcript language, or choose a different written language. Translation
+              requires Polish.
+            </FieldDescription>
+            {!aiFormattingEnabled && finalTextLanguage !== "same_as_transcript" ? (
+              <div className="mb-3 rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-700 dark:text-amber-300">
+                Turn on Polish to use a different final text language.
+              </div>
+            ) : null}
+            <ButtonGroup className="w-full flex-wrap md:w-fit">
+              <Button
+                type="button"
+                variant={!usingSpecificLanguage ? "default" : "outline"}
+                size="sm"
+                disabled={disabled}
+                onClick={() => onFinalTextLanguageChange("same_as_transcript")}
+              >
+                Same as transcript
+              </Button>
+              <Button
+                type="button"
+                variant={usingSpecificLanguage ? "default" : "outline"}
+                size="sm"
+                disabled={disabled || !allowsSpecificFinalLanguage}
+                onClick={() =>
+                  onFinalTextLanguageChange(usingSpecificLanguage ? finalTextLanguage : "en")
+                }
+              >
+                Specific language
+              </Button>
+            </ButtonGroup>
+            {usingSpecificLanguage ? (
+              <div className="mt-3">
+                <LanguageSelection
+                  value={finalTextLanguage}
+                  onValueChange={onFinalTextLanguageChange}
+                  className="w-full md:w-64"
+                />
+              </div>
+            ) : null}
+          </FieldSet>
 
-      <section className="space-y-4">
-        <header>
-          <h2 className="text-base font-semibold">Static Rules</h2>
-          <p className="mt-1 text-sm text-muted-foreground">
-            Work with or without Polish — even better with it. They also sharpen recognition.
-          </p>
-        </header>
-        <ReplacementEditor
-          replacements={writingSettings.replacements}
-          disabled={writingSettingsDisabled}
-          onChange={(replacements) =>
-            onWritingSettingsChange({ ...writingSettings, replacements })
-          }
-        />
-
-        <CustomWordEditor
-          customWords={writingSettings.custom_words}
-          disabled={writingSettingsDisabled}
-          onChange={(custom_words) =>
-            onWritingSettingsChange({ ...writingSettings, custom_words })
-          }
-        />
-
-        <SnippetEditor
-          snippets={writingSettings.snippets}
-          disabled={writingSettingsDisabled}
-          onChange={(snippets) =>
-            onWritingSettingsChange({ ...writingSettings, snippets })
-          }
-        />
-      </section>
-
-      <Collapsible
-        open={advancedOpen}
-        onOpenChange={onAdvancedOpenChange}
-        className="rounded-xl border border-border/60 bg-card"
-      >
-        <div className="flex flex-wrap items-center justify-between gap-3 p-4">
-          <div className="min-w-0">
-            <h2 className="text-base font-semibold">Advanced</h2>
-            <p className="mt-1 text-sm text-muted-foreground">
-              Provider and model setup, plus per-app reshaping.
-            </p>
-          </div>
-          <CollapsibleTrigger asChild>
-            <Button type="button" variant="outline" size="sm" aria-label="Toggle Advanced">
-              <ChevronDown
-                className={`h-4 w-4 transition-transform ${advancedOpen ? "rotate-180" : ""}`}
-              />
-              Advanced
-            </Button>
-          </CollapsibleTrigger>
-        </div>
-        <CollapsibleContent className="space-y-4 border-t border-border/60 p-4">
-          {advancedProviderContent}
           <AppFormattingRulesEditor
+            preset={preset}
             rules={writingSettings.app_formatting_rules}
             disabled={writingSettingsDisabled}
             aiFormattingEnabled={aiFormattingEnabled}
             onChange={(app_formatting_rules) =>
-              onWritingSettingsChange({ ...writingSettings, app_formatting_rules })
+              onWritingSettingsChange({
+                ...writingSettings,
+                app_formatting_rules,
+              })
             }
           />
-        </CollapsibleContent>
-      </Collapsible>
+        </section>
+
+        <section aria-label="Dictionary">
+          <CustomWordEditor
+            customWords={writingSettings.custom_words}
+            disabled={writingSettingsDisabled}
+            onChange={(custom_words) =>
+              onWritingSettingsChange({ ...writingSettings, custom_words })
+            }
+          />
+        </section>
+
+        <section aria-label="Corrections">
+          <ReplacementEditor
+            replacements={writingSettings.replacements}
+            disabled={writingSettingsDisabled}
+            onChange={(replacements) =>
+              onWritingSettingsChange({ ...writingSettings, replacements })
+            }
+          />
+        </section>
+
+        <section aria-label="Snippets">
+          <SnippetEditor
+            snippets={writingSettings.snippets}
+            disabled={writingSettingsDisabled}
+            onChange={(snippets) => onWritingSettingsChange({ ...writingSettings, snippets })}
+          />
+        </section>
+      </div>
     </div>
   );
 }

@@ -1,13 +1,9 @@
-import { render, screen } from "@testing-library/react";
+import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { Sidebar } from "./Sidebar";
 import { SidebarProvider, SidebarTrigger } from "@/components/ui/sidebar";
 import { TooltipProvider } from "@/components/ui/tooltip";
-const settingsState = {
-  settings_mode: "recommended" as "recommended" | "advanced",
-};
-
 
 vi.mock("@tauri-apps/api/app", () => ({
   getVersion: vi.fn().mockResolvedValue("2.0.5"),
@@ -19,13 +15,6 @@ vi.mock("@/contexts/LicenseContext", () => ({
     isLoading: false,
   }),
 }));
-
-vi.mock("@/contexts/SettingsContext", () => ({
-  useSettings: () => ({
-    settings: settingsState,
-  }),
-}));
-
 
 vi.mock("@/services/updateService", () => ({
   updateService: { checkForUpdatesManually: vi.fn() },
@@ -46,46 +35,69 @@ function renderSidebar(activeSection: Parameters<typeof Sidebar>[0]["activeSecti
 
 beforeEach(() => {
   vi.clearAllMocks();
-  settingsState.settings_mode = "recommended";
 });
 
 describe("Sidebar navigation", () => {
-  it("keeps one compact navigation list visible in Default mode", () => {
+  it("renders one flat ordered list of destinations", async () => {
     renderSidebar();
+    await screen.findByText("v2.0.5");
+    expect(document.querySelector('[data-slot="sidebar-container"]')).toHaveClass(
+      "group-data-[side=left]:border-r-0",
+    );
 
-    expect(screen.getByRole("button", { name: "Models" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Account" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /report a problem/i })).toBeInTheDocument();
-    expect(screen.queryByText("Workspace")).not.toBeInTheDocument();
-    expect(screen.queryByText("Configure")).not.toBeInTheDocument();
-    expect(screen.queryByText("Support")).not.toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: /network sharing/i })).not.toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: /agent & cli/i })).not.toBeInTheDocument();
-    const accountGroup = screen
-      .getByRole("button", { name: "Account" })
-      .closest('[data-slot="sidebar-group"]');
-    const reportGroup = screen
-      .getByRole("button", { name: /report a problem/i })
-      .closest('[data-slot="sidebar-group"]');
-    expect(accountGroup).not.toBe(reportGroup);
-  });
-
-  it("shows power-user destinations in advanced mode", () => {
-    settingsState.settings_mode = "advanced";
-    renderSidebar();
-
+    const sources = screen.getByRole("button", { name: "Sources" });
+    const recording = screen.getByRole("button", { name: "Recording" });
+    const polish = screen.getByRole("button", { name: "Polish" });
+    expect(
+      sources.compareDocumentPosition(recording) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+    expect(
+      recording.compareDocumentPosition(polish) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
     expect(screen.getByRole("button", { name: /network sharing/i })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /agent & cli/i })).toBeInTheDocument();
-    const advancedGroup = screen
-      .getByRole("button", { name: "Advanced" })
-      .closest('[data-slot="sidebar-group"]');
-    const reportGroup = screen
-      .getByRole("button", { name: /report a problem/i })
-      .closest('[data-slot="sidebar-group"]');
-    expect(advancedGroup).toBe(reportGroup);
+    expect(screen.getByRole("button", { name: "CLI" })).toBeInTheDocument();
   });
 
-  it("collapses to the icon rail from the title bar trigger", async () => {
+  it("keeps everyday destinations compact and support actions fixed below", async () => {
+    const user = userEvent.setup();
+    const onSectionChange = renderSidebar();
+    await screen.findByText("v2.0.5");
+
+    const mainNav = screen.getByTestId("sidebar-main-nav");
+    const overview = within(mainNav).getByRole("button", { name: "Overview" });
+    const general = within(mainNav).getByRole("button", { name: "General" });
+    const history = within(mainNav).getByRole("button", { name: "History" });
+    const footerGroup = screen.getByTestId("sidebar-footer-nav");
+    const diagnostics = within(footerGroup).getByRole("button", { name: "Quick help" });
+    const report = within(footerGroup).getByRole("button", { name: "Report a problem" });
+
+    expect(
+      overview.compareDocumentPosition(general) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+    expect(
+      general.compareDocumentPosition(history) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+    expect(within(mainNav).getByRole("button", { name: "License" })).toBeInTheDocument();
+    expect(within(mainNav).queryByRole("button", { name: "Quick help" })).not.toBeInTheDocument();
+    expect(
+      diagnostics.compareDocumentPosition(report) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+    expect(footerGroup).not.toHaveTextContent(/general|license/i);
+    expect(document.querySelector('[data-slot="sidebar-content"]')).toHaveClass("overflow-hidden");
+
+    await user.click(general);
+    expect(onSectionChange).toHaveBeenLastCalledWith("general");
+
+    await user.click(screen.getByRole("button", { name: /Pro. Open License/i }));
+    expect(onSectionChange).toHaveBeenLastCalledWith("license");
+  });
+
+  it("keeps the brand row close to the native titlebar", () => {
+    renderSidebar();
+    expect(document.querySelector('[data-slot="sidebar-header"]')).toHaveClass("pt-1");
+  });
+
+  it("collapses to the icon rail through the sidebar control contract", async () => {
     const user = userEvent.setup();
     renderSidebar();
     const sidebar = document.querySelector('[data-slot="sidebar"][data-state]');

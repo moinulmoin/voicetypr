@@ -88,21 +88,12 @@ vi.mock("@tauri-apps/api/event", () => ({
   emit: vi.fn().mockResolvedValue(undefined),
 }));
 
-vi.mock("@tauri-apps/plugin-shell", () => ({
-  open: vi.fn().mockResolvedValue(undefined),
-}));
-
 const platformMock = vi.hoisted(() => ({ isMacOS: true, isWindows: false, isLinux: false }));
 vi.mock("@/lib/platform", () => platformMock);
 
-const renderOnboarding = (licensed = false, licenseLoading = false) =>
+const renderOnboarding = () =>
   render(
-    <OnboardingDesktop
-      licenseLoading={licenseLoading}
-      onComplete={onCompleteMock}
-      modelManagement={modelManagement as never}
-      licensed={licensed}
-    />,
+    <OnboardingDesktop onComplete={onCompleteMock} modelManagement={modelManagement as never} />,
   );
 
 beforeEach(() => {
@@ -175,63 +166,11 @@ describe("OnboardingDesktop", () => {
       shortcut: "CommandOrControl+Shift+Space",
     });
 
-    // Success screen (Screen A): advance to the upgrade screen.
-    await user.click(screen.getByRole("button", { name: /continue/i }));
-    // Upgrade screen (Screen B): completion happens via "Continue".
-    await user.click(screen.getByRole("button", { name: /^continue$/i }));
+    await user.click(screen.getByRole("button", { name: /start using voicetypr/i }));
 
     expect(updateSettingsMock).toHaveBeenCalledWith({ onboarding_completed: true });
     expect(onCompleteMock).toHaveBeenCalledTimes(1);
-    expect(onCompleteMock).toHaveBeenCalledWith(undefined);
-  });
-
-  it("finishes directly without an upgrade screen for licensed users", async () => {
-    const user = userEvent.setup();
-    renderOnboarding(true);
-
-    await user.click(screen.getByRole("button", { name: /start setup/i }));
-    await user.click(screen.getByRole("button", { name: /continue/i }));
-    await user.click(screen.getByRole("button", { name: /continue/i }));
-    await user.click(screen.getByRole("button", { name: /continue/i }));
-    await user.click(screen.getByRole("button", { name: /save hotkey/i }));
-    await user.click(await screen.findByRole("button", { name: /continue/i }));
-
-    expect(screen.queryByText(/upgrade to pro/i)).not.toBeInTheDocument();
-    expect(onCompleteMock).toHaveBeenCalledWith(undefined);
-  });
-
-  it("waits for license status before choosing the completion route", async () => {
-    const user = userEvent.setup();
-    renderOnboarding(false, true);
-
-    await user.click(screen.getByRole("button", { name: /start setup/i }));
-    await user.click(screen.getByRole("button", { name: /continue/i }));
-    await user.click(screen.getByRole("button", { name: /continue/i }));
-    await user.click(screen.getByRole("button", { name: /continue/i }));
-    await user.click(screen.getByRole("button", { name: /save hotkey/i }));
-
-    expect(
-      await screen.findByRole("button", { name: /checking license/i }),
-    ).toBeDisabled();
-    expect(screen.queryByText(/upgrade to pro/i)).not.toBeInTheDocument();
-  });
-
-  it("routes to the License tab when the user already has a license", async () => {
-    const user = userEvent.setup();
-    renderOnboarding();
-
-    await user.click(screen.getByRole("button", { name: /start setup/i }));
-    await user.click(screen.getByRole("button", { name: /continue/i }));
-    await user.click(screen.getByRole("button", { name: /continue/i }));
-    await user.click(screen.getByRole("button", { name: /continue/i }));
-    await user.click(screen.getByRole("button", { name: /save hotkey/i }));
-
-    await screen.findByRole("heading", { name: /you're all set/i });
-    await user.click(screen.getByRole("button", { name: /continue/i }));
-    await user.click(screen.getByRole("button", { name: /already have a license/i }));
-
-    expect(updateSettingsMock).toHaveBeenCalledWith({ onboarding_completed: true });
-    expect(onCompleteMock).toHaveBeenCalledWith("license");
+    expect(onCompleteMock).toHaveBeenCalledWith();
   });
 
   it("strips a stale onboarding hold binding when a combo hotkey is saved", async () => {
@@ -348,7 +287,9 @@ describe("OnboardingDesktop", () => {
     await user.click(screen.getByRole("button", { name: /start setup/i }));
     await user.click(screen.getByRole("button", { name: /continue/i }));
     await user.click(screen.getByRole("button", { name: /continue/i }));
-    expect(await screen.findByRole("heading", { name: /choose a local model/i })).toBeInTheDocument();
+    expect(
+      await screen.findByRole("heading", { name: /choose a local model/i }),
+    ).toBeInTheDocument();
     expect(screen.getByText("Active")).toBeInTheDocument();
     expect(settingsState.current_model).toBe("base.en");
     expect(updateSettingsMock).not.toHaveBeenCalledWith(
@@ -362,15 +303,21 @@ describe("OnboardingDesktop", () => {
 
     await user.click(screen.getByRole("button", { name: /start setup/i }));
 
-    expect(screen.getByRole("heading", { name: /choose where transcription runs/i }))
-      .toBeInTheDocument();
-    expect(screen.getByRole("radio", { name: /use a local model/i })).toBeChecked();
-    expect(screen.getByRole("radio", { name: /use a cloud provider/i })).toBeInTheDocument();
-    expect(screen.getByRole("radio", { name: /use another voicetypr/i })).toBeInTheDocument();
+    expect(
+      screen.getByRole("heading", { name: /choose where transcription runs/i }),
+    ).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /use a local model/i })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+    expect(screen.getByRole("button", { name: /use a cloud provider/i })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /use another voicetypr/i })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /continue/i })).toBeEnabled();
-    expect(updateSettingsMock).not.toHaveBeenCalledWith(expect.objectContaining({
-      current_model: "base.en",
-    }));
+    expect(updateSettingsMock).not.toHaveBeenCalledWith(
+      expect.objectContaining({
+        current_model: "base.en",
+      }),
+    );
   });
 
   it("does not overwrite an explicit source choice when remote restore resolves late", async () => {
@@ -389,15 +336,21 @@ describe("OnboardingDesktop", () => {
 
     renderOnboarding();
     await user.click(screen.getByRole("button", { name: /start setup/i }));
-    await user.click(screen.getByRole("radio", { name: /use a cloud provider/i }));
+    await user.click(screen.getByRole("button", { name: /use a cloud provider/i }));
 
     await act(async () => {
       resolveActiveRemote("remote-1");
       await activeRemote;
     });
 
-    expect(screen.getByRole("radio", { name: /use a cloud provider/i })).toBeChecked();
-    expect(screen.getByRole("radio", { name: /use another voicetypr/i })).not.toBeChecked();
+    expect(screen.getByRole("button", { name: /use a cloud provider/i })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+    expect(screen.getByRole("button", { name: /use another voicetypr/i })).toHaveAttribute(
+      "aria-pressed",
+      "false",
+    );
   });
 
   it("does not overwrite a selected model when remote restore resolves late", async () => {
@@ -453,7 +406,7 @@ describe("OnboardingDesktop", () => {
     renderOnboarding();
 
     await user.click(screen.getByRole("button", { name: /start setup/i }));
-    await user.click(screen.getByRole("radio", { name: /use another Voicetypr/i }));
+    await user.click(screen.getByRole("button", { name: /use another Voicetypr/i }));
     await user.click(screen.getByRole("button", { name: /continue/i }));
     await user.click(screen.getByRole("button", { name: /continue/i }));
 
@@ -508,7 +461,7 @@ describe("OnboardingDesktop", () => {
     renderOnboarding();
 
     await user.click(screen.getByRole("button", { name: /start setup/i }));
-    await user.click(screen.getByRole("radio", { name: /use another Voicetypr/i }));
+    await user.click(screen.getByRole("button", { name: /use another Voicetypr/i }));
     await user.click(screen.getByRole("button", { name: /continue/i }));
     await user.click(screen.getByRole("button", { name: /continue/i }));
 
@@ -551,7 +504,7 @@ describe("OnboardingDesktop", () => {
 
     renderOnboarding();
     await user.click(screen.getByRole("button", { name: /start setup/i }));
-    await user.click(screen.getByRole("radio", { name: /use a cloud provider/i }));
+    await user.click(screen.getByRole("button", { name: /use a cloud provider/i }));
     await user.click(screen.getByRole("button", { name: /continue/i }));
     await user.click(screen.getByRole("button", { name: /continue/i }));
 
@@ -733,8 +686,7 @@ describe("OnboardingDesktop", () => {
     expect(screen.getByRole("checkbox", { name: /crash & error reporting/i })).toBeChecked();
     expect(screen.getByRole("checkbox", { name: /usage analytics/i })).toBeChecked();
 
-    await user.click(screen.getByRole("button", { name: /continue/i }));
-    await user.click(screen.getByRole("button", { name: /^continue$/i }));
+    await user.click(screen.getByRole("button", { name: /start using voicetypr/i }));
     await waitFor(() => {
       expect(invokeMock).toHaveBeenCalledWith("set_telemetry_consent", { enabled: true });
       expect(invokeMock).toHaveBeenCalledWith("set_product_analytics_consent", {
@@ -757,8 +709,7 @@ describe("OnboardingDesktop", () => {
     await screen.findByRole("heading", { name: /you're all set/i });
 
     await user.click(screen.getByRole("checkbox", { name: /usage analytics/i }));
-    await user.click(screen.getByRole("button", { name: /continue/i }));
-    await user.click(screen.getByRole("button", { name: /^continue$/i }));
+    await user.click(screen.getByRole("button", { name: /start using voicetypr/i }));
     await waitFor(() => {
       expect(invokeMock).toHaveBeenCalledWith("set_telemetry_consent", { enabled: true });
       expect(invokeMock).toHaveBeenCalledWith("set_product_analytics_consent", {

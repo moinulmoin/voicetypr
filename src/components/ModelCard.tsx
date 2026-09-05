@@ -1,15 +1,15 @@
-import { AlertCircle, CheckCircle, Download, HardDrive, Star, Trash2, X, Zap } from 'lucide-react';
-import { ModelInfo, isLocalModel } from '../types';
-import { Badge } from './ui/badge';
-import { Button } from './ui/button';
-import { Card } from './ui/card';
-import { Progress } from './ui/progress';
-import { Spinner } from './ui/spinner';
-import { cn } from '@/lib/utils';
-import { getModelDisplayName } from '@/lib/model-display';
-import { createLogger } from "@/lib/logger"
+import { AlertCircle, CheckCircle, Download, HardDrive, Star, Trash2, X, Zap } from "lucide-react";
+import { ModelInfo, isLocalModel } from "../types";
+import { Badge } from "./ui/badge";
+import { Button } from "./ui/button";
+import { Card } from "./ui/card";
+import { Progress } from "./ui/progress";
+import { Spinner } from "./ui/spinner";
+import { cn } from "@/lib/utils";
+import { getModelDisplayName } from "@/lib/model-display";
+import { createLogger } from "@/lib/logger";
 
-const log = createLogger("model-card")
+const log = createLogger("model-card");
 
 interface ModelCardProps {
   name: string;
@@ -40,9 +40,8 @@ export const ModelCard = function ModelCard({
   onDelete,
   onCancelDownload,
   onRepair,
-  showSelectButton = true
+  showSelectButton = true,
 }: ModelCardProps) {
-
   if (!isLocalModel(model)) {
     log.debug(`[ModelCard] Skipping non-local model card for ${model.name}`);
     return null;
@@ -50,14 +49,13 @@ export const ModelCard = function ModelCard({
 
   const formatSize = () => {
     const sizeInMB = model.size / (1024 * 1024);
-    return sizeInMB >= 1024
-      ? `${(sizeInMB / 1024).toFixed(1)} GB`
-      : `${Math.round(sizeInMB)} MB`;
+    return sizeInMB >= 1024 ? `${(sizeInMB / 1024).toFixed(1)} GB` : `${Math.round(sizeInMB)} MB`;
   };
 
   // Model is usable if fully downloaded and no setup/repair is required.
   const isUsable = model.downloaded && !model.requires_setup;
-  const showDownloadError = Boolean(downloadError) && !isUsable && downloadProgress === undefined && !isVerifying;
+  const showDownloadError =
+    Boolean(downloadError) && !isUsable && downloadProgress === undefined && !isVerifying;
   const downloadLabel = downloadPhase
     ? downloadPhase.charAt(0).toUpperCase() + downloadPhase.slice(1)
     : "Downloading";
@@ -67,9 +65,7 @@ export const ModelCard = function ModelCard({
       className={cn(
         "group rounded-xl border border-border bg-card p-4 transition-colors",
         isUsable && showSelectButton ? "cursor-pointer" : "",
-        isSelected
-          ? "border-sage/50 bg-sage-bg/40"
-          : "hover:border-sage/40 hover:bg-muted/30"
+        isSelected ? "border-sage/50 bg-sage-bg/40" : "hover:border-sage/40 hover:bg-muted/30",
       )}
       onClick={() => isUsable && showSelectButton && onSelect(name)}
     >
@@ -79,7 +75,7 @@ export const ModelCard = function ModelCard({
             <h3
               className={cn(
                 "truncate text-sm font-semibold tracking-tight",
-                isSelected && "text-sage"
+                isSelected && "text-sage",
               )}
             >
               {getModelDisplayName(name, { [name]: model })}
@@ -152,7 +148,7 @@ export const ModelCard = function ModelCard({
             </Badge>
           ) : downloadProgress !== undefined ? (
             <>
-              {model.engine === 'parakeet' ? (
+              {model.engine === "parakeet" ? (
                 // FluidAudio reports progress only at coarse file/phase
                 // boundaries — it jumps 0→25→50→100 and sits between, so a
                 // determinate bar looks frozen mid-file. Show an always-animated

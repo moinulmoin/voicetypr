@@ -1,20 +1,21 @@
-import { relaunch } from '@tauri-apps/plugin-process';
-import { ask } from '@tauri-apps/plugin-dialog';
-import { sendNotification, isPermissionGranted, requestPermission } from '@tauri-apps/plugin-notification';
-import { invoke } from '@tauri-apps/api/core';
-import { toast } from 'sonner';
-import type { AppSettings, UpdateChannel } from '@/types';
-import { createLogger } from "@/lib/logger";
+import { relaunch } from "@tauri-apps/plugin-process";
+import { ask } from "@tauri-apps/plugin-dialog";
 import {
-  isStoreDistribution,
-  type DistributionInfo,
-} from '@/types/distribution';
+  sendNotification,
+  isPermissionGranted,
+  requestPermission,
+} from "@tauri-apps/plugin-notification";
+import { invoke } from "@tauri-apps/api/core";
+import { toast } from "sonner";
+import type { AppSettings, UpdateChannel } from "@/types";
+import { createLogger } from "@/lib/logger";
+import { isStoreDistribution, type DistributionInfo } from "@/types/distribution";
 
 const log = createLogger("update");
 
 const UPDATE_CHECK_INTERVAL = 24 * 60 * 60 * 1000; // 24 hours in milliseconds
-const LAST_UPDATE_CHECK_KEY = 'last_update_check';
-const JUST_UPDATED_KEY = 'just_updated_version';
+const LAST_UPDATE_CHECK_KEY = "last_update_check";
+const JUST_UPDATED_KEY = "just_updated_version";
 
 export interface AppUpdateInfo {
   version: string;
@@ -41,7 +42,7 @@ export class UpdateService {
    */
   setSessionActive(active: boolean): void {
     this.isSessionActive = active;
-    
+
     // If session ended and we have a pending relaunch, do it now
     if (!active && this.pendingRelaunch) {
       this.pendingRelaunch = false;
@@ -59,15 +60,15 @@ export class UpdateService {
 
     // Final safety check: verify with backend that no session is active
     try {
-      const currentState = await invoke<{ state: string }>('get_current_recording_state');
-      const isActive = currentState.state !== 'idle' && currentState.state !== 'error';
+      const currentState = await invoke<{ state: string }>("get_current_recording_state");
+      const isActive = currentState.state !== "idle" && currentState.state !== "error";
       if (isActive) {
-        log.debug('Backend still in active session, deferring relaunch');
+        log.debug("Backend still in active session, deferring relaunch");
         this.pendingRelaunch = true;
         return;
       }
     } catch (error) {
-      log.error('Failed to check recording state, proceeding with relaunch:', error);
+      log.error("Failed to check recording state, proceeding with relaunch:", error);
     }
 
     // Store the version we're updating to so the next launch can show it
@@ -78,11 +79,9 @@ export class UpdateService {
     try {
       await relaunch();
     } catch (error) {
-      // Rollback: remove marker since relaunch failed
-      localStorage.removeItem(JUST_UPDATED_KEY);
-      log.error('Relaunch failed:', error);
-      toast.error('Update installed. Please restart the app manually.', { 
-        duration: 10000 
+      log.error("Relaunch failed:", error);
+      toast.error("Update installed. Please restart the app manually.", {
+        duration: 10000,
       });
     }
   }
@@ -99,6 +98,9 @@ export class UpdateService {
     }
 
     const version = localStorage.getItem(JUST_UPDATED_KEY);
+    if (version === this.pendingUpdateVersion) {
+      return null;
+    }
     if (version) {
       localStorage.removeItem(JUST_UPDATED_KEY);
     }
@@ -118,15 +120,15 @@ export class UpdateService {
     }
 
     if (!this.distributionInfoPromise) {
-      this.distributionInfoPromise = invoke<DistributionInfo>('get_distribution_info')
+      this.distributionInfoPromise = invoke<DistributionInfo>("get_distribution_info")
         .then((info) => {
           this.distributionInfo = info;
           return info;
         })
         .catch((error) => {
-          console.error('Failed to read distribution info, assuming direct install:', error);
+          console.error("Failed to read distribution info, assuming direct install:", error);
           const fallback: DistributionInfo = {
-            channel: 'direct',
+            channel: "direct",
             is_store_install: false,
             package_family_name: null,
           };
@@ -153,9 +155,9 @@ export class UpdateService {
     }
     // Check if automatic update checks are enabled (default to true if not set)
     const autoUpdateEnabled = settings.check_updates_automatically ?? true;
-    
+
     if (!autoUpdateEnabled) {
-      log.debug('Automatic update checks are disabled');
+      log.debug("Automatic update checks are disabled");
       return;
     }
 
@@ -177,18 +179,18 @@ export class UpdateService {
       let permitted = await isPermissionGranted();
       if (!permitted) {
         const permission = await requestPermission();
-        permitted = permission === 'granted';
+        permitted = permission === "granted";
       }
       // Send a welcome notification so user sees what they're allowing
       if (permitted) {
-        sendNotification({ 
-          title: 'Notifications Enabled', 
-          body: "You'll be notified about app updates" 
+        sendNotification({
+          title: "Notifications Enabled",
+          body: "You'll be notified about app updates",
         });
       }
       return permitted;
     } catch (error) {
-      log.error('Failed to request notification permission:', error);
+      log.error("Failed to request notification permission:", error);
       return false;
     }
   }
@@ -201,13 +203,13 @@ export class UpdateService {
       let permitted = await isPermissionGranted();
       if (!permitted) {
         const permission = await requestPermission();
-        permitted = permission === 'granted';
+        permitted = permission === "granted";
       }
       if (permitted) {
         sendNotification({ title, body });
       }
     } catch (error) {
-      log.error('Failed to send system notification:', error);
+      log.error("Failed to send system notification:", error);
     }
   }
 
@@ -218,7 +220,7 @@ export class UpdateService {
    */
   async checkForUpdatesInBackground(): Promise<void> {
     if (this.checkInProgress) {
-      log.debug('Update check already in progress');
+      log.debug("Update check already in progress");
       return;
     }
 
@@ -233,22 +235,22 @@ export class UpdateService {
         const lastCheckTime = parseInt(lastCheck, 10);
         const now = Date.now();
         if (now - lastCheckTime < UPDATE_CHECK_INTERVAL) {
-          log.debug('Skipping update check - too soon since last check');
+          log.debug("Skipping update check - too soon since last check");
           return;
         }
       }
 
-      log.debug('Checking for updates in background...');
-      const update = await invoke<AppUpdateInfo | null>('check_for_app_update');
-      
+      log.debug("Checking for updates in background...");
+      const update = await invoke<AppUpdateInfo | null>("check_for_app_update");
+
       // Update last check time
       localStorage.setItem(LAST_UPDATE_CHECK_KEY, Date.now().toString());
-      
+
       if (update) {
         await this.handleUpdateAvailable(update, true);
       }
     } catch (error) {
-      log.error('Background update check failed:', error);
+      log.error("Background update check failed:", error);
       // Don't show error toast for background checks
     } finally {
       this.checkInProgress = false;
@@ -260,32 +262,32 @@ export class UpdateService {
    */
   async checkForUpdatesManually(): Promise<void> {
     if (this.checkInProgress) {
-      toast.info('Update check already in progress');
+      toast.info("Update check already in progress");
       return;
     }
 
     this.checkInProgress = true;
     try {
       if (await this.usesStoreUpdates()) {
-        toast.info('Updates are handled by Microsoft Store');
+        toast.info("Updates are handled by Microsoft Store");
         return;
       }
 
-      toast.info('Checking for updates...');
-      
-      const update = await invoke<AppUpdateInfo | null>('check_for_app_update');
-      
+      toast.info("Checking for updates...");
+
+      const update = await invoke<AppUpdateInfo | null>("check_for_app_update");
+
       // Update last check time
       localStorage.setItem(LAST_UPDATE_CHECK_KEY, Date.now().toString());
-      
+
       if (update) {
         await this.handleUpdateAvailable(update, false);
       } else {
         toast.success("You're on the latest version!");
       }
     } catch (error) {
-      log.error('Update check failed:', error);
-      toast.error('Failed to check for updates');
+      log.error("Update check failed:", error);
+      toast.error("Failed to check for updates");
     } finally {
       this.checkInProgress = false;
     }
@@ -294,12 +296,15 @@ export class UpdateService {
   /**
    * Handle when an update is available
    */
-  private async handleUpdateAvailable(update: AppUpdateInfo, isBackgroundCheck: boolean): Promise<void> {
+  private async handleUpdateAvailable(
+    update: AppUpdateInfo,
+    isBackgroundCheck: boolean,
+  ): Promise<void> {
     if (isBackgroundCheck) {
       toast.info(`Update ${update.version} is available. Open Settings to install it.`);
       await this.sendSystemNotification(
-        'Update Available',
-        `Voicetypr ${update.version} is ready to install from Settings.`
+        "Update Available",
+        `Voicetypr ${update.version} is ready to install from Settings.`,
       );
       return;
     }
@@ -314,29 +319,32 @@ export class UpdateService {
     const yes = await ask(
       `Update ${update.version} is available!\n\nRelease notes:\n${update.body}\n\nDo you want to download and install it now?`,
       {
-        title: 'Update Available',
-        kind: 'info',
-        okLabel: 'Update',
-        cancelLabel: 'Later'
-      }
+        title: "Update Available",
+        kind: "info",
+        okLabel: "Update",
+        cancelLabel: "Later",
+      },
     );
-    
+
     if (yes) {
-      toast.info('Downloading update...');
-      
+      toast.info("Downloading update...");
+
       try {
-        await invoke('install_app_update', {
+        await invoke("install_app_update", {
           expectedVersion: update.version,
         });
         // Notify if relaunch will be deferred due to active session
         if (this.isSessionActive) {
-          await this.sendSystemNotification('Update Ready', 'Voicetypr will restart when recording ends');
+          await this.sendSystemNotification(
+            "Update Ready",
+            "Voicetypr will restart when recording ends",
+          );
         }
         this.pendingUpdateVersion = update.version;
         await this.performRelaunch();
       } catch (error) {
-        log.error('Update installation failed:', error);
-        toast.error('Failed to install update');
+        log.error("Update installation failed:", error);
+        toast.error("Failed to install update");
       }
     }
   }
@@ -355,7 +363,7 @@ export class UpdateService {
       this.checkForUpdatesInBackground();
     }, UPDATE_CHECK_INTERVAL);
 
-    log.debug('Daily update check scheduled');
+    log.debug("Daily update check scheduled");
   }
 
   /**

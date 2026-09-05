@@ -538,6 +538,26 @@ RMS/peak/prepared-audio evidence before attributing it to an engine. Any
 resulting product fix requires a newly cut beta and a rerun of the affected
 checks above.
 
+## Plan 050 — share card + chrome/UI pass (NEEDS-SMOKE)
+
+Verified on the local macOS dev build (`pnpm tauri:dev`) 2026-08-18: share
+modal geometry and rendered card pixels, Overview restructure (header share
+button, activity block, all-time strip), Quick help rename, CLI copy, and
+titlebar traffic-light/toggle alignment measured at 0.0px delta. Full
+`pnpm quality-gate` green (1378 backend tests).
+
+- [ ] 050-S1 Windows build (compile-only in CI): open Overview, Polish, and
+      History — container rhythm renders sanely at the 1000×680 min size and
+      the share modal export (Copy image / Download) produces the 2400×1600
+      PNG.
+- [ ] 050-S2 Packaged macOS build (non-dev): traffic lights at `y:12` stay
+      pixel-aligned with the sidebar-toggle glyph, and the branded share card
+      (logo, gradient CTA) renders identically to the dev build.
+- [ ] 050-S3 Real `pi` CLI against an OpenAI provider: Polish → Local Agents
+      → pi → Thinking selector offers Off/Minimal/Low/Medium and a polish run
+      at Minimal succeeds end-to-end (contract covered by
+      `agent_cli` unit tests; the real-binary round-trip is ignored in CI).
+
 ## Release rule
 
 015 + 016 + 046 smoke are ship gates for the AI-polish release; 004/008 smoke
@@ -548,3 +568,15 @@ Native triggers (NT-S1..S4) are a SEPARATE post-2.0.0 add-on (plan 022 P2,
 owner-confirmed): optional to smoke and they do NOT gate the 2.0.0 release.
 If they fail, the native engine is simply not advertised; the legacy
 global_shortcut path is untouched, so 2.0.0 ships regardless.
+
+- [ ] **058-S1** Packaged macOS (v2.0.6-beta.7): with "Pause media during recording" enabled —
+      (a) Spotify or Music.app playing → hotkey: music pauses, stop: resumes (log: `paused via MediaRemote command`);
+      (b) browser player playing → hotkey: audio silences via mute fallback if the player ignores commands (log: `muted via CoreAudio`), stop: unmutes;
+      (c) quick tap (<0.5s) with music: still resumes;
+      (d) back-to-back recordings: stays paused through both, resumes after last stop;
+      (e) quit the app while a muted recording is active → output unmutes on exit;
+      (f) nothing playing → no phantom media action.
+- [ ] **058-S2** Windows (v2.0.6-beta.7): media pause via SMTC — Spotify + a Chrome tab video pause on record, resume on stop; verify the paused-session ledger resumes only the session we paused.
+- [ ] **059-S1** Packaged macOS (`v2.0.6-beta.8`): hotkey with silence and a mic activation pop → pill "No speech detected", nothing inserted, no engine/polish in logs (`skipped_no_speech` in `SPEECH_EVIDENCE`); a 31–100ms soft utterance, quiet whisper, and deliberately dictated punctuation still transcribe; cloud STT path behaves like local.
+  - [ ] **059-S2** Packaged Windows (`v2.0.6-beta.8`): repeat 059-S1 with mono/stereo 44.1/48kHz devices and both small/large WASAPI callback buffers; stop during the final syllable keeps speech; local/cloud/remote routes remain fail-open for uncertain audio.
+

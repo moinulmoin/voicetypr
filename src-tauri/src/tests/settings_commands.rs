@@ -43,7 +43,7 @@ mod tests {
             transcription_task: TRANSCRIPTION_TASK_TRANSCRIBE.to_string(),
             final_text_language: FINAL_TEXT_LANGUAGE_SAME_AS_TRANSCRIPT.to_string(),
             theme: "dark".to_string(),
-            settings_mode: "advanced".to_string(),
+            settings_mode: "recommended".to_string(),
             transcription_cleanup_days: Some(7),
             pill_position: Some((100.0, 200.0)),
             launch_at_startup: false,
@@ -79,7 +79,7 @@ mod tests {
         assert!(json.contains("\"transcription_task\":\"transcribe\""));
         assert!(json.contains("\"final_text_language\":\"same_as_transcript\""));
         assert!(json.contains("\"theme\":\"dark\""));
-        assert!(json.contains("\"settings_mode\":\"advanced\""));
+        assert!(json.contains("\"settings_mode\":\"recommended\""));
         assert!(json.contains("\"transcription_cleanup_days\":7"));
         assert!(json.contains("\"auto_paste_transcription\":true"));
 
@@ -863,7 +863,7 @@ mod tests {
             transcription_task: TRANSCRIPTION_TASK_TRANSLATE_TO_ENGLISH.to_string(),
             final_text_language: "en".to_string(),
             theme: "dark".to_string(),
-            settings_mode: "advanced".to_string(),
+            settings_mode: "recommended".to_string(),
             transcription_cleanup_days: Some(14),
             pill_position: Some((500.0, 200.0)),
             launch_at_startup: true,

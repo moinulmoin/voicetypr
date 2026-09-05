@@ -18,10 +18,7 @@ function isPolishWorkflowUpdate(version: string | null): boolean {
   return version === "2.0.6" || Boolean(version?.match(/^2\.0\.6-beta\.\d+$/));
 }
 
-export function UpdateAnnouncementDialog({
-  version,
-  onClose,
-}: UpdateAnnouncementDialogProps) {
+export function UpdateAnnouncementDialog({ version, onClose }: UpdateAnnouncementDialogProps) {
   return (
     <Dialog open={Boolean(version)} onOpenChange={(open) => !open && onClose()}>
       <DialogContent className="sm:max-w-md">
@@ -30,9 +27,7 @@ export function UpdateAnnouncementDialog({
             <Sparkles className="h-5 w-5 text-primary" />
             Voicetypr Updated
           </DialogTitle>
-          <DialogDescription>
-            Successfully updated to version {version}
-          </DialogDescription>
+          <DialogDescription>Successfully updated to version {version}</DialogDescription>
         </DialogHeader>
         {isPolishWorkflowUpdate(version) && (
           <div className="space-y-3 rounded-lg border border-border bg-muted/30 p-4 text-sm">

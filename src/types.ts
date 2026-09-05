@@ -1,11 +1,18 @@
-export type SpeechModelEngine = 'whisper' | 'parakeet' | 'soniox' | 'openai' | 'groq' | 'deepgram' | 'cohere';
-export type ModelKind = 'local' | 'cloud';
+export type SpeechModelEngine =
+  | "whisper"
+  | "parakeet"
+  | "soniox"
+  | "openai"
+  | "groq"
+  | "deepgram"
+  | "cohere";
+export type ModelKind = "local" | "cloud";
 
 /** A downloaded shareable model exposed by a remote Voicetypr host. */
 export interface RemoteShareableModel {
   id: string;
   display_name: string;
-  engine: Extract<SpeechModelEngine, 'whisper' | 'parakeet'>;
+  engine: Extract<SpeechModelEngine, "whisper" | "parakeet">;
   recommended?: boolean | null;
   speed_score?: number | null;
   accuracy_score?: number | null;
@@ -33,7 +40,7 @@ interface BaseModelInfo {
 }
 
 export interface LocalModelInfo extends BaseModelInfo {
-  kind: 'local';
+  kind: "local";
   size: number;
   url: string;
   sha256: string;
@@ -41,36 +48,45 @@ export interface LocalModelInfo extends BaseModelInfo {
   accuracy_score: number;
 }
 
+export interface CloudSttModel {
+  id: string;
+  display_name: string;
+}
+
 export interface CloudModelInfo extends BaseModelInfo {
-  kind: 'cloud';
+  kind: "cloud";
   /** Backend-sourced transcription model id used by this cloud provider. */
   underlying_model?: string | null;
+  /** Curated, friendly-labeled API models for this provider. */
+  available_models?: CloudSttModel[] | null;
 }
 
 export type ModelInfo = LocalModelInfo | CloudModelInfo;
 
-export const isCloudModel = (model: ModelInfo): model is CloudModelInfo =>
-  model.kind === 'cloud';
+export const isCloudModel = (model: ModelInfo): model is CloudModelInfo => model.kind === "cloud";
 
-export const isLocalModel = (model: ModelInfo): model is LocalModelInfo =>
-  model.kind === 'local';
+export const isLocalModel = (model: ModelInfo): model is LocalModelInfo => model.kind === "local";
 
-export type RecordingMode = 'toggle' | 'push_to_talk';
-export type PillIndicatorMode = 'never' | 'always' | 'when_recording';
-export type PillIndicatorStyle = 'compact' | 'full';
-export type PillIndicatorPosition = 'top-left' | 'top-center' | 'top-right' | 'bottom-left' | 'bottom-center' | 'bottom-right';
-export type TranscriptionAcceleration = 'auto' | 'gpu' | 'cpu';
-export type UpdateChannel = 'stable' | 'beta';
-export type SettingsMode = 'recommended' | 'advanced';
+export type RecordingMode = "toggle" | "push_to_talk";
+export type PillIndicatorMode = "never" | "always" | "when_recording";
+export type PillIndicatorStyle = "compact" | "full";
+export type PillIndicatorPosition =
+  | "top-left"
+  | "top-center"
+  | "top-right"
+  | "bottom-left"
+  | "bottom-center"
+  | "bottom-right";
+export type TranscriptionAcceleration = "auto" | "gpu" | "cpu";
+export type UpdateChannel = "stable" | "beta";
 
 export interface AppSettings {
   hotkey: string;
   current_model: string;
   speech_language: string;
-  transcription_task?: 'transcribe' | 'translate_to_english';
+  transcription_task?: "transcribe" | "translate_to_english";
   final_text_language?: string;
   theme: string;
-  settings_mode?: SettingsMode;
   transcription_cleanup_days?: number | null;
   launch_at_startup?: boolean;
   onboarding_completed?: boolean;
@@ -131,8 +147,10 @@ export interface TranscriptionWritingMeta {
   ai_applied?: boolean;
   /** Pre-AI raw transcript saved when AI formatting changed the text (desktop only). Never logged; local history only. */
   original_text?: string;
-  /** App that received the dictated text (set when App Rules capture the active app). */
-  context_hint?: { app_name?: string; category?: string };
+  /** App active when desktop recording started. Captured locally whether Polish is on or off. */
+  context_hint?: { app_name?: string; process_path?: string; category?: string };
+  ai_provider?: string;
+  ai_model?: string;
 }
 
 export interface TranscriptionHistory {
@@ -142,16 +160,16 @@ export interface TranscriptionHistory {
   model: string;
   recording_file?: string; // Filename of the saved recording (not full path)
   source_recording_id?: string; // For re-transcriptions, references original transcription
-  status?: 'completed' | 'in_progress' | 'failed';
+  status?: "completed" | "in_progress" | "failed";
   writing?: TranscriptionWritingMeta;
 }
 
 export interface LicenseStatus {
-  status: 'licensed' | 'trial' | 'expired' | 'none';
+  status: "licensed" | "trial" | "expired" | "none";
   trial_days_left?: number;
   license_type?: string;
   license_key?: string;
   expires_at?: string;
-  verification_state?: 'verified' | 'offline_grace' | 'needs_revalidation';
+  verification_state?: "verified" | "offline_grace" | "needs_revalidation";
   verification_expires_at?: string;
 }

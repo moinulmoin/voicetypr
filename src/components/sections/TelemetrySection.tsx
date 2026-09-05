@@ -21,9 +21,7 @@ interface AnalyticsStatus {
 type PendingControl = "diagnostics" | "analytics" | null;
 
 export function TelemetrySection() {
-  const [diagnostics, setDiagnostics] = useState<DiagnosticsStatus | null>(
-    null,
-  );
+  const [diagnostics, setDiagnostics] = useState<DiagnosticsStatus | null>(null);
   const [analytics, setAnalytics] = useState<AnalyticsStatus | null>(null);
   const [pending, setPending] = useState<PendingControl>(null);
 
@@ -51,12 +49,8 @@ export function TelemetrySection() {
     setPending("diagnostics");
     try {
       await invoke("set_telemetry_consent", { enabled });
-      setDiagnostics((current) =>
-        current ? { ...current, enabled } : current,
-      );
-      toast.success(
-        enabled ? "Crash reporting turned on." : "Crash reporting turned off.",
-      );
+      setDiagnostics((current) => (current ? { ...current, enabled } : current));
+      toast.success(enabled ? "Crash reporting turned on." : "Crash reporting turned off.");
     } catch (error) {
       log.error("Failed to update crash reporting:", error);
       toast.error("Could not update crash reporting.");
@@ -72,9 +66,7 @@ export function TelemetrySection() {
       setAnalytics((current) =>
         current ? { ...current, enabled, consent_required: false } : current,
       );
-      toast.success(
-        enabled ? "Usage analytics turned on." : "Usage analytics turned off.",
-      );
+      toast.success(enabled ? "Usage analytics turned on." : "Usage analytics turned off.");
     } catch (error) {
       log.error("Failed to update usage analytics:", error);
       toast.error("Could not update usage analytics.");
@@ -99,8 +91,7 @@ export function TelemetrySection() {
           <div className="min-w-0">
             <p className="text-sm font-medium">Crash &amp; error reporting</p>
             <p className="mt-1 text-xs text-muted-foreground">
-              Sends scrubbed crashes and errors to GlitchTip for diagnostics and
-              native symbolication.
+              Anonymous crash reports that help us fix bugs faster.
             </p>
           </div>
           <Switch
@@ -120,17 +111,14 @@ export function TelemetrySection() {
           <div className="min-w-0">
             <p className="text-sm font-medium">Usage analytics</p>
             <p className="mt-1 text-xs text-muted-foreground">
-              Sends anonymous feature usage, outcomes, and performance buckets
-              to PostHog. No autocapture or session replay.
+              Anonymous usage analytics that help us improve the product.
             </p>
           </div>
           <Switch
             className="shrink-0"
             checked={analytics?.enabled ?? true}
             disabled={
-              pending !== null ||
-              analytics === null ||
-              (!analytics.available && !analytics.enabled)
+              pending !== null || analytics === null || (!analytics.available && !analytics.enabled)
             }
             onCheckedChange={updateAnalytics}
             aria-label="Enable usage analytics"
@@ -144,16 +132,8 @@ export function TelemetrySection() {
           </div>
         )}
 
-        {!loading && (!diagnostics.available || !analytics.available) && (
-          <p className="text-xs text-muted-foreground">
-            Unavailable categories are inert in this build. Your saved choices
-            still apply to official releases.
-          </p>
-        )}
-
         <p className="text-xs text-muted-foreground">
-          Neither category includes audio, transcripts, clipboard contents,
-          prompts, API keys, paths, window titles, or session replay.
+          No audio, transcripts, or personal data — ever.
         </p>
       </div>
     </div>
