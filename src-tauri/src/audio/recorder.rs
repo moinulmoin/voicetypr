@@ -145,15 +145,15 @@ fn drain_final_callback(
         Err(TrySendError::Full(WriterMsg::Chunk(mut chunk))) => {
             dropped_chunks.fetch_add(1, Ordering::SeqCst);
             chunk.clear();
-            // try_send: never blocks or allocates on the RT thread. By
-            // conservation (RECYCLE_CHANNEL_CAPACITY) the channel always
-            // has room; on the impossible full case the chunk is returned
-            // to the pool and the drop is counted above.
+            // Full carries the message we tried to send (never the queue
+            // front). Return that buffer to the pool for the RT thread;
+            // the drop is counted above.
             let _ = recycle_tx.try_send(chunk);
         }
+        // Disconnected (writer gone) counts the same way. The
+        // Full(Finalize) arm exists only for pattern totality: a Chunk
+        // send can never observe a Full carrying a different message.
         Err(TrySendError::Full(WriterMsg::Finalize)) | Err(TrySendError::Disconnected(_)) => {
-            // Writer already finalizing or gone: the final buffer is
-            // unwritten — same honesty rule, count the drop.
             dropped_chunks.fetch_add(1, Ordering::SeqCst);
         }
     }
@@ -1707,23 +1707,39 @@ mod tests {
     }
     #[test]
     fn drain_final_callback_feeds_capture_evidence_from_the_final_buffer() {
+        use crate::audio::speech_evidence::{
+            classify_speech_evidence, SpeechEvidenceClass,
+        };
         // Plan 060.1: the stop boundary lands right after the last word — the
         // final buffer must contribute speech evidence, or the no-speech gate
-        // deletes a recording whose speech the metrics never saw. Pre-fix the
-        // drain branch returned before `observe`, leaving a second of silence
-        // plus a loud final callback classified as high-confidence no-speech.
+        // deletes a recording whose speech the metrics never saw.
         let metrics = CaptureMetricsAccumulator::new(16_000, 1);
-        metrics.observe(&vec![0.0; 16_000]); // one second of room silence
-        let loud: Vec<f32> = vec![0.2; 160]; // 10ms well above the window floor
-        let i16_samples: Vec<i16> = loud.iter().map(|&sample| f32_to_i16(sample)).collect();
+        // One second of quiet room tone. Nonzero on purpose: an all-zero
+        // capture would take the HighConfidenceNoInput path, not the gate.
+        metrics.observe(&vec![0.0007; 16_000]);
+        // Pre-fix counterfactual: without the drained final buffer the
+        // evidence classifies as high-confidence no-speech — would_skip_engine
+        // is true and the recording (with its final word) is deleted.
+        let baseline_only = metrics.snapshot(16_000, 1, false);
+        assert!(matches!(
+            classify_speech_evidence(Some(baseline_only), None),
+            SpeechEvidenceClass::HighConfidenceNoSpeech
+        ));
 
-        let (_pool_tx, pool_rx) = mpsc::sync_channel::<Vec<i16>>(1);
-        let (writer_tx, _writer_rx) = mpsc::sync_channel::<WriterMsg>(1);
+        // The final drained buffer: 35ms of soft speech (0.004 > the 0.003
+        // window floor, yet below the aggregate floors) — past the 20ms
+        // transient allowance the gate extends to a bare click.
+        let final_buf: Vec<f32> = vec![0.004; 560];
+        let i16_samples: Vec<i16> = final_buf.iter().map(|&sample| f32_to_i16(sample)).collect();
+
+        let (pool_tx, pool_rx) = mpsc::sync_channel::<Vec<i16>>(1);
+        pool_tx.send(Vec::with_capacity(560)).unwrap();
+        let (writer_tx, writer_rx) = mpsc::sync_channel::<WriterMsg>(1);
         let (recycle_tx, _recycle_rx) = mpsc::sync_channel::<Vec<i16>>(1);
         let dropped = AtomicU64::new(0);
 
         drain_final_callback(
-            &loud,
+            &final_buf,
             &i16_samples,
             &metrics,
             &pool_rx,
@@ -1732,13 +1748,22 @@ mod tests {
             &dropped,
         );
 
-        let snapshot = metrics.snapshot(16_000, 1, false);
         assert_eq!(dropped.load(Ordering::SeqCst), 0);
+        let written = writer_rx.try_recv().ok();
         assert!(
-            snapshot.ms_above_rms_floor >= 10,
-            "final buffer must count as above-floor evidence: {snapshot:?}"
+            matches!(written.as_ref(), Some(WriterMsg::Chunk(chunk)) if *chunk == i16_samples),
+            "final chunk must reach the writer verbatim"
         );
-        assert!(snapshot.max_window_rms > crate::audio::speech_evidence::NO_SPEECH_WINDOW_RMS_FLOOR);
+        // The gate can no longer skip this capture: the final buffer's
+        // sustained above-floor windows pushed the evidence past the
+        // transient threshold (engine runs, speech survives).
+        let snapshot = metrics.snapshot(16_000, 1, false);
+        let class = classify_speech_evidence(Some(snapshot), None);
+        assert!(
+            !class.would_skip_engine(),
+            "final speech must not be gated away, got {class:?}"
+        );
+        assert!(matches!(class, SpeechEvidenceClass::Uncertain));
     }
 
     #[test]
@@ -1806,8 +1831,12 @@ mod tests {
         let samples = vec![0.2f32; 160];
         let i16_samples: Vec<i16> = samples.iter().map(|&sample| f32_to_i16(sample)).collect();
 
-        // Queue occupied by a Finalize (the Windows stream-drop-timeout case).
-        let (_pool_tx, pool_rx) = mpsc::sync_channel::<Vec<i16>>(1);
+        // Full queue (occupied by a Finalize, the Windows stream-drop-timeout
+        // case). The occupant is irrelevant: a Chunk send into a queue with
+        // no free slot reports Full carrying OUR chunk, which returns to the
+        // pool while the drop is counted.
+        let (pool_tx, pool_rx) = mpsc::sync_channel::<Vec<i16>>(1);
+        pool_tx.send(Vec::with_capacity(160)).unwrap();
         let (writer_tx, _writer_rx) = mpsc::sync_channel::<WriterMsg>(1);
         writer_tx.send(WriterMsg::Finalize).unwrap();
         let (recycle_tx, recycle_rx) = mpsc::sync_channel::<Vec<i16>>(1);
@@ -1823,7 +1852,10 @@ mod tests {
             &dropped,
         );
         assert_eq!(dropped.load(Ordering::SeqCst), 1);
-        assert!(recycle_rx.try_recv().is_err(), "a Full(Finalize) buffer is not recycled");
+        assert!(
+            recycle_rx.try_recv().is_ok(),
+            "the borrowed chunk returns to the pool for the RT thread"
+        );
 
         // Disconnected writer (receiver dropped) with a pool chunk available:
         // the send itself fails, and the drop is counted the same way.
@@ -1853,7 +1885,8 @@ mod tests {
         let samples = vec![0.2f32; 160];
         let i16_samples: Vec<i16> = samples.iter().map(|&sample| f32_to_i16(sample)).collect();
 
-        let (_pool_tx, pool_rx) = mpsc::sync_channel::<Vec<i16>>(1);
+        let (pool_tx, pool_rx) = mpsc::sync_channel::<Vec<i16>>(1);
+        pool_tx.send(Vec::with_capacity(160)).unwrap();
         let (writer_tx, _writer_rx) = mpsc::sync_channel::<WriterMsg>(1);
         writer_tx.send(WriterMsg::Chunk(Vec::new())).unwrap(); // occupy the queue
         let (recycle_tx, recycle_rx) = mpsc::sync_channel::<Vec<i16>>(1);

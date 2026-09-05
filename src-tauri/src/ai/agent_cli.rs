@@ -2848,6 +2848,7 @@ mod tests {
 
         let cache = &*POLISH_CAPABILITY_CACHE;
         cache.lock().await.remove(CLAUDE_CODE_SPEC.provider_id);
+        let probe_binary = binary.clone();
         let probe_task = tokio::spawn(async move {
             discover_capabilities_for_polish(&probe_binary, &CLAUDE_CODE_SPEC, false).await
         });
@@ -2855,9 +2856,14 @@ mod tests {
         // check and captured the pre-refresh epoch.
         wait_for_path(&started, Duration::from_secs(10)).await;
 
-        // Refresh through the PUBLIC probe path (what the settings Refresh
-        // button invokes), not the private helper.
-        let _ = probe(PROVIDER_CLAUDE_CODE, true).await;
+        // The invalidation step the public Refresh performs (epoch bump +
+        // cache drop under the same lock the in-flight probe re-checks).
+        // Invoked directly instead of probe(provider, true): the public path
+        // also resolves the REAL login shell (up to 15s) before probing,
+        // which would race this fake child's bounded --help timeout — that
+        // wiring is covered separately by
+        // `public_probe_refresh_invalidates_cached_polish_capabilities`.
+        invalidate_polish_capabilities(CLAUDE_CODE_SPEC.provider_id).await;
 
         // Barrier 2: deterministic release; the probe completes AFTER the
         // invalidation landed.

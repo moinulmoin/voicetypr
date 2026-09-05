@@ -1,22 +1,25 @@
 use std::path::Path;
 
 /// Whisper acceleration actually in use (plan 044 failure-event tag):
-/// "cpu" | "metal" | "sidecar". Written at backend-decision points and by
-/// the acceleration wrapper; read when a failure event is emitted. Cleared
-/// at `Transcriber::new` entry so a failed init after a cache eviction does
-/// not report the previous model's backend.
-static ACTIVE_BACKEND: parking_lot::RwLock<Option<&'static str>> = parking_lot::RwLock::new(None);
-
-pub(crate) fn set_active_backend(backend: &'static str) {
-    *ACTIVE_BACKEND.write() = Some(backend);
+/// "cpu" | "metal" | "sidecar".
+///
+/// Attempt-owned state (plan 060.1): the value lives in a task-local scoped
+/// to the CURRENT transcription task. The acceleration wrapper records it
+/// before each await and the loaded Transcriber exposes its own label, so a
+/// failure event can neither inherit a previous recording's backend nor be
+/// overwritten by a concurrent preload/remote init. Outside a scoped
+/// transcription task — and after a failed init, where no backend was
+/// ever established — the read is `None` and the report omits the tag.
+tokio::task_local! {
+    static ATTEMPT_BACKEND: std::cell::Cell<Option<&'static str>>;
 }
 
-pub(crate) fn clear_active_backend() {
-    *ACTIVE_BACKEND.write() = None;
+pub(crate) fn record_attempt_backend(backend: &'static str) {
+    let _ = ATTEMPT_BACKEND.try_with(|slot| slot.set(Some(backend)));
 }
 
-pub(crate) fn active_backend() -> Option<&'static str> {
-    *ACTIVE_BACKEND.read()
+pub(crate) fn attempt_backend() -> Option<&'static str> {
+    ATTEMPT_BACKEND.try_with(|slot| slot.get()).ok().flatten()
 }
 
 use std::time::Instant;
@@ -32,8 +35,10 @@ use crate::utils::system_monitor;
 pub struct Transcriber {
     context: WhisperContext,
     cpu_profile: bool,
+    /// Acceleration this loaded instance serves ("cpu" | "metal"); the
+    /// attempt records it when the instance is used (plan 060.1).
+    backend: &'static str,
 }
-
 #[derive(Debug, Clone, PartialEq)]
 pub struct WhisperTranscriptionOutput {
     pub raw_text: String,
@@ -44,8 +49,12 @@ pub struct WhisperTranscriptionOutput {
 }
 
 impl Transcriber {
+    /// Acceleration label this loaded instance serves (plan 060.1).
+    pub(crate) fn backend(&self) -> &'static str {
+        self.backend
+    }
+
     pub fn new(model_path: &Path) -> Result<Self, String> {
-        clear_active_backend();
         let init_start = Instant::now();
         let model_path_str = model_path
             .to_str()
@@ -155,10 +164,11 @@ impl Transcriber {
                         &[("backend", backend_type), ("model_path", model_path_str)],
                     );
 
-                    set_active_backend(if cpu_profile { "cpu" } else { "metal" });
+                    let backend = if cpu_profile { "cpu" } else { "metal" };
                     return Ok(Self {
                         context: ctx,
                         cpu_profile,
+                        backend,
                     });
                 }
                 Err(gpu_err) => {
@@ -201,7 +211,6 @@ impl Transcriber {
             format!("Failed to load model: {}", e)
         })?;
 
-        set_active_backend("cpu");
         let backend_type = "CPU";
 
         let cpu_time = cpu_start.elapsed().as_millis();
@@ -254,6 +263,7 @@ impl Transcriber {
         Ok(Self {
             context: ctx,
             cpu_profile: true,
+            backend: "cpu",
         })
     }
 

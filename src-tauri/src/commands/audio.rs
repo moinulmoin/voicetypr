@@ -1563,7 +1563,7 @@ where
             // marking left the backend tag stale through the whole sidecar
             // attempt, so a failure event (or a later read) could attribute this
             // recording to whatever backend the PREVIOUS run used.
-            crate::whisper::transcriber::set_active_backend("sidecar");
+            crate::whisper::transcriber::record_attempt_backend("sidecar");
             let gpu_result = gpu_client
                 .transcribe(
                     app,
@@ -1610,13 +1610,18 @@ where
     // CPU transcription, so a failure anywhere below attributes "cpu" (or the
     // sidecar above), never a previous recording's backend.
     #[cfg(target_os = "windows")]
-    crate::whisper::transcriber::set_active_backend("cpu");
+    crate::whisper::transcriber::record_attempt_backend("cpu");
 
     let transcriber = {
         let cache_state = app.state::<AsyncMutex<TranscriberCache>>();
         let mut cache = cache_state.lock().await;
         cache.get_or_create(model_path)?
     };
+    // Plan 060.1: the LOADED instance's label is the honest attempt backend —
+    // metal/cpu on macOS, cpu on Windows — recorded in the same task. A fresh
+    // init that fails leaves the slot empty: no backend was established, the
+    // report omits the tag instead of guessing.
+    crate::whisper::transcriber::record_attempt_backend(transcriber.backend());
 
     let audio_path = audio_path.to_path_buf();
     let language = language.map(str::to_owned);
@@ -5623,7 +5628,7 @@ pub async fn stop_recording(
                         engine_selection_for_task,
                         ActiveEngineSelection::Whisper { .. }
                     ) {
-                        crate::whisper::transcriber::active_backend()
+                        crate::whisper::transcriber::attempt_backend()
                     } else {
                         None
                     };
@@ -7461,14 +7466,14 @@ pub async fn cancel_recording(app: AppHandle) -> Result<(), String> {
     // user's paused media is restored — a failed ESC-cancel must never
     // strand a paused track or a stuck recording state.
     let recorder_state = app.state::<RecorderState>();
-    let stop_error: Option<String> = (|| {
+    let stop_error: Option<String> = (|| -> Result<(), String> {
         let mut guard = recorder_state
             .inner()
             .0
             .lock()
             .map_err(|e| format!("Failed to acquire recorder lock: {}", e))?;
         if !guard.is_recording() {
-            return Ok(None);
+            return Ok(());
         }
         log::info!("Stopping recorder");
         // Just stop the recorder, don't do full stop_recording flow.
@@ -7487,7 +7492,7 @@ pub async fn cancel_recording(app: AppHandle) -> Result<(), String> {
                         }
                     }
                 }
-                Ok(None)
+                Ok(())
             }
             Err(e) => Err(e),
         }
