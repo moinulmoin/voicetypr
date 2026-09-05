@@ -163,7 +163,7 @@ describe("TelemetrySection", () => {
     // Opt-out is live immediately: the on-state flips off and no restart is
     // mentioned.
     await waitFor(() => {
-      const successMessages = toast.success.mock.calls.map((call) => String(call[0]));
+      const successMessages = vi.mocked(toast.success).mock.calls.map((call) => String(call[0]));
       expect(successMessages.length).toBeGreaterThan(0);
       expect(successMessages.some((message) => /restart/i.test(message))).toBe(false);
       expect(
@@ -198,7 +198,7 @@ describe("TelemetrySection", () => {
     // No restart guidance when the typed result says reporting is live; the
     // switch still reflects the stored consent.
     await waitFor(() => {
-      const successMessages = toast.success.mock.calls.map((call) => String(call[0]));
+      const successMessages = vi.mocked(toast.success).mock.calls.map((call) => String(call[0]));
       expect(successMessages.length).toBeGreaterThan(0);
       expect(successMessages.some((message) => /restart/i.test(message))).toBe(false);
       expect(
