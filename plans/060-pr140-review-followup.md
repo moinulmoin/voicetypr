@@ -135,3 +135,13 @@ repeat-after-timeout regressions; Clippy workspace/all-targets and formatting
 pass.
 
 Soniox documents `total` as a required integer on its [file-count endpoint](https://soniox.com/docs/api-reference/stt/files/get_files_count) and [transcription-count endpoint](https://soniox.com/docs/api-reference/stt/transcriptions/get_transcriptions_count).
+
+## Initial source and post-timeout usage
+
+The lifted navigation filter starts unset, so ordinary Sources mounting derives
+the saved active source. An explicit Soniox Cloud override still wins. Stateful
+coverage checks both paths. Cleanup now reloads usage after failures/timeouts as
+well as success; failed usage refresh clears stale counts and surfaces the read
+error, and the button becomes usable again. The full frontend suite passes 715
+tests; typecheck, lint, build and independent review pass. Rust is unchanged
+from the 1,539-test validated revision.

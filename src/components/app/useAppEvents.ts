@@ -30,7 +30,7 @@ interface ErrorEventPayload {
 interface UseAppEventsOptions {
   checkModels: () => Promise<{ hasModels: boolean | null }>;
   setActiveSection: Dispatch<SetStateAction<ScreenId>>;
-  setSourceFilter: Dispatch<SetStateAction<SourceFilter>>;
+  setSourceFilter: (filter: SourceFilter) => void;
   setForceShowOnboarding: Dispatch<SetStateAction<boolean>>;
   forceOnboardingNeedsFreshAvailabilityRef: MutableRefObject<boolean>;
 }

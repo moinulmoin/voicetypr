@@ -80,8 +80,14 @@ const whisper: LocalModelInfo = {
   accuracy_score: 5,
 };
 
-function ControlledSources({ currentModel }: { currentModel: string }) {
-  const [filter, setFilter] = useState<SourceFilter>("cloud");
+function ControlledSources({
+  currentModel,
+  initialFilter,
+}: {
+  currentModel: string;
+  initialFilter?: SourceFilter;
+}) {
+  const [filter, setFilter] = useState<SourceFilter | undefined>(initialFilter);
   return (
     <ModelsSection
       models={[
@@ -137,10 +143,19 @@ describe("ModelsSection cloud model labels", () => {
     });
   });
 
+  it("opens the active Cloud source on ordinary first navigation without an explicit destination", async () => {
+    const user = userEvent.setup();
+    render(<ControlledSources currentModel="openai" />);
+    expect(await screen.findByRole("heading", { name: "Soniox v5" })).toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: /Cloud/ })).toHaveAttribute("aria-selected", "true");
+    await user.click(screen.getByRole("tab", { name: /Local/ }));
+    expect(screen.getByRole("tab", { name: /Local/ })).toHaveAttribute("aria-selected", "true");
+  });
+
   it("preserves a controlled Cloud destination with a local active model without render-phase parent updates", async () => {
     const errorSpy = vi.spyOn(console, "error");
     try {
-      render(<ControlledSources currentModel="tiny" />);
+      render(<ControlledSources currentModel="tiny" initialFilter="cloud" />);
       expect(await screen.findByRole("heading", { name: "Soniox v5" })).toBeInTheDocument();
       expect(screen.getByRole("tab", { name: /Cloud/ })).toHaveAttribute("aria-selected", "true");
       expect(

@@ -18,7 +18,7 @@ import type { SourceFilter } from "./sections/models/types";
 
 export function AppContainer() {
   const [activeSection, setActiveSection] = useState<ScreenId>("overview");
-  const [sourceFilter, setSourceFilter] = useState<SourceFilter>("local");
+  const [sourceFilter, setSourceFilter] = useState<SourceFilter | undefined>(undefined);
   const [forceShowOnboarding, setForceShowOnboarding] = useState(false);
   const { settings, refreshSettings } = useSettings();
   const { checkAccessibilityPermission, checkMicrophonePermission } = useReadiness();

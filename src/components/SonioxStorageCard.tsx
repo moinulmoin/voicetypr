@@ -79,10 +79,11 @@ export function SonioxStorageCard() {
             : ""
         }${result.errors.length > 0 ? ` — ${result.errors.length} failed` : ""}`,
       );
-      await loadCounts();
     } catch (error) {
       toast.error(getErrorMessage(error, "Failed to clean up stored files"));
     } finally {
+      // A failed/timed-out cleanup can still have deleted records remotely.
+      await loadCounts();
       setCleaning(false);
       setProgress(null);
     }

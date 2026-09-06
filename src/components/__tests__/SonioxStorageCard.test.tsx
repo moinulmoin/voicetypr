@@ -161,6 +161,44 @@ describe("SonioxStorageCard", () => {
     expect(screen.getByRole("button", { name: /clean up stored files/i })).not.toBeDisabled();
   });
 
+  it.each([false, true])(
+    "refreshes usage after a timeout (refresh fails: %s)",
+    async (refreshFails) => {
+      const user = userEvent.setup();
+      let attempted = false;
+      invokeMock.mockImplementation(async (cmd: string) => {
+        if (cmd === "get_soniox_storage_counts") {
+          if (attempted && refreshFails) throw new Error("Storage usage unavailable");
+          return attempted
+            ? { filesTotal: 2, transcriptionsTotal: 3 }
+            : { filesTotal: 7, transcriptionsTotal: 8 };
+        }
+        if (cmd === "cleanup_soniox_storage") {
+          attempted = true;
+          throw new Error("Cleanup timed out; some records may have been removed");
+        }
+        return null;
+      });
+      render(<SonioxStorageCard />);
+      await screen.findByText(/Stored files: 7 · Stored transcriptions: 8/);
+      await user.click(screen.getByRole("button", { name: "Clean up stored files" }));
+      await screen.findByText(
+        refreshFails
+          ? /Could not read storage usage: Storage usage unavailable/
+          : /Stored files: 2 · Stored transcriptions: 3/,
+      );
+      expect(toast.error).toHaveBeenCalledWith(
+        "Cleanup timed out; some records may have been removed",
+      );
+      expect(
+        invokeMock.mock.calls.filter(([cmd]) => cmd === "get_soniox_storage_counts"),
+      ).toHaveLength(2);
+      await waitFor(() =>
+        expect(screen.getByRole("button", { name: "Clean up stored files" })).not.toBeDisabled(),
+      );
+    },
+  );
+
   it("keeps the cleanup button named during progress and explains untouched records", async () => {
     const user = userEvent.setup();
     let finishCleanup!: (value: unknown) => void;

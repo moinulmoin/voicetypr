@@ -187,7 +187,7 @@ vi.mock("./tabs/TabContainer", () => ({
       <button onClick={() => onNavigate("models")}>Open Sources</button>
       {activeSection === "models" && (
         <div data-testid="sources">
-          Source filter: {sourceFilter}
+          Source filter: {sourceFilter ?? "automatic"}
           <button onClick={() => onSourceFilterChange("remote")}>Show remote sources</button>
         </div>
       )}
@@ -299,6 +299,12 @@ describe("AppContainer", () => {
       expect(screen.getByTestId("sources")).toHaveTextContent("Source filter: cloud");
     },
   );
+
+  it("leaves the initial Sources filter unset for the active source to choose", () => {
+    render(<AppContainer />);
+    fireEvent.click(screen.getByRole("button", { name: "Open Sources" }));
+    expect(screen.getByTestId("sources")).toHaveTextContent("Source filter: automatic");
+  });
 
   it("shows main app when onboarding is completed", async () => {
     await act(async () => {
