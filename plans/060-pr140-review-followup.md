@@ -184,3 +184,14 @@ transcription jobs and retained files. A zero-deletion result explains why
 usage did not decrease. Three regressions cover files alone, jobs alone and
 their combined count. All 718 frontend tests pass, with typecheck, lint and
 production build green. Rust is unchanged from the 1,547-test validated tree.
+
+## Sources remount after tray changes
+
+Sources browsing and explicit alert destinations now apply to one visit. The
+long-lived AppContainer clears the filter when leaving Sources, so remount
+derives the current source instead of restoring a stale tab after tray changes.
+This also consumes old Soniox overrides; a fresh storage alert still explicitly
+opens Cloud. Browsing within the current visit remains unchanged. Two parent
+navigation regressions cover ordinary browsing and alert destinations, alongside
+the existing stateful source-selection tests. All 720 frontend tests, typecheck,
+lint and production build pass; Rust is unchanged.

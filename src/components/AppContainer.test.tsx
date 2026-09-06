@@ -185,6 +185,7 @@ vi.mock("./tabs/TabContainer", () => ({
     <div data-testid="tab-container">
       Current Tab: {activeSection}
       <button onClick={() => onNavigate("models")}>Open Sources</button>
+      <button onClick={() => onNavigate("overview")}>Open Overview</button>
       {activeSection === "models" && (
         <div data-testid="sources">
           Source filter: {sourceFilter ?? "automatic"}
@@ -305,6 +306,34 @@ describe("AppContainer", () => {
     fireEvent.click(screen.getByRole("button", { name: "Open Sources" }));
     expect(screen.getByTestId("sources")).toHaveTextContent("Source filter: automatic");
   });
+
+  it.each(["browsing", "alert"])(
+    "consumes the %s destination when Sources closes so remount follows the current source",
+    async (destination) => {
+      render(<AppContainer />);
+      await waitFor(() => {
+        expect((window as any).__testEventCallbacks?.["soniox-storage-limit"]).toBeInstanceOf(
+          Function,
+        );
+      });
+      fireEvent.click(screen.getByRole("button", { name: "Open Sources" }));
+      if (destination === "browsing") {
+        fireEvent.click(screen.getByRole("button", { name: "Show remote sources" }));
+      } else {
+        act(() => (window as any).__testEventCallbacks["soniox-storage-limit"]({}));
+      }
+      expect(screen.getByTestId("sources")).toHaveTextContent(
+        `Source filter: ${destination === "browsing" ? "remote" : "cloud"}`,
+      );
+      fireEvent.click(screen.getByRole("button", { name: "Open Overview" }));
+      expect(screen.queryByTestId("sources")).not.toBeInTheDocument();
+      // No stale controlled value can mask SettingsContext/tray changes while hidden.
+      fireEvent.click(screen.getByRole("button", { name: "Open Sources" }));
+      expect(screen.getByTestId("sources")).toHaveTextContent("Source filter: automatic");
+      act(() => (window as any).__testEventCallbacks["soniox-storage-limit"]({}));
+      expect(screen.getByTestId("sources")).toHaveTextContent("Source filter: cloud");
+    },
+  );
 
   it("shows main app when onboarding is completed", async () => {
     await act(async () => {
