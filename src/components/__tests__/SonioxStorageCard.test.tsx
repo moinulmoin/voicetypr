@@ -80,6 +80,8 @@ describe("SonioxStorageCard", () => {
         return {
           deletedTranscriptions: 1900,
           deletedFiles: 40,
+          skippedActive: 0,
+          skippedActiveJobs: 0,
           skippedProcessing: 2,
           skippedUnknown: 0,
           errors: [],
@@ -119,6 +121,8 @@ describe("SonioxStorageCard", () => {
         return {
           deletedTranscriptions: 0,
           deletedFiles: 2,
+          skippedActive: 0,
+          skippedActiveJobs: 0,
           skippedProcessing: 1,
           skippedUnknown: 4,
           errors: ["Deletion failed"],
@@ -137,6 +141,39 @@ describe("SonioxStorageCard", () => {
     expect(screen.getByText(/Stored files: 3 · Stored transcriptions: 5/)).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Clean up stored files" })).not.toBeDisabled();
   });
+
+  it.each([
+    [2, 0],
+    [0, 1],
+    [2, 3],
+  ])(
+    "explains protected files (%i) and active jobs (%i) when nothing is deleted",
+    async (skippedActive, skippedActiveJobs) => {
+      invokeMock.mockImplementation(async (cmd: string) => {
+        if (cmd === "get_soniox_storage_counts") {
+          return { filesTotal: 5, transcriptionsTotal: 5 };
+        }
+        return {
+          deletedTranscriptions: 0,
+          deletedFiles: 0,
+          skippedProcessing: 0,
+          skippedActive,
+          skippedActiveJobs,
+          skippedUnknown: 0,
+          errors: [],
+        };
+      });
+      render(<SonioxStorageCard />);
+      await userEvent.setup().click(screen.getByRole("button", { name: "Clean up stored files" }));
+      const protectedCount = skippedActive + skippedActiveJobs;
+      await waitFor(() =>
+        expect(toast.success).toHaveBeenCalledWith(
+          `Deleted 0 stored records — ${protectedCount} protected record${protectedCount === 1 ? "" : "s"} left untouched (active jobs or referenced files)`,
+        ),
+      );
+      expect(screen.getByText(/Stored files: 5 · Stored transcriptions: 5/)).toBeInTheDocument();
+    },
+  );
 
   it("keeps the button usable and surfaces an error toast when cleanup fails", async () => {
     const user = userEvent.setup();
@@ -220,6 +257,8 @@ describe("SonioxStorageCard", () => {
       deletedTranscriptions: 0,
       deletedFiles: 0,
       skippedProcessing: 0,
+      skippedActive: 0,
+      skippedActiveJobs: 0,
       skippedUnknown: 5,
       errors: [],
     });

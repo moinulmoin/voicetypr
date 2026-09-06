@@ -176,3 +176,11 @@ unchanged from the 715-test validated tree.
 Microphone-selection validation logs now report availability and device count
 without the selected or available device names, including the newly captured
 DEBUG path. This removes the identifying name at its source.
+
+## Protected cleanup records
+
+The cleanup toast now includes both backend protection counters: active
+transcription jobs and retained files. A zero-deletion result explains why
+usage did not decrease. Three regressions cover files alone, jobs alone and
+their combined count. All 718 frontend tests pass, with typecheck, lint and
+production build green. Rust is unchanged from the 1,547-test validated tree.

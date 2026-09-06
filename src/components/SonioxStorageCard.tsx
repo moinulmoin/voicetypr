@@ -17,6 +17,8 @@ interface SonioxCleanupResult {
   deletedTranscriptions: number;
   deletedFiles: number;
   skippedProcessing: number;
+  skippedActive: number;
+  skippedActiveJobs: number;
   skippedUnknown: number;
   errors: string[];
 }
@@ -69,10 +71,15 @@ export function SonioxStorageCard() {
       const result = await invoke<SonioxCleanupResult>("cleanup_soniox_storage");
       const deleted = result.deletedTranscriptions + result.deletedFiles;
       const skipped = result.skippedProcessing;
+      const protectedRecords = result.skippedActive + result.skippedActiveJobs;
       const notify = result.errors.length > 0 ? toast.warning : toast.success;
       notify(
         `Deleted ${deleted} stored record${deleted === 1 ? "" : "s"}${
           skipped > 0 ? ` (${skipped} still processing)` : ""
+        }${
+          protectedRecords > 0
+            ? ` — ${protectedRecords} protected record${protectedRecords === 1 ? "" : "s"} left untouched (active jobs or referenced files)`
+            : ""
         }${
           result.skippedUnknown > 0
             ? ` — ${result.skippedUnknown} unrecognized records left untouched; review them in the Soniox console`
