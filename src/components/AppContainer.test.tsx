@@ -181,8 +181,17 @@ vi.mock("@/components/ui/sidebar", () => ({
 }));
 
 vi.mock("./tabs/TabContainer", () => ({
-  TabContainer: ({ activeSection }: any) => (
-    <div data-testid="tab-container">Current Tab: {activeSection}</div>
+  TabContainer: ({ activeSection, sourceFilter, onSourceFilterChange, onNavigate }: any) => (
+    <div data-testid="tab-container">
+      Current Tab: {activeSection}
+      <button onClick={() => onNavigate("models")}>Open Sources</button>
+      {activeSection === "models" && (
+        <div data-testid="sources">
+          Source filter: {sourceFilter}
+          <button onClick={() => onSourceFilterChange("remote")}>Show remote sources</button>
+        </div>
+      )}
+    </div>
   ),
 }));
 
@@ -261,6 +270,35 @@ describe("AppContainer", () => {
       return Promise.resolve(null);
     });
   });
+
+  it.each(["unmounted", "active"])(
+    "opens Cloud sources after Soniox escalation with Sources %s",
+    async (state) => {
+      render(<AppContainer />);
+      await waitFor(() => {
+        expect((window as any).__testEventCallbacks?.["soniox-storage-limit"]).toBeInstanceOf(
+          Function,
+        );
+      });
+      if (state === "active") {
+        fireEvent.click(screen.getByRole("button", { name: "Open Sources" }));
+        fireEvent.click(screen.getByRole("button", { name: "Show remote sources" }));
+        expect(screen.getByTestId("sources")).toHaveTextContent("Source filter: remote");
+      } else {
+        expect(screen.queryByTestId("sources")).not.toBeInTheDocument();
+      }
+      act(() => {
+        (window as any).__testEventCallbacks["soniox-storage-limit"]({});
+      });
+      expect(screen.getByTestId("sources")).toHaveTextContent("Source filter: cloud");
+      // A later escalation must override a new user-selected filter too.
+      fireEvent.click(screen.getByRole("button", { name: "Show remote sources" }));
+      act(() => {
+        (window as any).__testEventCallbacks["soniox-storage-limit"]({});
+      });
+      expect(screen.getByTestId("sources")).toHaveTextContent("Source filter: cloud");
+    },
+  );
 
   it("shows main app when onboarding is completed", async () => {
     await act(async () => {

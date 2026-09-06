@@ -97,6 +97,12 @@ describe("ModelsSection cloud model labels", () => {
     });
   });
 
+  it("renders the Cloud destination immediately on mount", async () => {
+    renderModels({ sourceFilter: "cloud" });
+    expect(screen.getByRole("tab", { name: /Cloud/ })).toHaveAttribute("aria-selected", "true");
+    expect(await screen.findByRole("heading", { name: "Soniox v5" })).toBeInTheDocument();
+  });
+
   it("shows curated labels and omits a redundant selector for one-model providers", async () => {
     renderModels();
 

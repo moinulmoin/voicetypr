@@ -17,7 +17,7 @@ import { ModelsEmptyStates } from "./models/ModelsEmptyStates";
 import { ModelsLanguageRow } from "./models/ModelsLanguageRow";
 import { ModelsSourcesHeader } from "./models/ModelsSourcesHeader";
 import { RemoteServersBlock } from "./models/RemoteServersBlock";
-import type { ModelsSectionProps } from "./models/types";
+import type { ModelsSectionProps, SourceFilter } from "./models/types";
 import { useCloudProviders } from "./models/useCloudProviders";
 import { useRemoteServers } from "./models/useRemoteServers";
 import { useSpokenLanguage } from "./models/useSpokenLanguage";
@@ -25,6 +25,8 @@ import { useSpokenLanguage } from "./models/useSpokenLanguage";
 const log = createLogger("models");
 
 export function ModelsSection({
+  sourceFilter: controlledSourceFilter,
+  onSourceFilterChange,
   models,
   downloadProgress,
   downloadPhases = {},
@@ -47,12 +49,9 @@ export function ModelsSection({
     refreshModels,
     clearActiveRemote: remotes.clearActiveRemote,
   });
-  const [sourceFilter, setSourceFilter] = useState<"local" | "cloud" | "remote">("local");
-
-  // Plan 044: when a Soniox storage-limit escalation lands the dashboard
-  // here, the cloud cards (and the Soniox stored-files cleanup card) must be
-  // visible even if the user had filtered to local/remote sources.
-  useTauriEvent("soniox-storage-limit", () => setSourceFilter("cloud"));
+  const [localSourceFilter, setLocalSourceFilter] = useState<SourceFilter>("local");
+  const sourceFilter = controlledSourceFilter ?? localSourceFilter;
+  const setSourceFilter = onSourceFilterChange ?? setLocalSourceFilter;
 
   const { availableToUse, availableToSetup } = useMemo(() => {
     const useList: typeof models = [];

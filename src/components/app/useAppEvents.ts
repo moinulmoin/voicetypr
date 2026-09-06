@@ -12,6 +12,8 @@ import { useEventCoordinator } from "@/hooks/useEventCoordinator";
 import { updateService } from "@/services/updateService";
 import { createLogger } from "@/lib/logger";
 
+import type { SourceFilter } from "../sections/models/types";
+
 const log = createLogger("app");
 
 interface ErrorEventPayload {
@@ -28,6 +30,7 @@ interface ErrorEventPayload {
 interface UseAppEventsOptions {
   checkModels: () => Promise<{ hasModels: boolean | null }>;
   setActiveSection: Dispatch<SetStateAction<ScreenId>>;
+  setSourceFilter: Dispatch<SetStateAction<SourceFilter>>;
   setForceShowOnboarding: Dispatch<SetStateAction<boolean>>;
   forceOnboardingNeedsFreshAvailabilityRef: MutableRefObject<boolean>;
 }
@@ -35,6 +38,7 @@ interface UseAppEventsOptions {
 export function useAppEvents({
   checkModels,
   setActiveSection,
+  setSourceFilter,
   setForceShowOnboarding,
   forceOnboardingNeedsFreshAvailabilityRef,
 }: UseAppEventsOptions) {
@@ -162,6 +166,7 @@ export function useAppEvents({
             // Same escalation as license-required: the backend already
             // focused the main window; land on the page with the Soniox
             // stored-files card and explain inline.
+            setSourceFilter("cloud");
             setActiveSection("models");
             toast.error(data.title || "Soniox storage limit reached", {
               description:
@@ -208,6 +213,7 @@ export function useAppEvents({
     registerEvent,
     checkModels,
     setActiveSection,
+    setSourceFilter,
     setForceShowOnboarding,
     forceOnboardingNeedsFreshAvailabilityRef,
   ]);

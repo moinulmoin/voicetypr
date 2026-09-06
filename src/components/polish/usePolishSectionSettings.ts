@@ -42,6 +42,7 @@ export function usePolishSectionSettings({
       if (signal?.aborted) return;
       setEnhancementOptions(fromBackendOptions(options, aiEnabled));
     } catch (error) {
+      if (signal?.aborted) return;
       log.error("Failed to load Polish options:", error);
     }
   };
@@ -53,6 +54,7 @@ export function usePolishSectionSettings({
       setWritingSettings(mergeWritingSettings(nextSettings));
       return true;
     } catch (error) {
+      if (signal?.aborted) return false;
       log.error("Failed to load writing settings:", error);
       return false;
     }

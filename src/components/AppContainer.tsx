@@ -14,8 +14,11 @@ import { useAppBootstrap } from "./app/useAppBootstrap";
 import { useAppEvents } from "./app/useAppEvents";
 import { useOnboardingRecovery } from "./app/useOnboardingRecovery";
 
+import type { SourceFilter } from "./sections/models/types";
+
 export function AppContainer() {
   const [activeSection, setActiveSection] = useState<ScreenId>("overview");
+  const [sourceFilter, setSourceFilter] = useState<SourceFilter>("local");
   const [forceShowOnboarding, setForceShowOnboarding] = useState(false);
   const { settings, refreshSettings } = useSettings();
   const { checkAccessibilityPermission, checkMicrophonePermission } = useReadiness();
@@ -37,6 +40,7 @@ export function AppContainer() {
   useAppEvents({
     checkModels: modelAvailability.checkModels,
     setActiveSection,
+    setSourceFilter,
     setForceShowOnboarding,
     forceOnboardingNeedsFreshAvailabilityRef,
   });
@@ -87,7 +91,12 @@ export function AppContainer() {
   // Main App Layout
   return (
     <>
-      <AppShell activeSection={activeSection} onSectionChange={setActiveSection} />
+      <AppShell
+        activeSection={activeSection}
+        onSectionChange={setActiveSection}
+        sourceFilter={sourceFilter}
+        onSourceFilterChange={setSourceFilter}
+      />
       <PrivacyConsentDialog />
       <UpdateAnnouncementDialog
         version={justUpdatedVersion}

@@ -14,12 +14,18 @@ import { AudioUploadSection } from "../sections/AudioUploadSection";
 import { ReportProblemSection } from "../sections/ReportProblemSection";
 import type { ScreenId } from "@/components/navigation";
 
-interface TabContainerProps {
+import type { SourceFilterProps } from "../sections/models/types";
+
+interface TabContainerProps extends SourceFilterProps {
   activeSection: ScreenId;
   onNavigate?: (section: ScreenId) => void;
 }
 
-export function TabContainer({ activeSection, onNavigate }: TabContainerProps) {
+export function TabContainer({
+  activeSection,
+  onNavigate,
+  ...sourceFilterProps
+}: TabContainerProps) {
   const renderTabContent = () => {
     switch (activeSection) {
       case "overview":
@@ -40,7 +46,7 @@ export function TabContainer({ activeSection, onNavigate }: TabContainerProps) {
         return <ShortcutsTab />;
 
       case "models":
-        return <ModelsTab />;
+        return <ModelsTab {...sourceFilterProps} />;
 
       case "network":
         return <NetworkSharingTab />;

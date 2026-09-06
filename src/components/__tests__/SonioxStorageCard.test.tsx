@@ -7,6 +7,7 @@ import { SonioxStorageCard } from "../SonioxStorageCard";
 vi.mock("sonner", () => ({
   toast: {
     success: vi.fn(),
+    warning: vi.fn(),
     error: vi.fn(),
   },
 }));
@@ -27,6 +28,7 @@ listenMock.mockResolvedValue(unlisten);
 
 describe("SonioxStorageCard", () => {
   beforeEach(() => {
+    vi.clearAllMocks();
     invokeMock.mockReset();
     invokeMock.mockImplementation(async (cmd: string) => {
       if (cmd === "get_soniox_storage_counts") {
@@ -103,6 +105,37 @@ describe("SonioxStorageCard", () => {
     await waitFor(() => {
       expect(screen.getByText(/Stored files: 0 · Stored transcriptions: 0/)).toBeInTheDocument();
     });
+  });
+
+  it("warns on partial cleanup failure, retains all counts, and refreshes usage", async () => {
+    const user = userEvent.setup();
+    let cleaned = false;
+    invokeMock.mockImplementation(async (cmd: string) => {
+      if (cmd === "get_soniox_storage_counts") {
+        return { filesTotal: cleaned ? 3 : 5, transcriptionsTotal: 5 };
+      }
+      if (cmd === "cleanup_soniox_storage") {
+        cleaned = true;
+        return {
+          deletedTranscriptions: 0,
+          deletedFiles: 2,
+          skippedProcessing: 1,
+          skippedUnknown: 4,
+          errors: ["Deletion failed"],
+        };
+      }
+      return null;
+    });
+    render(<SonioxStorageCard />);
+    await user.click(screen.getByRole("button", { name: "Clean up stored files" }));
+    await waitFor(() =>
+      expect(toast.warning).toHaveBeenCalledWith(
+        "Deleted 2 stored records (1 still processing) — 4 unrecognized records left untouched; review them in the Soniox console — 1 failed",
+      ),
+    );
+    expect(toast.success).not.toHaveBeenCalled();
+    expect(screen.getByText(/Stored files: 3 · Stored transcriptions: 5/)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Clean up stored files" })).not.toBeDisabled();
   });
 
   it("keeps the button usable and surfaces an error toast when cleanup fails", async () => {

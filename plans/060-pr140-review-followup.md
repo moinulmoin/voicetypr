@@ -71,3 +71,23 @@ and the initiating Windows license-decryption cause remain unverified.
 Soniox ownership is deliberately process-local. Failed cleanup from an earlier
 app session cannot safely be attributed and requires provider-console review.
 This fixes unsafe deletion without claiming to repair historical account data.
+
+## Overnight review follow-through — 2026-09-06
+
+A new review reproduced the Soniox event arriving before Sources mounted.
+AppContainer now owns the source filter, and the long-lived event handler saves
+Cloud before navigating. Regressions cover escalation from another tab,
+escalation while Sources is active, and repeated navigation.
+
+Canceled Polish loader/probe failures no longer emit stale error diagnostics.
+Partial Soniox cleanup uses a warning rather than a success toast.
+The complete frontend suite now passes 710 tests across 65 files; typecheck and
+lint pass. These changes do not modify Rust behavior.
+
+The request to copy executor `retryable` into failed-recording preservation is
+not applied: executor retryability controls immediate automatic retries, while
+`TranscriptionFailure::is_retryable_failure` controls user recovery from History.
+`SMOKE.md` FP-S1 explicitly requires preserving failed audio for an invalid key
+when save_recordings is on, so the user can fix the key and re-transcribe.
+Discarding that audio for `Unauthorized` would violate the existing recovery
+contract. Cancellation and too-short input remain excluded.

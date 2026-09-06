@@ -29,7 +29,9 @@ vi.mock("./OverviewTab", () => ({
 }));
 
 vi.mock("./ModelsTab", () => ({
-  ModelsTab: () => <div data-testid="models-tab">Models</div>,
+  ModelsTab: ({ sourceFilter }: { sourceFilter?: string }) => (
+    <div data-testid="models-tab">Models {sourceFilter}</div>
+  ),
 }));
 
 vi.mock("./SettingsTab", () => ({
@@ -53,6 +55,17 @@ vi.mock("../sections/ReportProblemSection", () => ({
 }));
 
 describe("TabContainer", () => {
+  it("passes the saved Cloud destination when mounting Sources from another tab", () => {
+    const { rerender } = render(<TabContainer activeSection="overview" sourceFilter="local" />);
+    expect(screen.queryByTestId("models-tab")).not.toBeInTheDocument();
+    rerender(<TabContainer activeSection="models" sourceFilter="cloud" />);
+    expect(screen.getByTestId("models-tab")).toHaveTextContent("Models cloud");
+    rerender(<TabContainer activeSection="models" sourceFilter="remote" />);
+    expect(screen.getByTestId("models-tab")).toHaveTextContent("Models remote");
+    rerender(<TabContainer activeSection="models" sourceFilter="cloud" />);
+    expect(screen.getByTestId("models-tab")).toHaveTextContent("Models cloud");
+  });
+
   it("renders correct tab based on activeSection", () => {
     const { rerender } = render(<TabContainer activeSection="overview" />);
     expect(screen.getByTestId("overview-tab")).toBeInTheDocument();

@@ -69,7 +69,8 @@ export function SonioxStorageCard() {
       const result = await invoke<SonioxCleanupResult>("cleanup_soniox_storage");
       const deleted = result.deletedTranscriptions + result.deletedFiles;
       const skipped = result.skippedProcessing;
-      toast.success(
+      const notify = result.errors.length > 0 ? toast.warning : toast.success;
+      notify(
         `Deleted ${deleted} stored record${deleted === 1 ? "" : "s"}${
           skipped > 0 ? ` (${skipped} still processing)` : ""
         }${

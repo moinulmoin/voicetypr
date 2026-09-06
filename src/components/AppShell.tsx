@@ -15,12 +15,14 @@ import { getTrayStatus, retryTrayCreation, type TrayStatus } from "@/lib/tray";
 
 const log = createLogger("app-shell");
 
-interface AppShellProps {
+import type { SourceFilterProps } from "./sections/models/types";
+
+interface AppShellProps extends SourceFilterProps {
   activeSection: ScreenId;
   onSectionChange: (section: ScreenId) => void;
 }
 
-export function AppShell({ activeSection, onSectionChange }: AppShellProps) {
+export function AppShell({ activeSection, onSectionChange, ...sourceFilterProps }: AppShellProps) {
   const [trayStatus, setTrayStatus] = useState<TrayStatus | null>(null);
   const [isRetryingTray, setIsRetryingTray] = useState(false);
   useEffect(() => {
@@ -101,7 +103,11 @@ export function AppShell({ activeSection, onSectionChange }: AppShellProps) {
           </Alert>
         ) : null}
         <div className="min-h-0 min-w-0 flex-1 overflow-hidden">
-          <TabContainer activeSection={activeSection} onNavigate={onSectionChange} />
+          <TabContainer
+            activeSection={activeSection}
+            onNavigate={onSectionChange}
+            {...sourceFilterProps}
+          />
         </div>
       </SidebarInset>
     </SidebarProvider>

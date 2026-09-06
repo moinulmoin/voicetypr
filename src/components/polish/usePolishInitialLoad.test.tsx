@@ -4,6 +4,10 @@ import { invoke } from "@tauri-apps/api/core";
 import { useAiProviderSettings } from "./useAiProviderSettings";
 import { usePolishSectionSettings } from "./usePolishSectionSettings";
 import { usePolishSettingsLoad } from "./usePolishSettingsLoad";
+import { getApiKey, hasApiKey } from "@/utils/keyring";
+
+const logError = vi.hoisted(() => vi.fn());
+vi.mock("@/lib/logger", () => ({ createLogger: () => ({ error: logError }) }));
 
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
 vi.mock("@tauri-apps/api/event", () => ({ listen: vi.fn(async () => () => {}) }));
@@ -63,7 +67,11 @@ function response(command: string, old: boolean): unknown {
 }
 
 describe("Polish initial loader ownership", () => {
-  beforeEach(() => vi.clearAllMocks());
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(hasApiKey).mockResolvedValue(false);
+    vi.mocked(getApiKey).mockResolvedValue(null);
+  });
 
   it.each([
     "list_ai_providers",
@@ -105,6 +113,77 @@ describe("Polish initial loader ownership", () => {
     expect(result.current.provider.openAIDefaultBaseUrl).toBe("https://new.example");
     expect(result.current.section.enhancementOptions.preset).toBe("Code");
     expect(result.current.section.writingSettings.custom_words[0].phrase).toBe("new");
+  });
+
+  it.each([
+    "list_ai_providers",
+    "get_ai_settings",
+    "get_ai_settings_for_provider",
+    "cache_ai_api_key",
+    "get_openai_config",
+    "get_enhancement_options",
+    "get_writing_settings",
+    "probe_agent_cli",
+  ])("ignores canceled %s failures but logs active failures", async (blockedCommand) => {
+    if (blockedCommand === "cache_ai_api_key") {
+      vi.mocked(hasApiKey).mockResolvedValue(true);
+      vi.mocked(getApiKey).mockResolvedValue("test-key");
+    }
+    const { result } = renderHook(() => ({
+      section: usePolishSectionSettings({ settings: null, updateSettings: noop }),
+      provider: useAiProviderSettings({
+        readinessAiReady: false,
+        settingsLoaded: false,
+        onPolishEnabled: noop,
+        onModelSelected: noop,
+        onEnabledModelSelected: noop,
+        onPolishToggled: noop,
+        onActiveProviderCleared: noop,
+      }),
+    }));
+    const startLoad = (signal: AbortSignal) => {
+      if (blockedCommand === "get_enhancement_options") {
+        return result.current.section.loadEnhancementOptionsRef.current(true, signal);
+      }
+      if (blockedCommand === "get_writing_settings") {
+        return result.current.section.loadWritingSettingsRef.current(signal);
+      }
+      if (blockedCommand === "probe_agent_cli") {
+        return result.current.provider.probeAgentCli("claude-code", false, signal);
+      }
+      return result.current.provider.loadAISettings(signal);
+    };
+    let rejectRequest!: (error: Error) => void;
+    vi.mocked(invoke).mockImplementation(async (command) => {
+      if (command === blockedCommand) {
+        return new Promise((_, reject) => {
+          rejectRequest = reject;
+        });
+      }
+      return response(command, false);
+    });
+    const controller = new AbortController();
+    let canceledLoad!: ReturnType<typeof startLoad>;
+    act(() => {
+      canceledLoad = startLoad(controller.signal);
+    });
+    await waitFor(() => expect(rejectRequest).toBeDefined());
+    await act(async () => {
+      controller.abort();
+      rejectRequest(new Error("Canceled request failed"));
+      await canceledLoad;
+    });
+    expect(logError).not.toHaveBeenCalled();
+
+    const activeError = new Error("Active request failed");
+    vi.mocked(invoke).mockImplementation(async (command) => {
+      if (command === blockedCommand) throw activeError;
+      return response(command, false);
+    });
+    await act(async () => {
+      await startLoad(new AbortController().signal);
+    });
+    expect(logError).toHaveBeenCalledWith(expect.any(String), activeError);
   });
 
   it.each(["list_provider_models", "probe_agent_cli"])(

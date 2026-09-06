@@ -113,6 +113,7 @@ export function useAiProviderSettings({
         setProviderApiKeys((prev) => ({ ...prev, [providerId]: ready }));
         return probe;
       } catch (error) {
+        if (signal?.aborted) return null;
         log.error(`Failed to probe ${providerId} CLI:`, error);
         return null;
       } finally {
@@ -167,6 +168,7 @@ export function useAiProviderSettings({
                   );
                   isConfigured = providerSettings.hasApiKey;
                 } catch (error) {
+                  if (signal?.aborted) return;
                   log.error(`Failed to resolve ${providerId} provider readiness:`, error);
                 }
               }
@@ -183,6 +185,7 @@ export function useAiProviderSettings({
                     });
                   }
                 } catch (error) {
+                  if (signal?.aborted) return;
                   log.error(`Failed to cache ${providerId} API key:`, error);
                 }
               }
@@ -209,6 +212,7 @@ export function useAiProviderSettings({
           if (signal?.aborted) return null;
           setOpenAIDefaultBaseUrl(customConfig.baseUrl || "https://api.openai.com/v1");
         } catch (error) {
+          if (signal?.aborted) return null;
           log.error("Failed to load custom config:", error);
         }
 
@@ -220,6 +224,7 @@ export function useAiProviderSettings({
 
         return loadedAISettings;
       } catch (error) {
+        if (signal?.aborted) return null;
         log.error("Failed to load AI settings:", error);
         return null;
       }

@@ -1,6 +1,13 @@
 import type { ModelInfo } from "@/types";
 
-export interface ModelsSectionProps {
+export type SourceFilter = "local" | "cloud" | "remote";
+
+export interface SourceFilterProps {
+  sourceFilter?: SourceFilter;
+  onSourceFilterChange?: (filter: SourceFilter) => void;
+}
+
+export interface ModelsSectionProps extends SourceFilterProps {
   models: [string, ModelInfo][];
   downloadProgress: Record<string, number>;
   downloadPhases?: Record<string, string>;
