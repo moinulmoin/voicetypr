@@ -245,7 +245,7 @@ export function useAiProviderSettings({
         // The CLI account behind the binary can change outside the app, so the
         // picker must reload models (populated or default-only cache) from the
         // probed installation instead of trusting the pre-refresh cache.
-        await fetchModels(provider.id);
+        await fetchModels(provider.id, undefined, { force: true });
         toast.success(`${provider.name}: installed`);
       } else if (state === "missing") {
         toast.info(

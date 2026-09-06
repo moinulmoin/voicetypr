@@ -115,50 +115,65 @@ export function useAllProviderModels() {
   const [loadingMap, setLoadingMap] = useState<Record<string, boolean>>({});
   const [errorMap, setErrorMap] = useState<Record<string, string | null>>({});
   const inFlightMapRef = useRef<Record<string, Promise<AIProviderModel[]> | undefined>>({});
+  const requestGenerationMapRef = useRef<Record<string, number | undefined>>({});
 
   const fetchModels = useCallback(
-    async (providerId: string, signal?: AbortSignal): Promise<AIProviderModel[]> => {
+    async (
+      providerId: string,
+      signal?: AbortSignal,
+      options?: { force?: boolean },
+    ): Promise<AIProviderModel[]> => {
       if (signal?.aborted) return [];
       // Don't fetch for custom provider
       if (providerId === "custom") {
         return [];
       }
 
-      // Don't refetch if already loading
+      // Ordinary fetches share one request per provider. A forced refresh is
+      // used after an external CLI/account change and must supersede any older
+      // discovery already in flight.
       const inFlightRequest = inFlightMapRef.current[providerId];
-      if (inFlightRequest) {
+      if (inFlightRequest && !options?.force) {
         return inFlightRequest;
       }
 
+      const generation = (requestGenerationMapRef.current[providerId] ?? 0) + 1;
+      requestGenerationMapRef.current[providerId] = generation;
       setLoadingMap((prev) => ({ ...prev, [providerId]: true }));
       setErrorMap((prev) => ({ ...prev, [providerId]: null }));
 
       const release = () => {
-        if (inFlightMapRef.current[providerId] !== request) return;
+        if (requestGenerationMapRef.current[providerId] !== generation) return;
         delete inFlightMapRef.current[providerId];
         setLoadingMap((prev) => ({ ...prev, [providerId]: false }));
       };
-      const request = (async () => {
-        try {
-          const fetchedModels = normalizeProviderModels(
-            await invoke<ProviderModelWire[]>("list_provider_models", {
-              provider: providerId,
-            }),
-          );
-          if (signal?.aborted) return [];
+      const request = Promise.resolve()
+        .then(() =>
+          invoke<ProviderModelWire[]>("list_provider_models", {
+            provider: providerId,
+          }),
+        )
+        .then((wireModels) => {
+          const fetchedModels = normalizeProviderModels(wireModels);
+          if (signal?.aborted || requestGenerationMapRef.current[providerId] !== generation) {
+            return [];
+          }
           setModelsMap((prev) => ({ ...prev, [providerId]: fetchedModels }));
           return fetchedModels;
-        } catch (err) {
-          if (signal?.aborted) return [];
+        })
+        .catch((err: unknown) => {
+          if (signal?.aborted || requestGenerationMapRef.current[providerId] !== generation) {
+            return [];
+          }
           const errorMessage = err instanceof Error ? err.message : String(err);
           setErrorMap((prev) => ({ ...prev, [providerId]: errorMessage }));
           log.error(`Failed to fetch models for ${providerId}:`, err);
           return [];
-        } finally {
+        })
+        .finally(() => {
           signal?.removeEventListener("abort", release);
           release();
-        }
-      })();
+        });
 
       inFlightMapRef.current[providerId] = request;
       signal?.addEventListener("abort", release, { once: true });

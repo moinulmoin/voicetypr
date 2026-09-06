@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { renderHook, act, waitFor } from "@testing-library/react";
 import { useProviderModels, useAllProviderModels } from "./useProviderModels";
 import { invoke } from "@tauri-apps/api/core";
+import type { AIProviderModel } from "@/types/providers";
 
 vi.mock("@tauri-apps/api/core", () => ({
   invoke: vi.fn(),
@@ -222,6 +223,104 @@ describe("useAllProviderModels", () => {
     });
 
     expect(result.current.getModels("openai")).toEqual([]);
+  });
+
+  it("deduplicates concurrent non-forced fetches", async () => {
+    let resolveModels!: (models: typeof mockModels) => void;
+    vi.mocked(invoke).mockReturnValue(
+      new Promise((resolve) => {
+        resolveModels = resolve;
+      }),
+    );
+    const { result } = renderHook(() => useAllProviderModels());
+    let firstFetch!: Promise<unknown>;
+    let secondFetch!: Promise<unknown>;
+
+    act(() => {
+      firstFetch = result.current.fetchModels("openai");
+      secondFetch = result.current.fetchModels("openai");
+    });
+
+    await waitFor(() => expect(invoke).toHaveBeenCalledTimes(1));
+    await act(async () => {
+      resolveModels(mockModels);
+      await Promise.all([firstFetch, secondFetch]);
+    });
+    expect(result.current.getModels("openai")).toEqual(mockModels);
+  });
+
+  it.each(["success", "failure"])(
+    "forced refresh supersedes an in-flight request's stale %s and finalizer",
+    async (outcome) => {
+      let resolveOld!: (models: AIProviderModel[]) => void;
+      let rejectOld!: (error: Error) => void;
+      let resolveRefresh!: (models: AIProviderModel[]) => void;
+      vi.mocked(invoke)
+        .mockImplementationOnce(
+          () =>
+            new Promise((resolve, reject) => {
+              resolveOld = resolve;
+              rejectOld = reject;
+            }),
+        )
+        .mockImplementationOnce(
+          () =>
+            new Promise((resolve) => {
+              resolveRefresh = resolve;
+            }),
+        );
+      const refreshedModels = [
+        { id: "new-account-model", name: "New account model", recommended: false },
+      ];
+      const { result } = renderHook(() => useAllProviderModels());
+      let oldFetch!: Promise<AIProviderModel[]>;
+      let refreshFetch!: Promise<AIProviderModel[]>;
+
+      act(() => {
+        oldFetch = result.current.fetchModels("claude-code");
+      });
+      await waitFor(() => expect(invoke).toHaveBeenCalledTimes(1));
+      act(() => {
+        refreshFetch = result.current.fetchModels("claude-code", undefined, { force: true });
+      });
+      await waitFor(() => expect(invoke).toHaveBeenCalledTimes(2));
+
+      await act(async () => {
+        if (outcome === "success") {
+          resolveOld([{ id: "stale-model", name: "Stale model", recommended: false }]);
+        } else rejectOld(new Error("stale discovery failed"));
+        await oldFetch;
+      });
+      expect(result.current.getModels("claude-code")).toEqual([]);
+      expect(result.current.getError("claude-code")).toBeNull();
+      expect(result.current.isLoading("claude-code")).toBe(true);
+
+      await act(async () => {
+        resolveRefresh(refreshedModels);
+        await refreshFetch;
+      });
+      expect(result.current.getModels("claude-code")).toEqual(refreshedModels);
+      expect(result.current.getError("claude-code")).toBeNull();
+      expect(result.current.isLoading("claude-code")).toBe(false);
+    },
+  );
+
+  it("retains usable models when a forced refresh fails", async () => {
+    vi.mocked(invoke)
+      .mockResolvedValueOnce(mockModels)
+      .mockRejectedValueOnce(new Error("CLI model discovery failed"));
+    const { result } = renderHook(() => useAllProviderModels());
+
+    await act(async () => {
+      await result.current.fetchModels("claude-code");
+    });
+    await act(async () => {
+      await result.current.fetchModels("claude-code", undefined, { force: true });
+    });
+
+    expect(result.current.getModels("claude-code")).toEqual(mockModels);
+    expect(result.current.getError("claude-code")).toBe("CLI model discovery failed");
+    expect(result.current.isLoading("claude-code")).toBe(false);
   });
 });
 

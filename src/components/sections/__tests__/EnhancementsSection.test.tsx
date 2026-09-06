@@ -158,12 +158,15 @@ const modelDiscovery = vi.hoisted(() => ({
   loading: {} as Record<string, boolean>,
   errors: {} as Record<string, string | null>,
   hiddenProviders: new Set<string>(),
-  fetchModels: vi.fn((providerId: string) => Promise.resolve(providerModels[providerId] || [])),
+  fetchModels: vi.fn((providerId: string, _signal?: AbortSignal, _options?: { force?: boolean }) =>
+    Promise.resolve(providerModels[providerId] || []),
+  ),
 }));
 
 vi.mock("@/hooks/useProviderModels", () => ({
   useAllProviderModels: () => ({
-    fetchModels: (providerId: string) => modelDiscovery.fetchModels(providerId),
+    fetchModels: (...args: [string, AbortSignal?, { force?: boolean }?]) =>
+      modelDiscovery.fetchModels(...args),
     getModels: (providerId: string) =>
       modelDiscovery.hiddenProviders.has(providerId) ? [] : providerModels[providerId] || [],
     isLoading: (providerId: string) => modelDiscovery.loading[providerId] || false,
@@ -427,8 +430,8 @@ describe("EnhancementsSection", () => {
   afterEach(() => {
     claudeCodeModelsRestore?.();
     claudeCodeModelsRestore = undefined;
-    modelDiscovery.fetchModels.mockImplementation(
-      (providerId: string) => Promise.resolve(providerModels[providerId] || []),
+    modelDiscovery.fetchModels.mockImplementation((providerId: string) =>
+      Promise.resolve(providerModels[providerId] || []),
     );
   });
 
@@ -748,9 +751,13 @@ describe("EnhancementsSection", () => {
       }),
     );
 
-    await user.click(
-      within(providersPanel).getByRole("button", { name: "Model for Claude Code" }),
-    );
+    await waitFor(() => {
+      expect(modelDiscovery.fetchModels).toHaveBeenCalledWith("claude-code", undefined, {
+        force: true,
+      });
+    });
+
+    await user.click(within(providersPanel).getByRole("button", { name: "Model for Claude Code" }));
     const picker = await screen.findByRole("dialog", { name: "Choose a Claude Code model" });
     expect(
       within(picker).getByRole("button", { name: /^Sonnet 4\.5.*claude-code\/sonnet-4-5/i }),
@@ -787,9 +794,7 @@ describe("EnhancementsSection", () => {
       }),
     );
 
-    await user.click(
-      within(providersPanel).getByRole("button", { name: "Model for Claude Code" }),
-    );
+    await user.click(within(providersPanel).getByRole("button", { name: "Model for Claude Code" }));
     const picker = await screen.findByRole("dialog", { name: "Choose a Claude Code model" });
     expect(within(picker).getByRole("button", { name: /^Haiku/i })).toBeInTheDocument();
     expect(within(picker).getByRole("button", { name: /^Sonnet/i })).toBeInTheDocument();

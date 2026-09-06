@@ -195,3 +195,14 @@ opens Cloud. Browsing within the current visit remains unchanged. Two parent
 navigation regressions cover ordinary browsing and alert destinations, alongside
 the existing stateful source-selection tests. All 720 frontend tests, typecheck,
 lint and production build pass; Rust is unchanged.
+
+## CLI refresh during model discovery
+
+A successful CLI installation/account probe now forces fresh model discovery even
+when an older listing is still pending. Per-provider request generations prevent
+superseded success, error, abort cleanup and finalizers from changing newer state.
+Ordinary discovery still deduplicates; failed refresh keeps previously usable
+models. Deferred-request regressions and the settings Refresh assertion pass.
+All 731 frontend tests across 67 files, typecheck, lint and production build pass.
+Rust is unchanged from the 1,555-passed, 16-ignored validated tree. Real external
+CLI account changes remain outside the completed macOS VM runtime coverage.
