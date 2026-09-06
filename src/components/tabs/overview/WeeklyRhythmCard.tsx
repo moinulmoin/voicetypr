@@ -64,7 +64,8 @@ export function WeeklyRhythmCard({
         <div className="mt-5 flex h-40 items-end gap-2">
           {stats.weekDays.map((day) => {
             const isPeak = day.count > 0 && day.count === stats.weekMax;
-            const heightPct = Math.max(6, Math.round((day.count / stats.weekMax) * 100));
+            const chartMax = Math.max(1, stats.weekMax);
+            const heightPct = Math.max(6, Math.round((day.count / chartMax) * 100));
             return (
               <div key={day.key} className="flex h-full min-w-0 flex-1 flex-col justify-end gap-2">
                 <div

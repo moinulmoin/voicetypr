@@ -106,14 +106,14 @@ describe("PrivacyConsentDialog", () => {
     });
   });
 
-  it("stays closed after consent has already been acknowledged", async () => {
+  it("stays closed when persisted opt-outs are read on launch", async () => {
     mockInvoke.mockImplementation((command: string) => {
       if (command === "get_telemetry_status") {
-        return Promise.resolve({ enabled: true, available: true });
+        return Promise.resolve({ enabled: false, available: true });
       }
       if (command === "get_product_analytics_status") {
         return Promise.resolve({
-          enabled: true,
+          enabled: false,
           available: true,
           consent_required: false,
         });

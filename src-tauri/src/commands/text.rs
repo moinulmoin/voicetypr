@@ -103,7 +103,7 @@ pub async fn insert_text(app: tauri::AppHandle, text: String) -> Result<(), Stri
     #[cfg(target_os = "macos")]
     let has_accessibility_permission = {
         use crate::commands::permissions::check_accessibility_permission;
-        check_accessibility_permission().await?
+        check_accessibility_permission(app.clone()).await?
     };
 
     #[cfg(not(target_os = "macos"))]

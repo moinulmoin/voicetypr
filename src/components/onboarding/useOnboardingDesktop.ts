@@ -532,17 +532,23 @@ export function useOnboardingDesktop({
     setIsSavingCompletion(true);
     onCompletionStart?.();
     try {
-      await updateSettings({ onboarding_completed: true });
-      // Save diagnostics first; analytics consent and its acknowledgement are
-      // persisted atomically by the second command.
+      // Persist privacy choices before publishing onboarding completion. The
+      // settings context updates optimistically, so setting onboarding_completed
+      // first would mount the main app's consent dialog while these writes were
+      // still pending. That dialog would then retain the old default-on state.
+      await invoke("set_telemetry_consent", { enabled: telemetryOptIn });
+      await invoke("set_product_analytics_consent", {
+        enabled: analyticsOptIn,
+      });
+
+      await updateSettings({ onboarding_completed: true }, { publishAfterSave: true });
+
       try {
-        await invoke("set_telemetry_consent", { enabled: telemetryOptIn });
-        await invoke("set_product_analytics_consent", {
-          enabled: analyticsOptIn,
-        });
         await invoke("record_onboarding_completed");
-      } catch (privacyError) {
-        log.error("Failed to persist privacy choices:", privacyError);
+      } catch (analyticsError) {
+        // Capturing the acknowledgement event is best-effort. The consent
+        // choices themselves have already been persisted successfully.
+        log.error("Failed to record onboarding completion:", analyticsError);
       }
       onComplete();
     } catch (error) {

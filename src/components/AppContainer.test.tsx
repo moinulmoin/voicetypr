@@ -408,6 +408,7 @@ describe("AppContainer", () => {
       expect(screen.getByTestId("onboarding")).toBeInTheDocument();
     });
     await act(async () => {
+      (window as any).__testOnboardingStart();
       mockSettings.onboarding_completed = true;
       rerender(<AppContainer />);
       (window as any).__testOnboardingComplete();
@@ -431,13 +432,13 @@ describe("AppContainer", () => {
     });
 
     await act(async () => {
-      mockSettings.onboarding_completed = true;
-      rerender(<AppContainer />);
+      (window as any).__testOnboardingStart();
       (window as any).__testOnboardingError?.();
       rerender(<AppContainer />);
     });
 
     await waitFor(() => {
+      expect(screen.getByTestId("onboarding")).toBeInTheDocument();
       expect(checkAccessibilityPermissionMock).not.toHaveBeenCalled();
       expect(checkMicrophonePermissionMock).not.toHaveBeenCalled();
       expect(requestNotificationPermissionServiceMock).not.toHaveBeenCalled();

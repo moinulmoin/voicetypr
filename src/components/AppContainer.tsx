@@ -77,7 +77,7 @@ export function AppContainer() {
     checkMicrophonePermission,
   });
 
-  const markOnboardingCompletionPersisted = () => {
+  const markOnboardingCompletionStarted = () => {
     hasCompletedOnboardingRef.current = true;
   };
 
@@ -90,9 +90,9 @@ export function AppContainer() {
     return (
       <AppErrorBoundary>
         <OnboardingDesktop
+          onCompletionStart={markOnboardingCompletionStarted}
           onCompletionError={clearOnboardingCompletionMarker}
           onComplete={() => {
-            markOnboardingCompletionPersisted();
             setForceShowOnboarding(false);
             refreshSettings();
             void modelAvailability.checkModels();

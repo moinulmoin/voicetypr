@@ -67,7 +67,7 @@ export function computeOverviewStats(
       count,
     };
   });
-  const weekMax = Math.max(1, ...weekDays.map((day) => day.count));
+  const weekMax = Math.max(0, ...weekDays.map((day) => day.count));
 
   let currentStreak = 0;
   let longestStreak = 0;
