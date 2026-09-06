@@ -206,3 +206,16 @@ models. Deferred-request regressions and the settings Refresh assertion pass.
 All 731 frontend tests across 67 files, typecheck, lint and production build pass.
 Rust is unchanged from the 1,555-passed, 16-ignored validated tree. Real external
 CLI account changes remain outside the completed macOS VM runtime coverage.
+
+## Manual cleanup during automatic recovery
+
+Manual Soniox cleanup now acquires the same endpoint/API-key running guard as
+automatic cleanup. A second cleanup returns a clear busy message instead of
+starting an overlapping drain. The guard spans the bounded operation and releases
+on success, HTTP errors, timeout, cancellation and panic; other accounts stay
+independent. Focused exclusion, error-release and timeout/retry regressions pass,
+and independent review found no blocker. Real Soniox account smoke remains open.
+
+Final integrated checks: 1,557 Rust workspace tests passed, 16 ignored; all-target
+Clippy with warnings denied and workspace formatting passed. Frontend is unchanged
+from the 731-test validated tree, with typecheck, lint and build passing.

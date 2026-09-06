@@ -8,6 +8,8 @@ const BASE: &str = "https://api.soniox.com/v1";
 const MANAGEMENT_REQUEST_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
 const CLEANUP_DEADLINE: std::time::Duration = std::time::Duration::from_secs(60);
 const CLEANUP_TIMEOUT_MESSAGE: &str = "Soniox cleanup timed out. Some records may already have been removed. Refresh storage counts and retry cleanup.";
+const CLEANUP_ALREADY_RUNNING_MESSAGE: &str =
+    "Soniox cleanup is already running. Wait for it to finish, then refresh storage counts.";
 
 pub(super) async fn validate_key(key: &str) -> Result<(), String> {
     common::get_validate(
@@ -681,7 +683,7 @@ pub(crate) async fn cleanup_stored(app: &AppHandle) -> Result<SonioxCleanupResul
         );
     };
 
-    drain_stored_records(&client, &key, Some(&report)).await
+    run_manual_cleanup_with_deadline(&client, &key, Some(&report), CLEANUP_DEADLINE).await
 }
 
 /// Drains stored Soniox records so retained files free capacity promptly:
@@ -721,6 +723,7 @@ pub(crate) async fn cleanup_stored(app: &AppHandle) -> Result<SonioxCleanupResul
 /// and the background auto-clean: FILE deletions bump the file-capacity
 /// counter and record deletions the record-capacity counter, so the
 /// storage-wall retry wakes on capacity that actually freed.
+#[cfg(test)]
 async fn drain_stored_records(
     client: &reqwest::Client,
     key: &str,
@@ -1016,6 +1019,21 @@ impl Drop for CleanupRunningGuard {
     }
 }
 
+fn try_acquire_cleanup(key: &str) -> Option<CleanupRunningGuard> {
+    CleanupRunningGuard::acquire(cleanup_coordinator(key))
+}
+
+async fn run_manual_cleanup_with_deadline(
+    client: &reqwest::Client,
+    key: &str,
+    report: Option<&(dyn Fn(u64, u64) + Send + Sync)>,
+    deadline: std::time::Duration,
+) -> Result<SonioxCleanupResult, String> {
+    let _guard =
+        try_acquire_cleanup(key).ok_or_else(|| CLEANUP_ALREADY_RUNNING_MESSAGE.to_string())?;
+    drain_stored_records_with_deadline(client, key, report, deadline).await
+}
+
 /// Progress counters for the storage-wall self-heal. FILE deletions free
 /// retained-audio capacity (file-count/size walls gate the retried
 /// upload); record deletions free transcription-count capacity (they gate
@@ -1057,7 +1075,7 @@ fn spawn_auto_cleanup_with_deadline(
     key: String,
     deadline: std::time::Duration,
 ) {
-    let Some(guard) = CleanupRunningGuard::acquire(cleanup_coordinator(&key)) else {
+    let Some(guard) = try_acquire_cleanup(&key) else {
         return;
     };
     tokio::spawn(async move {
@@ -2482,6 +2500,63 @@ mod tests {
         }
 
         #[tokio::test]
+        async fn manual_cleanup_excludes_same_scope_but_not_other_accounts() {
+            let server = MockServer::start().await;
+            let _guard = BaseOverrideGuard::install(&server).await;
+            let client = common::http_client();
+            let first_manual = try_acquire_cleanup("k").expect("first manual cleanup starts");
+
+            let busy = run_manual_cleanup_with_deadline(
+                &client,
+                "k",
+                None,
+                std::time::Duration::from_secs(1),
+            )
+            .await
+            .unwrap_err();
+            assert_eq!(busy, CLEANUP_ALREADY_RUNNING_MESSAGE);
+            assert!(
+                try_acquire_cleanup("k").is_none(),
+                "automatic cleanup must use the same occupied coordinator"
+            );
+            let other_account =
+                try_acquire_cleanup("other-key").expect("different API key stays isolated");
+
+            drop(other_account);
+            drop(first_manual);
+            assert!(
+                try_acquire_cleanup("k").is_some(),
+                "successful guard drop must allow retry"
+            );
+        }
+
+        #[tokio::test]
+        async fn manual_cleanup_error_releases_running_guard() {
+            let server = MockServer::start().await;
+            let _guard = BaseOverrideGuard::install(&server).await;
+            Mock::given(method("GET"))
+                .and(path("/v1/transcriptions"))
+                .respond_with(ResponseTemplate::new(500))
+                .expect(1)
+                .mount(&server)
+                .await;
+
+            let result = run_manual_cleanup_with_deadline(
+                &common::http_client(),
+                "k",
+                None,
+                std::time::Duration::from_secs(1),
+            )
+            .await;
+            assert!(result.is_err());
+            assert!(
+                try_acquire_cleanup("k").is_some(),
+                "error path must allow retry"
+            );
+            server.verify().await;
+        }
+
+        #[tokio::test]
         async fn cleanup_deadline_reports_possible_partial_work_and_can_be_retried() {
             let server = MockServer::start().await;
             let _guard = BaseOverrideGuard::install(&server).await;
@@ -2511,7 +2586,7 @@ mod tests {
                 .expect(1)
                 .mount(&server)
                 .await;
-            let error = drain_stored_records_with_deadline(
+            let error = run_manual_cleanup_with_deadline(
                 &client,
                 "k",
                 None,
@@ -2545,7 +2620,7 @@ mod tests {
                 .expect(1)
                 .mount(&server)
                 .await;
-            let retried = drain_stored_records_with_deadline(
+            let retried = run_manual_cleanup_with_deadline(
                 &client,
                 "k",
                 None,
@@ -3072,7 +3147,7 @@ mod tests {
             let server = MockServer::start().await;
             let _guard = BaseOverrideGuard::install(&server).await;
             let coordinator = cleanup_coordinator("k");
-            let guard = CleanupRunningGuard::acquire(coordinator.clone()).unwrap();
+            let guard = try_acquire_cleanup("k").unwrap();
             let task = tokio::spawn(async move {
                 let _guard = guard;
                 std::future::pending::<()>().await;
@@ -3080,7 +3155,7 @@ mod tests {
             task.abort();
             assert!(task.await.unwrap_err().is_cancelled());
             assert!(!coordinator.running.load(Ordering::SeqCst));
-            let guard = CleanupRunningGuard::acquire(coordinator.clone()).unwrap();
+            let guard = try_acquire_cleanup("k").unwrap();
             let task = tokio::spawn(async move {
                 let _guard = guard;
                 panic!("test cleanup panic");

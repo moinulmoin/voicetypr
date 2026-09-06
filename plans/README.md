@@ -66,7 +66,7 @@ Plan 063 — VM QA COMPLETE — Codex 2026-09-06: six reproduced fixes verified 
 
 ## PR #140 follow-up — 2026-09-06
 
-CODE COMPLETE / NEEDS-SMOKE — Codex follow-up on `fix/047-silent-failures` from `e97aa900`. Confirmed review defects fixed; 697 frontend and 1,525 Rust tests pass (16 ignored), typecheck/lint/frontend build/Clippy green. Packaged smoke remains unchecked. See `060-pr140-review-followup.md` for findings, rejected feedback and evidence. No release or Stable promotion implied.
+CODE COMPLETE / NEEDS-SMOKE — Codex follow-up on `fix/047-silent-failures` from `e97aa900`. Confirmed review defects fixed, including forced CLI model refresh and shared manual/automatic Soniox cleanup coordination; 731 frontend and 1,557 Rust tests pass (16 ignored), typecheck/lint/frontend build/Clippy green. Scoped macOS VM QA is complete in plan 063; external account and physical hardware smoke remain unchecked. See `060-pr140-review-followup.md` for findings, rejected feedback and evidence. No release or Stable promotion implied.
 
 ## Plan 062 — CI gating and compute policy
 
