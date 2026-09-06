@@ -91,3 +91,11 @@ not applied: executor retryability controls immediate automatic retries, while
 when save_recordings is on, so the user can fix the key and re-transcribe.
 Discarding that audio for `Unauthorized` would violate the existing recovery
 contract. Cancellation and too-short input remain excluded.
+
+The follow-through review also caught preexisting render-time source syncing
+calling the newly controlled parent setter. It now initializes tracking from
+the current source and synchronizes only later source-category changes from an
+effect. An actual stateful parent harness proves Cloud survives initial local
+model mounting, no parent-render warning occurs, and browsing survives unrelated
+renders. The full frontend suite passes 711 tests; typecheck, lint and build
+pass after this correction.
