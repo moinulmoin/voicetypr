@@ -59,6 +59,13 @@ Verification commands used across all plans: `pnpm typecheck`, `pnpm lint`,
 | 058  | Media pause v2 — upgrade existing MediaPauseController to VoiceInk-grade (macOS perl MediaRemote bridge + enigo CGEvent key + resume delay + mute fallback; Windows session ledger + Store manifest capability) | P1 | M | — | IN PROGRESS — claimed Main 2026-08-21; macOS action layer landed + live-verified (MediaRemote pause→resume round trip confirmed in dev-app log 12:48; mute fallback exercised live via CoreAudio test binary). Remaining: resume-delay setting, perl-bridge fallback if JXA ever breaks, Windows session-ledger verification + MSIX \`globalMediaControl\` |
 | 059  | No-speech gate — pre-engine reject on strong absence evidence, all STT paths; kills hallucinate-and-polish | P0 | S | — | CODE COMPLETE — beta.8 candidate on `fix/no-speech-transient-windows`: calibrated quiet-silence gate plus fixed 5ms evidence windows for callback-size-independent transient rejection; deliberate punctuation preserved; two-wave adversarial review clear; 1395 backend tests + clippy `-D warnings` green. Packaged macOS/Windows smoke pending in `SMOKE.md`; Phase 2 engine-neutral neural VAD remains planned. |
 
+## Plan 062 — CI gating and compute policy
+
+IN PROGRESS — claimed Codex 2026-09-06 on `agent/062-ci-gating`, based on
+main `4f9e497d`. First ship cancellation and cheap-check prerequisites without
+weakening native validation; manual-only native builds require an enforced
+current-revision merge gate. See `062-ci-gating.md`.
+
 ## Code-done, awaiting batched manual smoke (`plans/SMOKE.md`)
 
 | Plan | Title | Code landed | Status |
