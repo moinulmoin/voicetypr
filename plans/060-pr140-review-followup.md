@@ -145,3 +145,16 @@ well as success; failed usage refresh clears stale counts and surfaces the read
 error, and the button becomes usable again. The full frontend suite passes 715
 tests; typecheck, lint, build and independent review pass. Rust is unchanged
 from the 1,539-test validated revision.
+
+## Shared terminal references and scoped coordination
+
+Terminal cleanup now requires a fresh, complete transcription-reference listing
+before deleting an upload, including after the owned transcription returns 404.
+Shared references, failed listings and incomplete metadata retain the file for
+later cleanup. The complete terminal operation remains bounded by 60 seconds.
+Listing gates and active-job registries now live in the same account-scoped
+coordinator; each guard retains its exact scope. An old account's stalled
+listing cannot block a new account's upload/create, and matching IDs in different
+accounts cannot unregister one another. HTTP regressions and independent review
+cover these cases. Full Rust tests: 1,543 passed, 16 ignored; Clippy workspace/all-targets with
+warnings denied and changed-file formatting pass.

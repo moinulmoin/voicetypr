@@ -52,7 +52,7 @@ fn set_base_url_override(base: Option<String>) {
 //
 // Two primitives make that decision race-free:
 //
-//   * LISTING_GATE — a short-lived async gate. A flow holds a READ guard only
+//   * Per-key listing_gate — a short-lived async gate. A flow holds a READ guard only
 //     across its upload request (until the file id is registered) and across
 //     its create request (until the transcription id is attached). This
 //     closes the visibility window: a record becomes server-side list-visible
@@ -62,17 +62,11 @@ fn set_base_url_override(base: Option<String>) {
 //     snapshot — writes wait for in-flight upload/create windows, and flows
 //     starting afterwards list absent records. Never held across a poll or
 //     a whole dictation.
-//   * ACTIVE_JOBS — RAII registry of app-owned uploads (file_id →
+//   * Per-key active_jobs — RAII registry of app-owned uploads (file_id →
 //     Option<transcription_id>). Drains snapshot it under the gate and skip
 //     protected records in BOTH passes. Guards deregister on drop, so a
 //     cancelled dictation cannot leak protection; its proven session-owned
 //     leftovers remain eligible for the next drain.
-
-static LISTING_GATE: tokio::sync::RwLock<()> = tokio::sync::RwLock::const_new(());
-
-static ACTIVE_JOBS: std::sync::LazyLock<
-    std::sync::Mutex<std::collections::HashMap<String, Option<String>>>,
-> = std::sync::LazyLock::new(|| std::sync::Mutex::new(std::collections::HashMap::new()));
 
 // Only IDs actually returned to this client are cleanup candidates. Account
 // listings, filenames and age cannot prove ownership. Unknown historical data
@@ -149,25 +143,34 @@ fn forget_deleted(key: &str, url: &str) {
 /// RAII ownership of one flow's uploaded file and, once created, its
 /// transcription. Dropping the guard releases the protection — cancellation
 /// cannot leak it.
-struct ActiveJobGuard(String);
+struct ActiveJobGuard {
+    file_id: String,
+    coordinator: std::sync::Arc<CleanupCoordinator>,
+}
 
 impl ActiveJobGuard {
     fn register(file_id: &str, key: &str) -> Self {
         remember_owned(key, "files", file_id);
-        ACTIVE_JOBS
+        let coordinator = cleanup_coordinator(key);
+        coordinator
+            .active_jobs
             .lock()
             .expect("active-jobs registry poisoned")
             .insert(file_id.to_string(), None);
-        Self(file_id.to_string())
+        Self {
+            file_id: file_id.to_string(),
+            coordinator,
+        }
     }
 }
 
 impl Drop for ActiveJobGuard {
     fn drop(&mut self) {
-        ACTIVE_JOBS
+        self.coordinator
+            .active_jobs
             .lock()
             .expect("active-jobs registry poisoned")
-            .remove(&self.0);
+            .remove(&self.file_id);
     }
 }
 
@@ -177,7 +180,8 @@ impl Drop for ActiveJobGuard {
 /// ID proves record ownership independently; it does not prove file ownership.
 fn attach_transcription(file_id: &str, transcription_id: &str, key: &str) {
     remember_owned(key, "transcriptions", transcription_id);
-    if let Some(slot) = ACTIVE_JOBS
+    if let Some(slot) = cleanup_coordinator(key)
+        .active_jobs
         .lock()
         .expect("active-jobs registry poisoned")
         .get_mut(file_id)
@@ -188,8 +192,9 @@ fn attach_transcription(file_id: &str, transcription_id: &str, key: &str) {
 
 /// Snapshot of files owned by in-flight flows. The lock is never held across
 /// an await point.
-fn active_file_ids() -> std::collections::HashSet<String> {
-    ACTIVE_JOBS
+fn active_file_ids(key: &str) -> std::collections::HashSet<String> {
+    cleanup_coordinator(key)
+        .active_jobs
         .lock()
         .expect("active-jobs registry poisoned")
         .keys()
@@ -198,8 +203,9 @@ fn active_file_ids() -> std::collections::HashSet<String> {
 }
 
 /// Snapshot of transcription ids owned by in-flight flows.
-fn active_transcription_ids() -> std::collections::HashSet<String> {
-    ACTIVE_JOBS
+fn active_transcription_ids(key: &str) -> std::collections::HashSet<String> {
+    cleanup_coordinator(key)
+        .active_jobs
         .lock()
         .expect("active-jobs registry poisoned")
         .values()
@@ -213,7 +219,8 @@ fn active_transcription_ids() -> std::collections::HashSet<String> {
 ///
 ///   * transcription present → delete it; only once the delete lands (2xx)
 ///     or the record is already gone (404 — e.g. a backlog drain raced us
-///     and owns the file too) is the file unreferenced, so delete it too.
+///     and owns the file too), check fresh references before deleting its file.
+///     Unknown, shared, or incomplete references retain the file for later cleanup.
 ///   * 409 → the job is still processing (poll-timeout path). The file is
 ///     still referenced by that live job — deleting it now would fail the
 ///     job with `file_not_found` — so BOTH records linger for a later
@@ -235,6 +242,40 @@ async fn cleanup_stored_records(
     transcription_id: Option<&str>,
     file_id: &str,
 ) {
+    if cleanup_stored_records_with_deadline(
+        client,
+        key,
+        transcription_id,
+        file_id,
+        CLEANUP_DEADLINE,
+    )
+    .await
+    .is_err()
+    {
+        log::warn!("{CLEANUP_TIMEOUT_MESSAGE}");
+    }
+}
+
+async fn cleanup_stored_records_with_deadline(
+    client: &reqwest::Client,
+    key: &str,
+    transcription_id: Option<&str>,
+    file_id: &str,
+    deadline: std::time::Duration,
+) -> Result<(), tokio::time::error::Elapsed> {
+    tokio::time::timeout(
+        deadline,
+        cleanup_stored_records_inner(client, key, transcription_id, file_id),
+    )
+    .await
+}
+
+async fn cleanup_stored_records_inner(
+    client: &reqwest::Client,
+    key: &str,
+    transcription_id: Option<&str>,
+    file_id: &str,
+) {
     let Some(tid) = transcription_id else {
         if is_ambiguous_upload(key, file_id) {
             return;
@@ -251,10 +292,10 @@ async fn cleanup_stored_records(
     match attempt {
         Ok(Ok(DeleteOutcome::Deleted)) => {
             bump_record_freed_progress(key);
-            delete_file_best_effort(client, key, file_id).await;
+            delete_terminal_file_if_unreferenced(client, key, file_id).await;
         }
         Ok(Ok(DeleteOutcome::AlreadyGone)) => {
-            delete_file_best_effort(client, key, file_id).await;
+            delete_terminal_file_if_unreferenced(client, key, file_id).await;
         }
         Ok(Ok(DeleteOutcome::SkippedProcessing)) => {
             log::info!(
@@ -265,6 +306,22 @@ async fn cleanup_stored_records(
             "Soniox cleanup: delete transcription {tid} failed: {e}; file {file_id} left for backlog cleanup"
         ),
         Err(_) => log::warn!("Soniox cleanup: delete transcription timed out ({url})"),
+    }
+}
+
+/// Deleting this flow's transcription says nothing about sibling references.
+/// Check a complete fresh listing before freeing its file. Holding this key's
+/// gate through deletion prevents a local create from racing the check; the
+/// flow's own active guard remains in place but does not block its cleanup.
+async fn delete_terminal_file_if_unreferenced(client: &reqwest::Client, key: &str, file_id: &str) {
+    let coordinator = cleanup_coordinator(key);
+    let _gate = coordinator.listing_gate.write().await;
+    match list_pages::<ListedTranscription>(client, key, "transcriptions").await {
+        Ok((records, 0)) if !records.iter().any(|record| record.known_file() == Some(file_id)) => {
+            delete_file_best_effort(client, key, file_id).await;
+        }
+        Ok(_) => log::info!("Soniox cleanup: file {file_id} retained because references remain or metadata is incomplete"),
+        Err(err) => log::warn!("Soniox cleanup: file {file_id} retained because reference listing failed: {}", err.message("Soniox")),
     }
 }
 
@@ -623,7 +680,7 @@ pub(crate) async fn cleanup_stored(app: &AppHandle) -> Result<SonioxCleanupResul
 /// the protection snapshot exact (see the module-level ownership notes):
 /// flows hold READ guards only across upload→register and
 /// create→attach, so any record a listing can see is either already
-/// registered in ACTIVE_JOBS or was created after the listing and is
+/// registered in the scoped active_jobs registry or was created after the listing and is
 /// therefore absent from it. Nothing is deleted that
 ///   * is registered to an in-flight dictation flow — including queued or
 ///     completed-but-not-yet-extracted jobs, whose records the API would
@@ -687,12 +744,13 @@ async fn drain_stored_records_inner(
     // Pass 1 — transcription records. Listing + protection snapshot under
     // the write gate; deletes run outside it.
     let (transcriptions, skipped_records, mut protected_files, ref_counts) = {
-        let _drain_gate = LISTING_GATE.write().await;
+        let coordinator = cleanup_coordinator(key);
+        let _drain_gate = coordinator.listing_gate.write().await;
         let (transcriptions, skipped_records) =
             list_pages::<ListedTranscription>(client, key, "transcriptions")
                 .await
                 .map_err(cleanup_management_error)?;
-        let active_tids = active_transcription_ids();
+        let active_tids = active_transcription_ids(key);
         let mut protected_files = std::collections::HashSet::new();
         let mut ref_counts: std::collections::HashMap<String, u64> =
             std::collections::HashMap::new();
@@ -737,7 +795,7 @@ async fn drain_stored_records_inner(
         // path entirely; this re-check covers attaches that raced between
         // the pass-1 snapshot and this delete. Never delete the record, and
         // keep its file protected for the file pass.
-        if active_transcription_ids().contains(&item.id) {
+        if active_transcription_ids(key).contains(&item.id) {
             result.skipped_active_jobs += 1;
             if let Some(file_id) = item.known_file() {
                 protected_files.insert(file_id.to_string());
@@ -783,7 +841,7 @@ async fn drain_stored_records_inner(
                         && !files_fail_closed
                         && ref_counts.get(file_id).copied() == Some(1)
                         && !protected_files.contains(file_id)
-                        && !active_file_ids().contains(file_id)
+                        && !active_file_ids(key).contains(file_id)
                     {
                         let file_url = format!("{}/files/{file_id}", base_url());
                         // AlreadyGone freed no capacity here; other outcomes
@@ -818,7 +876,8 @@ async fn drain_stored_records_inner(
         let mut protected = protected_files;
         let mut file_items: Vec<ListedFile> = Vec::new();
         {
-            let _drain_gate = LISTING_GATE.write().await;
+            let coordinator = cleanup_coordinator(key);
+            let _drain_gate = coordinator.listing_gate.write().await;
             let (fresh_transcriptions, fresh_skipped) =
                 list_pages::<ListedTranscription>(client, key, "transcriptions")
                     .await
@@ -846,7 +905,7 @@ async fn drain_stored_records_inner(
                 }
             }
             // Registry snapshot under the same gate as the listings.
-            protected.extend(active_file_ids());
+            protected.extend(active_file_ids(key));
         }
         if !files_fail_closed {
             total_ops += file_items.len() as u64;
@@ -896,6 +955,8 @@ async fn drain_stored_records_inner(
 
 #[derive(Default)]
 struct CleanupCoordinator {
+    listing_gate: tokio::sync::RwLock<()>,
+    active_jobs: std::sync::Mutex<std::collections::HashMap<String, Option<String>>>,
     running: std::sync::atomic::AtomicBool,
     files_freed: std::sync::atomic::AtomicU64,
     records_freed: std::sync::atomic::AtomicU64,
@@ -1187,7 +1248,8 @@ async fn attempt_typed_once(
     // becomes server-side list-visible (during the POST) but its id is not
     // yet registered — a drain listing cannot interleave here. Released
     // right after registration; never held across poll/extract.
-    let _upload_gate = LISTING_GATE.read().await;
+    let coordinator = cleanup_coordinator(key);
+    let _upload_gate = coordinator.listing_gate.read().await;
     let upload_resp = common::with_retry(|| {
         let client = client.clone();
         let filename = filename.clone();
@@ -1252,7 +1314,8 @@ async fn create_transcription(
     payload: &serde_json::Value,
 ) -> Result<String, common::SttError> {
     // Listing must not interleave with create/ownership registration.
-    let _create_gate = LISTING_GATE.read().await;
+    let coordinator = cleanup_coordinator(key);
+    let _create_gate = coordinator.listing_gate.read().await;
     let owned_upload = is_owned(key, "files", file_id);
     // Do not create additional jobs against an already uncertain upload.
     if is_ambiguous_upload(key, file_id) {
@@ -1532,7 +1595,8 @@ async fn attempt_diarized_once(
     // Gate window 1 (mirrors the typed flow): upload POST until the file id
     // is registered — a drain listing cannot interleave with the
     // list-visible-before-registered gap.
-    let _upload_gate = LISTING_GATE.read().await;
+    let coordinator = cleanup_coordinator(key);
+    let _upload_gate = coordinator.listing_gate.read().await;
     let upload_resp = common::with_retry(|| {
         let client = client.clone();
         let filename = filename.clone();
@@ -1885,18 +1949,305 @@ mod tests {
             })
         }
 
+        async fn mount_empty_reference_listing(server: &MockServer) {
+            Mock::given(method("GET"))
+                .and(path("/v1/transcriptions"))
+                .respond_with(
+                    ResponseTemplate::new(200)
+                        .set_body_json(serde_json::json!({"transcriptions":[]})),
+                )
+                .mount(server)
+                .await;
+        }
+
         async fn wait_for_cleanup() {
             tokio::time::timeout(std::time::Duration::from_secs(5), async {
                 while cleanup_coordinator("k")
                     .running
                     .load(std::sync::atomic::Ordering::SeqCst)
-                    || !active_file_ids().is_empty()
+                    || !active_file_ids("k").is_empty()
                 {
                     tokio::time::sleep(std::time::Duration::from_millis(10)).await;
                 }
             })
             .await
             .expect("background cleanup did not finish");
+        }
+
+        #[tokio::test]
+        async fn terminal_cleanup_preserves_existing_shared_file_after_delete_or_not_found() {
+            for status in [204, 404] {
+                let server = MockServer::start().await;
+                let _guard = BaseOverrideGuard::install(&server).await;
+                let client = common::http_client();
+                let owner = ActiveJobGuard::register("shared-file", "k");
+                attach_transcription("shared-file", "own-job", "k");
+                Mock::given(method("DELETE"))
+                    .and(path("/v1/transcriptions/own-job"))
+                    .respond_with(ResponseTemplate::new(status))
+                    .expect(1)
+                    .mount(&server)
+                    .await;
+                Mock::given(method("GET"))
+                    .and(path("/v1/transcriptions"))
+                    .respond_with(ResponseTemplate::new(200).set_body_json(
+                        serde_json::json!({"transcriptions":[
+                            {"id":"other-client-job", "file_id":"shared-file"}
+                        ]}),
+                    ))
+                    .expect(1)
+                    .mount(&server)
+                    .await;
+                cleanup_stored_records(&client, "k", Some("own-job"), "shared-file").await;
+                assert!(is_owned("k", "files", "shared-file"));
+                assert!(active_file_ids("k").contains("shared-file"));
+                assert!(server
+                    .received_requests()
+                    .await
+                    .unwrap()
+                    .iter()
+                    .all(|r| r.url.path() != "/v1/files/shared-file"));
+                server.verify().await;
+                drop(owner);
+                // Once the sibling disappears, the retained upload remains
+                // eligible for a normal bounded backlog cleanup.
+                server.reset().await;
+                mount_empty_reference_listing(&server).await;
+                Mock::given(method("GET"))
+                    .and(path("/v1/files"))
+                    .respond_with(
+                        ResponseTemplate::new(200)
+                            .set_body_json(serde_json::json!({"files":[{"id":"shared-file"}]})),
+                    )
+                    .mount(&server)
+                    .await;
+                Mock::given(method("DELETE"))
+                    .and(path("/v1/files/shared-file"))
+                    .respond_with(ResponseTemplate::new(204))
+                    .expect(1)
+                    .mount(&server)
+                    .await;
+                assert_eq!(
+                    drain_stored_records(&client, "k", None)
+                        .await
+                        .unwrap()
+                        .deleted_files,
+                    1
+                );
+                server.verify().await;
+            }
+        }
+
+        #[tokio::test]
+        async fn terminal_reference_lookup_fails_closed_on_missing_metadata_or_http_failure() {
+            for response in [
+                ResponseTemplate::new(503),
+                ResponseTemplate::new(200)
+                    .set_body_json(serde_json::json!({"transcriptions":[{"id":"unknown-job"}]})),
+            ] {
+                let server = MockServer::start().await;
+                let _guard = BaseOverrideGuard::install(&server).await;
+                remember_owned("k", "files", "retained-file");
+                Mock::given(method("DELETE"))
+                    .and(path("/v1/transcriptions/own-job"))
+                    .respond_with(ResponseTemplate::new(204))
+                    .expect(1)
+                    .mount(&server)
+                    .await;
+                Mock::given(method("GET"))
+                    .and(path("/v1/transcriptions"))
+                    .respond_with(response)
+                    .expect(1)
+                    .mount(&server)
+                    .await;
+                cleanup_stored_records(
+                    &common::http_client(),
+                    "k",
+                    Some("own-job"),
+                    "retained-file",
+                )
+                .await;
+                assert!(is_owned("k", "files", "retained-file"));
+                assert!(server
+                    .received_requests()
+                    .await
+                    .unwrap()
+                    .iter()
+                    .all(|r| r.url.path() != "/v1/files/retained-file"));
+                server.verify().await;
+            }
+        }
+
+        #[tokio::test]
+        async fn terminal_reference_deadline_releases_gate_and_retains_file() {
+            let server = MockServer::start().await;
+            let _guard = BaseOverrideGuard::install(&server).await;
+            remember_owned("k", "files", "retained-file");
+            Mock::given(method("DELETE"))
+                .and(path("/v1/transcriptions/own-job"))
+                .respond_with(ResponseTemplate::new(204))
+                .expect(1)
+                .mount(&server)
+                .await;
+            Mock::given(method("GET"))
+                .and(path("/v1/transcriptions"))
+                .respond_with(
+                    ResponseTemplate::new(200)
+                        .set_body_json(serde_json::json!({"transcriptions":[]}))
+                        .set_delay(std::time::Duration::from_secs(2)),
+                )
+                .expect(1)
+                .mount(&server)
+                .await;
+            assert!(cleanup_stored_records_with_deadline(
+                &common::http_client(),
+                "k",
+                Some("own-job"),
+                "retained-file",
+                std::time::Duration::from_millis(150)
+            )
+            .await
+            .is_err());
+            assert!(cleanup_coordinator("k").listing_gate.try_read().is_ok());
+            assert!(is_owned("k", "files", "retained-file"));
+            assert!(server
+                .received_requests()
+                .await
+                .unwrap()
+                .iter()
+                .all(|r| r.url.path() != "/v1/files/retained-file"));
+            server.verify().await;
+        }
+
+        #[tokio::test]
+        async fn slow_old_key_listing_does_not_block_new_key_flow_or_alias_active_ids() {
+            use std::sync::atomic::Ordering;
+            let server = MockServer::start().await;
+            let _guard = BaseOverrideGuard::install(&server).await;
+            let client = common::http_client();
+            let old_owner = ActiveJobGuard::register("same-file", "old-key");
+            attach_transcription("same-file", "same-job", "old-key");
+            Mock::given(method("GET"))
+                .and(path("/v1/transcriptions"))
+                .and(wiremock::matchers::header(
+                    "authorization",
+                    "Bearer old-key",
+                ))
+                .respond_with(
+                    ResponseTemplate::new(200)
+                        .set_body_json(serde_json::json!({"transcriptions":[]}))
+                        .set_delay(std::time::Duration::from_secs(2)),
+                )
+                .expect(1)
+                .mount(&server)
+                .await;
+            spawn_auto_cleanup_with_deadline(
+                client.clone(),
+                "old-key".to_string(),
+                std::time::Duration::from_millis(700),
+            );
+            tokio::time::timeout(std::time::Duration::from_millis(300), async {
+                while server.received_requests().await.unwrap().is_empty() {
+                    tokio::task::yield_now().await;
+                }
+            })
+            .await
+            .unwrap();
+            assert!(cleanup_coordinator("old-key")
+                .listing_gate
+                .try_read()
+                .is_err());
+            Mock::given(method("POST"))
+                .and(path("/v1/files"))
+                .respond_with(
+                    ResponseTemplate::new(201).set_body_json(serde_json::json!({"id":"same-file"})),
+                )
+                .expect(1)
+                .mount(&server)
+                .await;
+            Mock::given(method("POST"))
+                .and(path("/v1/transcriptions"))
+                .respond_with(
+                    ResponseTemplate::new(201).set_body_json(serde_json::json!({"id":"same-job"})),
+                )
+                .expect(1)
+                .mount(&server)
+                .await;
+            Mock::given(method("GET"))
+                .and(path("/v1/transcriptions/same-job"))
+                .respond_with(
+                    ResponseTemplate::new(200)
+                        .set_body_json(serde_json::json!({"status":"completed"})),
+                )
+                .mount(&server)
+                .await;
+            Mock::given(method("GET"))
+                .and(path("/v1/transcriptions/same-job/transcript"))
+                .respond_with(
+                    ResponseTemplate::new(200)
+                        .set_body_json(serde_json::json!({"text":"new key works"})),
+                )
+                .mount(&server)
+                .await;
+            Mock::given(method("GET"))
+                .and(path("/v1/transcriptions"))
+                .and(wiremock::matchers::header(
+                    "authorization",
+                    "Bearer new-key",
+                ))
+                .respond_with(
+                    ResponseTemplate::new(200)
+                        .set_body_json(serde_json::json!({"transcriptions":[]})),
+                )
+                .expect(1)
+                .mount(&server)
+                .await;
+            Mock::given(method("DELETE"))
+                .and(wiremock::matchers::header(
+                    "authorization",
+                    "Bearer new-key",
+                ))
+                .respond_with(ResponseTemplate::new(204))
+                .expect(2)
+                .mount(&server)
+                .await;
+            let result = tokio::time::timeout(
+                std::time::Duration::from_millis(300),
+                attempt_typed_once(
+                    &client,
+                    "new-key",
+                    "stt-async-v5",
+                    Path::new("audio.wav"),
+                    b"audio",
+                    None,
+                    None,
+                ),
+            )
+            .await
+            .expect("old key listing blocked a new key upload/create")
+            .unwrap();
+            assert_eq!(result, "new key works");
+            tokio::time::timeout(std::time::Duration::from_millis(300), async {
+                while !active_file_ids("new-key").is_empty() {
+                    tokio::task::yield_now().await;
+                }
+            })
+            .await
+            .unwrap();
+            assert!(active_file_ids("old-key").contains("same-file"));
+            assert!(active_transcription_ids("old-key").contains("same-job"));
+            drop(old_owner);
+            tokio::time::timeout(std::time::Duration::from_secs(2), async {
+                while cleanup_coordinator("old-key")
+                    .running
+                    .load(Ordering::SeqCst)
+                {
+                    tokio::task::yield_now().await;
+                }
+            })
+            .await
+            .unwrap();
+            server.verify().await;
         }
 
         #[tokio::test]
@@ -2082,7 +2433,7 @@ mod tests {
             wait_for_cleanup().await;
             assert!(!cleanup_coordinator("k").running.load(Ordering::SeqCst));
             assert!(
-                LISTING_GATE.try_read().is_ok(),
+                cleanup_coordinator("k").listing_gate.try_read().is_ok(),
                 "timed-out listing retained its write gate"
             );
             server.verify().await;
@@ -2246,6 +2597,7 @@ mod tests {
                 for status in [401, 429] {
                     let server = MockServer::start().await;
                     let _guard = BaseOverrideGuard::install(&server).await;
+                    mount_empty_reference_listing(&server).await;
                     Mock::given(method("POST"))
                         .and(path("/v1/files"))
                         .respond_with(
@@ -2734,6 +3086,7 @@ mod tests {
             for diarized in [false, true] {
                 let server = MockServer::start().await;
                 let _guard = BaseOverrideGuard::install(&server).await;
+                mount_empty_reference_listing(&server).await;
                 Mock::given(method("POST"))
                     .and(path("/v1/files"))
                     .respond_with(
@@ -2807,8 +3160,8 @@ mod tests {
                 .expect("delivery must not wait for DELETE")
                 .unwrap();
                 assert_eq!(delivered, "delivered");
-                assert!(active_file_ids().contains("f-slow"));
-                assert!(active_transcription_ids().contains("t-slow"));
+                assert!(active_file_ids("k").contains("f-slow"));
+                assert!(active_transcription_ids("k").contains("t-slow"));
                 wait_for_cleanup().await;
                 assert!(!is_owned("k", "files", "f-slow"));
                 server.verify().await;
@@ -2819,6 +3172,7 @@ mod tests {
         async fn typed_flow_deletes_transcription_and_file_after_success() {
             let server = MockServer::start().await;
             let _guard = BaseOverrideGuard::install(&server).await;
+            mount_empty_reference_listing(&server).await;
             let client = common::http_client();
 
             Mock::given(method("POST"))
@@ -2876,6 +3230,7 @@ mod tests {
         async fn typed_flow_deletes_transcription_and_file_after_job_error() {
             let server = MockServer::start().await;
             let _guard = BaseOverrideGuard::install(&server).await;
+            mount_empty_reference_listing(&server).await;
             let client = common::http_client();
 
             Mock::given(method("POST"))
@@ -2922,6 +3277,7 @@ mod tests {
         async fn create_limit_exceeded_is_terminal_no_retry_and_deletes_orphan_file() {
             let server = MockServer::start().await;
             let _guard = BaseOverrideGuard::install(&server).await;
+            mount_empty_reference_listing(&server).await;
             let client = common::http_client();
 
             // Terminal quota wall: exactly ONE create request proves the
@@ -3095,6 +3451,7 @@ mod tests {
         async fn diarized_flow_deletes_transcription_and_file_after_success() {
             let server = MockServer::start().await;
             let _guard = BaseOverrideGuard::install(&server).await;
+            mount_empty_reference_listing(&server).await;
             let client = common::http_client();
 
             Mock::given(method("POST"))
@@ -3233,6 +3590,7 @@ mod tests {
             // processing 409 is never permission to delete the active file.
             let server = MockServer::start().await;
             let _guard = BaseOverrideGuard::install(&server).await;
+            mount_empty_reference_listing(&server).await;
             let client = common::http_client();
 
             Mock::given(method("DELETE"))
@@ -3268,6 +3626,7 @@ mod tests {
             // still attempted after the transcription 404.
             let server = MockServer::start().await;
             let _guard = BaseOverrideGuard::install(&server).await;
+            mount_empty_reference_listing(&server).await;
             let client = common::http_client();
 
             Mock::given(method("DELETE"))
@@ -3422,6 +3781,7 @@ mod tests {
             // storage self-heal (no whole-library drain, no storage nag).
             let server = MockServer::start().await;
             let _guard = BaseOverrideGuard::install(&server).await;
+            mount_empty_reference_listing(&server).await;
             let client = common::http_client();
 
             Mock::given(method("POST"))
@@ -3510,7 +3870,8 @@ mod tests {
 
             // Simulate the upload window: gate read guard held, response
             // not yet processed, nothing registered.
-            let _upload_window = LISTING_GATE.read().await;
+            let coordinator = cleanup_coordinator("k");
+            let _upload_window = coordinator.listing_gate.read().await;
             let drain_client = client.clone();
             let drain =
                 tokio::spawn(async move { drain_stored_records(&drain_client, "k", None).await });
@@ -3604,6 +3965,7 @@ mod tests {
             // `file_not_found`.
             let server = MockServer::start().await;
             let _guard = BaseOverrideGuard::install(&server).await;
+            mount_empty_reference_listing(&server).await;
             let client = common::http_client();
 
             Mock::given(method("DELETE"))
