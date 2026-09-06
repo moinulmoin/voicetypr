@@ -5,6 +5,9 @@ use std::path::Path;
 use tauri::AppHandle;
 
 const BASE: &str = "https://api.soniox.com/v1";
+const MANAGEMENT_REQUEST_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+const CLEANUP_DEADLINE: std::time::Duration = std::time::Duration::from_secs(60);
+const CLEANUP_TIMEOUT_MESSAGE: &str = "Soniox cleanup timed out. Some records may already have been removed. Refresh storage counts and retry cleanup.";
 
 pub(super) async fn validate_key(key: &str) -> Result<(), String> {
     common::get_validate(
@@ -364,9 +367,19 @@ async fn get_total(
     key: &str,
     collection: &str,
 ) -> Result<u64, common::SttError> {
+    get_total_with_timeout(client, key, collection, MANAGEMENT_REQUEST_TIMEOUT).await
+}
+
+async fn get_total_with_timeout(
+    client: &reqwest::Client,
+    key: &str,
+    collection: &str,
+    timeout: std::time::Duration,
+) -> Result<u64, common::SttError> {
     let url = format!("{}/{collection}/count", base_url());
     let resp = client
         .get(&url)
+        .timeout(timeout)
         .bearer_auth(key)
         .send()
         .await
@@ -374,11 +387,16 @@ async fn get_total(
     if !resp.status().is_success() {
         return Err(common::log_soniox_http_body(resp, "Soniox storage count").await);
     }
-    let json: serde_json::Value = resp
-        .json()
-        .await
-        .map_err(|_| common::SttError::BadResponse)?;
-    Ok(json.get("total").and_then(|v| v.as_u64()).unwrap_or(0))
+    let json: serde_json::Value = resp.json().await.map_err(|err| {
+        if err.is_timeout() {
+            common::SttError::Timeout
+        } else {
+            common::SttError::BadResponse
+        }
+    })?;
+    json.get("total")
+        .and_then(|v| v.as_u64())
+        .ok_or(common::SttError::BadResponse)
 }
 
 /// A transcription's file reference, exactly as documented: present for
@@ -430,6 +448,15 @@ async fn list_pages<T: serde::de::DeserializeOwned>(
     key: &str,
     collection: &str,
 ) -> Result<(Vec<T>, usize), common::SttError> {
+    list_pages_with_timeout(client, key, collection, MANAGEMENT_REQUEST_TIMEOUT).await
+}
+
+async fn list_pages_with_timeout<T: serde::de::DeserializeOwned>(
+    client: &reqwest::Client,
+    key: &str,
+    collection: &str,
+    timeout: std::time::Duration,
+) -> Result<(Vec<T>, usize), common::SttError> {
     let mut items = Vec::new();
     let mut skipped = 0;
     let mut cursor: Option<String> = None;
@@ -441,7 +468,10 @@ async fn list_pages<T: serde::de::DeserializeOwned>(
             return Err(common::SttError::BadResponse);
         }
         let url = format!("{}/{collection}", base_url());
-        let mut request = client.get(&url).query(&[("limit", "1000")]);
+        let mut request = client
+            .get(&url)
+            .timeout(timeout)
+            .query(&[("limit", "1000")]);
         if let Some(c) = &cursor {
             request = request.query(&[("cursor", c)]);
         }
@@ -453,10 +483,13 @@ async fn list_pages<T: serde::de::DeserializeOwned>(
         if !resp.status().is_success() {
             return Err(common::log_soniox_http_body(resp, "Soniox storage list").await);
         }
-        let json: serde_json::Value = resp
-            .json()
-            .await
-            .map_err(|_| common::SttError::BadResponse)?;
+        let json: serde_json::Value = resp.json().await.map_err(|err| {
+            if err.is_timeout() {
+                common::classify_reqwest_err(&err)
+            } else {
+                common::SttError::BadResponse
+            }
+        })?;
         let Some(page) = json
             .get(collection)
             .or_else(|| json.get("items"))
@@ -509,9 +542,19 @@ async fn delete_one(
     key: &str,
     url: &str,
 ) -> Result<DeleteOutcome, String> {
+    delete_one_with_timeout(client, key, url, MANAGEMENT_REQUEST_TIMEOUT).await
+}
+
+async fn delete_one_with_timeout(
+    client: &reqwest::Client,
+    key: &str,
+    url: &str,
+    timeout: std::time::Duration,
+) -> Result<DeleteOutcome, String> {
     for attempt in 0..2 {
         let resp = client
             .delete(url)
+            .timeout(timeout)
             .bearer_auth(key)
             .send()
             .await
@@ -609,6 +652,36 @@ async fn drain_stored_records(
     key: &str,
     report: Option<&(dyn Fn(u64, u64) + Send + Sync)>,
 ) -> Result<SonioxCleanupResult, String> {
+    drain_stored_records_with_deadline(client, key, report, CLEANUP_DEADLINE).await
+}
+
+/// Both manual and automatic cleanup use this bound, including gate waits,
+/// pagination, pacing and retries. Timing out drops the inner future and its
+/// listing guard; deletions already accepted by the server are not rolled back.
+async fn drain_stored_records_with_deadline(
+    client: &reqwest::Client,
+    key: &str,
+    report: Option<&(dyn Fn(u64, u64) + Send + Sync)>,
+    deadline: std::time::Duration,
+) -> Result<SonioxCleanupResult, String> {
+    tokio::time::timeout(deadline, drain_stored_records_inner(client, key, report))
+        .await
+        .map_err(|_| CLEANUP_TIMEOUT_MESSAGE.to_string())?
+}
+
+fn cleanup_management_error(error: common::SttError) -> String {
+    if matches!(error, common::SttError::Timeout) {
+        CLEANUP_TIMEOUT_MESSAGE.to_string()
+    } else {
+        error.message("Soniox")
+    }
+}
+
+async fn drain_stored_records_inner(
+    client: &reqwest::Client,
+    key: &str,
+    report: Option<&(dyn Fn(u64, u64) + Send + Sync)>,
+) -> Result<SonioxCleanupResult, String> {
     let mut result = SonioxCleanupResult::default();
 
     // Pass 1 — transcription records. Listing + protection snapshot under
@@ -618,7 +691,7 @@ async fn drain_stored_records(
         let (transcriptions, skipped_records) =
             list_pages::<ListedTranscription>(client, key, "transcriptions")
                 .await
-                .map_err(|e| e.message("Soniox"))?;
+                .map_err(cleanup_management_error)?;
         let active_tids = active_transcription_ids();
         let mut protected_files = std::collections::HashSet::new();
         let mut ref_counts: std::collections::HashMap<String, u64> =
@@ -749,7 +822,7 @@ async fn drain_stored_records(
             let (fresh_transcriptions, fresh_skipped) =
                 list_pages::<ListedTranscription>(client, key, "transcriptions")
                     .await
-                    .map_err(|e| e.message("Soniox"))?;
+                    .map_err(cleanup_management_error)?;
             for file_id in fresh_transcriptions.iter().filter_map(|t| t.known_file()) {
                 protected.insert(file_id.to_string());
             }
@@ -762,7 +835,7 @@ async fn drain_stored_records(
             if !files_fail_closed {
                 let (items, skipped_files) = list_pages::<ListedFile>(client, key, "files")
                     .await
-                    .map_err(|e| e.message("Soniox"))?;
+                    .map_err(cleanup_management_error)?;
                 if skipped_files > 0 {
                     files_fail_closed = true;
                     result.errors.push(format!(
@@ -897,13 +970,21 @@ fn auto_cleanup_progress_baselines(key: &str) -> (u64, u64) {
 /// file immediately frees org storage capacity, so a blocked dictation only
 /// needs the FIRST relevant deletion before retrying.
 fn spawn_auto_cleanup(client: reqwest::Client, key: String) {
+    spawn_auto_cleanup_with_deadline(client, key, CLEANUP_DEADLINE);
+}
+
+fn spawn_auto_cleanup_with_deadline(
+    client: reqwest::Client,
+    key: String,
+    deadline: std::time::Duration,
+) {
     let Some(guard) = CleanupRunningGuard::acquire(cleanup_coordinator(&key)) else {
         return;
     };
     tokio::spawn(async move {
         let _guard = guard;
         log::info!("Soniox storage limit hit: background cleanup started");
-        match drain_stored_records(&client, &key, None).await {
+        match drain_stored_records_with_deadline(&client, &key, None, deadline).await {
             Ok(totals) => log::info!(
                 "Soniox background cleanup finished: {} transcriptions + {} files deleted, {} processing-skipped, {} active-protected files, {} active-protected jobs, {} errors",
                 totals.deleted_transcriptions,
@@ -1816,6 +1897,220 @@ mod tests {
             })
             .await
             .expect("background cleanup did not finish");
+        }
+
+        #[tokio::test]
+        async fn management_requests_bound_stalled_count_listing_and_delete() {
+            let server = MockServer::start().await;
+            let _guard = BaseOverrideGuard::install(&server).await;
+            let client = reqwest::Client::builder()
+                .timeout(std::time::Duration::from_secs(30))
+                .build()
+                .unwrap();
+            let timeout = std::time::Duration::from_millis(100);
+            Mock::given(method("GET"))
+                .and(path("/v1/files/count"))
+                .respond_with(
+                    ResponseTemplate::new(200)
+                        .set_body_json(serde_json::json!({"total":1}))
+                        .set_delay(std::time::Duration::from_secs(2)),
+                )
+                .expect(1)
+                .mount(&server)
+                .await;
+            Mock::given(method("GET"))
+                .and(path("/v1/files"))
+                .respond_with(
+                    ResponseTemplate::new(200)
+                        .set_body_json(serde_json::json!({"files":[]}))
+                        .set_delay(std::time::Duration::from_secs(2)),
+                )
+                .expect(1)
+                .mount(&server)
+                .await;
+            Mock::given(method("DELETE"))
+                .and(path("/v1/files/slow"))
+                .respond_with(
+                    ResponseTemplate::new(204).set_delay(std::time::Duration::from_secs(2)),
+                )
+                .expect(1)
+                .mount(&server)
+                .await;
+            let results = tokio::time::timeout(std::time::Duration::from_secs(1), async {
+                let count = get_total_with_timeout(&client, "k", "files", timeout).await;
+                let list =
+                    list_pages_with_timeout::<ListedFile>(&client, "k", "files", timeout).await;
+                let delete = delete_one_with_timeout(
+                    &client,
+                    "k",
+                    &format!("{}/files/slow", base_url()),
+                    timeout,
+                )
+                .await;
+                (count, list, delete)
+            })
+            .await
+            .expect("management must not inherit the long transcription timeout");
+            assert!(matches!(results.0, Err(common::SttError::Timeout)));
+            assert!(matches!(results.1, Err(common::SttError::Timeout)));
+            assert!(results.2.is_err());
+            server.verify().await;
+        }
+
+        #[tokio::test]
+        async fn malformed_storage_counts_do_not_report_empty_storage() {
+            let server = MockServer::start().await;
+            let _guard = BaseOverrideGuard::install(&server).await;
+            for payload in [
+                serde_json::json!({}),
+                serde_json::json!({"total":"0"}),
+                serde_json::json!({"total":-1}),
+                serde_json::json!({"total":1.5}),
+            ] {
+                server.reset().await;
+                Mock::given(method("GET"))
+                    .and(path("/v1/files/count"))
+                    .respond_with(ResponseTemplate::new(200).set_body_json(payload))
+                    .mount(&server)
+                    .await;
+                assert!(matches!(
+                    get_total(&common::http_client(), "k", "files").await,
+                    Err(common::SttError::BadResponse)
+                ));
+            }
+        }
+
+        #[tokio::test]
+        async fn cleanup_deadline_reports_possible_partial_work_and_can_be_retried() {
+            let server = MockServer::start().await;
+            let _guard = BaseOverrideGuard::install(&server).await;
+            let client = common::http_client();
+            remember_owned("k", "transcriptions", "fast");
+            remember_owned("k", "transcriptions", "slow");
+            Mock::given(method("GET"))
+                .and(path("/v1/transcriptions"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(
+                    serde_json::json!({"transcriptions":[
+                        {"id":"fast", "file_id":null}, {"id":"slow", "file_id":null}
+                    ]}),
+                ))
+                .mount(&server)
+                .await;
+            Mock::given(method("DELETE"))
+                .and(path("/v1/transcriptions/fast"))
+                .respond_with(ResponseTemplate::new(204))
+                .expect(1)
+                .mount(&server)
+                .await;
+            Mock::given(method("DELETE"))
+                .and(path("/v1/transcriptions/slow"))
+                .respond_with(
+                    ResponseTemplate::new(204).set_delay(std::time::Duration::from_secs(2)),
+                )
+                .expect(1)
+                .mount(&server)
+                .await;
+            let error = drain_stored_records_with_deadline(
+                &client,
+                "k",
+                None,
+                std::time::Duration::from_millis(200),
+            )
+            .await
+            .unwrap_err();
+            assert_eq!(error, CLEANUP_TIMEOUT_MESSAGE);
+            assert!(!is_owned("k", "transcriptions", "fast"));
+            assert!(is_owned("k", "transcriptions", "slow"));
+            server.verify().await;
+            server.reset().await;
+            Mock::given(method("GET"))
+                .and(path("/v1/transcriptions"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(
+                    serde_json::json!({"transcriptions":[{"id":"slow","file_id":null}]}),
+                ))
+                .mount(&server)
+                .await;
+            Mock::given(method("GET"))
+                .and(path("/v1/files"))
+                .respond_with(
+                    ResponseTemplate::new(200).set_body_json(serde_json::json!({"files":[]})),
+                )
+                .mount(&server)
+                .await;
+            // A timed-out delete may have landed remotely; 404 is a safe retry.
+            Mock::given(method("DELETE"))
+                .and(path("/v1/transcriptions/slow"))
+                .respond_with(ResponseTemplate::new(404))
+                .expect(1)
+                .mount(&server)
+                .await;
+            let retried = drain_stored_records_with_deadline(
+                &client,
+                "k",
+                None,
+                std::time::Duration::from_secs(1),
+            )
+            .await
+            .unwrap();
+            assert!(retried.errors.is_empty());
+            assert!(!is_owned("k", "transcriptions", "slow"));
+            server.verify().await;
+        }
+
+        #[tokio::test]
+        async fn timed_out_background_listing_releases_gate_and_running_state_for_retry() {
+            use std::sync::atomic::Ordering;
+            let server = MockServer::start().await;
+            let _guard = BaseOverrideGuard::install(&server).await;
+            let client = common::http_client();
+            Mock::given(method("GET"))
+                .and(path("/v1/transcriptions"))
+                .respond_with(
+                    ResponseTemplate::new(200)
+                        .set_body_json(serde_json::json!({"transcriptions":[]}))
+                        .set_delay(std::time::Duration::from_secs(2)),
+                )
+                .expect(1)
+                .mount(&server)
+                .await;
+            spawn_auto_cleanup_with_deadline(
+                client.clone(),
+                "k".to_string(),
+                std::time::Duration::from_millis(150),
+            );
+            assert!(cleanup_coordinator("k").running.load(Ordering::SeqCst));
+            wait_for_cleanup().await;
+            assert!(!cleanup_coordinator("k").running.load(Ordering::SeqCst));
+            assert!(
+                LISTING_GATE.try_read().is_ok(),
+                "timed-out listing retained its write gate"
+            );
+            server.verify().await;
+            server.reset().await;
+            Mock::given(method("GET"))
+                .and(path("/v1/transcriptions"))
+                .respond_with(
+                    ResponseTemplate::new(200)
+                        .set_body_json(serde_json::json!({"transcriptions":[]})),
+                )
+                .expect(2)
+                .mount(&server)
+                .await;
+            Mock::given(method("GET"))
+                .and(path("/v1/files"))
+                .respond_with(
+                    ResponseTemplate::new(200).set_body_json(serde_json::json!({"files":[]})),
+                )
+                .expect(1)
+                .mount(&server)
+                .await;
+            spawn_auto_cleanup_with_deadline(
+                client,
+                "k".to_string(),
+                std::time::Duration::from_secs(1),
+            );
+            wait_for_cleanup().await;
+            server.verify().await;
         }
 
         #[tokio::test]

@@ -24,7 +24,7 @@ Corrected release contract (2026-09-05):
 
 - Soniox transcription deletion does **not** cascade to the uploaded file.
   Delete each resource explicitly, without deleting files still needed by
-  active or surviving records. Storage counts use paginated listings.
+  active or surviving records. Storage counts use provider count endpoints; cleanup listings are paginated.
 - Retained-file capacity and retained-transcription capacity are separate.
   RPM, concurrency, pending-job, and unknown limits remain rate-limit errors;
   they never authorize automatic backlog deletion.

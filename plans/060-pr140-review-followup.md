@@ -121,3 +121,17 @@ non-idempotent create POSTs are not blindly retried on transport/5xx failures.
 One retry remains for an explicit transient 429 rejection; outer storage-cap
 recovery is unchanged. HTTP regressions prove no deletion or duplicate create
 on ambiguous failure/cancellation, and normal auth/quota orphan cleanup remains.
+
+## Interactive management deadlines
+
+Storage-management counts/list/delete requests have a 10-second request bound.
+Manual and background cleanup share a 60-second total deadline including gate
+waits, pagination, pacing and retries. Timeout reports possible partial work
+honestly and releases the cleanup/listing guards so another attempt can run.
+Transcription and upload request deadlines are unchanged. Malformed count
+responses fail visibly instead of fabricating zero records. Final validation:
+1,539 Rust tests passed (16 ignored), including stalled management and
+repeat-after-timeout regressions; Clippy workspace/all-targets and formatting
+pass.
+
+Soniox documents `total` as a required integer on its [file-count endpoint](https://soniox.com/docs/api-reference/stt/files/get_files_count) and [transcription-count endpoint](https://soniox.com/docs/api-reference/stt/transcriptions/get_transcriptions_count).
