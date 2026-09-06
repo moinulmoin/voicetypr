@@ -66,6 +66,13 @@ Verification commands used across all plans: `pnpm typecheck`, `pnpm lint`,
 
 CODE COMPLETE / NEEDS-SMOKE — Codex follow-up on `fix/047-silent-failures` from `e97aa900`. Confirmed review defects fixed; 697 frontend and 1,525 Rust tests pass (16 ignored), typecheck/lint/frontend build/Clippy green. Packaged smoke remains unchecked. See `060-pr140-review-followup.md` for findings, rejected feedback and evidence. No release or Stable promotion implied.
 
+## Plan 062 — CI gating and compute policy
+
+IN PROGRESS — claimed Codex 2026-09-06 on `agent/062-ci-gating`, based on
+main `4f9e497d`. First ship cancellation and cheap-check prerequisites without
+weakening native validation; manual-only native builds require an enforced
+current-revision merge gate. See `062-ci-gating.md`.
+
 ## Code-done, awaiting batched manual smoke (`plans/SMOKE.md`)
 
 | Plan | Title | Code landed | Status |

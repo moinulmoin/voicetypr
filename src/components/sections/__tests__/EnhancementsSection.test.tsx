@@ -613,13 +613,10 @@ describe("EnhancementsSection", () => {
     expect(within(providersPanel).getByRole("tab", { name: "Cloud API" })).toBeInTheDocument();
 
     await user.click(within(providersPanel).getByRole("button", { name: /close/i }));
-    // Base UI unmounts the dialog once the close settles (jsdom has no Web
-    // Animations, so completion is immediate).
+    // Closing may already unmount the dialog; assert the user-visible result.
     await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
-    // The persisted selection survives close…
     expect(launcher).toHaveTextContent("OpenAI · GPT-5 Mini");
     expect(launcher).toHaveTextContent("Active");
-    // …and reopening the launcher shows the same provider and model.
     await user.click(launcher);
     const reopenedPanel = await screen.findByRole("dialog");
     expect(within(reopenedPanel).getByRole("combobox", { name: "Model for OpenAI" })).toHaveValue(
