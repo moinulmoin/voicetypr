@@ -383,7 +383,7 @@ fn setup_logging() -> tauri_plugin_log::Builder {
     // Release builds keep stdout + the FILE sink at Info (no DEBUG firehose
     // on disk) while the global level stays Debug: the in-memory ring target
     // captures DEBUG lines and every bug report attaches a redacted dump
-    // (plan 044). Debug builds log Debug everywhere as before.
+    // (plan 060). Debug builds log Debug everywhere as before.
     let file_sink_max = if cfg!(debug_assertions) {
         log::Level::Trace
     } else {

@@ -1,6 +1,8 @@
 # Plan 060 — Beta10 release remediation (silent-failures work migrated from PR 047)
 
-**Status:** CODE COMPLETE / NEEDS-SMOKE. Local automated gates pass.
+**Status:** CODE COMPLETE / NEEDS-SMOKE — local review follow-up verified.
+See `060-pr140-review-followup.md` for current findings and validation.
+Packaged smoke remains unchecked.
 Candidate tracked in [PR #140](https://github.com/moinulmoin/voicetypr/pull/140);
 see the PR for its published head and CI status. Not merged or released.
 
@@ -36,8 +38,10 @@ Corrected release contract (2026-09-05):
 
 1. Typed and diarized terminal paths explicitly clean up the transcription
    and its uploaded file. A processing refusal or failed record deletion
-   retains the referenced file; failed creates clean up orphan uploads.
-   Interrupted flows release their ownership guard for later backlog cleanup.
+   retains the referenced file; failed create operations clean up orphan uploads.
+   Terminal cleanup runs in the background so it cannot delay transcript delivery.
+   Interrupted flows release their active guard; only IDs created by this app
+   session remain eligible for cleanup retries.
 2. Classify only recognized retained-storage walls as
    `SttError::LimitExceeded { file_storage }`. Separate file and record
    deletion counters wake the relevant quota waiter; capture baselines before
@@ -45,7 +49,10 @@ Corrected release contract (2026-09-05):
    then retry the complete flow once.
 3. Map a remaining storage wall to the existing actionable storage-limit
    error. Never expose raw provider response bodies.
-4. Backlog cleanup protects active uploads/jobs and shared file references.
+4. Cleanup only deletes records proven to belong to the current app session,
+   scoped to the configured API key. Unknown historical records and records
+   from other apps/devices are untouched; the UI directs users to review those
+   in the Soniox console. It also protects active uploads/jobs and shared file references.
    Re-list references under the coordination gate before the file pass.
    Missing or malformed reference metadata fails file deletion closed;
    documented `file_id: null` URL records remain valid. Report processed work,

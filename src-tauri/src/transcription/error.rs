@@ -155,7 +155,7 @@ fn user_message_for_code(code: TranscriptionErrorCode) -> &'static str {
             "Authentication failed for the transcription service."
         }
         TranscriptionErrorCode::StorageLimitExceeded => {
-            "Cloud storage limit reached. Delete stored files (Settings → Clean up stored files, or your provider's console) and try again."
+            "Cloud storage limit reached. Delete stored files (Sources → Cloud → Clean up stored files, or your provider's console) and try again."
         }
         TranscriptionErrorCode::UnsupportedMediaType => "This audio format is not supported.",
         TranscriptionErrorCode::ResponseInvalid => {

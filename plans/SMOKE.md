@@ -6,7 +6,8 @@ date, result, and evidence. Development runs help diagnosis but do not establish
 beta-to-beta proof. Do not silently re-implement code-frozen plans; report a
 reproduced failure against the named plan.
 
-The 060/061 candidate has local automated proof only and is not released.
+The 060/061 candidate is not released. PR #140 follow-up fixes are being
+validated locally; existing CI results apply only to the published PR head.
 Windows hardware, real-provider cleanup, and consent/alert delivery remain
 unchecked. Existing 045-S1–S6, 050-S1–S3, 058-S1/S2 and 059-S1/S2 must also be
 verified against the new candidate rather than inherited from older betas.
@@ -27,17 +28,22 @@ diagnostic consent. macOS first; 060-S4/S7 also require real Windows hardware.
       transcription succeeds AND `Settings → Cloud transcription → Soniox
       stored files` counts do not grow (auto-delete fired); Soniox console
       shows the new records gone.
-- [ ] 060-S2 Exercise both retained-file and retained-transcription caps in
-      the test account, including URL-based records without uploaded files.
-      Cleanup frees the relevant capacity and dictation retries once. A
-      remaining wall shows the honest storage error and Models cleanup route.
-      Manual cleanup removes eligible backlog but preserves active/shared
-      references; counts and errors reflect what actually remains.
-- [ ] 060-S3 Force a failure with an invalid test Groq key, or disconnect
-      networking during cloud transcription → GlitchTip issue appears with
-      message `flow.transcription.failed.<class>` and tags
-      engine/model/backend/failure_class, Discord alert fires; verify NO
-      structured logs/transactions arrive anymore (logs view stays empty).
+- [ ] 060-S2 Exercise retained-file and retained-transcription caps in
+      the test account. Cleanup retries only records created by this app
+      session, preserving older records and records from other apps/devices.
+      Unknown records remain counted and the UI directs review to the Soniox
+      console. A remaining wall shows the storage error and Sources → Cloud
+      cleanup route. A quota retry happens at most once after capacity frees,
+      cleanup finishes, or the eight-second wait expires.
+- [ ] 060-S3 With telemetry endpoints reachable, use an invalid test Groq key
+      to trigger a transcription failure. With consent on, verify the
+      GlitchTip issue `flow.transcription.failed.<class>`, closed-vocabulary
+      engine/model/backend/failure_class tags, redaction, and Discord routing.
+      With consent off, verify no consent-gated failure event is emitted.
+      Separately disconnect networking and verify local failure handling;
+      remote alert delivery is not required while offline. In both cases,
+      verify no structured logs/transactions are emitted. Change consent only
+      with explicit approval.
 - [ ] 060-S4 Windows with GPU sidecar active → failure event carries
       `backend=sidecar`; with GPU off/fallback → `backend=cpu`.
 - [ ] 060-S5 A release-build report contains System specs (or a visible

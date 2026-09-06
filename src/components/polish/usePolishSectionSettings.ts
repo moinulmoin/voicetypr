@@ -36,18 +36,20 @@ export function usePolishSectionSettings({
     writingSettingsRef.current = writingSettings;
   }, [writingSettings]);
 
-  const loadEnhancementOptions = async (aiEnabled: boolean) => {
+  const loadEnhancementOptions = async (aiEnabled: boolean, signal?: AbortSignal) => {
     try {
       const options = await invoke<EnhancementOptions>("get_enhancement_options");
+      if (signal?.aborted) return;
       setEnhancementOptions(fromBackendOptions(options, aiEnabled));
     } catch (error) {
       log.error("Failed to load Polish options:", error);
     }
   };
 
-  const loadWritingSettings = async () => {
+  const loadWritingSettings = async (signal?: AbortSignal) => {
     try {
       const nextSettings = await invoke<Partial<WritingSettings>>("get_writing_settings");
+      if (signal?.aborted) return false;
       setWritingSettings(mergeWritingSettings(nextSettings));
       return true;
     } catch (error) {

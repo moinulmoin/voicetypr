@@ -116,44 +116,56 @@ export function useAllProviderModels() {
   const [errorMap, setErrorMap] = useState<Record<string, string | null>>({});
   const inFlightMapRef = useRef<Record<string, Promise<AIProviderModel[]> | undefined>>({});
 
-  const fetchModels = useCallback(async (providerId: string): Promise<AIProviderModel[]> => {
-    // Don't fetch for custom provider
-    if (providerId === "custom") {
-      return [];
-    }
-
-    // Don't refetch if already loading
-    const inFlightRequest = inFlightMapRef.current[providerId];
-    if (inFlightRequest) {
-      return inFlightRequest;
-    }
-
-    setLoadingMap((prev) => ({ ...prev, [providerId]: true }));
-    setErrorMap((prev) => ({ ...prev, [providerId]: null }));
-
-    const request = (async () => {
-      try {
-        const fetchedModels = normalizeProviderModels(
-          await invoke<ProviderModelWire[]>("list_provider_models", {
-            provider: providerId,
-          }),
-        );
-        setModelsMap((prev) => ({ ...prev, [providerId]: fetchedModels }));
-        return fetchedModels;
-      } catch (err) {
-        const errorMessage = err instanceof Error ? err.message : String(err);
-        setErrorMap((prev) => ({ ...prev, [providerId]: errorMessage }));
-        log.error(`Failed to fetch models for ${providerId}:`, err);
+  const fetchModels = useCallback(
+    async (providerId: string, signal?: AbortSignal): Promise<AIProviderModel[]> => {
+      if (signal?.aborted) return [];
+      // Don't fetch for custom provider
+      if (providerId === "custom") {
         return [];
-      } finally {
+      }
+
+      // Don't refetch if already loading
+      const inFlightRequest = inFlightMapRef.current[providerId];
+      if (inFlightRequest) {
+        return inFlightRequest;
+      }
+
+      setLoadingMap((prev) => ({ ...prev, [providerId]: true }));
+      setErrorMap((prev) => ({ ...prev, [providerId]: null }));
+
+      const release = () => {
+        if (inFlightMapRef.current[providerId] !== request) return;
         delete inFlightMapRef.current[providerId];
         setLoadingMap((prev) => ({ ...prev, [providerId]: false }));
-      }
-    })();
+      };
+      const request = (async () => {
+        try {
+          const fetchedModels = normalizeProviderModels(
+            await invoke<ProviderModelWire[]>("list_provider_models", {
+              provider: providerId,
+            }),
+          );
+          if (signal?.aborted) return [];
+          setModelsMap((prev) => ({ ...prev, [providerId]: fetchedModels }));
+          return fetchedModels;
+        } catch (err) {
+          if (signal?.aborted) return [];
+          const errorMessage = err instanceof Error ? err.message : String(err);
+          setErrorMap((prev) => ({ ...prev, [providerId]: errorMessage }));
+          log.error(`Failed to fetch models for ${providerId}:`, err);
+          return [];
+        } finally {
+          signal?.removeEventListener("abort", release);
+          release();
+        }
+      })();
 
-    inFlightMapRef.current[providerId] = request;
-    return request;
-  }, []);
+      inFlightMapRef.current[providerId] = request;
+      signal?.addEventListener("abort", release, { once: true });
+      return request;
+    },
+    [],
+  );
 
   const getModels = useCallback(
     (providerId: string): AIProviderModel[] => {

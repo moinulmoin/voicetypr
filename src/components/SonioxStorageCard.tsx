@@ -17,6 +17,7 @@ interface SonioxCleanupResult {
   deletedTranscriptions: number;
   deletedFiles: number;
   skippedProcessing: number;
+  skippedUnknown: number;
   errors: string[];
 }
 
@@ -24,15 +25,13 @@ interface SonioxCleanupResult {
  * Soniox retains every dictation as a stored file + transcription record
  * against org caps (1,000 files / 2,000 transcriptions). Voicetypr deletes
  * each dictation's records automatically after transcription; this card
- * shows the remaining backlog and drains it.
+ * shows account usage and retries cleanup of records created this session.
  */
 export function SonioxStorageCard() {
   const [counts, setCounts] = useState<SonioxStorageCounts | null>(null);
   const [countError, setCountError] = useState<string | null>(null);
   const [cleaning, setCleaning] = useState(false);
-  const [progress, setProgress] = useState<{ deleted: number; total: number } | null>(
-    null
-  );
+  const [progress, setProgress] = useState<{ deleted: number; total: number } | null>(null);
 
   const loadCounts = useCallback(() => {
     return invoke<SonioxStorageCounts>("get_soniox_storage_counts").then(
@@ -73,7 +72,11 @@ export function SonioxStorageCard() {
       toast.success(
         `Deleted ${deleted} stored record${deleted === 1 ? "" : "s"}${
           skipped > 0 ? ` (${skipped} still processing)` : ""
-        }${result.errors.length > 0 ? ` — ${result.errors.length} failed` : ""}`
+        }${
+          result.skippedUnknown > 0
+            ? ` — ${result.skippedUnknown} unrecognized records left untouched; review them in the Soniox console`
+            : ""
+        }${result.errors.length > 0 ? ` — ${result.errors.length} failed` : ""}`,
       );
       await loadCounts();
     } catch (error) {
@@ -93,9 +96,9 @@ export function SonioxStorageCard() {
             <h3 className="text-sm font-semibold tracking-tight">Soniox stored files</h3>
           </div>
           <p className="mt-2.5 text-xs text-muted-foreground">
-            Soniox caps stored files (1,000) and transcription records (2,000) per
-            account. Voicetypr now deletes each dictation's records automatically
-            after transcription — clear the backlog from before that existed.
+            Soniox caps stored files (1,000) and transcription records (2,000) per account. Cleanup
+            retries records created by this app session. Older records and records from other apps
+            or devices stay untouched; review those in the Soniox console.
           </p>
           <p className="mt-2 text-xs text-muted-foreground" data-testid="soniox-storage-counts">
             {counts
@@ -110,6 +113,7 @@ export function SonioxStorageCard() {
           className="shrink-0"
           onClick={() => void handleCleanup()}
           disabled={cleaning}
+          aria-label="Clean up stored files"
         >
           {cleaning ? (
             <>

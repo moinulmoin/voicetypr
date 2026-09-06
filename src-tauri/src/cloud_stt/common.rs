@@ -44,7 +44,7 @@ impl SttError {
                 format!("{} rate limit reached. Try again shortly.", provider_name)
             }
             Self::LimitExceeded { .. } => format!(
-                "{provider} storage quota exceeded — delete stored files/transcriptions and retry",
+                "{provider} storage quota exceeded. Open Sources → Cloud → Clean up stored files to retry cleanup of records from this app session. Manage older or other-client records in the Soniox console.",
                 provider = provider_name
             ),
             Self::Timeout => format!("{} request timed out", provider_name),
@@ -230,6 +230,18 @@ fn soniox_limit_is_file_storage(body: &str) -> Option<bool> {
 }
 
 pub(super) async fn log_http_body(resp: reqwest::Response, label: &str) -> SttError {
+    log_http_body_for_provider(resp, label, false).await
+}
+
+pub(super) async fn log_soniox_http_body(resp: reqwest::Response, label: &str) -> SttError {
+    log_http_body_for_provider(resp, label, true).await
+}
+
+async fn log_http_body_for_provider(
+    resp: reqwest::Response,
+    label: &str,
+    soniox: bool,
+) -> SttError {
     let status = resp.status();
     let mut err = classify_status(status);
     // Body holds err_msg + a request id, never the key — safe to log, needed to diagnose.
@@ -239,13 +251,13 @@ pub(super) async fn log_http_body(resp: reqwest::Response, label: &str) -> SttEr
     // stored-file count/size, stored-transcription count, pending files).
     // The docs instruct clients to read `message` for the sub-cause: only
     // retained-storage walls are permanent until records are deleted, so
-    // only those may become the non-retryable quota error (plan 044) —
+    // only those may become the non-retryable quota error (plan 060) —
     // typed by which capacity was hit so the self-heal waits on capacity
     // that actually freed. Every other 429 — including unrecognized
     // wording — stays the transient `RateLimited`; we never guess a
     // destructive cleanup from an unrecognized message and never surface
     // the raw body to the user.
-    if matches!(err, SttError::RateLimited) {
+    if soniox && matches!(err, SttError::RateLimited) {
         if let Some(file_storage) = soniox_limit_is_file_storage(&body) {
             err = SttError::LimitExceeded { file_storage };
         }
@@ -1006,6 +1018,22 @@ mod tests {
         );
     }
     #[tokio::test]
+    async fn other_provider_429_does_not_trigger_soniox_cleanup_classification() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .respond_with(ResponseTemplate::new(429).set_body_json(serde_json::json!({
+                "error_type":"limit_exceeded", "message":"Total file count limit has been exceeded"
+            })))
+            .mount(&server)
+            .await;
+        let response = reqwest::get(server.uri()).await.unwrap();
+        assert!(matches!(
+            super::log_http_body(response, "Deepgram").await,
+            SttError::RateLimited
+        ));
+    }
+
+    #[tokio::test]
     async fn log_http_body_maps_soniox_429_json_paths_to_typed_quota_kinds() {
         for (body, expected_label, expected_storage) in [
             (
@@ -1031,7 +1059,7 @@ mod tests {
                 .mount(&server)
                 .await;
             let resp = reqwest::get(server.uri()).await.unwrap();
-            let err = super::log_http_body(resp, "Soniox classification").await;
+            let err = super::log_soniox_http_body(resp, "Soniox classification").await;
             // The file_storage FIELD is part of the contract: a
             // discriminant-only compare could pass {true} vs {false}.
             let kind = match &err {

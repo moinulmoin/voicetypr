@@ -216,7 +216,7 @@ impl Drop for StopInFlightGuard {
     }
 }
 /// Decode journey (PostHog) + terminal outcome. The GlitchTip log-funnel
-/// transaction/span plumbing was removed (plan 047 pivot: logs never alerted);
+/// transaction/span plumbing was removed (plan 060 pivot: logs never alerted);
 /// failure events now go through `telemetry::capture_transcription_failure`.
 /// Cancellation (None) is the default so aborting the Tokio task during an
 /// await still emits a terminal journey event.
@@ -258,41 +258,71 @@ impl Drop for DecodeJourneyGuard {
     }
 }
 
-/// Delivery journey (PostHog). Failure is the conservative default, so
-/// cancellation and every early return are recorded without duplicating the
-/// user's text or error details.
+/// Delivery journey (PostHog). A task abandoned before delivery is cancelled;
+/// only an attempted paste or clipboard operation can succeed or fail.
 struct DeliveryJourneyGuard {
     started: Instant,
-    succeeded: bool,
+    succeeded: Option<bool>,
 }
 
 impl DeliveryJourneyGuard {
     fn new() -> Self {
         Self {
             started: Instant::now(),
-            succeeded: false,
+            succeeded: None,
         }
     }
 
     fn mark_succeeded(&mut self) {
-        self.succeeded = true;
+        self.succeeded = Some(true);
+    }
+
+    fn mark_failed(&mut self) {
+        self.succeeded = Some(false);
+    }
+
+    fn outcome(&self) -> crate::product_analytics::JourneyOutcome {
+        match self.succeeded {
+            Some(true) => crate::product_analytics::JourneyOutcome::Succeeded,
+            Some(false) => crate::product_analytics::JourneyOutcome::Failed,
+            None => crate::product_analytics::JourneyOutcome::Cancelled,
+        }
     }
 }
 
 impl Drop for DeliveryJourneyGuard {
     fn drop(&mut self) {
         let duration_ms = self.started.elapsed().as_millis() as u64;
-        let outcome = if self.succeeded {
-            crate::product_analytics::JourneyOutcome::Succeeded
-        } else {
-            crate::product_analytics::JourneyOutcome::Failed
-        };
         crate::product_analytics::capture(crate::product_analytics::ProductEvent::StageFinished {
             stage: crate::product_analytics::JourneyStage::Delivery,
-            outcome,
+            outcome: self.outcome(),
             duration_ms,
             engine: None,
         });
+    }
+}
+
+#[cfg(test)]
+mod delivery_journey_tests {
+    use super::DeliveryJourneyGuard;
+    use crate::product_analytics::JourneyOutcome;
+
+    #[test]
+    fn cancelled_or_stale_task_before_delivery_is_not_a_failure() {
+        assert_eq!(
+            DeliveryJourneyGuard::new().outcome(),
+            JourneyOutcome::Cancelled
+        );
+    }
+
+    #[test]
+    fn attempted_delivery_records_its_result_even_if_history_is_cancelled() {
+        let mut delivered = DeliveryJourneyGuard::new();
+        delivered.mark_succeeded();
+        assert_eq!(delivered.outcome(), JourneyOutcome::Succeeded);
+        let mut failed = DeliveryJourneyGuard::new();
+        failed.mark_failed();
+        assert_eq!(failed.outcome(), JourneyOutcome::Failed);
     }
 }
 
@@ -826,7 +856,7 @@ pub(crate) fn is_duplicate_transcription(
 
     same_text && same_model && within_window
 }
-/// Closed-vocabulary engine label for failure-event tags (plan 047).
+/// Closed-vocabulary engine label for failure-event tags (plan 060).
 fn engine_kind_label(selection: &ActiveEngineSelection) -> &'static str {
     match selection {
         ActiveEngineSelection::Whisper { .. } => "whisper",
@@ -848,12 +878,25 @@ fn engine_model_label(selection: &ActiveEngineSelection) -> String {
 }
 
 /// Closed failure-class vocabulary driving `flow.transcription.failed.*`
-/// event names. Local failures arrive as user-facing strings (the shared
-/// error contract renders them), so classification mirrors the marker table
-/// in `from_local_engine_string` plus the cloud storage-limit marker.
+/// event names. Executor failures retain their typed code; legacy desktop
+/// failures still use the string marker fallback.
 fn transcription_failure_class(failure: &TranscriptionFailure) -> String {
     let class = match failure {
-        TranscriptionFailure::Local(message) => {
+        TranscriptionFailure::Local {
+            code: Some(code), ..
+        } => match code {
+            TranscriptionErrorCode::Timeout => "timeout",
+            TranscriptionErrorCode::StorageLimitExceeded => "cloud_storage_limit",
+            TranscriptionErrorCode::TransportFailed => "transport",
+            TranscriptionErrorCode::Unauthorized => "auth",
+            TranscriptionErrorCode::ModelUnavailable
+            | TranscriptionErrorCode::EngineUnavailable => "model_unavailable",
+            _ => "engine_failed",
+        },
+        TranscriptionFailure::Local {
+            message,
+            code: None,
+        } => {
             let lower = message.to_ascii_lowercase();
             if lower.contains("timed out") {
                 "timeout"
@@ -890,28 +933,38 @@ fn transcription_failure_class(failure: &TranscriptionFailure) -> String {
 
 #[derive(Debug, Clone)]
 pub(crate) enum TranscriptionFailure {
-    Local(String),
+    Local {
+        message: String,
+        code: Option<TranscriptionErrorCode>,
+    },
     Remote(RemoteClientError),
 }
 
 impl TranscriptionFailure {
+    fn local(message: String) -> Self {
+        Self::Local {
+            message,
+            code: None,
+        }
+    }
+
     fn message(&self) -> String {
         match self {
-            Self::Local(message) => message.clone(),
+            Self::Local { message, .. } => message.clone(),
             Self::Remote(error) => error.to_string(),
         }
     }
 
     fn error_kind(&self) -> &'static str {
         match self {
-            Self::Local(_) => "local",
+            Self::Local { .. } => "local",
             Self::Remote(error) => remote_client_error_kind(error),
         }
     }
 
     fn server_error_body(&self) -> Option<&str> {
         match self {
-            Self::Local(_) => None,
+            Self::Local { .. } => None,
             Self::Remote(error) => error.server_error_body(),
         }
     }
@@ -921,7 +974,7 @@ impl TranscriptionFailure {
     fn is_retryable_failure(&self) -> bool {
         match self {
             Self::Remote(_) => true,
-            Self::Local(message) => {
+            Self::Local { message, .. } => {
                 !message.contains("cancelled")
                     && !message.contains("Cancelled")
                     && !message.contains("too short")
@@ -1056,7 +1109,7 @@ fn build_desktop_transcription_request(
     audio_path: PathBuf,
 ) -> Result<TranscriptionRequest, TranscriptionFailure> {
     let engine = ProviderEngine::from_engine_str(active.engine_name()).ok_or_else(|| {
-        TranscriptionFailure::Local(format!(
+        TranscriptionFailure::local(format!(
             "Unknown transcription engine: {}",
             active.engine_name()
         ))
@@ -1104,7 +1157,10 @@ fn desktop_failure_from_transcription_error(
             _ => error.user_message,
         },
     };
-    TranscriptionFailure::Local(message)
+    TranscriptionFailure::Local {
+        message,
+        code: Some(error.code),
+    }
 }
 
 fn is_non_speech_transcript(raw: &str) -> bool {
@@ -2476,7 +2532,7 @@ mod tests {
     #[test]
     fn failed_history_row_supports_local_engine_failures() {
         let row = build_failed_transcription_row(
-            &TranscriptionFailure::Local("Transcription timed out".to_string()),
+            &TranscriptionFailure::local("Transcription timed out".to_string()),
             "base.en",
             "recordings/failure.wav",
         );
@@ -2493,16 +2549,16 @@ mod tests {
     #[test]
     fn is_retryable_failure_excludes_cancellation_and_too_short() {
         assert!(
-            TranscriptionFailure::Local("Transcription timed out".to_string())
+            TranscriptionFailure::local("Transcription timed out".to_string())
                 .is_retryable_failure()
         );
-        assert!(TranscriptionFailure::Local("OpenAI error: 500".to_string()).is_retryable_failure());
+        assert!(TranscriptionFailure::local("OpenAI error: 500".to_string()).is_retryable_failure());
         assert!(
-            !TranscriptionFailure::Local("Transcription cancelled".to_string())
+            !TranscriptionFailure::local("Transcription cancelled".to_string())
                 .is_retryable_failure()
         );
         assert!(
-            !TranscriptionFailure::Local("Recording too short".to_string()).is_retryable_failure()
+            !TranscriptionFailure::local("Recording too short".to_string()).is_retryable_failure()
         );
     }
 
@@ -2885,7 +2941,7 @@ mod tests {
         let app_state = Arc::new(AppState::new());
         let history_path = unique_side_effect_path("failed-history");
         let row = build_failed_transcription_row(
-            &TranscriptionFailure::Local("Transcription timed out".to_string()),
+            &TranscriptionFailure::local("Transcription timed out".to_string()),
             "base.en",
             "recording.wav",
         );
@@ -5548,7 +5604,7 @@ pub async fn stop_recording(
                         );
 
                         let audio_data = std::fs::read(&audio_path_clone).map_err(|e| {
-                            TranscriptionFailure::Local(format!("Failed to read audio file: {}", e))
+                            TranscriptionFailure::local(format!("Failed to read audio file: {}", e))
                         })?;
 
                         let audio_size_kb = audio_data.len() as f64 / 1024.0;
@@ -5611,13 +5667,13 @@ pub async fn stop_recording(
                     .await
                 }
             };
-        // Plan 047: terminal decode failures become alertable GlitchTip
+        // Plan 060: terminal decode failures become alertable GlitchTip
         // events (fixed class-suffixed message + closed-vocabulary tags).
         // Cancelled dictations are user intent, not failures — never sent.
         // The PostHog decode journey records success/failure/cancel.
         {
             let cancelled = match &transcription_result {
-                Err(TranscriptionFailure::Local(message)) => {
+                Err(TranscriptionFailure::Local { message, .. }) => {
                     message.contains("cancelled") || message.contains("Cancelled")
                 }
                 _ => false,
@@ -6095,6 +6151,7 @@ pub async fn stop_recording(
                                 log::debug!("Text inserted at cursor successfully");
                             }
                             Err(e) => {
+                                delivery_journey.mark_failed();
                                 log::error!("Failed to insert text: {}", e);
                                 crate::telemetry::capture_paste_failure("insert");
 
@@ -6155,6 +6212,7 @@ pub async fn stop_recording(
                                 pill_toast(&app_for_process, "Transcription copied", 1500);
                             }
                             Err(e) => {
+                                delivery_journey.mark_failed();
                                 log::error!("Failed to copy text to clipboard: {}", e);
                                 crate::telemetry::capture_paste_failure("clipboard");
                                 pill_toast(&app_for_process, "Copy failed", 1500);
@@ -6229,7 +6287,7 @@ pub async fn stop_recording(
             }
             Err(failure) => {
                 match &failure {
-                    TranscriptionFailure::Local(e)
+                    TranscriptionFailure::Local { message: e, .. }
                         if e.contains("cancelled") || e.contains("Cancelled") =>
                     {
                         log::info!("Handling transcription cancellation");
@@ -6247,7 +6305,7 @@ pub async fn stop_recording(
                         }
                         update_recording_state(&app_for_task, RecordingState::Idle, None);
                     }
-                    TranscriptionFailure::Local(e) if e.contains("too short") => {
+                    TranscriptionFailure::Local { message: e, .. } if e.contains("too short") => {
                         // Handle "too short" errors with specific user feedback
                         log::info!("Recording was too short: {}", e);
 
@@ -6343,7 +6401,7 @@ pub async fn stop_recording(
                             update_recording_state(&app_for_reset, RecordingState::Idle, None);
                         });
                     }
-                    TranscriptionFailure::Local(e) => {
+                    TranscriptionFailure::Local { message: e, .. } => {
                         // Genuine local/cloud failure. If the recording was preserved
                         // (save_recordings on), write a retryable failed row so the user
                         // can re-transcribe from History instead of losing the dictation.
@@ -7969,5 +8027,90 @@ mod diarization_tests {
         ];
         let result = group_words_into_speaker_text(&words);
         assert_eq!(result, "Speaker 0: Hello there.\n\nSpeaker 1: How are you?");
+    }
+}
+
+#[cfg(test)]
+mod failure_class_tests {
+    use super::*;
+
+    #[test]
+    fn typed_failure_class_is_independent_of_display_text_and_detail() {
+        use crate::transcription::error::TranscriptionError;
+        for (code, class) in [
+            (TranscriptionErrorCode::Unauthorized, "auth"),
+            (TranscriptionErrorCode::TransportFailed, "transport"),
+            (
+                TranscriptionErrorCode::StorageLimitExceeded,
+                "cloud_storage_limit",
+            ),
+            (
+                TranscriptionErrorCode::ModelUnavailable,
+                "model_unavailable",
+            ),
+            (
+                TranscriptionErrorCode::EngineUnavailable,
+                "model_unavailable",
+            ),
+            (TranscriptionErrorCode::Timeout, "timeout"),
+            (TranscriptionErrorCode::EngineFailed, "engine_failed"),
+        ] {
+            let error = TranscriptionError::new(
+                code,
+                TranscriptionSource::DesktopRecording,
+                "Display copy changed",
+            )
+            .with_detail("network model authentication timed out");
+            let failure = desktop_failure_from_transcription_error(error);
+            assert_eq!(transcription_failure_class(&failure), class);
+        }
+    }
+
+    #[test]
+    fn typed_failure_keeps_desktop_cancellation_and_history_messages() {
+        use crate::transcription::error::TranscriptionError;
+        for (code, message, retryable) in [
+            (
+                TranscriptionErrorCode::Cancelled,
+                "Transcription cancelled",
+                false,
+            ),
+            (
+                TranscriptionErrorCode::Timeout,
+                "Transcription timed out",
+                true,
+            ),
+            (
+                TranscriptionErrorCode::Unauthorized,
+                "Display copy: provider detail",
+                true,
+            ),
+        ] {
+            let failure = desktop_failure_from_transcription_error(
+                TranscriptionError::new(
+                    code,
+                    TranscriptionSource::DesktopRecording,
+                    "Display copy",
+                )
+                .with_detail("provider detail"),
+            );
+            assert_eq!(failure.message(), message);
+            assert_eq!(failure.is_retryable_failure(), retryable);
+            assert_eq!(failure.error_kind(), "local");
+        }
+    }
+
+    #[test]
+    fn legacy_failures_keep_string_classification() {
+        assert_eq!(
+            transcription_failure_class(&TranscriptionFailure::local(
+                "Transcription timed out".into()
+            )),
+            "timeout"
+        );
+        assert_eq!(
+            transcription_failure_class(&TranscriptionFailure::local("network error".into())),
+            "transport"
+        );
     }
 }

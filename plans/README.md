@@ -62,6 +62,10 @@ Verification commands used across all plans: `pnpm typecheck`, `pnpm lint`,
 | 060  | Beta10 release remediation — migrated silent failures plus reviewed release fixes | P0 | L | 031 (pivot), 019 seam | CODE COMPLETE / NEEDS-SMOKE — branch `fix/060-beta10-readiness`, tracked in PR #140; 684 frontend and 1,509 Rust workspace tests pass (16 Rust ignored), typecheck/lint/build/Clippy green. Final integrated reviews cleared after corrections. Not merged or released; packaged 060-S1–S10 and existing release smoke remain unchecked. See `060-beta10-readiness.md`. |
 | 061  | License preservation — non-destructive secure-store reads and payload-free recovery errors | P0 | S | 060 | CODE COMPLETE / NEEDS-SMOKE — integrated into `fix/060-beta10-readiness`; real-file/AES regressions and security review pass. Unreadable entries are preserved, not treated as absent. Original Windows decryption cause remains unknown; no restoration of already-deleted data. Packaged 061-S1/S2 pending; see `061-license-preservation.md`. |
 
+## PR #140 follow-up — 2026-09-06
+
+CODE COMPLETE / NEEDS-SMOKE — Codex follow-up on `fix/047-silent-failures` from `e97aa900`. Confirmed review defects fixed; 697 frontend and 1,525 Rust tests pass (16 ignored), typecheck/lint/frontend build/Clippy green. Packaged smoke remains unchecked. See `060-pr140-review-followup.md` for findings, rejected feedback and evidence. No release or Stable promotion implied.
+
 ## Code-done, awaiting batched manual smoke (`plans/SMOKE.md`)
 
 | Plan | Title | Code landed | Status |

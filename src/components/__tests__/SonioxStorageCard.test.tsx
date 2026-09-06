@@ -41,7 +41,7 @@ describe("SonioxStorageCard", () => {
 
     await waitFor(() => {
       expect(
-        screen.getByText(/Stored files: 940 · Stored transcriptions: 1900/)
+        screen.getByText(/Stored files: 940 · Stored transcriptions: 1900/),
       ).toBeInTheDocument();
     });
     expect(invokeMock).toHaveBeenCalledWith("get_soniox_storage_counts");
@@ -59,7 +59,7 @@ describe("SonioxStorageCard", () => {
 
     await waitFor(() => {
       expect(
-        screen.getByText(/Could not read storage usage: Soniox API key not set/)
+        screen.getByText(/Could not read storage usage: Soniox API key not set/),
       ).toBeInTheDocument();
     });
   });
@@ -79,6 +79,7 @@ describe("SonioxStorageCard", () => {
           deletedTranscriptions: 1900,
           deletedFiles: 40,
           skippedProcessing: 2,
+          skippedUnknown: 0,
           errors: [],
         };
       }
@@ -96,13 +97,11 @@ describe("SonioxStorageCard", () => {
     // Drained total in the toast, then refreshed zero counts on screen.
     await waitFor(() =>
       expect(toast.success).toHaveBeenCalledWith(
-        expect.stringMatching(/Deleted 1940 stored records \(2 still processing\)/)
-      )
+        expect.stringMatching(/Deleted 1940 stored records \(2 still processing\)/),
+      ),
     );
     await waitFor(() => {
-      expect(
-        screen.getByText(/Stored files: 0 · Stored transcriptions: 0/)
-      ).toBeInTheDocument();
+      expect(screen.getByText(/Stored files: 0 · Stored transcriptions: 0/)).toBeInTheDocument();
     });
   });
 
@@ -126,9 +125,41 @@ describe("SonioxStorageCard", () => {
     await waitFor(() => {
       expect(toast.error).toHaveBeenCalledWith("Soniox API key not set");
     });
-    expect(
-      screen.getByRole("button", { name: /clean up stored files/i })
-    ).not.toBeDisabled();
+    expect(screen.getByRole("button", { name: /clean up stored files/i })).not.toBeDisabled();
+  });
+
+  it("keeps the cleanup button named during progress and explains untouched records", async () => {
+    const user = userEvent.setup();
+    let finishCleanup!: (value: unknown) => void;
+    invokeMock.mockImplementation((cmd: string) => {
+      if (cmd === "get_soniox_storage_counts") {
+        return Promise.resolve({ filesTotal: 3, transcriptionsTotal: 2 });
+      }
+      if (cmd === "cleanup_soniox_storage") {
+        return new Promise((resolve) => {
+          finishCleanup = resolve;
+        });
+      }
+      return Promise.resolve(null);
+    });
+    render(<SonioxStorageCard />);
+    await user.click(screen.getByRole("button", { name: "Clean up stored files" }));
+    expect(screen.getByRole("button", { name: "Clean up stored files" })).toBeDisabled();
+    finishCleanup({
+      deletedTranscriptions: 0,
+      deletedFiles: 0,
+      skippedProcessing: 0,
+      skippedUnknown: 5,
+      errors: [],
+    });
+    await waitFor(() =>
+      expect(toast.success).toHaveBeenCalledWith(
+        expect.stringContaining(
+          "5 unrecognized records left untouched; review them in the Soniox console",
+        ),
+      ),
+    );
+    expect(screen.getByRole("button", { name: "Clean up stored files" })).not.toBeDisabled();
   });
 
   it("surfaces the native message when cleanup rejects with a plain string", async () => {
@@ -153,8 +184,6 @@ describe("SonioxStorageCard", () => {
     await waitFor(() => {
       expect(toast.error).toHaveBeenCalledWith("cleanup failed: soniox storage unreachable");
     });
-    expect(
-      screen.getByRole("button", { name: /clean up stored files/i })
-    ).not.toBeDisabled();
+    expect(screen.getByRole("button", { name: /clean up stored files/i })).not.toBeDisabled();
   });
 });

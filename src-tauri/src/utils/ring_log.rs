@@ -1,4 +1,4 @@
-//! Always-on in-memory DEBUG ring (plan 044).
+//! Always-on in-memory DEBUG ring (plan 060).
 //!
 //! tauri-plugin-log owns the global logger and, in release builds, the file
 //! sink is filtered at Info — so `log::debug!` reaches no sink in production

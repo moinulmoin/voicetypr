@@ -224,3 +224,37 @@ describe("useAllProviderModels", () => {
     expect(result.current.getModels("openai")).toEqual([]);
   });
 });
+
+describe("initial-load model cancellation", () => {
+  it.each(["success", "failure"])(
+    "keeps replacement models after a canceled request's late %s",
+    async (outcome) => {
+      let resolveOld!: (value: unknown) => void;
+      let rejectOld!: (reason: Error) => void;
+      vi.mocked(invoke).mockImplementationOnce(
+        () =>
+          new Promise((resolve, reject) => {
+            resolveOld = resolve;
+            rejectOld = reject;
+          }),
+      );
+      const { result } = renderHook(() => useAllProviderModels());
+      const controller = new AbortController();
+      act(() => {
+        void result.current.fetchModels("openai", controller.signal);
+      });
+      act(() => controller.abort());
+      vi.mocked(invoke).mockResolvedValueOnce(mockModels);
+      await act(async () => {
+        await result.current.fetchModels("openai");
+      });
+      await act(async () => {
+        if (outcome === "success") resolveOld([{ id: "stale-model" }]);
+        else rejectOld(new Error("stale error"));
+      });
+      expect(result.current.getModels("openai")).toEqual(mockModels);
+      expect(result.current.getError("openai")).toBeNull();
+      expect(result.current.isLoading("openai")).toBe(false);
+    },
+  );
+});

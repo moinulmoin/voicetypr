@@ -308,17 +308,54 @@ mod tests {
     #[test]
     fn test_voicetypr_log_date_strict_shapes() {
         assert_eq!(
-            voicetypr_log_date("voicetypr-2026-08-20.log").as_deref(),
-            Some("2026-08-20")
+            voicetypr_log_date("voicetypr-2026-08-20.log"),
+            chrono::NaiveDate::from_ymd_opt(2026, 8, 20)
         );
         assert_eq!(
-            voicetypr_log_date("voicetypr-2026-08-20.log.3").as_deref(),
-            Some("2026-08-20")
+            voicetypr_log_date("voicetypr-2026-08-20.log.3"),
+            chrono::NaiveDate::from_ymd_opt(2026, 8, 20)
         );
         // Non-numeric or executable suffixes are NOT logs — never deleted,
         // never attached to reports.
         assert_eq!(voicetypr_log_date("voicetypr-2026-08-20.log.1.exe"), None);
         assert_eq!(voicetypr_log_date("voicetypr-backup.logx"), None);
+        for date in [
+            "backup",
+            "2026-02-30",
+            "2025-02-29",
+            "2026-13-01",
+            "2026-8-20",
+            "+2026-08-20",
+            "2026-08-2",
+            "2026-08-20-extra",
+        ] {
+            for suffix in [".log", ".log.3"] {
+                assert_eq!(
+                    voicetypr_log_date(&format!("voicetypr-{date}{suffix}")),
+                    None
+                );
+            }
+        }
+        assert_eq!(
+            voicetypr_log_date("voicetypr-2024-02-29.log"),
+            chrono::NaiveDate::from_ymd_opt(2024, 2, 29)
+        );
+    }
+
+    #[test]
+    fn test_find_newest_log_excludes_invalid_dates_and_backups() {
+        let dir = TempDir::new().unwrap();
+        for name in [
+            "voicetypr-backup.log",
+            "voicetypr-2026-02-30.log",
+            "voicetypr-2026-8-20.log.3",
+        ] {
+            std::fs::write(dir.path().join(name), "private backup").unwrap();
+        }
+        assert!(find_newest_log(dir.path()).is_none());
+        let valid = dir.path().join("voicetypr-2026-08-20.log.1");
+        std::fs::write(&valid, "log").unwrap();
+        assert_eq!(find_newest_log(dir.path()), Some(valid));
     }
 
     // ── LatestLogAttachment serialization ──────────────────────────────
@@ -339,6 +376,8 @@ mod tests {
         assert!(json.contains("\"fileName\":\"voicetypr-2026-04-27.log\""));
         assert!(json.contains("\"redactedContent\":\"[REDACTED] log content\""));
         assert!(json.contains("\"truncated\":true"));
+        assert!(json.contains("\"debugRing\":\"\""));
+        assert!(!json.contains("debug_ring"));
     }
 
     #[test]

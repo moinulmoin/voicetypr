@@ -18,7 +18,7 @@
 * **updater:** default direct-install prerelease builds to the Beta update channel when no channel preference has been saved, and preserve the post-update announcement when automatic relaunch fails
 * **recording:** include final recorder buffers in speech evidence and restore paused or muted media even when stopping a recording fails
 * **ai:** preserve standalone “Sure” and other user-authored text, refresh CLI capabilities and model lists, and allow ready CLI providers to be enabled from tray and shortcut controls
-* **soniox:** delete transcription records and uploaded files independently, protect active/shared references during cleanup, and retry storage failures only after the relevant capacity is freed or cleanup finishes
+* **soniox:** delete transcription records and uploaded files independently, return transcripts before background cleanup, preserve unknown and active/shared records, and retry storage failures once after capacity frees, cleanup finishes, or an eight-second wait expires
 * **licensing:** preserve unreadable saved licenses and credentials instead of deleting them or treating them as absent; report recovery errors without exposing stored contents
 * **diagnostics:** isolate backend attribution per recording, show restart requirements when enabling crash reporting, and retain collected diagnostics in copied report fallbacks
 * **settings:** complete Polish initialization under React StrictMode and restore model-picker refresh behavior

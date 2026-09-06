@@ -9,8 +9,9 @@ use pbkdf2::pbkdf2_hmac;
 use rand::Rng;
 use sha2::Sha256;
 use std::path::Path;
+use std::sync::Arc;
 use tauri::{AppHandle, Runtime};
-use tauri_plugin_store::{resolve_store_path, StoreExt};
+use tauri_plugin_store::{resolve_store_path, Store, StoreExt};
 
 // Encryption key storage - OnceCell ensures thread-safe single initialization
 static ENCRYPTION_KEY: OnceCell<[u8; 32]> = OnceCell::new();
@@ -136,9 +137,7 @@ fn decrypt_value(encrypted: &str) -> Result<String, String> {
 pub fn secure_set<R: Runtime>(app: &AppHandle<R>, key: &str, value: &str) -> Result<(), String> {
     let encrypted = encrypt_value(value)?;
 
-    let store = app
-        .store(SECURE_STORE_FILE)
-        .map_err(|e| format!("Failed to access store: {}", e))?;
+    let store = writable_store(app)?;
 
     store.set(key, encrypted);
     store
@@ -174,6 +173,21 @@ fn read_store_file(
         );
         "Secure store file could not be read (it may be corrupted)".to_string()
     })
+}
+
+/// Validate unopened stores before registering them: the plugin ignores initial
+/// load errors and saves registered stores on exit, which could replace an
+/// unreadable file with an empty cache even if the requested write later fails.
+fn writable_store<R: Runtime>(app: &AppHandle<R>) -> Result<Arc<Store<R>>, String> {
+    if let Some(store) = app.get_store(SECURE_STORE_FILE) {
+        return Ok(store);
+    }
+
+    let path = resolve_store_path(app, SECURE_STORE_FILE)
+        .map_err(|e| format!("Secure store is unavailable: {}", e))?;
+    read_store_file(&path)?;
+    app.store(SECURE_STORE_FILE)
+        .map_err(|e| format!("Failed to access store: {}", e))
 }
 
 /// Decrypt a raw stored entry. Read failures never mutate anything: the saved
@@ -240,9 +254,7 @@ pub fn secure_get<R: Runtime>(app: &AppHandle<R>, key: &str) -> Result<Option<St
 
 /// Delete a value from the secure store
 pub fn secure_delete<R: Runtime>(app: &AppHandle<R>, key: &str) -> Result<(), String> {
-    let store = app
-        .store(SECURE_STORE_FILE)
-        .map_err(|e| format!("Failed to access store: {}", e))?;
+    let store = writable_store(app)?;
 
     store.delete(key);
     store
@@ -264,7 +276,109 @@ pub fn secure_has<R: Runtime>(app: &AppHandle<R>, key: &str) -> Result<bool, Str
 mod tests {
     use super::*;
     use std::fs;
+    use tauri::plugin::{Plugin, TauriPlugin};
+    use tauri::test::{mock_builder, mock_context, noop_assets, MockRuntime};
     use tempfile::TempDir;
+
+    fn mock_store_app(dir: &TempDir) -> (tauri::App<MockRuntime>, TauriPlugin<MockRuntime>) {
+        let mut context = mock_context(noop_assets());
+        // The path resolver joins the identifier to the platform data directory.
+        // An absolute temporary identifier isolates each test without changing
+        // process-wide environment variables or touching the user's app data.
+        context.config_mut().identifier = dir.path().to_str().unwrap().to_string();
+        let app = mock_builder().build(context).unwrap();
+        let mut plugin = tauri_plugin_store::Builder::default().build();
+        plugin
+            .initialize(app.handle(), serde_json::Value::Null)
+            .unwrap();
+        assert_eq!(
+            resolve_store_path(app.handle(), SECURE_STORE_FILE).unwrap(),
+            dir.path().join(SECURE_STORE_FILE)
+        );
+        (app, plugin)
+    }
+
+    #[test]
+    fn malformed_store_rejects_access_without_registration_or_exit_overwrite() {
+        initialize_encryption_key().unwrap();
+        for bytes in [b"{ not valid json".as_slice(), b"null", b"[]"] {
+            let dir = TempDir::new().unwrap();
+            let path = dir.path().join(SECURE_STORE_FILE);
+            fs::write(&path, bytes).unwrap();
+            let (app, mut plugin) = mock_store_app(&dir);
+
+            for result in [
+                secure_get(app.handle(), "license").map(|_| ()),
+                secure_set(app.handle(), "unrelated_api_key", "replacement"),
+                secure_delete(app.handle(), "unrelated_api_key"),
+                secure_set(app.handle(), "license", "replacement"),
+                secure_delete(app.handle(), "license"),
+            ] {
+                assert!(result.unwrap_err().starts_with("Secure store"));
+                assert!(app.get_store(SECURE_STORE_FILE).is_none());
+                assert_eq!(fs::read(&path).unwrap(), bytes);
+            }
+
+            // Exercise the plugin's actual exit callback, which saves every
+            // registered store, even stores that have not been mutated.
+            plugin.on_event(app.handle(), &tauri::RunEvent::Exit);
+            assert_eq!(fs::read(&path).unwrap(), bytes);
+        }
+    }
+
+    #[test]
+    fn unreadable_entry_survives_other_writes_and_allows_explicit_replacement() {
+        initialize_encryption_key().unwrap();
+        let dir = TempDir::new().unwrap();
+        let path = write_store_file(&dir, &serde_json::json!({"license": "not-base64!"}));
+        let (app, mut plugin) = mock_store_app(&dir);
+
+        assert!(secure_get(app.handle(), "license").is_err());
+        secure_set(app.handle(), "api_key", "secret").unwrap();
+        secure_delete(app.handle(), "api_key").unwrap();
+        plugin.on_event(app.handle(), &tauri::RunEvent::Exit);
+        let disk = read_store_file(&path).unwrap().unwrap();
+        assert_eq!(disk.get("license").unwrap(), "not-base64!");
+        assert!(secure_get(app.handle(), "license").is_err());
+
+        secure_set(app.handle(), "license", "recovered-license").unwrap();
+        assert_eq!(
+            secure_get(app.handle(), "license").unwrap().as_deref(),
+            Some("recovered-license")
+        );
+        plugin.on_event(app.handle(), &tauri::RunEvent::Exit);
+        let disk = read_store_file(&path).unwrap().unwrap();
+        assert_eq!(
+            decrypt_raw_entry("license", disk.get("license"))
+                .unwrap()
+                .as_deref(),
+            Some("recovered-license")
+        );
+    }
+
+    #[test]
+    fn registered_cache_remains_authoritative_for_reads_and_writes() {
+        initialize_encryption_key().unwrap();
+        let dir = TempDir::new().unwrap();
+        let encrypted = encrypt_value("old-license").unwrap();
+        let path = write_store_file(&dir, &serde_json::json!({"license": encrypted}));
+        let (app, mut plugin) = mock_store_app(&dir);
+        let store = app
+            .store_builder(SECURE_STORE_FILE)
+            .disable_auto_save()
+            .build()
+            .unwrap();
+        store.delete("license"); // Deleted in cache; the old value is still on disk.
+
+        assert_eq!(secure_get(app.handle(), "license").unwrap(), None);
+        secure_set(app.handle(), "api_key", "secret").unwrap();
+        assert_eq!(secure_get(app.handle(), "license").unwrap(), None);
+        plugin.on_event(app.handle(), &tauri::RunEvent::Exit);
+        assert!(!read_store_file(&path)
+            .unwrap()
+            .unwrap()
+            .contains_key("license"));
+    }
 
     #[test]
     fn test_encryption_decryption() {

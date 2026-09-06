@@ -7,9 +7,11 @@ import type { AISettings } from "@/types/ai";
 interface LoadProps {
   settingsLoaded: boolean;
   setSettingsLoaded: (loaded: boolean) => void;
-  loadAISettings: () => Promise<AISettings | null | undefined>;
-  loadEnhancementOptionsRef: MutableRefObject<(aiEnabled: boolean) => Promise<void>>;
-  loadWritingSettingsRef: MutableRefObject<() => Promise<boolean>>;
+  loadAISettings: (signal?: AbortSignal) => Promise<AISettings | null | undefined>;
+  loadEnhancementOptionsRef: MutableRefObject<
+    (aiEnabled: boolean, signal?: AbortSignal) => Promise<void>
+  >;
+  loadWritingSettingsRef: MutableRefObject<(signal?: AbortSignal) => Promise<boolean>>;
 }
 
 const loadedSettings: AISettings = {
@@ -87,6 +89,22 @@ describe("usePolishSettingsLoad", () => {
     expect(props.loadEnhancementOptionsRef.current).toHaveBeenCalledTimes(1);
     expect(props.loadWritingSettingsRef.current).toHaveBeenCalledTimes(1);
     expect(props.setSettingsLoaded).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps completed background work alive until unmount", async () => {
+    let signal: AbortSignal | undefined;
+    const props = makeProps({
+      loadAISettings: async (nextSignal) => {
+        signal = nextSignal;
+        return loadedSettings;
+      },
+    });
+    const { rerender, unmount } = renderLoad(props);
+    await waitFor(() => expect(props.setSettingsLoaded).toHaveBeenCalledWith(true));
+    rerender({ ...props, settingsLoaded: true });
+    expect(signal?.aborted).toBe(false);
+    unmount();
+    expect(signal?.aborted).toBe(true);
   });
 
   it("retries and reports the loaded state after a failed attempt", async () => {

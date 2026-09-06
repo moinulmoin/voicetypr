@@ -33,14 +33,12 @@ pub async fn clear_old_logs(app: tauri::AppHandle, days_to_keep: u32) -> Result<
                 .unwrap_or("")
                 .to_string();
 
-            if let Some(date_str) = voicetypr_log_date(&file_name) {
-                if let Ok(file_date) = NaiveDate::parse_from_str(&date_str, "%Y-%m-%d") {
-                    if file_date < cutoff_date {
-                        fs::remove_file(&path)
-                            .map_err(|e| format!("Failed to delete log file: {}", e))?;
-                        deleted_count += 1;
-                        log::info!("Deleted old log file: {}", file_name);
-                    }
+            if let Some(file_date) = voicetypr_log_date(&file_name) {
+                if file_date < cutoff_date {
+                    fs::remove_file(&path)
+                        .map_err(|e| format!("Failed to delete log file: {}", e))?;
+                    deleted_count += 1;
+                    log::info!("Deleted old log file: {}", file_name);
                 }
             }
         }
@@ -53,17 +51,31 @@ pub async fn clear_old_logs(app: tauri::AppHandle, days_to_keep: u32) -> Result<
 /// `voicetypr-YYYY-MM-DD.log.N` with a NUMERIC suffix only. Anything else
 /// sharing the prefix (e.g. `voicetypr-2026-01-01.log.1.exe`) is NOT a log
 /// and must never be deleted or attached to a report. Returns the date
-/// segment.
-pub(crate) fn voicetypr_log_date(file_name: &str) -> Option<String> {
+/// as a validated calendar date.
+pub(crate) fn voicetypr_log_date(file_name: &str) -> Option<NaiveDate> {
     let stem = file_name.strip_prefix("voicetypr-")?;
-    if let Some(date) = stem.strip_suffix(".log") {
-        return Some(date.to_string());
-    }
-    let (date, rotation) = stem.split_once(".log.")?;
-    if rotation.is_empty() || !rotation.bytes().all(|b| b.is_ascii_digit()) {
+    let date = if let Some(date) = stem.strip_suffix(".log") {
+        date
+    } else {
+        let (date, rotation) = stem.split_once(".log.")?;
+        if rotation.is_empty() || !rotation.bytes().all(|b| b.is_ascii_digit()) {
+            return None;
+        }
+        date
+    };
+    // Chrono accepts variable-width fields; the on-disk contract does not.
+    if date.len() != 10
+        || !date.bytes().enumerate().all(|(index, byte)| {
+            if index == 4 || index == 7 {
+                byte == b'-'
+            } else {
+                byte.is_ascii_digit()
+            }
+        })
+    {
         return None;
     }
-    Some(date.to_string())
+    NaiveDate::parse_from_str(date, "%Y-%m-%d").ok()
 }
 
 #[tauri::command]
@@ -128,7 +140,7 @@ pub struct LatestLogAttachment {
     pub truncated: bool,
     /// Human-readable status for the frontend (empty when log exists).
     pub status_note: String,
-    /// Redacted dump of the in-memory DEBUG ring (plan 044): timings,
+    /// Redacted dump of the in-memory DEBUG ring (plan 060): timings,
     /// budgets, and backend decisions that never reach the Info-filtered
     /// file log in release builds.
     pub debug_ring: String,

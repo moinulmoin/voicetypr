@@ -1,6 +1,7 @@
 # Plan 061 — License preservation — non-destructive secure-store reads
 
-**Status:** CODE COMPLETE / NEEDS-SMOKE (061-S1/S2); not released
+**Status:** CODE COMPLETE / NEEDS-SMOKE — PR #140 follow-up verified 2026-09-06;
+packaged 061-S1/S2 remain unverified; not released
 **Priority:** P0
 **Effort:** S
 **Depends on:** 060 (release remediation wave; independent file ownership)
@@ -26,7 +27,7 @@ Parent evidence: injected decrypt failure with a synthetic temp-backed store →
 
 ## Fix (non-destructive read; no crypto or device-identity redesign)
 
-`secure_store.rs` only. Generic secure read distinguishes three outcomes that
+`secure_store.rs` (plus Tauri test support). Generic secure read distinguishes three outcomes that
 today all collapse to "absent":
 
 | Situation | Old behavior | New behavior |
@@ -64,8 +65,11 @@ cache would overwrite the (possibly recoverable) file. So:
 Reads never call `delete`/`save`; `secure_delete`, deactivation, and Reset
 keep their explicit user-action semantics (and `secure_delete`'s
 `"Failed to access store"` error prefix, which `reset.rs:101` matches on).
-`secure_set` intentionally still overwrites unreadable entries: re-entering a
-value is the user-facing recovery for a corrupt record. `check_migration_needed`
+Before `secure_set` or `secure_delete` registers a store, it validates the
+whole file. Malformed files reject the write without registration, so plugin
+exit cannot replace them with an empty cache. An already-open valid cache
+remains authoritative. `secure_set` can still replace an unreadable individual
+entry in a valid JSON store: re-entering that value is the recovery path. `check_migration_needed`
 (dead code) also switched to a read-only existence check.
 
 Startup UI audit: on the storage error, `useAppReadiness.isLoading` stays true
@@ -115,9 +119,12 @@ the read path has no `Store` write surface at all.
 
 Local macOS workspace verification: 1,509 Rust tests passed, 16 ignored;
 Clippy with warnings denied passed. Independent security review cleared the
-integrated read path and error redaction. These tests exercise real files and
-AES-GCM, not an `AppHandle`, plugin exit/autosave, or Windows identity changes.
-Those boundaries remain explicitly unchecked in `SMOKE.md`.
+integrated read path and error redaction. The 2026-09-06 follow-up adds MockRuntime/AppHandle tests invoking the actual
+store plugin exit callback: malformed JSON/null/array files reject reads and
+writes, remain unregistered and byte-identical after exit; valid stores preserve
+unreadable licenses across unrelated writes and permit explicit replacement;
+a cache deletion remains authoritative. Windows identity changes and packaged
+exit/relaunch behavior remain unchecked in `SMOKE.md`.
 
 ## Out of scope / explicit non-goals
 
@@ -131,3 +138,6 @@ Those boundaries remain explicitly unchecked in `SMOKE.md`.
   entitlement and coordinate recovery with the original license key.
 - Retrying a read in the fixed build preserves the evidence; explicit writes
   can replace unreadable data and are not covered by the read-only guarantee.
+
+Follow-up validation: 1,525 Rust workspace tests passed (16 ignored); Clippy
+workspace/all-targets passes with warnings denied. See `060-pr140-review-followup.md`.

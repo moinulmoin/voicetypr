@@ -954,7 +954,11 @@ async fn kill_and_reap(
 
 /// Run a bounded `--help` capability probe. Claude falls back conservatively
 /// when this optional probe fails; pi/omp then fail mandatory-capability checks.
-type CachedCapabilities = (ClaudeCapabilities, Vec<u8>);
+struct CachedCapabilities {
+    binary_path: PathBuf,
+    capabilities: ClaudeCapabilities,
+    help: Vec<u8>,
+}
 static POLISH_CAPABILITY_CACHE: LazyLock<Mutex<HashMap<&'static str, CachedCapabilities>>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
 
@@ -992,8 +996,13 @@ async fn discover_capabilities_for_polish(
     if refresh {
         POLISH_CAPABILITY_EPOCH.fetch_add(1, Ordering::SeqCst);
         cached.remove(spec.provider_id);
-    } else if let Some((capabilities, help)) = cached.get(spec.provider_id).cloned() {
-        return (capabilities, help, true);
+    } else if let Some(entry) = cached.get(spec.provider_id) {
+        // A polish request can retain the previous binary path while Refresh
+        // resolves its replacement. Even probes in the same epoch must only
+        // reuse capabilities discovered from their own binary.
+        if entry.binary_path == binary_path {
+            return (entry.capabilities, entry.help.clone(), true);
+        }
     }
     let epoch = POLISH_CAPABILITY_EPOCH.load(Ordering::SeqCst);
     drop(cached);
@@ -1014,7 +1023,14 @@ async fn discover_capabilities_for_polish(
             let capabilities = claude_capabilities_from_help(&help);
             let mut guard = cache.lock().await;
             if POLISH_CAPABILITY_EPOCH.load(Ordering::SeqCst) == epoch {
-                guard.insert(spec.provider_id, (capabilities, help.clone()));
+                guard.insert(
+                    spec.provider_id,
+                    CachedCapabilities {
+                        binary_path: binary_path.to_path_buf(),
+                        capabilities,
+                        help: help.clone(),
+                    },
+                );
             }
             drop(guard);
             (capabilities, help, false)
@@ -2895,6 +2911,66 @@ mod tests {
         assert_eq!(help_after, b"late-help\n");
 
         cache.lock().await.remove(CLAUDE_CODE_SPEC.provider_id);
+    }
+
+    #[cfg(unix)]
+    #[serial_test::serial]
+    #[tokio::test]
+    async fn concurrent_capability_probes_after_refresh_do_not_reuse_another_binarys_help() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = tempfile::TempDir::new().unwrap();
+        let started = dir.path().join("old-probe-started");
+        let release = dir.path().join("release-old-probe");
+        let old_binary = dir.path().join("old-claude");
+        let new_binary = dir.path().join("new-claude");
+        std::fs::write(
+            &old_binary,
+            format!(
+                "#!/bin/sh\ntouch '{}'\nwhile [ ! -f '{}' ]; do sleep 0.02; done\nprintf 'old-help\\n'\n",
+                started.display(),
+                release.display()
+            ),
+        )
+        .unwrap();
+        std::fs::write(
+            &new_binary,
+            b"#!/bin/sh\nprintf 'new-help --no-session-persistence\\n'\n",
+        )
+        .unwrap();
+        for binary in [&old_binary, &new_binary] {
+            let mut permissions = std::fs::metadata(binary).unwrap().permissions();
+            permissions.set_mode(0o755);
+            std::fs::set_permissions(binary, permissions).unwrap();
+        }
+
+        invalidate_polish_capabilities(CLAUDE_CODE_SPEC.provider_id).await;
+        // A polish call that already resolved the old path can begin probing
+        // after invalidation. It shares the new path's epoch, so the epoch
+        // alone cannot protect the replacement's cached capabilities.
+        let old_probe = tokio::spawn(async move {
+            discover_capabilities_for_polish(&old_binary, &CLAUDE_CODE_SPEC, false).await
+        });
+        wait_for_path(&started, Duration::from_secs(10)).await;
+        let (_, new_help, new_cached) =
+            discover_capabilities_for_polish(&new_binary, &CLAUDE_CODE_SPEC, false).await;
+        assert!(!new_cached);
+        assert_eq!(new_help, b"new-help --no-session-persistence\n");
+
+        std::fs::write(&release, b"").unwrap();
+        let (_, old_help, old_cached) = old_probe.await.unwrap();
+        assert!(!old_cached);
+        assert_eq!(old_help, b"old-help\n");
+
+        let (_, help, cached) =
+            discover_capabilities_for_polish(&new_binary, &CLAUDE_CODE_SPEC, false).await;
+        assert!(!cached, "a different binary's help must not be a cache hit");
+        assert_eq!(help, new_help);
+        let (_, help, cached) =
+            discover_capabilities_for_polish(&new_binary, &CLAUDE_CODE_SPEC, false).await;
+        assert!(cached, "the matching binary should still use the cache");
+        assert_eq!(help, new_help);
+        invalidate_polish_capabilities(CLAUDE_CODE_SPEC.provider_id).await;
     }
 
     /// Bounded, event-driven wait for a readiness marker a fake child writes
