@@ -1,6 +1,6 @@
 # Plan 063 — Packaged macOS VM QA
 
-Status: IN PROGRESS — final action checks reproduced Saved text and Dock-overlap defects; fixes under verification.
+Status: VM QA COMPLETE — six reproduced fixes verified; engine limitations and external release gates remain open.
 Baseline: PR #140, `37eea0229e3b2c391315c4235068af1212d80f36`.
 
 ## Scope
@@ -127,12 +127,22 @@ placement use Tauri's monitor work area, backed by `NSScreen.visibleFrame`,
 with bounds/scale validation and pill/toast clamping. Non-macOS startup and
 runtime geometry retain their previous behavior. Integrated validation after
 these changes: 1,555 Rust workspace tests passed, 16 ignored; workspace/all-target
-Clippy passed with warnings denied; full workspace formatting passed. Packaged
-verification of these two follow-up fixes is pending.
+Clippy passed with warnings denied; full workspace formatting passed.
+
+Rebuilt package `f76cbc68d96ab8aa50f8a1f638752aebd5f8a5c8` passed both follow-up
+regressions. The punctuated trigger expanded to the exact saved body through
+the installed CLI, while `Please insert QA Signature.` remained unchanged.
+A live recording then inserted the exact saved body into TextEdit. The
+bottom-center pill was visibly above the default visible Dock at startup and
+during recording; When Recording mode hid it while idle and after completion.
+The failure toast also remained above the Dock. The known cached Whisper `-6`
+error recurred on the first live attempt after bundle replacement; a normal
+app restart restored the successful live flow. Its underlying cause remains
+unestablished, and no speculative engine/cache change was made.
 
 Final ad hoc bundle, ZIP and build manifest are under
-`candidate-6c09035c/local-arm64-adhoc/` in the VM workspace. ZIP SHA-256:
-`8e31bef9f06c5c17964f8494fe758e8e6abd3305c2f3f4f97e5395a6ac2b088b`.
+`candidate-f76cbc68/local-arm64-adhoc/` in the VM workspace. ZIP SHA-256:
+`70d2f51d38d2811c0325c344ec4635b838ce3744cc010dd8344df2d32748d2c8`.
 Screenshots, the exported card and guest-only diagnostics are in `evidence/`.
 
 Completion of the scoped VM pass does not complete the release matrix. Real Windows and

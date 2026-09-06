@@ -31,6 +31,13 @@ hallucinated `you`; one cached VM Whisper inference failed with code `-6` and
 recovered after app restart. Neither silence prevention nor GPU stability is
 claimed passed.
 
+Final VM package `f76cbc68` additionally verified Saved text expansion for an
+STT-punctuated whole trigger (including live cursor insertion), rejection of a
+trigger embedded in a longer sentence, and a visible bottom recording indicator
+above the default Dock with idle/completion hiding intact. Cached Whisper `-6`
+recurred after bundle replacement and recovered after normal app restart; this
+remains a runtime limitation, not a passed stability check.
+
 ## Plan 060 — Soniox lifecycle, failure events, report diagnostics + beta10 remediation (NEEDS-SMOKE)
 
 Use a dedicated Soniox test account and the configured GlitchTip/Discord test
