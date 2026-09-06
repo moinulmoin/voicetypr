@@ -27,6 +27,8 @@ Verification commands used across all plans: `pnpm typecheck`, `pnpm lint`,
 
 ## Active plans
 
+Plan 063 — IN PROGRESS — claimed Codex 2026-09-06: packaged macOS VM QA of PR #140; fix reproduced onboarding consent handoff and other confirmed release blockers. See `063-macos-vm-qa.md`.
+
 | Plan | Title | Priority | Effort | Depends on | Status |
 |------|-------|----------|--------|------------|--------|
 | 013  | *(reserved: close 004/008 smoke blockers — checklist, no plan file yet)* | P1 | S | 004, 008 | RESERVED — no executable plan file yet |
