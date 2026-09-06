@@ -158,3 +158,21 @@ listing cannot block a new account's upload/create, and matching IDs in differen
 accounts cannot unregister one another. HTTP regressions and independent review
 cover these cases. Full Rust tests: 1,543 passed, 16 ignored; Clippy workspace/all-targets with
 warnings denied and changed-file formatting pass.
+
+## Fresh file checks and cold-start attribution
+
+All Soniox file deletion paths now share a fresh reference check immediately
+before DELETE, under the account gate: terminal cleanup, rejected-create orphan
+cleanup, inline quota freeing and the final file pass. Regression tests retain
+files when another reference appears after either earlier snapshot. Remote
+creation after the final check remains outside the local gate's control.
+
+Cold Whisper initialization records Metal/CPU before the attempt and CPU before
+fallback, preserving attribution even when model initialization fails. Missing
+model tests exercise actual initialization failure and preload isolation.
+The full Rust workspace passes 1,547 tests, with 16 ignored. Frontend code is
+unchanged from the 715-test validated tree.
+
+Microphone-selection validation logs now report availability and device count
+without the selected or available device names, including the newly captured
+DEBUG path. This removes the identifying name at its source.

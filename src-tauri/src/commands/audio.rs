@@ -1673,10 +1673,9 @@ where
         let mut cache = cache_state.lock().await;
         cache.get_or_create(model_path)?
     };
-    // Plan 060.1: the LOADED instance's label is the honest attempt backend —
-    // metal/cpu on macOS, cpu on Windows — recorded in the same task. A fresh
-    // init that fails leaves the slot empty: no backend was established, the
-    // report omits the tag instead of guessing.
+    // Plan 060.1: warm-cache attempts use the loaded instance's backend.
+    // Cold initialization records each selected backend before attempting it,
+    // so a failed initialization retains the final attempted backend as well.
     crate::whisper::transcriber::record_attempt_backend(transcriber.backend());
 
     let audio_path = audio_path.to_path_buf();

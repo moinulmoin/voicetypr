@@ -275,15 +275,14 @@ pub async fn validate_microphone_selection(app: AppHandle) -> Result<bool, Strin
 
     // Check if selected mic still exists
     if available_devices.contains(&selected_mic) {
-        log::debug!("Selected microphone '{}' is available", selected_mic);
+        log::debug!("Selected microphone is available");
         return Ok(false);
     }
 
     // Selected mic no longer exists - reset to default
     log::info!(
-        "Selected microphone '{}' is no longer available (available: {:?}), resetting to default",
-        selected_mic,
-        available_devices
+        "Selected microphone is no longer available ({} devices available), resetting to default",
+        available_devices.len()
     );
 
     // Clear the selection

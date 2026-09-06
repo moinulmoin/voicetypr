@@ -121,6 +121,8 @@ impl Transcriber {
                 ],
             );
 
+            // Retain the selected attempt even when context initialization fails.
+            record_attempt_backend(if is_apple_silicon { "metal" } else { "cpu" });
             match WhisperContext::new_with_params(model_path_str, ctx_params) {
                 Ok(ctx) => {
                     let cpu_profile = !is_apple_silicon;
@@ -194,6 +196,7 @@ impl Transcriber {
 
         // Create context (for Windows CPU fallback or other platforms)
         let cpu_start = Instant::now();
+        record_attempt_backend("cpu");
         let ctx = WhisperContext::new_with_params(model_path_str, ctx_params).map_err(|e| {
             log_failed("TRANSCRIBER_INIT", &e.to_string());
             log_with_context(
@@ -901,6 +904,41 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn failed_cold_initialization_records_cpu_fallback() {
+        let directory = tempfile::tempdir().unwrap();
+        let missing_model = directory.path().join("missing-model.bin");
+        // Whisper opens the model before initializing any device. A missing
+        // file exercises real initialization failure without GPU/model assets.
+        ATTEMPT_BACKEND
+            .scope(std::cell::Cell::new(None), async {
+                assert!(Transcriber::new(&missing_model).is_err());
+                // On Apple Silicon the Metal attempt fails first, then CPU;
+                // other platforms attempt CPU directly.
+                assert_eq!(attempt_backend(), Some("cpu"));
+            })
+            .await;
+        assert_eq!(attempt_backend(), None);
+    }
+
+    #[tokio::test]
+    async fn failed_unscoped_preload_does_not_change_recording_backend() {
+        let directory = tempfile::tempdir().unwrap();
+        let missing_model = directory.path().join("missing-model.bin");
+        ATTEMPT_BACKEND
+            .scope(std::cell::Cell::new(Some("sidecar")), async {
+                tokio::spawn(async move {
+                    assert_eq!(attempt_backend(), None);
+                    assert!(Transcriber::new(&missing_model).is_err());
+                    assert_eq!(attempt_backend(), None);
+                })
+                .await
+                .unwrap();
+                assert_eq!(attempt_backend(), Some("sidecar"));
+            })
+            .await;
+    }
+
+    #[tokio::test]
     async fn concurrent_scoped_attempts_have_isolated_tags() {
         // Two overlapping transcription attempts must never observe each
         // other's backend: the tag is task-local state, not process-global.
@@ -920,9 +958,7 @@ mod tests {
 
     #[tokio::test]
     async fn scoped_attempt_starts_empty_and_records_before_read() {
-        // The scope initialises the slot empty; only an explicit record makes
-        // a backend observable — a wrapper that never records (failed init)
-        // leaves the tag omitted.
+        // The scope starts empty; only an actual backend selection records it.
         let outcome = ATTEMPT_BACKEND
             .scope(std::cell::Cell::new(None), async {
                 let before = attempt_backend();
