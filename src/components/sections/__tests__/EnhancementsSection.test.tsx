@@ -1,6 +1,6 @@
 import { render, screen, fireEvent, waitFor, within, act } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { afterEach, describe, it, expect, vi, beforeEach } from "vitest";
 import { EnhancementsSection } from "../EnhancementsSection";
 import { invoke } from "@tauri-apps/api/core";
 import { toast } from "sonner";
@@ -158,12 +158,15 @@ const modelDiscovery = vi.hoisted(() => ({
   loading: {} as Record<string, boolean>,
   errors: {} as Record<string, string | null>,
   hiddenProviders: new Set<string>(),
-  fetchModels: vi.fn((providerId: string) => Promise.resolve(providerModels[providerId] || [])),
+  fetchModels: vi.fn((providerId: string, _signal?: AbortSignal, _options?: { force?: boolean }) =>
+    Promise.resolve(providerModels[providerId] || []),
+  ),
 }));
 
 vi.mock("@/hooks/useProviderModels", () => ({
   useAllProviderModels: () => ({
-    fetchModels: (providerId: string) => modelDiscovery.fetchModels(providerId),
+    fetchModels: (...args: [string, AbortSignal?, { force?: boolean }?]) =>
+      modelDiscovery.fetchModels(...args),
     getModels: (providerId: string) =>
       modelDiscovery.hiddenProviders.has(providerId) ? [] : providerModels[providerId] || [],
     isLoading: (providerId: string) => modelDiscovery.loading[providerId] || false,
@@ -417,6 +420,18 @@ describe("EnhancementsSection", () => {
         }
         return Promise.resolve(undefined);
       },
+    );
+  });
+
+  // Tests that simulate an external CLI account change swap the shared
+  // provider catalog; restore it (and the default fetch implementation)
+  // so later tests keep seeing the pristine fixtures.
+  let claudeCodeModelsRestore: (() => void) | undefined;
+  afterEach(() => {
+    claudeCodeModelsRestore?.();
+    claudeCodeModelsRestore = undefined;
+    modelDiscovery.fetchModels.mockImplementation((providerId: string) =>
+      Promise.resolve(providerModels[providerId] || []),
     );
   });
 
@@ -694,6 +709,98 @@ describe("EnhancementsSection", () => {
     });
   });
 
+  it("shows the refreshed CLI account's models in the picker after a ready Refresh", async () => {
+    agentCliProbeResponse = {
+      state: "ready",
+    };
+    const user = userEvent.setup();
+    renderWithProviders();
+    const providersPanel = await getProviderSetupPanel();
+    await user.click(within(providersPanel).getByRole("tab", { name: "Local Agents" }));
+    expect(
+      await within(providersPanel).findByRole("heading", {
+        name: "Claude Code",
+      }),
+    ).toBeInTheDocument();
+    // Let the initial probes settle so the Refresh click reaches probeAgentCli.
+    await waitFor(() => {
+      expect(within(providersPanel).getAllByText("Installed").length).toBeGreaterThan(0);
+    });
+
+    // The CLI account changed outside the app. A ready Refresh must reload the
+    // model cache, so the picker offers the new account's models instead of
+    // the ones captured before the Refresh.
+    const previousModels = providerModels["claude-code"];
+    const refreshedAccountModels = [
+      { id: "", name: "Default", recommended: true, cliDefault: true },
+      { id: "sonnet-4-5", name: "Sonnet 4.5", recommended: false },
+    ];
+    claudeCodeModelsRestore = () => {
+      providerModels["claude-code"] = previousModels;
+    };
+    modelDiscovery.fetchModels.mockImplementation(async (providerId: string) => {
+      if (providerId === "claude-code") {
+        providerModels["claude-code"] = refreshedAccountModels;
+      }
+      return providerModels[providerId] || [];
+    });
+
+    await user.click(
+      within(providersPanel).getByRole("button", {
+        name: "Refresh Claude Code status",
+      }),
+    );
+
+    await waitFor(() => {
+      expect(modelDiscovery.fetchModels).toHaveBeenCalledWith("claude-code", undefined, {
+        force: true,
+      });
+    });
+
+    await user.click(within(providersPanel).getByRole("button", { name: "Model for Claude Code" }));
+    const picker = await screen.findByRole("dialog", { name: "Choose a Claude Code model" });
+    expect(
+      within(picker).getByRole("button", { name: /^Sonnet 4\.5.*claude-code\/sonnet-4-5/i }),
+    ).toBeInTheDocument();
+    expect(within(picker).queryByRole("button", { name: /^Haiku/i })).not.toBeInTheDocument();
+    expect(within(picker).queryByRole("button", { name: /^Opus/i })).not.toBeInTheDocument();
+  });
+
+  it("keeps the previous model list in the picker when a Refresh fails", async () => {
+    agentCliProbeResponse = {
+      state: "ready",
+    };
+    const user = userEvent.setup();
+    renderWithProviders();
+    const providersPanel = await getProviderSetupPanel();
+    await user.click(within(providersPanel).getByRole("tab", { name: "Local Agents" }));
+    expect(
+      await within(providersPanel).findByRole("heading", {
+        name: "Claude Code",
+      }),
+    ).toBeInTheDocument();
+    // Let the initial probes settle so the CLI starts out ready and the
+    // picker is enabled with the cached list.
+    await waitFor(() => {
+      expect(within(providersPanel).getAllByText("Installed").length).toBeGreaterThan(0);
+    });
+
+    // The Refresh probe itself fails; the previously probed status and the
+    // cached model list must survive it.
+    agentCliProbeHandler = () => Promise.reject(new Error("probe failed"));
+    await user.click(
+      within(providersPanel).getByRole("button", {
+        name: "Refresh Claude Code status",
+      }),
+    );
+
+    await user.click(within(providersPanel).getByRole("button", { name: "Model for Claude Code" }));
+    const picker = await screen.findByRole("dialog", { name: "Choose a Claude Code model" });
+    expect(within(picker).getByRole("button", { name: /^Haiku/i })).toBeInTheDocument();
+    expect(within(picker).getByRole("button", { name: /^Sonnet/i })).toBeInTheDocument();
+    expect(within(picker).getByRole("button", { name: /^Opus/i })).toBeInTheDocument();
+  });
+
   it("opens the API key modal from a cloud provider row", async () => {
     const user = userEvent.setup();
     renderWithProviders();
@@ -741,7 +848,7 @@ describe("EnhancementsSection", () => {
       within(providersPanel).getAllByRole("button", { name: /refresh/i }).length,
     ).toBeGreaterThan(0);
     await user.click(within(providersPanel).getByRole("button", { name: /close/i }));
-    expect(screen.getByRole("dialog")).toHaveAttribute("data-closed");
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
     expect(screen.queryByLabelText("API Key")).not.toBeInTheDocument();
   });
 

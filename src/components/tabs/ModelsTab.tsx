@@ -6,9 +6,11 @@ import { useModelManagementContext } from "@/contexts/ModelManagementContext";
 import { AppSettings } from "@/types";
 import { createLogger } from "@/lib/logger";
 
+import type { SourceFilterProps } from "../sections/models/types";
+
 const log = createLogger("models-tab");
 
-export function ModelsTab() {
+export function ModelsTab(sourceFilterProps: SourceFilterProps) {
   const { settings, updateSettings } = useSettings();
 
   // Use the model management context
@@ -62,6 +64,7 @@ export function ModelsTab() {
 
   return (
     <ModelsSection
+      {...sourceFilterProps}
       models={sortedModels}
       downloadProgress={downloadProgress}
       downloadPhases={downloadPhases}

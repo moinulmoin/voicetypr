@@ -27,6 +27,8 @@ Verification commands used across all plans: `pnpm typecheck`, `pnpm lint`,
 
 ## Active plans
 
+Plan 063 — VM QA COMPLETE — Codex 2026-09-06: six reproduced fixes verified in rebuilt macOS packages, including Saved text punctuation and Dock-safe indicator placement. Engine limitations and external release gates remain open. See `063-macos-vm-qa.md`.
+
 | Plan | Title | Priority | Effort | Depends on | Status |
 |------|-------|----------|--------|------------|--------|
 | 013  | *(reserved: close 004/008 smoke blockers — checklist, no plan file yet)* | P1 | S | 004, 008 | RESERVED — no executable plan file yet |
@@ -39,6 +41,7 @@ Verification commands used across all plans: `pnpm typecheck`, `pnpm lint`,
 | 027  | Formatting & recording-pill UI/UX pass (naming, guidance, pill state legibility, app-category UI) | P2 | M | 016, 017 | TODO — captured 2026-06-19; backlog for post-2.0.0-smoke UAUX phase (notes only, not yet claimed) |
 | 028  | Transcription latency + streaming ("fast af" dictation) — investigation + phased design | P2 | XL | 015/020 smoke | TODO — drafted 2026-06-20; design/index only, not claimed. Phase 0 (insert-path plumbing tail + ffmpeg normalize) is S/LOW-risk and shippable alone; Phases 1–5 (decode-ahead, Parakeet/Whisper/cloud streaming, partial UX) graduate to 029+ |
 | 031  | GlitchTip observability — errors, symbols, curated logs, sampled traces | P0 | M | — | IN PROGRESS — claimed Main 2026-07-14; user approved stages 1–4 for next Beta |
+| 032  | Product analytics + automatic formatting corrections | P1 | XL | 031 core | TODO — backend approved 2026-07-16: PostHog Cloud EU + first-party Cloudflare Worker/R2; wait for unfinished 031 source changes |
 | 034  | Compact report problem page | P1 | S | 033 | DONE — reviewer pass; contact fields + system configuration preview; local macOS UI smoke and frontend checks passed 2026-07-23 |
 | 040  | Punctuation consistency + AI-formatting decision diagnostics | P1 | S | 027 | DONE — reviewer pass; focused checks + local UI smoke passed 2026-07-24 |
 | 041  | Paid-license validation resilience | P0 | M | — | DONE — reviewer PASS; focused/full gates + local Account UI smoke passed 2026-07-24 |
@@ -58,6 +61,12 @@ Verification commands used across all plans: `pnpm typecheck`, `pnpm lint`,
 | 057  | cpal 0.18 stream resilience + auto device recovery (StreamInvalidated rebuild, stable IDs, busy/permission UX) | P1 | M | — | TODO — brief filed 2026-08-21 from upstream 0.17/0.18 changelog audit; see `057-cpal-stream-resilience.md` |
 | 058  | Media pause v2 — upgrade existing MediaPauseController to VoiceInk-grade (macOS perl MediaRemote bridge + enigo CGEvent key + resume delay + mute fallback; Windows session ledger + Store manifest capability) | P1 | M | — | IN PROGRESS — claimed Main 2026-08-21; macOS action layer landed + live-verified (MediaRemote pause→resume round trip confirmed in dev-app log 12:48; mute fallback exercised live via CoreAudio test binary). Remaining: resume-delay setting, perl-bridge fallback if JXA ever breaks, Windows session-ledger verification + MSIX \`globalMediaControl\` |
 | 059  | No-speech gate — pre-engine reject on strong absence evidence, all STT paths; kills hallucinate-and-polish | P0 | S | — | CODE COMPLETE — beta.8 candidate on `fix/no-speech-transient-windows`: calibrated quiet-silence gate plus fixed 5ms evidence windows for callback-size-independent transient rejection; deliberate punctuation preserved; two-wave adversarial review clear; 1395 backend tests + clippy `-D warnings` green. Packaged macOS/Windows smoke pending in `SMOKE.md`; Phase 2 engine-neutral neural VAD remains planned. |
+| 060  | Beta10 release remediation — migrated silent failures plus reviewed release fixes | P0 | L | 031 (pivot), 019 seam | CODE COMPLETE / NEEDS-SMOKE — branch `fix/060-beta10-readiness`, tracked in PR #140; 684 frontend and 1,509 Rust workspace tests pass (16 Rust ignored), typecheck/lint/build/Clippy green. Final integrated reviews cleared after corrections. Not merged or released; packaged 060-S1–S10 and existing release smoke remain unchecked. See `060-beta10-readiness.md`. |
+| 061  | License preservation — non-destructive secure-store reads and payload-free recovery errors | P0 | S | 060 | CODE COMPLETE / NEEDS-SMOKE — integrated into `fix/060-beta10-readiness`; real-file/AES regressions and security review pass. Unreadable entries are preserved, not treated as absent. Original Windows decryption cause remains unknown; no restoration of already-deleted data. Packaged 061-S1/S2 pending; see `061-license-preservation.md`. |
+
+## PR #140 follow-up — 2026-09-06
+
+CODE COMPLETE / NEEDS-SMOKE — Codex follow-up on `fix/047-silent-failures` from `e97aa900`. Confirmed review defects fixed, including forced CLI model refresh and shared manual/automatic Soniox cleanup coordination; 731 frontend and 1,557 Rust tests pass (16 ignored), typecheck/lint/frontend build/Clippy green. Scoped macOS VM QA is complete in plan 063; external account and physical hardware smoke remain unchecked. See `060-pr140-review-followup.md` for findings, rejected feedback and evidence. No release or Stable promotion implied.
 
 ## Plan 062 — CI gating and compute policy
 
@@ -150,6 +159,11 @@ Status values: TODO | IN PROGRESS — claimed <by> <date> | DONE | NEEDS-SMOKE
     language normalization broader than provider contracts.
   - Merge order: reliability-fixed 019 lands first, then 017/018 adapt around
     the established `stt_*` namespace.
+- **032 after 031 core (hard)**: 032 splits the existing GlitchTip consent keys,
+  changes release-client initialization, and reuses the transcription telemetry
+  boundaries introduced by 031. Do not execute it concurrently with unfinished
+  031 source changes. Native symbolication may remain pending because 032 does
+  not depend on resolved GlitchTip frames.
 - **Plan-number collision (2026-08-20)**: branch `feat/049-pure-rust-audio`
   commit `b8ff14cf` labels parakeet decode-ahead live preview as "plan 051",
   while this branch's 051 is the Polish tab split. Both exist; renumber the

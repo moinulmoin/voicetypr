@@ -5,20 +5,24 @@
 ### Main Release Scripts
 - `release-separate.sh` - macOS release script (creates version, builds both architectures, creates GitHub release)
 - `release-windows.ps1` - Windows release script (builds NSIS installer, updates existing release)
-- `release-windows.bat` - Batch wrapper for the PowerShell script
 
 ### Microsoft Store MSIX
 - `build-msix-store.ps1` - Windows Microsoft Store MSIX package builder
 - Store submission playbook: [`MICROSOFT_STORE_LAUNCH.md`](../MICROSOFT_STORE_LAUNCH.md)
 
 ### Supporting Scripts
-- `fix-release-archives.sh` - Fixes macOS tar.gz archives by removing AppleDouble files
-- `create-latest-json.js` - Creates the combined latest.json for the updater
+- `latest.json` for the updater is generated inline by `release-separate.sh`, `release-windows.ps1`, and the release workflow (no standalone script)
 - Other scripts - Various build configurations for different scenarios
 
-## Cross-Platform Release Workflow
+## Release Paths
 
-The recommended release process is:
+**Automated (recommended):** the GitHub Actions release workflow
+`.github/workflows/release.yml` (workflow_dispatch) computes the version and tag with
+`.github/scripts/release-tool.mjs`, builds macOS aarch64/x86_64 and Windows x64, bumps version
+files, publishes the tag, and opens a draft GitHub release with generated release notes. It does
+not regenerate `CHANGELOG.md`; released sections are curated by hand on main.
+
+**Manual (local scripts):** the per-platform scripts below.
 
 1. **macOS Release** (creates the initial release):
    ```bash
@@ -34,10 +38,6 @@ The recommended release process is:
 2. **Windows x86_64 Release** (adds to existing release):
    ```powershell
    .\scripts\release-windows.ps1 [version]
-   ```
-   OR
-   ```batch
-   scripts\release-windows.bat [version]
    ```
    - Reads version from package.json (or uses provided version)
    - Verifies the GitHub release exists
@@ -101,9 +101,7 @@ failed to unpack `._voicetypr.app` into `/var/folders/.../T/tauri_updated_app...
 ```
 
 ### The Solution
-1. **Environment Variable**: Set `COPYFILE_DISABLE=1` in `.cargo/config.toml` to prevent creation during build
-2. **Post-Build Fix**: The `fix-release-archives.sh` script repacks archives without AppleDouble files
-3. **Release Process**: The main `release.sh` automatically calls the fix script after building
+1. **Archive creation excludes**: `release-separate.sh` and the release workflow create updater archives with `COPYFILE_DISABLE=1 tar -czf ... --exclude='._*' --exclude='.DS_Store'`; prevention is built into the packaging steps (there is no separate fix script)
 
 ### Manual Fix (if needed)
 If you need to fix an existing archive:
@@ -112,3 +110,14 @@ COPYFILE_DISABLE=1 tar -czf fixed.tar.gz --exclude='._*' --exclude='.DS_Store' V
 ```
 
 This ensures the Tauri updater can successfully unpack and install updates on all macOS systems.
+
+## Known CI Failure: Intel Artifact Upload ENOTFOUND
+
+The `build-macos (macos-15-intel, x86_64)` CI job can fail in its `Upload preview artifact`
+step with `Failed to CreateArtifact: Unable to make request: ENOTFOUND`. That is a transient,
+runner-side DNS failure reaching GitHub's artifact storage; the build itself completed. Re-run
+the failed job. This is external network noise: do not change build or packaging code for it.
+
+Packaging and notarized artifacts have no automated test suite. Green CI establishes compilation
+and automated contracts only; packaged-app validation is the manual smoke matrix
+(`plans/SMOKE.md`).

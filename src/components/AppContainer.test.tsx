@@ -181,8 +181,18 @@ vi.mock("@/components/ui/sidebar", () => ({
 }));
 
 vi.mock("./tabs/TabContainer", () => ({
-  TabContainer: ({ activeSection }: any) => (
-    <div data-testid="tab-container">Current Tab: {activeSection}</div>
+  TabContainer: ({ activeSection, sourceFilter, onSourceFilterChange, onNavigate }: any) => (
+    <div data-testid="tab-container">
+      Current Tab: {activeSection}
+      <button onClick={() => onNavigate("models")}>Open Sources</button>
+      <button onClick={() => onNavigate("overview")}>Open Overview</button>
+      {activeSection === "models" && (
+        <div data-testid="sources">
+          Source filter: {sourceFilter ?? "automatic"}
+          <button onClick={() => onSourceFilterChange("remote")}>Show remote sources</button>
+        </div>
+      )}
+    </div>
   ),
 }));
 
@@ -262,6 +272,69 @@ describe("AppContainer", () => {
     });
   });
 
+  it.each(["unmounted", "active"])(
+    "opens Cloud sources after Soniox escalation with Sources %s",
+    async (state) => {
+      render(<AppContainer />);
+      await waitFor(() => {
+        expect((window as any).__testEventCallbacks?.["soniox-storage-limit"]).toBeInstanceOf(
+          Function,
+        );
+      });
+      if (state === "active") {
+        fireEvent.click(screen.getByRole("button", { name: "Open Sources" }));
+        fireEvent.click(screen.getByRole("button", { name: "Show remote sources" }));
+        expect(screen.getByTestId("sources")).toHaveTextContent("Source filter: remote");
+      } else {
+        expect(screen.queryByTestId("sources")).not.toBeInTheDocument();
+      }
+      act(() => {
+        (window as any).__testEventCallbacks["soniox-storage-limit"]({});
+      });
+      expect(screen.getByTestId("sources")).toHaveTextContent("Source filter: cloud");
+      // A later escalation must override a new user-selected filter too.
+      fireEvent.click(screen.getByRole("button", { name: "Show remote sources" }));
+      act(() => {
+        (window as any).__testEventCallbacks["soniox-storage-limit"]({});
+      });
+      expect(screen.getByTestId("sources")).toHaveTextContent("Source filter: cloud");
+    },
+  );
+
+  it("leaves the initial Sources filter unset for the active source to choose", () => {
+    render(<AppContainer />);
+    fireEvent.click(screen.getByRole("button", { name: "Open Sources" }));
+    expect(screen.getByTestId("sources")).toHaveTextContent("Source filter: automatic");
+  });
+
+  it.each(["browsing", "alert"])(
+    "consumes the %s destination when Sources closes so remount follows the current source",
+    async (destination) => {
+      render(<AppContainer />);
+      await waitFor(() => {
+        expect((window as any).__testEventCallbacks?.["soniox-storage-limit"]).toBeInstanceOf(
+          Function,
+        );
+      });
+      fireEvent.click(screen.getByRole("button", { name: "Open Sources" }));
+      if (destination === "browsing") {
+        fireEvent.click(screen.getByRole("button", { name: "Show remote sources" }));
+      } else {
+        act(() => (window as any).__testEventCallbacks["soniox-storage-limit"]({}));
+      }
+      expect(screen.getByTestId("sources")).toHaveTextContent(
+        `Source filter: ${destination === "browsing" ? "remote" : "cloud"}`,
+      );
+      fireEvent.click(screen.getByRole("button", { name: "Open Overview" }));
+      expect(screen.queryByTestId("sources")).not.toBeInTheDocument();
+      // No stale controlled value can mask SettingsContext/tray changes while hidden.
+      fireEvent.click(screen.getByRole("button", { name: "Open Sources" }));
+      expect(screen.getByTestId("sources")).toHaveTextContent("Source filter: automatic");
+      act(() => (window as any).__testEventCallbacks["soniox-storage-limit"]({}));
+      expect(screen.getByTestId("sources")).toHaveTextContent("Source filter: cloud");
+    },
+  );
+
   it("shows main app when onboarding is completed", async () => {
     await act(async () => {
       render(<AppContainer />);
@@ -335,6 +408,7 @@ describe("AppContainer", () => {
       expect(screen.getByTestId("onboarding")).toBeInTheDocument();
     });
     await act(async () => {
+      (window as any).__testOnboardingStart();
       mockSettings.onboarding_completed = true;
       rerender(<AppContainer />);
       (window as any).__testOnboardingComplete();
@@ -358,13 +432,13 @@ describe("AppContainer", () => {
     });
 
     await act(async () => {
-      mockSettings.onboarding_completed = true;
-      rerender(<AppContainer />);
+      (window as any).__testOnboardingStart();
       (window as any).__testOnboardingError?.();
       rerender(<AppContainer />);
     });
 
     await waitFor(() => {
+      expect(screen.getByTestId("onboarding")).toBeInTheDocument();
       expect(checkAccessibilityPermissionMock).not.toHaveBeenCalled();
       expect(checkMicrophonePermissionMock).not.toHaveBeenCalled();
       expect(requestNotificationPermissionServiceMock).not.toHaveBeenCalled();

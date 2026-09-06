@@ -1,13 +1,109 @@
 # Pending manual smoke — consolidated checklist
 
-All code below is implemented, gate-green, and committed. The ONLY remaining
-work is interactive desktop smoke, batched (per product owner) to run once at
-the end of the current feature push, before release. Do NOT re-implement
-anything here; executors and agents treat these plans as code-frozen.
+Unchecked rows are unverified, regardless of green automated checks.
+Use the packaged candidate for the named platform and record its exact version,
+date, result, and evidence. Development runs help diagnosis but do not establish
+beta-to-beta proof. Do not silently re-implement code-frozen plans; report a
+reproduced failure against the named plan.
 
-Run on a real macOS machine via `pnpm tauri:dev` (item 16-S8 needs a Windows
-build). Check each box with date + result; on failure, file the failure
-against the named plan instead of hot-fixing inline.
+The 060/061 candidate is not released. PR #140 follow-up fixes are being
+validated locally; existing CI results apply only to the published PR head.
+Windows hardware, real-provider cleanup, and consent/alert delivery remain
+unchecked. Existing 045-S1–S6, 050-S1–S3, 058-S1/S2 and 059-S1/S2 must also be
+verified against the new candidate rather than inherited from older betas.
+
+Local 060/061 development-bundle observation: build and startup succeeded under
+the separate `.dev` identity; cached Parakeet loading completed. The dashboard
+remained hidden in menubar mode and background AX input was refused. No
+foreground navigation, recording, consent change, or report submission was
+initiated; the owned process was stopped. This does not check any release row.
+
+2026-09-06 isolated macOS ARM VM observations (ad hoc packages `9d5248ab` and
+`6c09035c`, source version 2.0.5): onboarding OFF/OFF persistence, late
+Accessibility engine recovery, local recording/insertion/cancel, file
+transcription/export, CLI installation and loopback remote transcription were
+exercised. Malformed/undecryptable license fixtures survived Retry and normal
+exit/relaunch with reachable recovery, and the share-card PNG rendered at
+2400×1600. See `063-macos-vm-qa.md` for exact limits and evidence. These are
+partial runtime observations: signed-update, physical hardware, provider and
+alert-delivery conditions below remain unchecked. A silence-only CLI fixture
+hallucinated `you`; one cached VM Whisper inference failed with code `-6` and
+recovered after app restart. Neither silence prevention nor GPU stability is
+claimed passed.
+
+Final VM package `f76cbc68` additionally verified Saved text expansion for an
+STT-punctuated whole trigger (including live cursor insertion), rejection of a
+trigger embedded in a longer sentence, and a visible bottom recording indicator
+above the default Dock with idle/completion hiding intact. Cached Whisper `-6`
+recurred after bundle replacement and recovered after normal app restart; this
+remains a runtime limitation, not a passed stability check.
+
+## Plan 060 — Soniox lifecycle, failure events, report diagnostics + beta10 remediation (NEEDS-SMOKE)
+
+Use a dedicated Soniox test account and the configured GlitchTip/Discord test
+route. Obtain approval before creating/deleting provider records or changing
+diagnostic consent. macOS first; 060-S4/S7 also require real Windows hardware.
+
+- [ ] 060-S1 Soniox dictation with a key that has stored records →
+      transcription succeeds AND `Settings → Cloud transcription → Soniox
+      stored files` counts do not grow (auto-delete fired); Soniox console
+      shows the new records gone.
+- [ ] 060-S2 Exercise retained-file and retained-transcription caps in
+      the test account. Cleanup retries only records created by this app
+      session, preserving older records and records from other apps/devices.
+      Unknown records remain counted and the UI directs review to the Soniox
+      console. A remaining wall shows the storage error and Sources → Cloud
+      cleanup route. A quota retry happens at most once after capacity frees,
+      cleanup finishes, or the eight-second wait expires.
+- [ ] 060-S3 With telemetry endpoints reachable, use an invalid test Groq key
+      to trigger a transcription failure. With consent on, verify the
+      GlitchTip issue `flow.transcription.failed.<class>`, closed-vocabulary
+      engine/model/backend/failure_class tags, redaction, and Discord routing.
+      With consent off, verify no consent-gated failure event is emitted.
+      Separately disconnect networking and verify local failure handling;
+      remote alert delivery is not required while offline. In both cases,
+      verify no structured logs/transactions are emitted. Change consent only
+      with explicit approval.
+- [ ] 060-S4 Windows with GPU sidecar active → failure event carries
+      `backend=sidecar`; with GPU off/fallback → `backend=cpu`.
+- [ ] 060-S5 A release-build report contains System specs (or a visible
+      collection failure) and the redacted DEBUG ring. A failed submission's
+      Copy Details fallback retains both. Release log files contain no DEBUG
+      entries.
+- [ ] 060-S6 Media-restore regression (with 058-S1/S2): dictation where
+      stop fails (force recorder error) or ESC during `Starting` → media
+      still resumes (no stuck-pause after an error path).
+- [ ] 060-S7 Windows: a terminal failure reports the backend actually
+      attempted. If CPU fallback is attempted and fails, report `cpu`; if the
+      terminal attempt is the GPU sidecar, report `sidecar`. Concurrent
+      preload/remote work and previous recordings cannot replace that tag.
+      A recovered success must not emit a terminal-failure event.
+- [ ] 060-S8 Polish: a ready CLI provider can be enabled from tray/shortcut
+      controls; Refresh updates capabilities and the model picker after an
+      external CLI change. Failed refresh retains the previous usable list.
+      Standalone “Sure” survives punctuation changes and line reflow.
+- [ ] 060-S9 On macOS and Windows, short/quiet speech ending at hotkey release
+      remains intact; final callback buffers must not turn speech into a
+      no-speech rejection. Re-run 059-S1/S2 and the media restoration checks.
+- [ ] 060-S10 Polish settings finish loading after reopening the window;
+      opt-in crash reporting shows restart guidance when required. Opt-out
+      takes effect immediately. Change consent only with explicit approval.
+
+## Plan 061 — Unreadable license preservation (NEEDS-SMOKE)
+
+Use a disposable app-data/user profile with synthetic malformed JSON and
+valid-length but unauthenticatable ciphertext, never a customer's real store.
+Preserve fixtures before starting. Do not activate/deactivate an entitlement
+or reset existing app data as part of this check.
+
+- [ ] 061-S1 Windows packaged candidate: unreadable license data produces a
+      recovery error, not an expired-trial fallback. Account Retry is reachable.
+      Repeated reads and a full exit/relaunch preserve the fixture; no paid
+      validation or trial request is triggered by that storage failure.
+- [ ] 061-S2 macOS packaged candidate: repeat the preservation/exit checks.
+      A missing store still follows normal unlicensed handling; a valid test
+      store still reads normally. Parse errors and diagnostics contain no
+      synthetic secret, ciphertext, or device fingerprint.
 
 ## Plan 030 — Windows crash dependencies (NEEDS-SMOKE)
 
@@ -544,4 +640,3 @@ global_shortcut path is untouched, so 2.0.0 ships regardless.
 - [ ] **058-S2** Windows (v2.0.6-beta.7): media pause via SMTC — Spotify + a Chrome tab video pause on record, resume on stop; verify the paused-session ledger resumes only the session we paused.
 - [ ] **059-S1** Packaged macOS (`v2.0.6-beta.8`): hotkey with silence and a mic activation pop → pill "No speech detected", nothing inserted, no engine/polish in logs (`skipped_no_speech` in `SPEECH_EVIDENCE`); a 31–100ms soft utterance, quiet whisper, and deliberately dictated punctuation still transcribe; cloud STT path behaves like local.
   - [ ] **059-S2** Packaged Windows (`v2.0.6-beta.8`): repeat 059-S1 with mono/stereo 44.1/48kHz devices and both small/large WASAPI callback buffers; stop during the final syllable keeps speech; local/cloud/remote routes remain fail-open for uncertain audio.
-

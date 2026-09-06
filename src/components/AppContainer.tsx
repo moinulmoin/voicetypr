@@ -1,4 +1,4 @@
-import { useRef, useState } from "react";
+import { useCallback, useRef, useState, type SetStateAction } from "react";
 import { AppErrorBoundary } from "./ErrorBoundary";
 import { AppShell } from "./AppShell";
 import type { ScreenId } from "./navigation";
@@ -14,8 +14,26 @@ import { useAppBootstrap } from "./app/useAppBootstrap";
 import { useAppEvents } from "./app/useAppEvents";
 import { useOnboardingRecovery } from "./app/useOnboardingRecovery";
 
+import type { SourceFilter } from "./sections/models/types";
+
 export function AppContainer() {
-  const [activeSection, setActiveSection] = useState<ScreenId>("overview");
+  const [{ activeSection, sourceFilter }, setNavigation] = useState<{
+    activeSection: ScreenId;
+    sourceFilter?: SourceFilter;
+  }>({ activeSection: "overview" });
+  const setActiveSection = useCallback((action: SetStateAction<ScreenId>) => {
+    setNavigation((current) => {
+      const next = typeof action === "function" ? action(current.activeSection) : action;
+      // Destinations apply to one Sources visit; returning derives the latest source.
+      return {
+        activeSection: next,
+        sourceFilter: next === "models" ? current.sourceFilter : undefined,
+      };
+    });
+  }, []);
+  const setSourceFilter = useCallback((filter: SourceFilter) => {
+    setNavigation((current) => ({ ...current, sourceFilter: filter }));
+  }, []);
   const [forceShowOnboarding, setForceShowOnboarding] = useState(false);
   const { settings, refreshSettings } = useSettings();
   const { checkAccessibilityPermission, checkMicrophonePermission } = useReadiness();
@@ -37,6 +55,7 @@ export function AppContainer() {
   useAppEvents({
     checkModels: modelAvailability.checkModels,
     setActiveSection,
+    setSourceFilter,
     setForceShowOnboarding,
     forceOnboardingNeedsFreshAvailabilityRef,
   });
@@ -58,7 +77,7 @@ export function AppContainer() {
     checkMicrophonePermission,
   });
 
-  const markOnboardingCompletionPersisted = () => {
+  const markOnboardingCompletionStarted = () => {
     hasCompletedOnboardingRef.current = true;
   };
 
@@ -71,9 +90,9 @@ export function AppContainer() {
     return (
       <AppErrorBoundary>
         <OnboardingDesktop
+          onCompletionStart={markOnboardingCompletionStarted}
           onCompletionError={clearOnboardingCompletionMarker}
           onComplete={() => {
-            markOnboardingCompletionPersisted();
             setForceShowOnboarding(false);
             refreshSettings();
             void modelAvailability.checkModels();
@@ -87,7 +106,12 @@ export function AppContainer() {
   // Main App Layout
   return (
     <>
-      <AppShell activeSection={activeSection} onSectionChange={setActiveSection} />
+      <AppShell
+        activeSection={activeSection}
+        onSectionChange={setActiveSection}
+        sourceFilter={sourceFilter}
+        onSourceFilterChange={setSourceFilter}
+      />
       <PrivacyConsentDialog />
       <UpdateAnnouncementDialog
         version={justUpdatedVersion}

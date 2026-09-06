@@ -37,10 +37,18 @@ function buildCopyDetails(data: CrashReportData): string {
     `Timestamp: ${data.timestamp}`,
   ];
 
+  if (!data.systemSpecs && data.systemSpecsError) {
+    parts.push("", `System Specs: unavailable (${data.systemSpecsError})`);
+  }
+
   if (data.logContent) {
     parts.push("", "Latest App Log:", data.logContent);
   } else if (data.logStatusNote) {
     parts.push("", `Latest App Log: ${data.logStatusNote}`);
+  }
+
+  if (data.debugRingContent) {
+    parts.push("", "Debug Ring (most recent, in-memory):", data.debugRingContent);
   }
 
   return parts.join("\n");

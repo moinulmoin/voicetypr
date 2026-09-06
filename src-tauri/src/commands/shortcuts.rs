@@ -313,10 +313,20 @@ fn stored_global_preset_needs_clean_normalization(app: &AppHandle) -> Result<boo
 }
 
 pub async fn toggle_ai_formatting(app: AppHandle) -> Result<(), String> {
-    use crate::commands::ai::get_ai_settings;
-    let ai_settings = get_ai_settings(app.clone()).await?;
-    let current = ai_settings.enabled;
-    let can_enable = ai_settings.has_api_key && !ai_settings.model.is_empty();
+    // Shared CLI-aware readiness — the same gate the Polish screen uses.
+    // Agent-CLI providers (Claude Code) are subscription-authenticated local
+    // CLIs with no API key and no catalog model, so the previous
+    // `has_api_key && !model.is_empty()` check permanently refused to enable
+    // Polish for them from the tray or the shortcut. Cloud providers keep
+    // their model + credential requirements.
+    let can_enable = crate::commands::ai::has_ai_model_and_key(&app)?;
+    let current = {
+        let store = app.store("settings").map_err(|e| e.to_string())?;
+        store
+            .get("ai_enabled")
+            .and_then(|value| value.as_bool())
+            .unwrap_or(false)
+    };
 
     match next_ai_enabled(current, can_enable) {
         Some(true) => {

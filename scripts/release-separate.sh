@@ -68,7 +68,15 @@ require_file() {
     fi
 }
 
-# Load .env file FIRST if it exists
+# Match the minimum Node version used by release CI before reading credentials
+# or starting builds (the frontend toolchain also needs a modern Node runtime).
+require_cmd node
+if ! node -e 'const [major, minor] = process.versions.node.split(".").map(Number); process.exit(major > 22 || (major === 22 && minor >= 19) ? 0 : 1)'; then
+    echo -e "${RED}Error: Release builds require Node.js 22.19.0 or newer.${NC}"
+    exit 1
+fi
+
+# Load .env file if it exists
 if [ -f .env ]; then
     echo -e "${YELLOW}Loading environment variables from .env...${NC}"
     set -a
@@ -566,9 +574,10 @@ if [[ "$BUILD_ONLY" == false ]]; then
         exit 1
     fi
 
-    # Generate changelog only after successful build/sign verification
-    echo -e "${YELLOW}Generating changelog...${NC}"
-    npx conventional-changelog -p angular -i CHANGELOG.md -s
+    # Generate changelog only after successful build/sign verification.
+    # Resolves the pinned local conventional-changelog-cli (no network fetch); -r 1 -u is
+    # required: without them the pre-tag run silently emits an empty changelog.
+    pnpm exec conventional-changelog -p angular -i CHANGELOG.md -s -r 1 -u
 
     # Commit, tag, push
     echo -e "${YELLOW}Committing and tagging...${NC}"

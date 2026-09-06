@@ -30,7 +30,7 @@ interface CliToolStatus {
 const AGENT_PROMPT = `Use Voicetypr for local audio transcription.
 
 When I give you an audio file, run:
-voicetypr transcribe <file> --json
+voicetypr transcribe --file <file> --json
 
 Read the JSON response, use the transcript for the task I requested, and report any CLI error exactly. Do not upload the audio to another service unless I explicitly ask.`;
 

@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { AppSettings } from "@/types";
 
@@ -16,6 +16,7 @@ import { SettingsProvider, useSettings } from "./SettingsContext";
 const initialSettings = {
   theme: "system",
   update_channel: "stable",
+  onboarding_completed: false,
 } as AppSettings;
 
 function Probe() {
@@ -30,6 +31,17 @@ function Probe() {
       </button>
       <button type="button" onClick={() => void updateSettings({ update_channel: "beta" })}>
         Choose beta
+      </button>
+      <span>{settings.onboarding_completed ? "complete" : "incomplete"}</span>
+      <button
+        type="button"
+        onClick={() =>
+          void updateSettings({ onboarding_completed: true }, { publishAfterSave: true }).catch(
+            () => undefined,
+          )
+        }
+      >
+        Complete onboarding
       </button>
     </>
   );
@@ -68,5 +80,63 @@ describe("SettingsContext update channel persistence", () => {
         updateChannelExplicit: true,
       }),
     );
+  });
+
+  it("publishes deferred onboarding completion only after save succeeds", async () => {
+    let resolveSave: (() => void) | undefined;
+    const savePending = new Promise<void>((resolve) => {
+      resolveSave = resolve;
+    });
+    vi.mocked(invoke).mockImplementation(async (command) => {
+      if (command === "get_settings") return initialSettings;
+      if (command === "save_settings") return savePending;
+      throw new Error(`Unexpected command: ${command}`);
+    });
+
+    render(
+      <SettingsProvider>
+        <Probe />
+      </SettingsProvider>,
+    );
+
+    expect(await screen.findByText("incomplete")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Complete onboarding" }));
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith("save_settings", expect.anything()));
+    expect(screen.getByText("incomplete")).toBeInTheDocument();
+    expect(screen.queryByText("complete")).not.toBeInTheDocument();
+
+    await act(async () => {
+      resolveSave?.();
+      await savePending;
+    });
+
+    expect(await screen.findByText("complete")).toBeInTheDocument();
+  });
+
+  it("does not publish rejected onboarding completion and allows retry", async () => {
+    let rejectCompletion = true;
+    vi.mocked(invoke).mockImplementation(async (command) => {
+      if (command === "get_settings") return initialSettings;
+      if (command === "save_settings") {
+        if (rejectCompletion) throw new Error("settings store unavailable");
+        return undefined;
+      }
+      throw new Error(`Unexpected command: ${command}`);
+    });
+
+    render(
+      <SettingsProvider>
+        <Probe />
+      </SettingsProvider>,
+    );
+
+    expect(await screen.findByText("incomplete")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Complete onboarding" }));
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith("save_settings", expect.anything()));
+    expect(screen.getByText("incomplete")).toBeInTheDocument();
+
+    rejectCompletion = false;
+    fireEvent.click(screen.getByRole("button", { name: "Complete onboarding" }));
+    expect(await screen.findByText("complete")).toBeInTheDocument();
   });
 });

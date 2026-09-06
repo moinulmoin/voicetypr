@@ -18,8 +18,23 @@ export interface SystemSpecs {
   gpus: string[];
 }
 
-export async function getSystemSpecs(): Promise<SystemSpecs | undefined> {
-  return invoke<SystemSpecs>("get_system_specs").catch(() => undefined);
+export type SystemSpecsResult = { specs: SystemSpecs } | { error: string };
+
+// Collects full system specs. NEVER silently drops the failure (plan 044):
+// a missing System section in a report must mean "specs exist", not
+// "collection broke and nobody noticed" — failures surface in the report
+// body and the submitted payload instead.
+export async function getSystemSpecs(): Promise<SystemSpecsResult> {
+  try {
+    return { specs: await invoke<SystemSpecs>("get_system_specs") };
+  } catch (error) {
+    const raw = error instanceof Error ? error.message : String(error);
+    log.error("Failed to collect system specs:", error);
+    // Single-line, pipe-free so BOTH the report body table and the raw JSON
+    // payload carry a bounded diagnostic; the payload path has no sanitizer.
+    const message = raw.replace(/[|\r\n]+/g, " ").replace(/\s+/g, " ").trim().slice(0, 300);
+    return { error: message };
+  }
 }
 
 export interface CrashReportData {
@@ -37,6 +52,8 @@ export interface CrashReportData {
   logContent: string;
   logTruncated: boolean;
   logStatusNote: string;
+  debugRingContent: string;
+  systemSpecsError?: string;
   systemSpecs?: SystemSpecs;
   trayStatus?: TrayStatus;
 }
@@ -47,13 +64,15 @@ export async function gatherCrashReportData(
   currentModel?: string | null,
 ): Promise<CrashReportData> {
   // Get async values
-  const [appVer, deviceId, logAttachment, systemSpecs, trayStatus] = await Promise.all([
+  const [appVer, deviceId, logAttachment, systemSpecsResult, trayStatus] = await Promise.all([
     getVersion().catch(() => "Unknown"),
     invoke<string>("get_device_id").catch(() => "Unknown"),
     getLatestLogAttachment(),
     getSystemSpecs(),
     getTrayStatus().catch(() => undefined),
   ]);
+  const systemSpecs = "specs" in systemSpecsResult ? systemSpecsResult.specs : undefined;
+  const systemSpecsError = "error" in systemSpecsResult ? systemSpecsResult.error : undefined;
 
   // Get sync values from OS plugin (these are not promises)
   let os = "Unknown";
@@ -83,7 +102,9 @@ export async function gatherCrashReportData(
     logContent: logAttachment.redactedContent,
     logTruncated: logAttachment.truncated,
     logStatusNote: logAttachment.statusNote,
+    debugRingContent: logAttachment.debugRing,
     systemSpecs,
+    systemSpecsError,
     trayStatus,
   };
 }
@@ -103,6 +124,8 @@ export interface ManualReportData {
   logContent: string;
   logTruncated: boolean;
   logStatusNote: string;
+  debugRingContent: string;
+  systemSpecsError?: string;
   systemSpecs?: SystemSpecs;
   trayStatus?: TrayStatus;
 }
@@ -112,6 +135,7 @@ interface LatestLogAttachment {
   redactedContent: string;
   truncated: boolean;
   statusNote: string;
+  debugRing: string;
 }
 
 async function getLatestLogAttachment(): Promise<LatestLogAttachment> {
@@ -120,6 +144,7 @@ async function getLatestLogAttachment(): Promise<LatestLogAttachment> {
     redactedContent: "",
     truncated: false,
     statusNote: "Failed to retrieve log.",
+    debugRing: "",
   }));
 }
 
@@ -129,13 +154,15 @@ export async function gatherManualReportData(
   message: string,
   currentModel?: string | null,
 ): Promise<ManualReportData> {
-  const [appVer, deviceId, logAttachment, systemSpecs, trayStatus] = await Promise.all([
+  const [appVer, deviceId, logAttachment, systemSpecsResult, trayStatus] = await Promise.all([
     getVersion().catch(() => "Unknown"),
     invoke<string>("get_device_id").catch(() => "Unknown"),
     getLatestLogAttachment(),
     getSystemSpecs(),
     getTrayStatus().catch(() => undefined),
   ]);
+  const systemSpecs = "specs" in systemSpecsResult ? systemSpecsResult.specs : undefined;
+  const systemSpecsError = "error" in systemSpecsResult ? systemSpecsResult.error : undefined;
 
   let os = "Unknown";
   let osVer = "Unknown";
@@ -164,7 +191,9 @@ export async function gatherManualReportData(
     logContent: logAttachment.redactedContent,
     logTruncated: logAttachment.truncated,
     logStatusNote: logAttachment.statusNote,
+    debugRingContent: logAttachment.debugRing,
     systemSpecs,
+    systemSpecsError,
     trayStatus,
   };
 }
@@ -221,6 +250,12 @@ export function buildReportBody(data: ManualReportData): string {
     parts.push(`| Memory | ${Math.round(specs.totalMemoryMb / 1024)} GB |`);
     parts.push(`| GPU | ${specs.gpus.length ? specs.gpus.join(", ") : "Unknown"} |`);
     parts.push("");
+  } else if (data.systemSpecsError) {
+    const reason = data.systemSpecsError.replace(/[|\r\n]+/g, " ").replace(/\s+/g, " ").trim();
+    parts.push("## System");
+    parts.push("");
+    parts.push(`> System configuration could not be collected: ${reason}`);
+    parts.push("");
   }
 
   // Latest log section
@@ -245,6 +280,16 @@ export function buildReportBody(data: ManualReportData): string {
     parts.push(`> ${data.logStatusNote}`);
   }
 
+  if (data.debugRingContent) {
+    parts.push("## Debug (most recent, in-memory ring)");
+    parts.push("");
+    parts.push("```");
+    parts.push(data.debugRingContent);
+    parts.push("```");
+    parts.push("");
+    parts.push("_Ring content has been automatically redacted for common sensitive patterns._");
+  }
+
   parts.push("");
   parts.push("---");
   parts.push("_This report was generated by the Voicetypr Report Bug feature._");
@@ -264,6 +309,7 @@ interface ReportEnvironmentPayload {
   deviceId: string;
   timestamp: string;
   systemSpecs?: SystemSpecs;
+  systemSpecsError?: string;
   trayStatus?: TrayStatus;
 }
 
@@ -272,6 +318,7 @@ interface LatestLogPayload {
   content: string;
   truncated: boolean;
   statusNote: string;
+  debugRing: string;
 }
 
 export type BugReportPayload =
@@ -364,7 +411,6 @@ async function submitBugReport(payload: BugReportPayload): Promise<ReportSubmitR
         message: responseBody?.message || "Failed to submit report.",
       };
     }
-
     return {
       success: true,
       message: responseBody?.message || "Report submitted.",
@@ -397,6 +443,9 @@ function buildEnvironmentPayload(
   if (data.trayStatus) {
     environment.trayStatus = data.trayStatus;
   }
+  if (data.systemSpecsError) {
+    environment.systemSpecsError = data.systemSpecsError;
+  }
 
   return environment;
 }
@@ -407,5 +456,6 @@ function buildLatestLogPayload(data: ManualReportData | CrashReportData): Latest
     content: data.logContent,
     truncated: data.logTruncated,
     statusNote: data.logStatusNote,
+    debugRing: data.debugRingContent,
   };
 }

@@ -13,11 +13,16 @@ export function usePolishSettingsLoad({
 }: {
   settingsLoaded: boolean;
   setSettingsLoaded: (loaded: boolean) => void;
-  loadAISettings: () => Promise<AISettings | null | undefined>;
-  loadEnhancementOptionsRef: MutableRefObject<(aiEnabled: boolean) => Promise<void>>;
-  loadWritingSettingsRef: MutableRefObject<() => Promise<boolean>>;
+  loadAISettings: (signal?: AbortSignal) => Promise<AISettings | null | undefined>;
+  loadEnhancementOptionsRef: MutableRefObject<
+    (aiEnabled: boolean, signal?: AbortSignal) => Promise<void>
+  >;
+  loadWritingSettingsRef: MutableRefObject<(signal?: AbortSignal) => Promise<boolean>>;
 }) {
   const settingsLoadStartedRef = useRef(false);
+  const controllerRef = useRef<AbortController | null>(null);
+
+  useEffect(() => () => controllerRef.current?.abort(), []);
 
   useEffect(() => {
     if (settingsLoaded || settingsLoadStartedRef.current) {
@@ -25,37 +30,41 @@ export function usePolishSettingsLoad({
     }
 
     settingsLoadStartedRef.current = true;
-    const mountedRef = { current: true };
+    controllerRef.current?.abort();
+    const controller = new AbortController();
+    controllerRef.current = controller;
+    let completed = false;
+    const { signal } = controller;
     void (async () => {
       try {
-        const loadedAISettings = await loadAISettings();
-        if (!mountedRef.current) {
-          settingsLoadStartedRef.current = false;
-          return;
-        }
-        await loadEnhancementOptionsRef.current(loadedAISettings?.enabled ?? false);
-        if (!mountedRef.current) {
-          settingsLoadStartedRef.current = false;
-          return;
-        }
-        const writingSettingsLoaded = await loadWritingSettingsRef.current();
-        if (!mountedRef.current) {
-          settingsLoadStartedRef.current = false;
-          return;
-        }
+        const loadedAISettings = await loadAISettings(signal);
+        // A superseded attempt applies nothing and leaves the start guard
+        // alone: the effect that replaced it owns the guard now.
+        if (signal.aborted) return;
+        await loadEnhancementOptionsRef.current(loadedAISettings?.enabled ?? false, signal);
+        if (signal.aborted) return;
+        const writingSettingsLoaded = await loadWritingSettingsRef.current(signal);
+        if (signal.aborted) return;
+        completed = writingSettingsLoaded;
         setSettingsLoaded(writingSettingsLoaded);
         if (!writingSettingsLoaded) {
           settingsLoadStartedRef.current = false;
         }
       } catch (error) {
+        if (signal.aborted) return;
         settingsLoadStartedRef.current = false;
-        if (!mountedRef.current) return;
         log.error("Failed to load Polish settings:", error);
       }
     })();
 
     return () => {
-      mountedRef.current = false;
+      // Lower the guard so the replacement effect (StrictMode's
+      // setup-cleanup-setup cycle) can start its own attempt instead of being
+      // blocked by the canceled one.
+      // Completion reruns this effect too. Its background model/probe work
+      // remains owned until unmount or a new attempt starts.
+      if (!completed) controller.abort();
+      settingsLoadStartedRef.current = false;
     };
   }, [
     settingsLoaded,

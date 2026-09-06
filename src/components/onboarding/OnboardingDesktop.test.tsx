@@ -7,6 +7,8 @@ const {
   invokeMock,
   updateSettingsMock,
   onCompleteMock,
+  onCompletionStartMock,
+  onCompletionErrorMock,
   eventListeners,
   modelManagement,
   settingsState,
@@ -14,6 +16,8 @@ const {
   invokeMock: vi.fn(),
   updateSettingsMock: vi.fn(),
   onCompleteMock: vi.fn(),
+  onCompletionStartMock: vi.fn(),
+  onCompletionErrorMock: vi.fn(),
   eventListeners: new Map<string, Set<(event: { payload: unknown }) => void>>(),
   settingsState: {
     hotkey: "CommandOrControl+Shift+Space",
@@ -93,7 +97,12 @@ vi.mock("@/lib/platform", () => platformMock);
 
 const renderOnboarding = () =>
   render(
-    <OnboardingDesktop onComplete={onCompleteMock} modelManagement={modelManagement as never} />,
+    <OnboardingDesktop
+      onCompletionStart={onCompletionStartMock}
+      onCompletionError={onCompletionErrorMock}
+      onComplete={onCompleteMock}
+      modelManagement={modelManagement as never}
+    />,
   );
 
 beforeEach(() => {
@@ -168,7 +177,10 @@ describe("OnboardingDesktop", () => {
 
     await user.click(screen.getByRole("button", { name: /start using voicetypr/i }));
 
-    expect(updateSettingsMock).toHaveBeenCalledWith({ onboarding_completed: true });
+    expect(updateSettingsMock).toHaveBeenCalledWith(
+      { onboarding_completed: true },
+      { publishAfterSave: true },
+    );
     expect(onCompleteMock).toHaveBeenCalledTimes(1);
     expect(onCompleteMock).toHaveBeenCalledWith();
   });
@@ -716,5 +728,158 @@ describe("OnboardingDesktop", () => {
         enabled: false,
       });
     });
+  });
+
+  it("keeps onboarding active until both opt-outs are persisted", async () => {
+    const user = userEvent.setup();
+    let resolveAnalytics: (() => void) | undefined;
+    const analyticsPersisted = new Promise<void>((resolve) => {
+      resolveAnalytics = resolve;
+    });
+    invokeMock.mockImplementation((command: string) => {
+      if (command === "set_product_analytics_consent") {
+        return analyticsPersisted;
+      }
+      if (command === "discover_remote_servers" || command === "list_remote_servers") {
+        return Promise.resolve([]);
+      }
+      if (command === "get_active_remote_server") {
+        return Promise.resolve(null);
+      }
+      return Promise.resolve(null);
+    });
+    renderOnboarding();
+
+    await user.click(screen.getByRole("button", { name: /start setup/i }));
+    await user.click(screen.getByRole("button", { name: /continue/i }));
+    await user.click(screen.getByRole("button", { name: /continue/i }));
+    await user.click(screen.getByRole("button", { name: /continue/i }));
+    await user.click(screen.getByRole("button", { name: /save hotkey/i }));
+    await user.click(screen.getByRole("checkbox", { name: /crash & error reporting/i }));
+    await user.click(screen.getByRole("checkbox", { name: /usage analytics/i }));
+    await user.click(screen.getByRole("button", { name: /start using voicetypr/i }));
+
+    await waitFor(() => {
+      expect(invokeMock).toHaveBeenCalledWith("set_telemetry_consent", { enabled: false });
+      expect(invokeMock).toHaveBeenCalledWith("set_product_analytics_consent", {
+        enabled: false,
+      });
+    });
+    expect(onCompletionStartMock).toHaveBeenCalledTimes(1);
+    expect(
+      updateSettingsMock.mock.calls.some(([updates]) => updates?.onboarding_completed === true),
+    ).toBe(false);
+    expect(onCompleteMock).not.toHaveBeenCalled();
+    expect(screen.getByRole("button", { name: /start using voicetypr/i })).toBeDisabled();
+
+    resolveAnalytics?.();
+
+    await waitFor(() => {
+      expect(updateSettingsMock).toHaveBeenCalledWith(
+        { onboarding_completed: true },
+        { publishAfterSave: true },
+      );
+      expect(onCompleteMock).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  it("keeps onboarding recoverable when analytics consent fails after diagnostics saves", async () => {
+    const user = userEvent.setup();
+    invokeMock.mockImplementation((command: string) => {
+      if (command === "set_product_analytics_consent") {
+        return Promise.reject(new Error("analytics consent store unavailable"));
+      }
+      if (command === "discover_remote_servers" || command === "list_remote_servers") {
+        return Promise.resolve([]);
+      }
+      if (command === "get_active_remote_server") {
+        return Promise.resolve(null);
+      }
+      return Promise.resolve(null);
+    });
+    renderOnboarding();
+
+    await user.click(screen.getByRole("button", { name: /start setup/i }));
+    await user.click(screen.getByRole("button", { name: /continue/i }));
+    await user.click(screen.getByRole("button", { name: /continue/i }));
+    await user.click(screen.getByRole("button", { name: /continue/i }));
+    await user.click(screen.getByRole("button", { name: /save hotkey/i }));
+    await user.click(screen.getByRole("checkbox", { name: /crash & error reporting/i }));
+    await user.click(screen.getByRole("checkbox", { name: /usage analytics/i }));
+    await user.click(screen.getByRole("button", { name: /start using voicetypr/i }));
+
+    await waitFor(() => {
+      expect(onCompletionErrorMock).toHaveBeenCalledTimes(1);
+    });
+    expect(invokeMock).toHaveBeenCalledWith("set_telemetry_consent", { enabled: false });
+    expect(invokeMock).not.toHaveBeenCalledWith("record_onboarding_completed");
+    expect(
+      updateSettingsMock.mock.calls.some(([updates]) => updates?.onboarding_completed === true),
+    ).toBe(false);
+    expect(onCompleteMock).not.toHaveBeenCalled();
+    expect(screen.getByRole("heading", { name: /you're all set/i })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /start using voicetypr/i })).toBeEnabled();
+
+    invokeMock.mockResolvedValue(null);
+    await user.click(screen.getByRole("button", { name: /start using voicetypr/i }));
+
+    await waitFor(() => {
+      expect(
+        invokeMock.mock.calls.filter(([command]) => command === "set_product_analytics_consent"),
+      ).toHaveLength(2);
+      expect(updateSettingsMock).toHaveBeenCalledWith(
+        { onboarding_completed: true },
+        { publishAfterSave: true },
+      );
+      expect(onCompleteMock).toHaveBeenCalledTimes(1);
+    });
+    expect(onCompletionStartMock).toHaveBeenCalledTimes(2);
+    expect(onCompletionErrorMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps opt-outs selected when the completion save fails and succeeds on retry", async () => {
+    const user = userEvent.setup();
+    let completionAttempts = 0;
+    updateSettingsMock.mockImplementation(
+      (updates: Partial<typeof settingsState>, options?: { publishAfterSave?: boolean }) => {
+        if (updates.onboarding_completed === true) {
+          expect(options).toEqual({ publishAfterSave: true });
+          completionAttempts += 1;
+          if (completionAttempts === 1) {
+            return Promise.reject(new Error("settings store unavailable"));
+          }
+        }
+        Object.assign(settingsState, updates);
+        return Promise.resolve();
+      },
+    );
+    renderOnboarding();
+
+    await user.click(screen.getByRole("button", { name: /start setup/i }));
+    await user.click(screen.getByRole("button", { name: /continue/i }));
+    await user.click(screen.getByRole("button", { name: /continue/i }));
+    await user.click(screen.getByRole("button", { name: /continue/i }));
+    await user.click(screen.getByRole("button", { name: /save hotkey/i }));
+    await user.click(screen.getByRole("checkbox", { name: /crash & error reporting/i }));
+    await user.click(screen.getByRole("checkbox", { name: /usage analytics/i }));
+    await user.click(screen.getByRole("button", { name: /start using voicetypr/i }));
+
+    await waitFor(() => expect(onCompletionErrorMock).toHaveBeenCalledTimes(1));
+    expect(settingsState.onboarding_completed).toBe(false);
+    expect(onCompleteMock).not.toHaveBeenCalled();
+    expect(screen.getByRole("heading", { name: /you're all set/i })).toBeInTheDocument();
+    expect(screen.getByRole("checkbox", { name: /crash & error reporting/i })).not.toBeChecked();
+    expect(screen.getByRole("checkbox", { name: /usage analytics/i })).not.toBeChecked();
+    expect(screen.getByRole("button", { name: /start using voicetypr/i })).toBeEnabled();
+
+    await user.click(screen.getByRole("button", { name: /start using voicetypr/i }));
+
+    await waitFor(() => {
+      expect(settingsState.onboarding_completed).toBe(true);
+      expect(onCompleteMock).toHaveBeenCalledTimes(1);
+    });
+    expect(completionAttempts).toBe(2);
+    expect(onCompletionStartMock).toHaveBeenCalledTimes(2);
+    expect(onCompletionErrorMock).toHaveBeenCalledTimes(1);
   });
 });
