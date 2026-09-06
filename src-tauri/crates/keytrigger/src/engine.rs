@@ -461,7 +461,10 @@ mod tests {
         let second = start(Arc::clone(&engine), Arc::clone(&barrier));
         barrier.wait();
 
-        let outcomes = [first.join().expect("first starter"), second.join().expect("second starter")];
+        let outcomes = [
+            first.join().expect("first starter"),
+            second.join().expect("second starter"),
+        ];
         assert_eq!(outcomes.iter().filter(|result| result.is_ok()).count(), 1);
         assert_eq!(
             outcomes

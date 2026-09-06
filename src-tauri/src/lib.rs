@@ -1417,24 +1417,43 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             {
                 use tauri::{WebviewUrl, WebviewWindowBuilder};
 
-                // Calculate center-bottom position for pill/toast
-                let (pos_x, pos_y) = {
-                    let (screen_width, screen_height) = crate::utils::monitor::catch_monitor_panic(|| {
-                        let monitor = app.primary_monitor().ok().flatten()?;
-                        let size = monitor.size();
-                        let scale = monitor.scale_factor();
-                        Some((size.width as f64 / scale, size.height as f64 / scale))
-                    })
-                    .flatten()
-                    .unwrap_or((1440.0, 900.0));
+                // On macOS, use the same saved placement and monitor work area as
+                // later repositioning so an always-visible pill starts clear of the Dock.
+                #[cfg(target_os = "macos")]
+                let ((pos_x, pos_y), (toast_x, toast_y)) = {
+                    let app_state = app.state::<AppState>();
+                    app_state
+                        .get_window_manager()
+                        .map(|manager| manager.current_floating_window_positions())
+                        .unwrap_or_else(|| {
+                            log::warn!("Window manager unavailable during floating window placement; using safe defaults");
+                            ((600.0, 842.0), (520.0, 754.0))
+                        })
+                };
 
-                    let pill_width = crate::window_manager::PILL_WIDTH;
-                    let pill_height = crate::window_manager::PILL_HEIGHT;
-                    let bottom_offset = 10.0;  // Distance from bottom of screen
-
-                    let x = (screen_width - pill_width) / 2.0;
-                    let y = screen_height - pill_height - bottom_offset;
-                    (x, y)
+                // Preserve the established non-macOS startup behavior: primary
+                // monitor, bottom-center, with the fixed 10px edge offset.
+                #[cfg(not(target_os = "macos"))]
+                let ((pos_x, pos_y), (toast_x, toast_y)) = {
+                    let (screen_width, screen_height) =
+                        crate::utils::monitor::catch_monitor_panic(|| {
+                            let monitor = app.primary_monitor().ok().flatten()?;
+                            let size = monitor.size();
+                            let scale = monitor.scale_factor();
+                            Some((size.width as f64 / scale, size.height as f64 / scale))
+                        })
+                        .flatten()
+                        .unwrap_or((1440.0, 900.0));
+                    let pill_x = (screen_width - crate::window_manager::PILL_WIDTH) / 2.0;
+                    let pill_y = screen_height - crate::window_manager::PILL_HEIGHT - 10.0;
+                    let toast_x = pill_x
+                        + (crate::window_manager::PILL_WIDTH
+                            - crate::window_manager::TOAST_WIDTH)
+                            / 2.0;
+                    let toast_y = pill_y
+                        - crate::window_manager::TOAST_HEIGHT
+                        - crate::window_manager::FLOATING_WINDOW_GAP;
+                    ((pill_x, pill_y), (toast_x, toast_y))
                 };
 
                 // macOS: create pill window and convert to NSPanel
@@ -1484,16 +1503,14 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
                     }
                 }
 
-                // Create toast window for feedback messages (positioned above pill) - all platforms
-                let toast_width = 400.0;
-                let toast_height = 80.0;
-                let pill_width = crate::window_manager::PILL_WIDTH;
-                let gap = 8.0; // Gap between pill and toast
-
-                // Center toast above pill
-                let toast_x = pos_x + (pill_width - toast_width) / 2.0;
-                let toast_y = pos_y - toast_height - gap;
-                log::info!("Toast window position: ({}, {}) - above pill at ({}, {})", toast_x, toast_y, pos_x, pos_y);
+                // Create toast window for feedback messages - all platforms
+                log::info!(
+                    "Toast window position: ({}, {}) relative to pill at ({}, {})",
+                    toast_x,
+                    toast_y,
+                    pos_x,
+                    pos_y
+                );
 
                 let toast_builder = WebviewWindowBuilder::new(app, "toast", WebviewUrl::App("toast".into()))
                     .title("Feedback")
@@ -1503,7 +1520,10 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
                     .skip_taskbar(true)
                     .transparent(true)
                     .shadow(false) // Prevent window shadow/outline on macOS
-                    .inner_size(toast_width, toast_height)
+                    .inner_size(
+                        crate::window_manager::TOAST_WIDTH,
+                        crate::window_manager::TOAST_HEIGHT,
+                    )
                     .position(toast_x, toast_y)
                     .visible(false); // Starts hidden
 

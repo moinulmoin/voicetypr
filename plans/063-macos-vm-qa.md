@@ -1,6 +1,6 @@
 # Plan 063 — Packaged macOS VM QA
 
-Status: VM QA COMPLETE — 2026-09-06; recorded limitations and external release gates remain open.
+Status: IN PROGRESS — final action checks reproduced Saved text and Dock-overlap defects; fixes under verification.
 Baseline: PR #140, `37eea0229e3b2c391315c4235068af1212d80f36`.
 
 ## Scope
@@ -111,12 +111,31 @@ and network-level request capture were not exercised.
 
 ## Deliverables and remaining gates
 
+Follow-up action checks on `6c09035c` reproduced two additional defects. Saved
+text trigger `insert qa signature` did not match the engine's ordinary
+`Insert QA Signature.` output; tolerate one terminal sentence mark only after
+checking exact trigger matches. Separately, the default bottom-center pill was
+behind a visible Dock: enabling Dock autohide in the guest revealed the same
+pill at the same position. Guest Dock defaults were restored after recording
+both screenshots. Keep the overlay within the available desktop area and
+retest with the Dock visible. Local correction rules worked with AI Polish off.
+
+Both follow-up fixes are implemented and independently reviewed. Saved text
+checks exact eligible triggers first, then tolerates one trailing ASCII `.`,
+`!`, or `?` only for an unpunctuated whole trigger. macOS startup and subsequent
+placement use Tauri's monitor work area, backed by `NSScreen.visibleFrame`,
+with bounds/scale validation and pill/toast clamping. Non-macOS startup and
+runtime geometry retain their previous behavior. Integrated validation after
+these changes: 1,555 Rust workspace tests passed, 16 ignored; workspace/all-target
+Clippy passed with warnings denied; full workspace formatting passed. Packaged
+verification of these two follow-up fixes is pending.
+
 Final ad hoc bundle, ZIP and build manifest are under
 `candidate-6c09035c/local-arm64-adhoc/` in the VM workspace. ZIP SHA-256:
 `8e31bef9f06c5c17964f8494fe758e8e6abd3305c2f3f4f97e5395a6ac2b088b`.
 Screenshots, the exported card and guest-only diagnostics are in `evidence/`.
 
-This completes the scoped VM pass, not the release matrix. Real Windows and
+Completion of the scoped VM pass does not complete the release matrix. Real Windows and
 physical macOS microphone/GPU/media/device-change checks, signed updater and
 notarization, real cloud/Polish provider accounts, Soniox cleanup ownership,
 analytics ingestion, and support/alert delivery remain unverified. No beta or

@@ -328,13 +328,37 @@ fn match_snippet<'a>(
     transcript_language: Option<&str>,
 ) -> Option<&'a Snippet> {
     let trimmed = text.trim();
-    snippets
-        .iter()
-        .filter(|snippet| {
+    let eligible_snippets = || {
+        snippets.iter().filter(|snippet| {
             snippet.enabled
                 && language_scope_matches(snippet.language.as_deref(), transcript_language)
         })
+    };
+
+    // Preserve punctuation as part of an explicitly configured trigger. This
+    // pass also makes a punctuated trigger win over the fallback below when an
+    // unpunctuated trigger with the same words exists.
+    if let Some(snippet) = eligible_snippets()
         .filter(|snippet| snippet.trigger.eq_ignore_ascii_case(trimmed))
+        .max_by_key(|snippet| snippet.trigger.len())
+    {
+        return Some(snippet);
+    }
+
+    // Speech engines commonly append one sentence terminator to an otherwise
+    // exact command utterance. Tolerate only that final character: punctuation
+    // inside the trigger, repeated punctuation, and surrounding words remain
+    // meaningful and cannot turn a substring into a snippet match.
+    let without_stt_terminator = trimmed
+        .strip_suffix('.')
+        .or_else(|| trimmed.strip_suffix('!'))
+        .or_else(|| trimmed.strip_suffix('?'))?;
+
+    eligible_snippets()
+        .filter(|snippet| {
+            !matches!(snippet.trigger.chars().last(), Some('.' | '!' | '?'))
+                && snippet.trigger.eq_ignore_ascii_case(without_stt_terminator)
+        })
         .max_by_key(|snippet| snippet.trigger.len())
 }
 
@@ -585,7 +609,84 @@ mod tests {
         }];
 
         assert!(match_snippet("insert note", &snippets, Some("en")).is_some());
+        assert!(match_snippet("Insert note.", &snippets, Some("en")).is_some());
+        assert!(match_snippet("insert note!", &snippets, Some("en")).is_some());
+        assert!(match_snippet("insert note?", &snippets, Some("en")).is_some());
         assert!(match_snippet("please insert note", &snippets, Some("en")).is_none());
+        assert!(match_snippet("please insert note.", &snippets, Some("en")).is_none());
+        assert!(match_snippet("insert note,", &snippets, Some("en")).is_none());
+        assert!(match_snippet("insert note..", &snippets, Some("en")).is_none());
+        assert!(match_snippet("insert. note", &snippets, Some("en")).is_none());
+    }
+
+    #[test]
+    fn test_snippet_exact_punctuated_trigger_wins_before_stt_fallback() {
+        let snippets = vec![
+            Snippet {
+                trigger: "insert note".to_string(),
+                body: "Unpunctuated trigger".to_string(),
+                language: None,
+                enabled: true,
+                preserve_literal: true,
+            },
+            Snippet {
+                trigger: "insert note.".to_string(),
+                body: "Explicit punctuated trigger".to_string(),
+                language: None,
+                enabled: true,
+                preserve_literal: true,
+            },
+        ];
+
+        let matched = match_snippet("INSERT NOTE.", &snippets, Some("en")).expect("snippet match");
+        assert_eq!(matched.body, "Explicit punctuated trigger");
+
+        let fallback = match_snippet("insert note!", &snippets, Some("en")).expect("fallback");
+        assert_eq!(fallback.body, "Unpunctuated trigger");
+        assert!(match_snippet("insert note..", &snippets, Some("en")).is_none());
+    }
+
+    #[test]
+    fn test_snippet_stt_punctuation_preserves_eligibility_and_literal_body() {
+        let settings = WritingSettings {
+            snippets: vec![
+                Snippet {
+                    trigger: "insert qa signature".to_string(),
+                    body: "disabled body".to_string(),
+                    language: Some("en".to_string()),
+                    enabled: false,
+                    preserve_literal: true,
+                },
+                Snippet {
+                    trigger: "insert qa signature".to_string(),
+                    body: "wrong language".to_string(),
+                    language: Some("fr".to_string()),
+                    enabled: true,
+                    preserve_literal: true,
+                },
+                Snippet {
+                    trigger: "insert qa signature".to_string(),
+                    body: "regards from the qa fixture.".to_string(),
+                    language: Some("en".to_string()),
+                    enabled: true,
+                    preserve_literal: true,
+                },
+            ],
+            ..WritingSettings::default()
+        };
+        let mut operations = Vec::new();
+
+        let result = apply_library_rules(
+            "Insert QA Signature.",
+            &settings,
+            Some("en"),
+            &mut operations,
+        );
+
+        assert_eq!(result.text, "regards from the qa fixture.");
+        assert!(result.literal_locked);
+        assert_eq!(operations.len(), 1);
+        assert_eq!(operations[0].kind, WritingOperationKind::Snippet);
     }
 
     #[test]

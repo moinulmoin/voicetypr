@@ -27,7 +27,7 @@ Verification commands used across all plans: `pnpm typecheck`, `pnpm lint`,
 
 ## Active plans
 
-Plan 063 — VM QA COMPLETE — Codex 2026-09-06: packaged macOS VM QA of PR #140; four reproduced fixes verified, with external release gates and intermittent VM inference limitation recorded. See `063-macos-vm-qa.md`.
+Plan 063 — IN PROGRESS — Codex 2026-09-06: four packaged VM fixes verified; follow-up action checks reproduced Saved text punctuation and Dock-obscured indicator defects, now under verification. External release gates remain open. See `063-macos-vm-qa.md`.
 
 | Plan | Title | Priority | Effort | Depends on | Status |
 |------|-------|----------|--------|------------|--------|
