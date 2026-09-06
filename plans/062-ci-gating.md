@@ -41,3 +41,12 @@ confirm native jobs queue only after successful cheap checks. No product
 hardware smoke is claimed by CI policy validation.
 
 Local validation: all 18 workflow-helper tests pass; pinned actionlint 1.7.7 passes.
+
+## Review corrections — 2026-09-06
+
+Native and frontend conditions use `!cancelled()` rather than `always()` so
+superseded running jobs actually stop. GitHub re-evaluates job conditions during
+cancellation; unconditional `always()` can keep them alive. See the
+[workflow cancellation reference](https://docs.github.com/en/actions/reference/workflows-and-actions/workflow-cancellation).
+CI and Store checkouts also disable credential persistence before running
+repository code. Existing read-only workflow permissions remain intact.
