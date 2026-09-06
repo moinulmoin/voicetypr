@@ -1,6 +1,6 @@
 # Plan 063 — Packaged macOS VM QA
 
-Status: IN PROGRESS — claimed Codex 2026-09-06.
+Status: VM QA COMPLETE — 2026-09-06; recorded limitations and external release gates remain open.
 Baseline: PR #140, `37eea0229e3b2c391315c4235068af1212d80f36`.
 
 ## Scope
@@ -80,8 +80,9 @@ report submission or host UI operations were used.
 
 The CLI page's copied agent prompt was also reproduced as invalid: it omitted
 the parser's required `--file` flag. Corrected the example and its existing copy
-assertion; the real guest CLI accepted the corrected syntax. The new package
-must be checked for that displayed/copied text before this QA pass closes.
+assertion; the real guest CLI accepted the corrected syntax. Final package
+`6c09035ccab38739f50d20c6be7018a99a3653e6` displayed and copied the corrected
+prompt. Its 2400×1600 share-card PNG export also passed visual inspection.
 
 Recognition limits: the rebuilt controlled sentence and uploaded source both
 matched the synthetic fixture, but this is not general accuracy proof. A very
@@ -89,3 +90,35 @@ short file was rejected by the existing 0.5-second engine minimum after
 preparation. A three-second zero-audio CLI input produced `you`; silence
 hallucination prevention is therefore not passed. No speculative speech gate
 was added, and physical short/soft-speech and end-of-capture checks remain open.
+
+Final-package recording: a cached Whisper instance failed with inference code
+`-6`; the failure toast appeared, clipboard stayed intact, and the app returned
+to Idle. A fresh CLI instance succeeded. After a normal app restart, the same
+loopback sentence inserted correctly, followed by a separate `Sure.` recording
+without another restart. Cause of the intermittent VM inference failure is
+unestablished; physical GPU stability is not passed. Replacing the ad hoc bundle
+also required refreshing guest TCC grants using the exact installed app path;
+this does not establish signed-update permission continuity.
+
+License fixtures on `9d5248ab`: malformed JSON and valid-length unauthenticatable
+ciphertext each retained identical bytes through repeated License Retry,
+normal tray Quit, relaunch, and another normal Quit. License remained Unknown
+with reachable Retry, without expired-trial fallback. Fixture-period logs had
+no trial-check marker, synthetic payload, or ciphertext. The original absent
+secure store was restored after preserving fixtures; ordinary trial status
+returned. No entitlement was activated/deactivated. Valid paid-store behavior
+and network-level request capture were not exercised.
+
+## Deliverables and remaining gates
+
+Final ad hoc bundle, ZIP and build manifest are under
+`candidate-6c09035c/local-arm64-adhoc/` in the VM workspace. ZIP SHA-256:
+`8e31bef9f06c5c17964f8494fe758e8e6abd3305c2f3f4f97e5395a6ac2b088b`.
+Screenshots, the exported card and guest-only diagnostics are in `evidence/`.
+
+This completes the scoped VM pass, not the release matrix. Real Windows and
+physical macOS microphone/GPU/media/device-change checks, signed updater and
+notarization, real cloud/Polish provider accounts, Soniox cleanup ownership,
+analytics ingestion, and support/alert delivery remain unverified. No beta or
+Stable release is implied. Existing SMOKE rows remain unchecked where their
+full acceptance conditions were not performed.

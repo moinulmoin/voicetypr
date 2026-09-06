@@ -18,6 +18,19 @@ remained hidden in menubar mode and background AX input was refused. No
 foreground navigation, recording, consent change, or report submission was
 initiated; the owned process was stopped. This does not check any release row.
 
+2026-09-06 isolated macOS ARM VM observations (ad hoc packages `9d5248ab` and
+`6c09035c`, source version 2.0.5): onboarding OFF/OFF persistence, late
+Accessibility engine recovery, local recording/insertion/cancel, file
+transcription/export, CLI installation and loopback remote transcription were
+exercised. Malformed/undecryptable license fixtures survived Retry and normal
+exit/relaunch with reachable recovery, and the share-card PNG rendered at
+2400×1600. See `063-macos-vm-qa.md` for exact limits and evidence. These are
+partial runtime observations: signed-update, physical hardware, provider and
+alert-delivery conditions below remain unchecked. A silence-only CLI fixture
+hallucinated `you`; one cached VM Whisper inference failed with code `-6` and
+recovered after app restart. Neither silence prevention nor GPU stability is
+claimed passed.
+
 ## Plan 060 — Soniox lifecycle, failure events, report diagnostics + beta10 remediation (NEEDS-SMOKE)
 
 Use a dedicated Soniox test account and the configured GlitchTip/Discord test
@@ -620,4 +633,3 @@ global_shortcut path is untouched, so 2.0.0 ships regardless.
 - [ ] **058-S2** Windows (v2.0.6-beta.7): media pause via SMTC — Spotify + a Chrome tab video pause on record, resume on stop; verify the paused-session ledger resumes only the session we paused.
 - [ ] **059-S1** Packaged macOS (`v2.0.6-beta.8`): hotkey with silence and a mic activation pop → pill "No speech detected", nothing inserted, no engine/polish in logs (`skipped_no_speech` in `SPEECH_EVIDENCE`); a 31–100ms soft utterance, quiet whisper, and deliberately dictated punctuation still transcribe; cloud STT path behaves like local.
   - [ ] **059-S2** Packaged Windows (`v2.0.6-beta.8`): repeat 059-S1 with mono/stereo 44.1/48kHz devices and both small/large WASAPI callback buffers; stop during the final syllable keeps speech; local/cloud/remote routes remain fail-open for uncertain audio.
-
