@@ -194,6 +194,64 @@ mod tests {
     }
 
     #[test]
+    fn test_redact_wrapped_secrets_with_escaped_delimiters() {
+        for secret in [
+            "prefix\"suffix",
+            "prefix'suffix",
+            "prefix\\\"suffix",
+            "prefix\\suffix\\",
+            "prefix\nsuffix\r\ttail",
+            "prefix雪suffix",
+        ] {
+            let encoded = serde_json::to_string(secret).unwrap();
+            for value in [
+                encoded.clone(),
+                format!("String({encoded})"),
+                format!("Some({encoded})"),
+            ] {
+                let input = format!(r#"before {{"password": {value}, "status": "ready"}} after"#);
+                let expected_value = value.replace(&encoded, "\"[REDACTED]\"");
+                let expected =
+                    format!(r#"before {{"password": {expected_value}, "status": "ready"}} after"#);
+                assert_eq!(redact_log_content(&input), expected);
+            }
+        }
+    }
+
+    #[test]
+    fn test_redact_legacy_remote_settings_debug_password_fully() {
+        let value = serde_json::json!({
+            "password": "prefix\"suffix\\tail'apostrophe\nlast",
+            "port": 47842,
+        });
+        let input = format!("Raw JSON: {value:?}");
+        let redacted = redact_log_content(&input);
+        for fragment in ["prefix", "suffix", "tail", "apostrophe", "last"] {
+            assert!(!redacted.contains(fragment), "leaked fragment {fragment}");
+        }
+        assert!(redacted.contains("Raw JSON:"));
+        assert!(redacted.contains("47842"));
+    }
+
+    #[test]
+    fn test_redact_single_quoted_secrets_without_eating_neighbors() {
+        for value in [
+            r#"'prefix\'suffix'"#,
+            r#"Some('prefix\'suffix')"#,
+            r#"String('prefix"suffix\\tail')"#,
+            "'prefix\nsuffix'",
+        ] {
+            let input = format!("before {{'api_key': {value}, 'status': 'ready'}} after");
+            let redacted = redact_log_content(&input);
+            assert!(!redacted.contains("prefix"));
+            assert!(!redacted.contains("suffix"));
+            assert!(!redacted.contains("tail"));
+            assert!(redacted.starts_with("before {'api_key': "));
+            assert!(redacted.ends_with(", 'status': 'ready'} after"));
+        }
+    }
+
+    #[test]
     fn test_redact_email_addresses() {
         let input = "User: alice@example.com and bob@voicetypr.com reported";
         let redacted = redact_log_content(input);

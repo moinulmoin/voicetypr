@@ -99,3 +99,25 @@ effect. An actual stateful parent harness proves Cloud survives initial local
 model mounting, no parent-render warning occurs, and browsing survives unrelated
 renders. The full frontend suite passes 711 tests; typecheck, lint and build
 pass after this correction.
+
+## Provider ambiguity and report redaction — overnight continuation
+
+Accepted Soniox creates now protect uploads before response decoding. A missing,
+empty, or undecodable job ID cannot trigger immediate or later automatic orphan
+deletion. Cleanup running state and file/record progress are isolated per API
+endpoint/key, so overlapping key changes cannot suppress or wake another
+account's recovery. The running guard releases on completion/panic/cancellation.
+
+Wrapped-secret redaction now handles escaped delimiters/backslashes in JSON and
+Rust Debug values, preserving surrounding context without exposing suffixes.
+The legacy remote-settings raw debug statement was also removed at its source.
+New HTTP and redaction regressions cover these boundaries. Independent review
+found no confirmed new data-loss/privacy/race defect. Final Rust validation:
+1,535 passed, 16 ignored; Clippy workspace/all-targets with warnings denied and
+changed-file formatting pass. No real provider records or settings were modified.
+
+The ambiguity handling also covers transport loss before response headers:
+non-idempotent create POSTs are not blindly retried on transport/5xx failures.
+One retry remains for an explicit transient 429 rejection; outer storage-cap
+recovery is unchanged. HTTP regressions prove no deletion or duplicate create
+on ambiguous failure/cancellation, and normal auth/quota orphan cleanup remains.

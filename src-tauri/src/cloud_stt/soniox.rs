@@ -103,6 +103,33 @@ fn is_owned(key: &str, collection: &str, id: &str) -> bool {
         .contains(&(ownership_scope(key), collection.to_string(), id.to_string()))
 }
 
+// An uncertain create response or transport failure may still represent
+// a live server job. Never reinterpret its upload as an orphan after the flow
+// ends, even if a later listing omits that job or lacks its metadata.
+type AmbiguousUpload = ([u8; 32], String);
+static AMBIGUOUS_UPLOADS: std::sync::LazyLock<
+    std::sync::Mutex<std::collections::HashSet<AmbiguousUpload>>,
+> = std::sync::LazyLock::new(|| std::sync::Mutex::new(std::collections::HashSet::new()));
+
+fn preserve_ambiguous_upload(key: &str, file_id: &str) {
+    let scope = ownership_scope(key);
+    AMBIGUOUS_UPLOADS
+        .lock()
+        .expect("ambiguous uploads poisoned")
+        .insert((scope, file_id.to_string()));
+    OWNED_RECORDS
+        .lock()
+        .expect("ownership ledger poisoned")
+        .remove(&(scope, "files".to_string(), file_id.to_string()));
+}
+
+fn is_ambiguous_upload(key: &str, file_id: &str) -> bool {
+    AMBIGUOUS_UPLOADS
+        .lock()
+        .expect("ambiguous uploads poisoned")
+        .contains(&(ownership_scope(key), file_id.to_string()))
+}
+
 fn forget_deleted(key: &str, url: &str) {
     let Some(relative) = url.strip_prefix(&format!("{}/", base_url())) else {
         return;
@@ -206,6 +233,9 @@ async fn cleanup_stored_records(
     file_id: &str,
 ) {
     let Some(tid) = transcription_id else {
+        if is_ambiguous_upload(key, file_id) {
+            return;
+        }
         delete_file_best_effort(client, key, file_id).await;
         return;
     };
@@ -217,7 +247,7 @@ async fn cleanup_stored_records(
     .await;
     match attempt {
         Ok(Ok(DeleteOutcome::Deleted)) => {
-            bump_record_freed_progress();
+            bump_record_freed_progress(key);
             delete_file_best_effort(client, key, file_id).await;
         }
         Ok(Ok(DeleteOutcome::AlreadyGone)) => {
@@ -264,7 +294,7 @@ async fn delete_file_best_effort(client: &reqwest::Client, key: &str, file_id: &
     )
     .await
     {
-        Ok(Ok(DeleteOutcome::Deleted)) => bump_auto_cleanup_progress(),
+        Ok(Ok(DeleteOutcome::Deleted)) => bump_auto_cleanup_progress(key),
         Ok(Ok(DeleteOutcome::AlreadyGone)) => {}
         Ok(Ok(DeleteOutcome::SkippedProcessing)) => {
             log::warn!("Soniox cleanup: unexpected 409 deleting file {file_id} ({url})")
@@ -673,7 +703,7 @@ async fn drain_stored_records(
                 // was undecodable (unknown refs possible).
                 if matches!(outcome, Ok(DeleteOutcome::Deleted)) {
                     result.deleted_transcriptions += 1;
-                    bump_record_freed_progress();
+                    bump_record_freed_progress(key);
                 }
                 if let Some(file_id) = item.known_file() {
                     if is_owned(key, "files", file_id)
@@ -692,7 +722,7 @@ async fn drain_stored_records(
                             // progress counts monotonic and truthful.
                             done_ops += 1;
                             total_ops += 1;
-                            bump_auto_cleanup_progress();
+                            bump_auto_cleanup_progress(key);
                         }
                     }
                 }
@@ -758,7 +788,7 @@ async fn drain_stored_records(
                     match delete_one(client, key, &url).await {
                         Ok(DeleteOutcome::Deleted) => {
                             result.deleted_files += 1;
-                            bump_auto_cleanup_progress();
+                            bump_auto_cleanup_progress(key);
                         }
                         Ok(DeleteOutcome::AlreadyGone) => {}
                         // Files have no processing state; a 409 here is
@@ -786,19 +816,53 @@ async fn drain_stored_records(
 
 // --- Storage-limit self-heal (plan 060) --------------------------------------
 //
-// When a dictation hits Soniox's storage wall, drain the stored records in
-// the background and retry once — for most users the cap is only reachable
-// via pre-044 backlog, so the first limit hit self-heals and the dictation
-// succeeds a few seconds later with no visible error. If the retry still
-// hits the wall, the flow returns LimitExceeded and the caller surfaces the
-// settings toast.
+// When a dictation hits Soniox's storage wall, retry cleanup of records
+// proven to belong to this app session, then retry dictation once. Unknown
+// historical records and ambiguous uploads stay untouched. If capacity is
+// still exhausted, surface the recovery route and provider-console guidance.
 
-static AUTO_CLEANUP_RUNNING: std::sync::atomic::AtomicBool =
-    std::sync::atomic::AtomicBool::new(false);
-static AUTO_CLEANUP_FILES_FREED: std::sync::atomic::AtomicU64 =
-    std::sync::atomic::AtomicU64::new(0);
-static AUTO_CLEANUP_RECORDS_FREED: std::sync::atomic::AtomicU64 =
-    std::sync::atomic::AtomicU64::new(0);
+#[derive(Default)]
+struct CleanupCoordinator {
+    running: std::sync::atomic::AtomicBool,
+    files_freed: std::sync::atomic::AtomicU64,
+    records_freed: std::sync::atomic::AtomicU64,
+}
+
+type CleanupCoordinators = std::collections::HashMap<[u8; 32], std::sync::Arc<CleanupCoordinator>>;
+static CLEANUP_COORDINATORS: std::sync::LazyLock<std::sync::Mutex<CleanupCoordinators>> =
+    std::sync::LazyLock::new(|| std::sync::Mutex::new(std::collections::HashMap::new()));
+
+fn cleanup_coordinator(key: &str) -> std::sync::Arc<CleanupCoordinator> {
+    CLEANUP_COORDINATORS
+        .lock()
+        .expect("cleanup coordinators poisoned")
+        .entry(ownership_scope(key))
+        .or_default()
+        .clone()
+}
+
+struct CleanupRunningGuard(std::sync::Arc<CleanupCoordinator>);
+
+impl CleanupRunningGuard {
+    fn acquire(coordinator: std::sync::Arc<CleanupCoordinator>) -> Option<Self> {
+        if coordinator
+            .running
+            .swap(true, std::sync::atomic::Ordering::SeqCst)
+        {
+            None
+        } else {
+            Some(Self(coordinator))
+        }
+    }
+}
+
+impl Drop for CleanupRunningGuard {
+    fn drop(&mut self) {
+        self.0
+            .running
+            .store(false, std::sync::atomic::Ordering::SeqCst);
+    }
+}
 
 /// Progress counters for the storage-wall self-heal. FILE deletions free
 /// retained-audio capacity (file-count/size walls gate the retried
@@ -806,21 +870,26 @@ static AUTO_CLEANUP_RECORDS_FREED: std::sync::atomic::AtomicU64 =
 /// the retried create). Soniox does not cascade, and old records may carry
 /// no file at all, so each kind is tracked separately and the retry waits
 /// on the kind its wall actually capped.
-fn bump_auto_cleanup_progress() {
-    AUTO_CLEANUP_FILES_FREED.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+fn bump_auto_cleanup_progress(key: &str) {
+    cleanup_coordinator(key)
+        .files_freed
+        .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
 }
 
-fn bump_record_freed_progress() {
-    AUTO_CLEANUP_RECORDS_FREED.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+fn bump_record_freed_progress(key: &str) {
+    cleanup_coordinator(key)
+        .records_freed
+        .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
 }
 
 /// Baselines for [`wait_for_cleanup_progress`]. MUST be captured before
 /// `spawn_auto_cleanup` so the drain's first deletion can never be missed.
-fn auto_cleanup_progress_baselines() -> (u64, u64) {
+fn auto_cleanup_progress_baselines(key: &str) -> (u64, u64) {
     use std::sync::atomic::Ordering;
+    let coordinator = cleanup_coordinator(key);
     (
-        AUTO_CLEANUP_FILES_FREED.load(Ordering::SeqCst),
-        AUTO_CLEANUP_RECORDS_FREED.load(Ordering::SeqCst),
+        coordinator.files_freed.load(Ordering::SeqCst),
+        coordinator.records_freed.load(Ordering::SeqCst),
     )
 }
 
@@ -828,11 +897,11 @@ fn auto_cleanup_progress_baselines() -> (u64, u64) {
 /// file immediately frees org storage capacity, so a blocked dictation only
 /// needs the FIRST relevant deletion before retrying.
 fn spawn_auto_cleanup(client: reqwest::Client, key: String) {
-    use std::sync::atomic::Ordering;
-    if AUTO_CLEANUP_RUNNING.swap(true, Ordering::SeqCst) {
+    let Some(guard) = CleanupRunningGuard::acquire(cleanup_coordinator(&key)) else {
         return;
-    }
+    };
     tokio::spawn(async move {
+        let _guard = guard;
         log::info!("Soniox storage limit hit: background cleanup started");
         match drain_stored_records(&client, &key, None).await {
             Ok(totals) => log::info!(
@@ -846,7 +915,6 @@ fn spawn_auto_cleanup(client: reqwest::Client, key: String) {
             ),
             Err(e) => log::warn!("Soniox background cleanup failed: {e}"),
         }
-        AUTO_CLEANUP_RUNNING.store(false, Ordering::SeqCst);
     });
 }
 
@@ -859,20 +927,22 @@ fn spawn_auto_cleanup(client: reqwest::Client, key: String) {
 /// elapses. Baselines must come from `auto_cleanup_progress_baselines`
 /// captured BEFORE the drain was spawned.
 async fn wait_for_cleanup_progress(
+    key: &str,
     file_storage: bool,
     files_baseline: u64,
     records_baseline: u64,
     budget: std::time::Duration,
 ) {
     use std::sync::atomic::Ordering;
+    let coordinator = cleanup_coordinator(key);
     let start = std::time::Instant::now();
     while start.elapsed() < budget {
         let freed = if file_storage {
-            AUTO_CLEANUP_FILES_FREED.load(Ordering::SeqCst) > files_baseline
+            coordinator.files_freed.load(Ordering::SeqCst) > files_baseline
         } else {
-            AUTO_CLEANUP_RECORDS_FREED.load(Ordering::SeqCst) > records_baseline
+            coordinator.records_freed.load(Ordering::SeqCst) > records_baseline
         };
-        if freed || !AUTO_CLEANUP_RUNNING.load(Ordering::SeqCst) {
+        if freed || !coordinator.running.load(Ordering::SeqCst) {
             return;
         }
         tokio::time::sleep(std::time::Duration::from_millis(200)).await;
@@ -995,9 +1065,10 @@ async fn transcribe_typed_with_autoheal(
             Err(common::SttError::LimitExceeded { file_storage }) if attempt < LIMIT_ATTEMPTS => {
                 // Baselines BEFORE spawn: the drain's first deletion must
                 // never be missed by the wait.
-                let (files_baseline, records_baseline) = auto_cleanup_progress_baselines();
+                let (files_baseline, records_baseline) = auto_cleanup_progress_baselines(key);
                 spawn_auto_cleanup(client.clone(), key.to_string());
                 wait_for_cleanup_progress(
+                    key,
                     file_storage,
                     files_baseline,
                     records_baseline,
@@ -1090,6 +1161,75 @@ async fn attempt_typed_once(
     result
 }
 
+/// Creating a job is non-idempotent: transport failures and 5xx may hide an
+/// accepted job. Protect the upload before sending and never retry ambiguous
+/// outcomes. Only a definitive throttle rejection gets one bounded retry.
+async fn create_transcription(
+    client: &reqwest::Client,
+    key: &str,
+    file_id: &str,
+    payload: &serde_json::Value,
+) -> Result<String, common::SttError> {
+    // Listing must not interleave with create/ownership registration.
+    let _create_gate = LISTING_GATE.read().await;
+    let owned_upload = is_owned(key, "files", file_id);
+    // Do not create additional jobs against an already uncertain upload.
+    if is_ambiguous_upload(key, file_id) {
+        return Err(common::SttError::BadResponse);
+    }
+    for attempt in 0..2 {
+        preserve_ambiguous_upload(key, file_id);
+        let response = client
+            .post(format!("{}/transcriptions", base_url()))
+            .bearer_auth(key)
+            .json(payload)
+            .send()
+            .await
+            .map_err(|err| common::classify_reqwest_err(&err))?;
+        let status = response.status();
+        if !status.is_success() {
+            // These statuses explicitly reject the request. A timeout,
+            // connection loss, 5xx, or other status cannot prove rejection.
+            let rejected = matches!(status.as_u16(), 400 | 401 | 403 | 404 | 422 | 429);
+            if rejected {
+                restore_unambiguous_upload(key, file_id, owned_upload);
+            }
+            let err = common::log_soniox_http_body(response, "Soniox create transcription").await;
+            if status == reqwest::StatusCode::TOO_MANY_REQUESTS
+                && matches!(err, common::SttError::RateLimited)
+                && attempt == 0
+            {
+                tokio::time::sleep(std::time::Duration::from_millis(400)).await;
+                continue;
+            }
+            return Err(err);
+        }
+        let json: serde_json::Value = response
+            .json()
+            .await
+            .map_err(|_| common::SttError::BadResponse)?;
+        let id = json
+            .get("id")
+            .and_then(|value| value.as_str())
+            .filter(|id| !id.is_empty())
+            .ok_or(common::SttError::BadResponse)?;
+        restore_unambiguous_upload(key, file_id, owned_upload);
+        attach_transcription(file_id, id, key);
+        return Ok(id.to_string());
+    }
+    unreachable!("create returns after at most two definitive throttle rejections")
+}
+
+fn restore_unambiguous_upload(key: &str, file_id: &str, owned_upload: bool) {
+    AMBIGUOUS_UPLOADS
+        .lock()
+        .expect("ambiguous uploads poisoned")
+        .remove(&(ownership_scope(key), file_id.to_string()));
+    if owned_upload {
+        remember_owned(key, "files", file_id);
+    }
+}
+
 /// Steps 2-4 of the typed flow: create transcription, poll to terminal
 /// status, extract text. App-free so tests can drive it against wiremock.
 /// Returns the transcription id (once created) alongside the outcome so the
@@ -1105,47 +1245,9 @@ async fn run_typed_transcription(
     // 2) Create transcription -> transcription_id
     let payload = build_create_payload(model, file_id, language, soniox_context, false);
 
-    let create_url = format!("{}/transcriptions", base_url());
-    // Second short gate window: the transcription becomes list-visible
-    // during this POST, so the create and the registry attach must complete
-    // atomically against any drain's listing + snapshot.
-    let transcription_id = {
-        let _create_gate = LISTING_GATE.read().await;
-        let create_resp = common::with_retry(|| {
-            let client = client.clone();
-            let create_url = create_url.clone();
-            let payload = payload.clone();
-            async move {
-                let resp = client
-                    .post(&create_url)
-                    .bearer_auth(key)
-                    .header("Content-Type", "application/json")
-                    .json(&payload)
-                    .send()
-                    .await
-                    .map_err(|e| common::classify_reqwest_err(&e))?;
-                if resp.status().is_success() {
-                    Ok(resp)
-                } else {
-                    Err(common::log_soniox_http_body(resp, "Soniox create transcription").await)
-                }
-            }
-        })
-        .await;
-        let create_resp = match create_resp {
-            Ok(resp) => resp,
-            Err(e) => return (None, Err(e)),
-        };
-        let create_json: serde_json::Value = match create_resp.json().await {
-            Ok(v) => v,
-            Err(_) => return (None, Err(common::SttError::BadResponse)),
-        };
-        let transcription_id = match create_json.get("id").and_then(|v| v.as_str()) {
-            Some(id) => id.to_string(),
-            None => return (None, Err(common::SttError::BadResponse)),
-        };
-        attach_transcription(file_id, &transcription_id, key);
-        transcription_id
+    let transcription_id = match create_transcription(client, key, file_id, &payload).await {
+        Ok(id) => id,
+        Err(err) => return (None, Err(err)),
     };
 
     let result = async {
@@ -1308,9 +1410,10 @@ async fn transcribe_diarized_with_autoheal(
             Ok(transcript) => return Ok(transcript),
             Err(common::SttError::LimitExceeded { file_storage }) if attempt < LIMIT_ATTEMPTS => {
                 // Baselines BEFORE spawn (mirrors the typed flow).
-                let (files_baseline, records_baseline) = auto_cleanup_progress_baselines();
+                let (files_baseline, records_baseline) = auto_cleanup_progress_baselines(key);
                 spawn_auto_cleanup(client.clone(), key.to_string());
                 wait_for_cleanup_progress(
+                    key,
                     file_storage,
                     files_baseline,
                     records_baseline,
@@ -1413,50 +1516,9 @@ async fn run_diarized_transcription(
     // 2) Create transcription with diarization -> transcription_id
     let payload = build_create_payload(model, file_id, language, soniox_context, true);
 
-    let create_url = format!("{}/transcriptions", base_url());
-    // Gate window 2 (mirrors the typed flow): create POST until the
-    // transcription id is attached to the registered upload.
-    let transcription_id = {
-        let _create_gate = LISTING_GATE.read().await;
-        let create_resp = common::with_retry(|| {
-            let client = client.clone();
-            let create_url = create_url.clone();
-            let payload = payload.clone();
-            async move {
-                let resp = client
-                    .post(&create_url)
-                    .bearer_auth(key)
-                    .header("Content-Type", "application/json")
-                    .json(&payload)
-                    .send()
-                    .await
-                    .map_err(|e| common::classify_reqwest_err(&e))?;
-                if resp.status().is_success() {
-                    Ok(resp)
-                } else {
-                    Err(common::log_soniox_http_body(
-                        resp,
-                        "Soniox create transcription (diarized)",
-                    )
-                    .await)
-                }
-            }
-        })
-        .await;
-        let create_resp = match create_resp {
-            Ok(resp) => resp,
-            Err(e) => return (None, Err(e)),
-        };
-        let create_json: serde_json::Value = match create_resp.json().await {
-            Ok(v) => v,
-            Err(_) => return (None, Err(common::SttError::BadResponse)),
-        };
-        let transcription_id = match create_json.get("id").and_then(|v| v.as_str()) {
-            Some(id) => id.to_string(),
-            None => return (None, Err(common::SttError::BadResponse)),
-        };
-        attach_transcription(file_id, &transcription_id, key);
-        transcription_id
+    let transcription_id = match create_transcription(client, key, file_id, &payload).await {
+        Ok(id) => id,
+        Err(err) => return (None, Err(err)),
     };
 
     let result = async {
@@ -1721,6 +1783,8 @@ mod tests {
             async fn install(server: &MockServer) -> Self {
                 let lock = FLOW_TEST_LOCK.lock().await;
                 OWNED_RECORDS.lock().unwrap().clear();
+                AMBIGUOUS_UPLOADS.lock().unwrap().clear();
+                CLEANUP_COORDINATORS.lock().unwrap().clear();
                 set_base_url_override(Some(format!("{}/v1", server.uri())));
                 Self { _lock: lock }
             }
@@ -1742,7 +1806,9 @@ mod tests {
 
         async fn wait_for_cleanup() {
             tokio::time::timeout(std::time::Duration::from_secs(5), async {
-                while AUTO_CLEANUP_RUNNING.load(std::sync::atomic::Ordering::SeqCst)
+                while cleanup_coordinator("k")
+                    .running
+                    .load(std::sync::atomic::Ordering::SeqCst)
                     || !active_file_ids().is_empty()
                 {
                     tokio::time::sleep(std::time::Duration::from_millis(10)).await;
@@ -1750,6 +1816,480 @@ mod tests {
             })
             .await
             .expect("background cleanup did not finish");
+        }
+
+        #[tokio::test]
+        async fn ambiguous_create_transport_server_and_cancellation_never_retry_or_delete_upload() {
+            for diarized in [false, true] {
+                for failure in ["timeout", "server", "cancel"] {
+                    let server = MockServer::start().await;
+                    let _guard = BaseOverrideGuard::install(&server).await;
+                    Mock::given(method("POST"))
+                        .and(path("/v1/files"))
+                        .respond_with(
+                            ResponseTemplate::new(201)
+                                .set_body_json(serde_json::json!({"id":"uncertain-file"})),
+                        )
+                        .mount(&server)
+                        .await;
+                    let creates = std::sync::atomic::AtomicUsize::new(0);
+                    Mock::given(method("POST"))
+                        .and(path("/v1/transcriptions"))
+                        .respond_with(move |_: &wiremock::Request| {
+                            let attempt = creates.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                            if attempt > 0 {
+                                // A blind retry would receive a known ID, hiding
+                                // the first accepted job. No second POST is safe.
+                                return ResponseTemplate::new(201)
+                                    .set_body_json(serde_json::json!({"id":"retry-job"}));
+                            }
+                            if failure == "server" {
+                                ResponseTemplate::new(503)
+                            } else {
+                                ResponseTemplate::new(201)
+                                    .set_body_json(serde_json::json!({"id":"accepted-job"}))
+                                    .set_delay(std::time::Duration::from_secs(1))
+                            }
+                        })
+                        .expect(1)
+                        .mount(&server)
+                        .await;
+                    let client = reqwest::Client::builder()
+                        .timeout(std::time::Duration::from_millis(if failure == "timeout" {
+                            250
+                        } else {
+                            3000
+                        }))
+                        .build()
+                        .unwrap();
+                    let outcome = tokio::time::timeout(
+                        std::time::Duration::from_millis(if failure == "cancel" {
+                            250
+                        } else {
+                            3000
+                        }),
+                        async {
+                            if diarized {
+                                attempt_diarized_once(
+                                    &client,
+                                    "k",
+                                    "stt-async-v5",
+                                    Path::new("audio.wav"),
+                                    b"audio",
+                                    None,
+                                    None,
+                                )
+                                .await
+                                .map(|r| r.text)
+                            } else {
+                                attempt_typed_once(
+                                    &client,
+                                    "k",
+                                    "stt-async-v5",
+                                    Path::new("audio.wav"),
+                                    b"audio",
+                                    None,
+                                    None,
+                                )
+                                .await
+                            }
+                        },
+                    )
+                    .await;
+                    if failure == "cancel" {
+                        assert!(outcome.is_err());
+                    } else {
+                        let err = outcome.unwrap().unwrap_err();
+                        assert!(matches!(
+                            (failure, err),
+                            ("timeout", common::SttError::Timeout)
+                                | ("server", common::SttError::Server)
+                        ));
+                    }
+                    wait_for_cleanup().await;
+                    assert!(is_ambiguous_upload("k", "uncertain-file"));
+                    assert!(!is_owned("k", "files", "uncertain-file"));
+                    server.verify().await;
+                    assert!(server
+                        .received_requests()
+                        .await
+                        .unwrap()
+                        .iter()
+                        .all(|r| r.method.as_str() != "DELETE"));
+                    Mock::given(method("GET"))
+                        .and(path("/v1/transcriptions"))
+                        .respond_with(
+                            ResponseTemplate::new(200)
+                                .set_body_json(serde_json::json!({"transcriptions":[]})),
+                        )
+                        .mount(&server)
+                        .await;
+                    Mock::given(method("GET"))
+                        .and(path("/v1/files"))
+                        .respond_with(
+                            ResponseTemplate::new(200).set_body_json(
+                                serde_json::json!({"files":[{"id":"uncertain-file"}]}),
+                            ),
+                        )
+                        .mount(&server)
+                        .await;
+                    let cleanup = drain_stored_records(&client, "k", None).await.unwrap();
+                    assert_eq!(cleanup.deleted_files, 0);
+                    assert!(server
+                        .received_requests()
+                        .await
+                        .unwrap()
+                        .iter()
+                        .all(|r| r.method.as_str() != "DELETE"));
+                }
+            }
+        }
+
+        #[tokio::test]
+        async fn definitive_create_auth_and_quota_rejections_still_clean_orphans_in_both_flows() {
+            for diarized in [false, true] {
+                for status in [401, 429] {
+                    let server = MockServer::start().await;
+                    let _guard = BaseOverrideGuard::install(&server).await;
+                    Mock::given(method("POST"))
+                        .and(path("/v1/files"))
+                        .respond_with(
+                            ResponseTemplate::new(201)
+                                .set_body_json(serde_json::json!({"id":"rejected-file"})),
+                        )
+                        .mount(&server)
+                        .await;
+                    Mock::given(method("POST"))
+                        .and(path("/v1/transcriptions"))
+                        .respond_with(
+                            ResponseTemplate::new(status).set_body_json(limit_exceeded_body()),
+                        )
+                        .expect(1)
+                        .mount(&server)
+                        .await;
+                    Mock::given(method("DELETE"))
+                        .and(path("/v1/files/rejected-file"))
+                        .respond_with(ResponseTemplate::new(204))
+                        .expect(1)
+                        .mount(&server)
+                        .await;
+                    let client = common::http_client();
+                    let result = if diarized {
+                        attempt_diarized_once(
+                            &client,
+                            "k",
+                            "stt-async-v5",
+                            Path::new("audio.wav"),
+                            b"audio",
+                            None,
+                            None,
+                        )
+                        .await
+                        .map(|r| r.text)
+                    } else {
+                        attempt_typed_once(
+                            &client,
+                            "k",
+                            "stt-async-v5",
+                            Path::new("audio.wav"),
+                            b"audio",
+                            None,
+                            None,
+                        )
+                        .await
+                    };
+                    assert!(matches!(
+                        (status, result),
+                        (401, Err(common::SttError::Auth))
+                            | (429, Err(common::SttError::LimitExceeded { .. }))
+                    ));
+                    wait_for_cleanup().await;
+                    assert!(!is_ambiguous_upload("k", "rejected-file"));
+                    server.verify().await;
+                }
+            }
+        }
+
+        #[tokio::test]
+        async fn definitive_create_throttle_retries_once_without_losing_cleanup_ownership() {
+            let server = MockServer::start().await;
+            let _guard = BaseOverrideGuard::install(&server).await;
+            let creates = std::sync::atomic::AtomicUsize::new(0);
+            Mock::given(method("POST")).and(path("/v1/transcriptions"))
+                .respond_with(move |_: &wiremock::Request| {
+                    if creates.fetch_add(1, std::sync::atomic::Ordering::SeqCst) == 0 {
+                        ResponseTemplate::new(429).set_body_json(serde_json::json!({
+                            "error_type":"limit_exceeded", "message":"Requests per minute limit exceeded"
+                        }))
+                    } else {
+                        ResponseTemplate::new(201).set_body_json(serde_json::json!({"id":"accepted"}))
+                    }
+                }).expect(2).mount(&server).await;
+            let owner = ActiveJobGuard::register("throttled-file", "k");
+            let payload = build_create_payload("stt-async-v5", "throttled-file", None, None, false);
+            let id = create_transcription(&common::http_client(), "k", "throttled-file", &payload)
+                .await
+                .unwrap();
+            assert_eq!(id, "accepted");
+            assert!(!is_ambiguous_upload("k", "throttled-file"));
+            assert!(is_owned("k", "files", "throttled-file"));
+            assert!(is_owned("k", "transcriptions", "accepted"));
+            drop(owner);
+            server.verify().await;
+        }
+
+        #[tokio::test]
+        async fn accepted_create_without_usable_id_preserves_upload_in_both_flows_and_later_drains()
+        {
+            for diarized in [false, true] {
+                for body in ["not-json", r#"{"status":"queued"}"#, r#"{"id":""}"#] {
+                    let server = MockServer::start().await;
+                    let _guard = BaseOverrideGuard::install(&server).await;
+                    Mock::given(method("POST"))
+                        .and(path("/v1/files"))
+                        .respond_with(
+                            ResponseTemplate::new(201)
+                                .set_body_json(serde_json::json!({"id":"ambiguous-file"})),
+                        )
+                        .mount(&server)
+                        .await;
+                    Mock::given(method("POST"))
+                        .and(path("/v1/transcriptions"))
+                        .respond_with(ResponseTemplate::new(201).set_body_string(body))
+                        .mount(&server)
+                        .await;
+                    let client = common::http_client();
+                    let result = if diarized {
+                        attempt_diarized_once(
+                            &client,
+                            "k",
+                            "stt-async-v5",
+                            Path::new("audio.wav"),
+                            b"audio",
+                            None,
+                            None,
+                        )
+                        .await
+                        .map(|r| r.text)
+                    } else {
+                        attempt_typed_once(
+                            &client,
+                            "k",
+                            "stt-async-v5",
+                            Path::new("audio.wav"),
+                            b"audio",
+                            None,
+                            None,
+                        )
+                        .await
+                    };
+                    assert!(matches!(result, Err(common::SttError::BadResponse)));
+                    wait_for_cleanup().await;
+                    assert!(is_ambiguous_upload("k", "ambiguous-file"));
+                    assert!(!is_ambiguous_upload("other-key", "ambiguous-file"));
+                    assert!(!is_owned("k", "files", "ambiguous-file"));
+                    assert!(server
+                        .received_requests()
+                        .await
+                        .unwrap()
+                        .iter()
+                        .all(|r| r.method.as_str() != "DELETE"));
+                    // Missing job, complete unknown job, and incomplete metadata
+                    // must all preserve the upload after its active guard ends.
+                    for records in [
+                        serde_json::json!([]),
+                        serde_json::json!([
+                            {"id":"accepted-server-job", "file_id":"ambiguous-file"}
+                        ]),
+                        serde_json::json!([{"id":"accepted-server-job"}]),
+                    ] {
+                        server.reset().await;
+                        Mock::given(method("GET"))
+                            .and(path("/v1/transcriptions"))
+                            .respond_with(
+                                ResponseTemplate::new(200)
+                                    .set_body_json(serde_json::json!({"transcriptions":records})),
+                            )
+                            .mount(&server)
+                            .await;
+                        Mock::given(method("GET"))
+                            .and(path("/v1/files"))
+                            .respond_with(ResponseTemplate::new(200).set_body_json(
+                                serde_json::json!({"files":[{"id":"ambiguous-file"}]}),
+                            ))
+                            .mount(&server)
+                            .await;
+                        let cleanup = drain_stored_records(&client, "k", None).await.unwrap();
+                        assert_eq!(cleanup.deleted_files, 0);
+                        assert_eq!(cleanup.deleted_transcriptions, 0);
+                        assert!(server
+                            .received_requests()
+                            .await
+                            .unwrap()
+                            .iter()
+                            .all(|r| r.method.as_str() != "DELETE"));
+                    }
+                }
+            }
+        }
+
+        #[tokio::test]
+        async fn overlapping_keys_start_independent_drains_and_only_own_progress_wakes_waiters() {
+            use std::sync::atomic::Ordering;
+            let server = MockServer::start().await;
+            let _guard = BaseOverrideGuard::install(&server).await;
+            let client = common::http_client();
+            for (key, tid, delay) in [("old-key", "old-job", 300), ("new-key", "new-job", 1500)] {
+                remember_owned(key, "transcriptions", tid);
+                Mock::given(method("GET"))
+                    .and(path("/v1/transcriptions"))
+                    .and(wiremock::matchers::header(
+                        "authorization",
+                        format!("Bearer {key}"),
+                    ))
+                    .respond_with(ResponseTemplate::new(200).set_body_json(
+                        serde_json::json!({"transcriptions":[{"id":tid,"file_id":null}]}),
+                    ))
+                    .mount(&server)
+                    .await;
+                Mock::given(method("DELETE"))
+                    .and(path(format!("/v1/transcriptions/{tid}")))
+                    .and(wiremock::matchers::header(
+                        "authorization",
+                        format!("Bearer {key}"),
+                    ))
+                    .respond_with(
+                        ResponseTemplate::new(204)
+                            .set_delay(std::time::Duration::from_millis(delay)),
+                    )
+                    .expect(1)
+                    .mount(&server)
+                    .await;
+            }
+            Mock::given(method("GET"))
+                .and(path("/v1/files"))
+                .respond_with(
+                    ResponseTemplate::new(200).set_body_json(serde_json::json!({"files":[]})),
+                )
+                .mount(&server)
+                .await;
+            let (new_files, new_records) = auto_cleanup_progress_baselines("new-key");
+            spawn_auto_cleanup(client.clone(), "old-key".to_string());
+            spawn_auto_cleanup(client.clone(), "new-key".to_string());
+            // A duplicate within one key is suppressed, not the other key.
+            spawn_auto_cleanup(client, "new-key".to_string());
+            assert!(cleanup_coordinator("old-key")
+                .running
+                .load(Ordering::SeqCst));
+            assert!(cleanup_coordinator("new-key")
+                .running
+                .load(Ordering::SeqCst));
+            assert!(
+                tokio::time::timeout(
+                    std::time::Duration::from_millis(800),
+                    wait_for_cleanup_progress(
+                        "new-key",
+                        false,
+                        new_files,
+                        new_records,
+                        std::time::Duration::from_secs(4)
+                    )
+                )
+                .await
+                .is_err(),
+                "old key completion or freed capacity must not wake new key"
+            );
+            assert!(
+                cleanup_coordinator("old-key")
+                    .records_freed
+                    .load(Ordering::SeqCst)
+                    > 0
+            );
+            assert_eq!(
+                auto_cleanup_progress_baselines("new-key"),
+                (new_files, new_records)
+            );
+            wait_for_cleanup_progress(
+                "new-key",
+                false,
+                new_files,
+                new_records,
+                std::time::Duration::from_secs(4),
+            )
+            .await;
+            assert_eq!(
+                auto_cleanup_progress_baselines("new-key"),
+                (new_files, new_records + 1)
+            );
+            tokio::time::timeout(std::time::Duration::from_secs(2), async {
+                while cleanup_coordinator("new-key")
+                    .running
+                    .load(Ordering::SeqCst)
+                {
+                    tokio::task::yield_now().await;
+                }
+            })
+            .await
+            .unwrap();
+            server.verify().await;
+        }
+
+        #[tokio::test]
+        async fn file_waiter_requires_same_scope_file_capacity() {
+            let server = MockServer::start().await;
+            let _guard = BaseOverrideGuard::install(&server).await;
+            let (files, records) = auto_cleanup_progress_baselines("new-key");
+            let _running = CleanupRunningGuard::acquire(cleanup_coordinator("new-key")).unwrap();
+            bump_auto_cleanup_progress("old-key");
+            bump_record_freed_progress("new-key");
+            assert!(tokio::time::timeout(
+                std::time::Duration::from_millis(300),
+                wait_for_cleanup_progress(
+                    "new-key",
+                    true,
+                    files,
+                    records,
+                    std::time::Duration::from_secs(2)
+                )
+            )
+            .await
+            .is_err());
+            bump_auto_cleanup_progress("new-key");
+            tokio::time::timeout(
+                std::time::Duration::from_millis(100),
+                wait_for_cleanup_progress(
+                    "new-key",
+                    true,
+                    files,
+                    records,
+                    std::time::Duration::from_secs(2),
+                ),
+            )
+            .await
+            .unwrap();
+        }
+
+        #[tokio::test]
+        async fn cleanup_guard_resets_on_cancellation_and_panic() {
+            use std::sync::atomic::Ordering;
+            let server = MockServer::start().await;
+            let _guard = BaseOverrideGuard::install(&server).await;
+            let coordinator = cleanup_coordinator("k");
+            let guard = CleanupRunningGuard::acquire(coordinator.clone()).unwrap();
+            let task = tokio::spawn(async move {
+                let _guard = guard;
+                std::future::pending::<()>().await;
+            });
+            task.abort();
+            assert!(task.await.unwrap_err().is_cancelled());
+            assert!(!coordinator.running.load(Ordering::SeqCst));
+            let guard = CleanupRunningGuard::acquire(coordinator.clone()).unwrap();
+            let task = tokio::spawn(async move {
+                let _guard = guard;
+                panic!("test cleanup panic");
+            });
+            assert!(task.await.unwrap_err().is_panic());
+            assert!(!coordinator.running.load(Ordering::SeqCst));
         }
 
         #[tokio::test]
@@ -3184,19 +3724,25 @@ mod tests {
                 None,
             )
             .await;
-            let resumed_before_drain_finished =
-                AUTO_CLEANUP_RUNNING.load(std::sync::atomic::Ordering::SeqCst);
+            let resumed_before_drain_finished = cleanup_coordinator("k")
+                .running
+                .load(std::sync::atomic::Ordering::SeqCst);
             // Global-state hygiene: the background drain (spawned inside
             // the flow) must be awaited before the test ends, so its
             // statics/gate are quiet for sibling tests.
             for _ in 0..100 {
-                if !AUTO_CLEANUP_RUNNING.load(std::sync::atomic::Ordering::SeqCst) {
+                if !cleanup_coordinator("k")
+                    .running
+                    .load(std::sync::atomic::Ordering::SeqCst)
+                {
                     break;
                 }
                 tokio::time::sleep(std::time::Duration::from_millis(100)).await;
             }
             assert!(
-                !AUTO_CLEANUP_RUNNING.load(std::sync::atomic::Ordering::SeqCst),
+                !cleanup_coordinator("k")
+                    .running
+                    .load(std::sync::atomic::Ordering::SeqCst),
                 "background drain did not finish"
             );
             assert!(

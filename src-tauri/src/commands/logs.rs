@@ -238,15 +238,23 @@ pub fn redact_log_content(content: &str) -> String {
 
     let mut result = content.to_string();
 
-    // Key/value secret patterns. Keep the field name, redact the value.
+    // Quoted values close only at their matching, unescaped delimiter. Treat
+    // backslash + the next character as a pair so escaped quotes/backslashes
+    // in JSON or Rust Debug output cannot expose the remainder of a secret.
     let wrapped_secret_re = WRAPPED_SECRET_RE.get_or_init(|| {
         regex::Regex::new(
-            r#"(?i)([\"']?\b(?:api[_-]?key|apikey|secret[_-]?key|access[_-]?token|license[_-]?key|password|passwd)\b[\"']?\s*[:=]\s*(?:Some\(|String\()?['\"])[^'\"]+(['\"]\)?)"#,
+            r#"(?i)(["']?\b(?:api[_-]?key|apikey|secret[_-]?key|access[_-]?token|license[_-]?key|password|passwd)\b["']?\s*[:=]\s*(?:Some\(|String\()?)("(?:\\(?s:.)|[^"\\])*"|'(?:\\(?s:.)|[^'\\])*')(\)?)"#,
         )
         .unwrap()
     });
     result = wrapped_secret_re
-        .replace_all(&result, "$1[REDACTED]$2")
+        .replace_all(&result, |captures: &regex::Captures<'_>| {
+            let delimiter = &captures[2][..1];
+            format!(
+                "{}{delimiter}[REDACTED]{delimiter}{}",
+                &captures[1], &captures[3]
+            )
+        })
         .to_string();
 
     let unquoted_secret_re = UNQUOTED_SECRET_RE.get_or_init(|| {
