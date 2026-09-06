@@ -50,3 +50,13 @@ cancellation; unconditional `always()` can keep them alive. See the
 [workflow cancellation reference](https://docs.github.com/en/actions/reference/workflows-and-actions/workflow-cancellation).
 CI and Store checkouts also disable credential persistence before running
 repository code. Existing read-only workflow permissions remain intact.
+
+The first corrected manual run (34004045086) stopped native jobs when frontend
+preflight caught main's existing dialog-close test failure. The dialog had
+already unmounted, contradicting the test's assumption that it must remain
+mounted with data-closed. Applied the same test-only correction as PR #140:
+wait for the dialog to disappear and verify persisted selection by reopening.
+No product code is pulled into this CI change.
+
+Removed CI-only YAML edits from Store triggers: the Store workflow owns its
+preflight and does not consume ci.yml, so unrelated CI edits should stay cheap.
