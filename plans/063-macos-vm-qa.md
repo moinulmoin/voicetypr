@@ -35,7 +35,7 @@ fixtures; no customer data resets, provider deletion, support submissions or
 release publication as a side effect of QA. Keep release smoke limitations
 explicit in the final report.
 
-## Confirmed fixes — awaiting rebuilt VM verification
+## Confirmed fixes — rebuilt VM verification
 
 - Onboarding persisted OFF/OFF correctly, but published completion before the
   writes finished, so the main app opened a stale default-on dialog. Persist
@@ -61,3 +61,31 @@ diagnostic run contained prolonged silence and extra recognized words; a short
 controlled run also had a word-level recognition mismatch. Do not treat either
 as exact transcription-accuracy proof or infer a recorder defect without audio
 comparison. Both paths returned to Idle and saved History entries.
+
+Rebuilt candidate `9d5248ab` passed the three regressions in the guest: initial
+Accessibility denial produced an engine-start failure; the later permission
+recheck started the engine in the same process, and the physical VNC shortcut
+completed recording, transcription and TextEdit insertion. Both onboarding
+reporting choices were off, no duplicate dialog appeared, and persisted values
+remained false. Empty Overview showed zero activity without a busiest-day badge.
+
+All primary pages were inspected at the guest's 1024×768 logical display size:
+Overview, General, History, Upload, Sources (Local/Cloud/Remote), Recording,
+Polish, Shortcuts, Network sharing, CLI, License, Quick help, Report a problem.
+Local upload transcription, clipboard copy, transcript file save/readback,
+History empty search, CLI installation/status, loopback remote transcription,
+server shutdown and double-Escape cancellation passed. Cancellation returned to
+Idle and removed the canceled recording. No provider keys, license activation,
+report submission or host UI operations were used.
+
+The CLI page's copied agent prompt was also reproduced as invalid: it omitted
+the parser's required `--file` flag. Corrected the example and its existing copy
+assertion; the real guest CLI accepted the corrected syntax. The new package
+must be checked for that displayed/copied text before this QA pass closes.
+
+Recognition limits: the rebuilt controlled sentence and uploaded source both
+matched the synthetic fixture, but this is not general accuracy proof. A very
+short file was rejected by the existing 0.5-second engine minimum after
+preparation. A three-second zero-audio CLI input produced `you`; silence
+hallucination prevention is therefore not passed. No speculative speech gate
+was added, and physical short/soft-speech and end-of-capture checks remain open.
