@@ -5,6 +5,7 @@ on:
     branches: [main]
     paths:
       - '.github/workflows/store-msix.yml'
+      - '.github/workflows/ci.yml'
       - 'package.json'
       - 'pnpm-lock.yaml'
       - 'scripts/build-msix-store.ps1'
@@ -19,9 +20,44 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
 jobs:
+  preflight:
+    name: Frontend preflight
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v5
+        with:
+          node-version: '22.19.0'
+          package-manager-cache: false
+
+      - name: Setup pnpm
+        run: |
+          corepack enable
+          corepack prepare pnpm@10.13.1 --activate
+          pnpm --version
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Lint
+        run: pnpm lint
+
+      - name: TypeScript check
+        run: pnpm typecheck
+
+      - name: Run tests
+        run: pnpm exec vitest run src
+
   build-store-msix:
     name: Build Store MSIX
+    needs: preflight
     runs-on: windows-latest
     env:
       CARGO_TERM_COLOR: always

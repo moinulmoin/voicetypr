@@ -1,10 +1,20 @@
 name: CI
 
+# A manual dispatch validates the selected ref with the full matrix.
+
 on:
   push:
     branches: [main]
   pull_request:
     branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
 
 env:
   CARGO_TERM_COLOR: always
@@ -97,14 +107,18 @@ jobs:
         run: pnpm typecheck
 
       - name: Run tests
-        run: pnpm test
+        run: pnpm exec vitest run src
 
   # ===========================================
   # Build macOS (full build = catches all issues)
   # ===========================================
   build-macos:
-    needs: changes
-    if: always() && (needs.changes.result != 'success' || needs.changes.outputs.application_required != 'false')
+    needs: [changes, workflow, frontend]
+    if: >-
+      always() &&
+      needs.workflow.result == 'success' &&
+      needs.frontend.result == 'success' &&
+      (needs.changes.result != 'success' || needs.changes.outputs.application_required != 'false')
     strategy:
       matrix:
         include:
@@ -191,8 +205,12 @@ jobs:
   # Build Windows (CPU-safe app + Vulkan sidecar)
   # ===========================================
   build-windows:
-    needs: changes
-    if: always() && (needs.changes.result != 'success' || needs.changes.outputs.application_required != 'false')
+    needs: [changes, workflow, frontend]
+    if: >-
+      always() &&
+      needs.workflow.result == 'success' &&
+      needs.frontend.result == 'success' &&
+      (needs.changes.result != 'success' || needs.changes.outputs.application_required != 'false')
     runs-on: windows-2022
     env:
       # Keep Windows paths short to avoid MSBuild/FileTracker failures on deep dependency trees.

@@ -1,6 +1,6 @@
 # Plan 062 — CI gating and compute policy
 
-Status: IN PROGRESS — claimed Codex 2026-09-06.
+Status: IMPLEMENTED — local workflow validation passed; remote checks pending.
 Base: main `4f9e497d`. Separate from PR #140 product/runtime fixes.
 
 ## Observed waste
@@ -39,3 +39,5 @@ Run workflow helper contract tests, JavaScript syntax checks and actionlint.
 Use the PR's workflow checks and a manual CI run to verify the updated job graph;
 confirm native jobs queue only after successful cheap checks. No product
 hardware smoke is claimed by CI policy validation.
+
+Local validation: all 18 workflow-helper tests pass; pinned actionlint 1.7.7 passes.
