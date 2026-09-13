@@ -61,9 +61,12 @@ allowlisted.
   SHA, and is release-candidate validation, not a normal PR check; a preflight
   trust gate verifies that SHA is an ancestor of `origin/main` before the
   Windows packaging job runs, so only reviewed commits on main can be packaged.
-  Its `use_depot` input is likewise a routing control; `store-msix.yml` is not
-  in the runner allowlist, so it runs on GitHub-hosted `windows-2022` until the
-  allowlist is deliberately extended.
+  Its `use_depot` input is likewise a routing control, but ordering matters:
+  the default `use_depot=false` selects GitHub-hosted `windows-2022`; setting
+  `use_depot=true` before `store-msix.yml` joins the runner allowlist leaves
+  the job unassigned or denied, since Depot runners are granted only to
+  allowlisted workflows. Allowlist the workflow first, then `use_depot`
+  routes the package build to `depot-windows-2022-16`.
 
 Depot's own CI product was rejected because it is Linux-only; the GitHub App
 managed runners are the adopted path. The runner variables do not activate an

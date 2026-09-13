@@ -68,9 +68,12 @@ Remaining external rollout:
    commit, tag, publish, and GitHub release jobs stay off — before any
    `DEPOT_RELEASE_RUNNERS_ENABLED` is considered.
 3. Release allowlisting: `store-msix.yml` and `release.yml` are not in the
-   Default runner group's Selected workflows allowlist, so their
-   Depot-labeled jobs still resolve to GitHub-hosted runners. Extending the
-   allowlist is an explicit, separate decision.
+   Default runner group's Selected workflows allowlist. Keeping Store
+   `use_depot=false` and `DEPOT_RELEASE_RUNNERS_ENABLED` unset is what
+   selects GitHub-hosted runners — there is no automatic fallback. Enable in
+   order: first extend the allowlist with the intended immutable workflow
+   refs, then select Depot. If Depot is selected while the workflow is
+   disallowed, the job remains unassigned/denied.
 
 ## Workflow contract
 
@@ -106,9 +109,10 @@ Remaining external rollout:
   lane. Intel is a direct manual-only GitHub job; it is never Depot-eligible.
 - Store MSIX is manual-only and accepts only exact lowercase 40-character
   SHAs verified as ancestors of `origin/main` with full history before
-  packaging. Its Windows job can select the Depot label via input, but the
-  workflow is not in the runner allowlist, so it still runs on GitHub-hosted
-  Windows. Store MSIX is not an updater/release asset.
+  packaging. Its Windows job selects GitHub-hosted runners only while
+  `use_depot` stays false; selecting the Depot label before the workflow is
+  allowlisted leaves the job unassigned/denied, so allowlist extension must
+  precede any Store Depot use. Store MSIX is not an updater/release asset.
 - Release remains manual and keeps Intel on GitHub. `dry_run` builds signed
   and notarized artifacts while the version commit, tag, publish, and GitHub
   release jobs stay off. A distinct `DEPOT_RELEASE_RUNNERS_ENABLED=true` may
