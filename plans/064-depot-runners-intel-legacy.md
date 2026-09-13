@@ -31,6 +31,14 @@ Enabling Depot requires an explicit, external rollout after this code lands:
    Audit hard-coded repository URLs, GitHub App installations, branch settings,
    signing secrets, release permissions, updater redirects, and the website
    before transfer. Repository transfer is not part of this plan.
+   Pre-transfer audit: `ideaplexa/voicetypr` is available; the authenticated
+   user is an active organization admin; the public repository has no GitHub
+   Pages, repository webhooks, rulesets, or environments. Nine Actions secrets
+   remain associated by GitHub's transfer contract. Historical changelog links
+   may rely on redirects; runtime updater endpoints, Help links, badges, clone
+   URLs, and manual release scripts are prepared for the canonical new owner.
+   Never recreate `moinulmoin/voicetypr`, which would permanently remove the
+   redirect.
 2. Redeem/activate the Depot offer and choose a plan. Current Depot docs place
    macOS runners on Startup/Business. The published PostHog offer covers plan and
    usage for one year, then charges the card after credits are exhausted.

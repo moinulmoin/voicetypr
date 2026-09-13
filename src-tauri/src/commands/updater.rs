@@ -6,9 +6,9 @@ use tauri_plugin_updater::{Updater, UpdaterExt};
 use crate::{commands::distribution, release_channel};
 
 pub const STABLE_UPDATE_ENDPOINT: &str =
-    "https://github.com/moinulmoin/voicetypr/releases/latest/download/latest.json";
+    "https://github.com/ideaplexa/voicetypr/releases/latest/download/latest.json";
 pub const BETA_UPDATE_ENDPOINT: &str =
-    "https://github.com/moinulmoin/voicetypr/releases/download/beta/latest.json";
+    "https://github.com/ideaplexa/voicetypr/releases/download/beta/latest.json";
 
 static UPDATE_OPERATION: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 pub const UPDATE_CHANNEL_EXPLICIT_KEY: &str = "update_channel_explicit";

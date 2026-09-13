@@ -629,12 +629,12 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
                     let _ = app.emit("tray-check-updates", ());
                 } else if id == HELP_REPORT_ISSUE_ID {
                     let _ = app.opener().open_url(
-                        "https://github.com/moinulmoin/voicetypr/issues",
+                        "https://github.com/ideaplexa/voicetypr/issues",
                         None::<&str>,
                     );
                 } else if id == HELP_RELEASE_NOTES_ID {
                     let _ = app.opener().open_url(
-                        "https://github.com/moinulmoin/voicetypr/releases",
+                        "https://github.com/ideaplexa/voicetypr/releases",
                         None::<&str>,
                     );
                 }
