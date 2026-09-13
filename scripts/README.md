@@ -32,8 +32,10 @@ and the Depot GitHub App is configured:
 - A manual CI dispatch can set `use_depot=true` for the initial ARM
   macOS/Windows pilot. After that succeeds, `DEPOT_RUNNERS_ENABLED=true` routes
   trusted Apple Silicon macOS and Windows x64 CI jobs to `depot-macos-14` and
-  `depot-windows-2022`. Missing/false keeps GitHub-hosted runners; fork PRs never
-  consume Depot runners.
+  `depot-windows-2022-16`. The 16-core, 64 GB tier is deliberate: Depot's
+  unsuffixed Windows label is only two-core/8 GB, while GitHub's free public
+  runner is already four-core/16 GB. Missing/false keeps GitHub-hosted runners;
+  fork PRs never consume Depot runners.
 - `DEPOT_RELEASE_RUNNERS_ENABLED=true` separately routes only the ARM macOS and
   Windows release build jobs. Keep it unset until a signed `dry_run` proves the
   complete artifact contract. Intel stays on `macos-15-intel`.

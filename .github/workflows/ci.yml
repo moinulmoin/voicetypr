@@ -176,13 +176,18 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Select Swift 6 toolchain (Parakeet sidecar needs Xcode 16+)
+      - name: Select Swift 6 toolchain and configure Clang runtime
         run: |
           xcode=$(ls -d /Applications/Xcode_1[6-9]*.app /Applications/Xcode_[2-9][0-9]*.app 2>/dev/null | sort -V | tail -1)
           if [ -z "$xcode" ]; then echo "No Xcode >=16 (Swift 6) found on runner" >&2; exit 1; fi
           echo "Selecting $xcode"
           sudo xcode-select -s "$xcode"
           swift --version
+          # Xcode 16.4 emits availability checks in whisper.cpp's Metal objects,
+          # but Rust's final link does not automatically include compiler-rt.
+          clang_runtime=$(xcrun --sdk macosx clang -print-libgcc-file-name)
+          if [ ! -f "$clang_runtime" ]; then echo "Clang runtime not found: $clang_runtime" >&2; exit 1; fi
+          echo "RUSTFLAGS=${RUSTFLAGS:+$RUSTFLAGS }-C link-arg=$clang_runtime" >> "$GITHUB_ENV"
 
       - name: Capture Swift toolchain cache key
         id: swift-toolchain
@@ -264,7 +269,7 @@ jobs:
       (github.event_name == 'workflow_dispatch' && inputs.use_depot)) &&
       (github.event_name != 'pull_request' ||
       github.event.pull_request.head.repo.full_name == github.repository) &&
-      'depot-windows-2022' ||
+      'depot-windows-2022-16' ||
       'windows-2022'
       }}
     timeout-minutes: 120

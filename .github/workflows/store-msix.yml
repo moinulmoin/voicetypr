@@ -70,7 +70,7 @@ jobs:
   build-store-msix:
     name: Build Store MSIX
     needs: preflight
-    runs-on: ${{ inputs.use_depot && 'depot-windows-2022' || 'windows-2022' }}
+    runs-on: ${{ inputs.use_depot && 'depot-windows-2022-16' || 'windows-2022' }}
     timeout-minutes: 90
     env:
       CARGO_TERM_COLOR: always

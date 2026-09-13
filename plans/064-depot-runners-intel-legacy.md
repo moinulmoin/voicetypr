@@ -41,6 +41,10 @@ Transfer audit:
 - Historical changelog links may rely on redirects. Runtime updater endpoints,
   Help links, badges, clone URLs, and manual release scripts use the canonical
   new owner on PR #140 and must land before the next release.
+- Depot's Default runner group now allows public repositories, which is required
+  for this public repository. Fork PRs still resolve to GitHub-hosted runners,
+  use a read-only token and do not retain checkout credentials; the generic
+  self-hosted-runner warning does not require an additional approval policy.
 
 Remaining external rollout:
 
@@ -50,8 +54,9 @@ Remaining external rollout:
 2. Confirm the Depot offer/plan and configure spend caps or alerts. Current
    Depot docs place macOS runners on Startup/Business, and the published PostHog
    offer charges the card after credits expire.
-3. Run a separately approved non-release CI pilot with `use_depot=true`; only
-   after it succeeds should `DEPOT_RUNNERS_ENABLED=true` route trusted routine
+3. Repeat the non-release CI pilot after publishing the Xcode 16.4 compiler
+   runtime link and the 16-core Windows runner correction. Only after both
+   native jobs succeed should `DEPOT_RUNNERS_ENABLED=true` route trusted routine
    native jobs to Depot.
 4. Keep `DEPOT_RELEASE_RUNNERS_ENABLED` unset until an explicit signed dry-run
    release proves signing, notarization, artifacts, updater signatures and
@@ -71,8 +76,10 @@ Remaining external rollout:
   cancel. Native jobs start only after those prerequisites pass, only for native
   or unknown build inputs, and not while the PR is draft.
 - A manual CI dispatch may set `use_depot=true` for a controlled runner pilot.
-  Once `DEPOT_RUNNERS_ENABLED=true`, trusted same-repository/manual/main ARM Mac
-  and Windows jobs use `depot-macos-14` and `depot-windows-2022`; fork PRs stay
+- Once `DEPOT_RUNNERS_ENABLED=true`, trusted same-repository/manual/main ARM Mac
+  and Windows jobs use `depot-macos-14` and `depot-windows-2022-16`. The 16-core,
+  64 GB Windows tier is intentional: the unsuffixed Depot label is only
+  two-core/8 GB and was slower than GitHub's free public runner. Fork PRs stay
   on GitHub-hosted runners so untrusted contributors cannot consume Depot credit.
 - Automatic CI includes Apple Silicon and Windows x64 only. A manual CI dispatch
   exposes `include_intel`; true adds the existing `macos-15-intel` lane.
@@ -103,19 +110,31 @@ not simply delete `darwin-x86_64` from the shared updater manifest.
 - `pnpm build` passes and now runs in the cheap Ubuntu prerequisite, so
   frontend-only changes cannot skip production bundle validation.
 - Independent workflow review is clear after adding that production build.
-- After the provider and spending checks, repeat the non-release ARM/Windows
-  pilot and compare elapsed time, queue time, cache hit rate and billed usage.
-  Only then consider the separate release runner flag.
+- Repeat the non-release ARM/Windows pilot with `depot-windows-2022-16` and
+  compare elapsed time, queue time, cache hit rate and billed usage. Only then
+  consider the routine CI flag or separate release runner flag.
 
-Local result: 19 workflow helper tests passed; Node syntax, actionlint,
-production frontend build and `git diff --check` passed. The canonical URL
-patch passes shell/JSON/Rust formatting checks and the focused updater-channel
-test. PowerShell syntax was not executed because `pwsh` is unavailable locally.
+Local result: 19 workflow helper tests and pinned actionlint 1.7.7 pass after
+the pilot corrections. An explicit compiler-rt link completed
+`cargo test --no-run` locally, including both application test executables.
+The production frontend build and canonical URL checks passed before the pilot.
+PowerShell syntax was not executed because `pwsh` is unavailable locally.
 
 The first manual Depot pilot was started before a separate point-of-spend
 confirmation and canceled. Workflow/frontend prerequisites passed; its ARM and
 Windows native jobs started and were canceled, so no native result is accepted.
-Some metered usage may have occurred. Routine/release Depot variables remain
+Some metered usage may have occurred.
+
+Authorized pilot `34768887709` initially queued because the runner group did not
+allow public repositories. After that prerequisite was enabled, both Depot jobs
+started. ARM macOS failed during Rust test linking: Depot selected Xcode 16.4,
+whose whisper.cpp Metal objects reference `___isPlatformVersionAtLeast`, while
+Rust's final link omitted `libclang_rt.osx.a`. CI and both macOS release lanes
+now discover and link Xcode's compiler runtime. Windows used the unsuffixed
+two-core/8 GB label, reached 100% CPU and 98% memory, and was canceled by the
+user after 57m50s; its compile-only Rust tests passed, but the release build did
+not complete. CI, Store and release routing now use the deliberate 16-core,
+64 GB `depot-windows-2022-16` tier. Routine/release Depot variables remain
 unset; Store and release workflows did not run.
 
 Remote GitHub fallback proof on PR #140 heads `27afadd1` and `c2af36ab`:
