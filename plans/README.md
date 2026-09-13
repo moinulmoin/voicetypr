@@ -80,14 +80,14 @@ current-revision merge gate. See `062-ci-gating.md`.
 ROLLOUT IN PROGRESS — CI policy and canonical owner URLs are published on PR #140;
 the repository is now `ideaplexa/voicetypr`. GitHub Actions remains the
 control plane; Intel is a manual-only GitHub job and Store packaging is an
-immutable manual candidate check. The fork-safe secure pilot (run
-`34778214659` at head `2259e34e149c9ea43ded178596c8416a76a97e5b`) passed
+immutable manual candidate check. The portable fork-safe pilot (run
+`34785226804` at head `e9a022fc94a4978fc41218b177af368389bc9cb7`) passed
 every scheduled job on the pinned `native-ci.yml`: workflow/front-end green,
-allowlisted Depot `depot-macos-14` in 8m19s and `depot-windows-2022-16` in
-17m11s on the expected Default runner group, Intel skipped. It supersedes the
-earlier compatibility pilot (which exposed the matrix/YAML admission bypass)
-and the lint-failed corrective preflight; full chronology lives in the plan
-file. Remaining gates: explicit approval before setting recurring
+allowlisted Depot `depot-macos-14` in 17m00s and `depot-windows-2022-16` in
+17m29s on the expected Default runner group, Intel skipped. The same head
+passed GitHub-hosted fallback after bundle-local optional compiler-runtime
+discovery closed the Xcode 16.2/16.4 difference; full chronology lives in the
+plan file. Remaining gates: explicit approval before setting recurring
 `DEPOT_RUNNERS_ENABLED=true`; a separate signed/notarized no-publish release
 dry run before any `DEPOT_RELEASE_RUNNERS_ENABLED`; Store and release
 workflows stay outside the runner allowlist. No merge or release occurred.

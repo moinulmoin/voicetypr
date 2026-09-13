@@ -1,11 +1,12 @@
 # Plan 064 — Depot runners and Intel legacy support
 
-Status: SECURE PILOT COMPLETE — repository transfer and canonical URL cutover
-landed on PR #140, and pilot `34778214659` proved the fork-safe admission
-design remotely. Routine and release Depot variables remain unset pending
-explicit routine-enablement approval, a signed no-publish release dry run,
-and release runner allowlisting. No release action is authorized here.
-Base: `2259e34e` (secure pilot head `2259e34e149c9ea43ded178596c8416a76a97e5b`).
+Status: PORTABLE SECURE PILOT COMPLETE — repository transfer and canonical URL
+cutover landed on PR #140, and current-head pilot `34785226804` proved the
+fork-safe admission design on Depot after the GitHub-hosted fallback passed.
+Routine and release Depot variables remain unset pending explicit
+routine-enablement approval, a signed no-publish release dry run, and release
+runner allowlisting. No release action is authorized here.
+Base: `e9a022fc` (portable pilot head `e9a022fc94a4978fc41218b177af368389bc9cb7`).
 Depends on: 042 (cache correctness), 062 (cheap-check gates and cancellation).
 
 ## Decision
@@ -89,7 +90,7 @@ Remaining external rollout:
   cancel. Native jobs start only after those prerequisites pass, only for native
   or unknown build inputs, and not while the PR is draft.
 - CI calls the reusable `native-ci.yml` pinned to immutable SHA
-  `a7cb868f0b7718633816aeab1bc454759d2cbd44`; only that exact workflow is in
+  `00e8006fb7efd9f7c6a8ffb2bcc9c30c8a298c52`; only that exact workflow is in
   the Default runner group's Selected workflows allowlist. Every
   Depot-eligible job is defined directly in the trusted callee with fixed
   labels and admission logic; callers cannot inject a runner label, matrix,
@@ -135,18 +136,18 @@ not simply delete `darwin-x86_64` from the shared updater manifest.
 
 ## Verification
 
-- Workflow helper tests cover default ARM-only/manual Intel matrices and
-  frontend-only/native fail-closed classification.
+- Workflow helper tests cover documentation/frontend/native fail-closed
+  classification and release version/update-manifest contracts.
 - Pinned actionlint 1.7.7 validates every GitHub workflow, including missing
   variable fallbacks and runner expressions.
 - `pnpm build` passes and now runs in the cheap Ubuntu prerequisite, so
   frontend-only changes cannot skip production bundle validation.
 - Independent workflow review is clear after adding that production build; a
   later review found the admission bypass recorded below, now closed.
-- Secure pilot `34778214659` at head
-  `2259e34e149c9ea43ded178596c8416a76a97e5b` passed every scheduled job:
+- Portable secure pilot `34785226804` at head
+  `e9a022fc94a4978fc41218b177af368389bc9cb7` passed every scheduled job:
   workflow/front-end passed, the allowlisted Depot macOS lane passed in
-  8m19s, and Windows-16 passed in 17m11s; Intel was skipped. Depot labels and
+  17m00s, and Windows-16 passed in 17m29s; Intel was skipped. Depot labels and
   runner names were observed on the expected Default group.
 
 Local result: 18 workflow helper tests and pinned actionlint 1.7.7 pass after
@@ -194,6 +195,20 @@ jobs: workflow/front-end passed, the allowlisted Depot macOS lane passed in
 runner names were observed on the expected Default group. No Intel, Store,
 release, signing, or deployment workload ran in this pilot, and
 routine/release Depot variables remain unset.
+
+The first automatic GitHub-hosted fallback on the pinned callee
+(`34778145500`) exposed a cross-Xcode regression: Xcode 16.2 reported a
+nonexistent compiler-runtime path even though that older toolchain neither
+ships nor requires `libclang_rt.osx.a`. Compiler-runtime discovery is now
+bundle-local and optional: Xcode 16.4 links the real archive, while older
+toolchains continue without it. Current-head fallback run `34780572224`
+passed all scheduled jobs at `e9a022fc`; GitHub-hosted macOS passed in 35m29s,
+Windows passed in 22m35s, and Intel was skipped.
+
+Final current-head Depot pilot `34785226804` then passed the same pinned
+portable workflow: macOS passed in 17m00s, Windows-16 passed in 17m29s, and
+Intel was skipped. No Intel, Store, release, signing, or deployment workload
+ran; routine/release Depot variables remain unset.
 
 Remote GitHub fallback proof on PR #140 heads `27afadd1` and `c2af36ab`:
 Store and Intel stayed off and all five scheduled jobs passed. The first run

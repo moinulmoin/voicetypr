@@ -28,7 +28,7 @@ not regenerate `CHANGELOG.md`; released sections are curated by hand on main.
 GitHub Actions remains the workflow and release control plane. Admission to
 Depot's managed runners is enforced outside the workflow YAML: `ci.yml` calls
 the reusable `native-ci.yml` pinned to the immutable SHA
-`a7cb868f0b7718633816aeab1bc454759d2cbd44`, and only that exact workflow is
+`00e8006fb7efd9f7c6a8ffb2bcc9c30c8a298c52`, and only that exact workflow is
 allowlisted in the Default runner group's Selected workflows, with
 public-repository runner access enabled. Every Depot-eligible job is defined
 directly in that trusted callee with fixed macOS/Windows labels and timeouts
@@ -44,9 +44,9 @@ allowlisted.
   routing input on the same allowlist gate. The 16-core, 64 GB Windows tier is
   deliberate: Depot's unsuffixed Windows label is only two-core/8 GB, while
   GitHub's free public runner is already four-core/16 GB. The flag is still
-  unset pending explicit approval; the fork-safe secure pilot (run
-  `34778214659`) already passed with Depot macOS in 8m19s and Windows-16 in
-  17m11s.
+  unset pending explicit approval; the portable current-head pilot (run
+  `34785226804`) passed with Depot macOS in 17m00s and Windows-16 in 17m29s;
+  the same head also passed GitHub-hosted fallback.
 - Releases: `DEPOT_RELEASE_RUNNERS_ENABLED=true` separately routes only the
   ARM macOS and Windows release build jobs. Keep it unset until a signed,
   notarized `dry_run` — which builds artifacts while publish/tag/release stay
