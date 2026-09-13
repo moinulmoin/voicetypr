@@ -79,14 +79,19 @@ current-revision merge gate. See `062-ci-gating.md`.
 
 ROLLOUT IN PROGRESS — CI policy and canonical owner URLs are published on PR #140;
 the repository is now `ideaplexa/voicetypr`. GitHub Actions remains the
-control plane; Intel is manual/release-only and Store packaging is an immutable
-manual candidate check. The authorized Depot pilot reached both native runners
-after public-repository access was enabled, then exposed an Xcode 16.4
-compiler-runtime link omission and an undersized two-core Windows label. Local
-corrections explicitly link compiler-rt and use 16-core Windows runners; 19
-workflow tests, actionlint and a full local Rust test-binary link pass. Depot
-spend checks, a successful repeat pilot, routine runner enablement and a signed
-release dry run remain. See `064-depot-runners-intel-legacy.md`.
+control plane; Intel is a manual-only GitHub job and Store packaging is an
+immutable manual candidate check. The fork-safe secure pilot (run
+`34778214659` at head `2259e34e149c9ea43ded178596c8416a76a97e5b`) passed
+every scheduled job on the pinned `native-ci.yml`: workflow/front-end green,
+allowlisted Depot `depot-macos-14` in 8m19s and `depot-windows-2022-16` in
+17m11s on the expected Default runner group, Intel skipped. It supersedes the
+earlier compatibility pilot (which exposed the matrix/YAML admission bypass)
+and the lint-failed corrective preflight; full chronology lives in the plan
+file. Remaining gates: explicit approval before setting recurring
+`DEPOT_RUNNERS_ENABLED=true`; a separate signed/notarized no-publish release
+dry run before any `DEPOT_RELEASE_RUNNERS_ENABLED`; Store and release
+workflows stay outside the runner allowlist. No merge or release occurred.
+See `064-depot-runners-intel-legacy.md`.
 
 ## Code-done, awaiting batched manual smoke (`plans/SMOKE.md`)
 

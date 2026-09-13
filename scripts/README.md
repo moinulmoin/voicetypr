@@ -25,31 +25,50 @@ not regenerate `CHANGELOG.md`; released sections are curated by hand on main.
 
 ### CI compute policy
 
-GitHub Actions remains the workflow and release control plane. Native CI may use
-Depot's managed GitHub Actions runners after the repository is organization-owned
-and the Depot GitHub App is configured:
+GitHub Actions remains the workflow and release control plane. Admission to
+Depot's managed runners is enforced outside the workflow YAML: `ci.yml` calls
+the reusable `native-ci.yml` pinned to the immutable SHA
+`a7cb868f0b7718633816aeab1bc454759d2cbd44`, and only that exact workflow is
+allowlisted in the Default runner group's Selected workflows, with
+public-repository runner access enabled. Every Depot-eligible job is defined
+directly in that trusted callee with fixed macOS/Windows labels and timeouts
+— callers cannot inject a runner label, matrix, timeout, trust boolean, or
+checkout ref. The in-file predicates and rollout variables below are routing
+controls, not the admission boundary: fork PRs and other untrusted callers can
+only ever select literal GitHub-hosted runners because nothing else is
+allowlisted.
 
-- A manual CI dispatch can set `use_depot=true` for the initial ARM
-  macOS/Windows pilot. After that succeeds, `DEPOT_RUNNERS_ENABLED=true` routes
-  trusted Apple Silicon macOS and Windows x64 CI jobs to `depot-macos-14` and
-  `depot-windows-2022-16`. The 16-core, 64 GB tier is deliberate: Depot's
-  unsuffixed Windows label is only two-core/8 GB, while GitHub's free public
-  runner is already four-core/16 GB. Missing/false keeps GitHub-hosted runners;
-  fork PRs never consume Depot runners.
-- `DEPOT_RELEASE_RUNNERS_ENABLED=true` separately routes only the ARM macOS and
-  Windows release build jobs. Keep it unset until a signed `dry_run` proves the
-  complete artifact contract. Intel stays on `macos-15-intel`.
-- Regular PR CI omits Intel. Use the CI workflow's manual `include_intel` option
-  for an on-demand compatibility build; every release still produces the legacy
-  x86_64 artifact.
+- Routine CI: `DEPOT_RUNNERS_ENABLED=true` routes trusted Apple Silicon macOS
+  and Windows x64 jobs (90/120-minute timeouts) to `depot-macos-14` and
+  `depot-windows-2022-16`. The manual `use_depot=true` CI dispatch is a pilot
+  routing input on the same allowlist gate. The 16-core, 64 GB Windows tier is
+  deliberate: Depot's unsuffixed Windows label is only two-core/8 GB, while
+  GitHub's free public runner is already four-core/16 GB. The flag is still
+  unset pending explicit approval; the fork-safe secure pilot (run
+  `34778214659`) already passed with Depot macOS in 8m19s and Windows-16 in
+  17m11s.
+- Releases: `DEPOT_RELEASE_RUNNERS_ENABLED=true` separately routes only the
+  ARM macOS and Windows release build jobs. Keep it unset until a signed,
+  notarized `dry_run` — which builds artifacts while publish/tag/release stay
+  off — proves the complete artifact contract; `release.yml` is also not in
+  the runner allowlist yet. Intel stays on `macos-15-intel`, manual-only.
+- Regular PR CI omits Intel. Use the CI workflow's manual `include_intel`
+  option for an on-demand compatibility build; every release still produces
+  the legacy x86_64 artifact.
 - Draft PRs and frontend-only changes skip native runners. Commit locally as
   needed, then push reviewed checkpoints. Superseded runs cancel.
 - Store MSIX packaging is manual-only, requires the exact 40-character commit
-  SHA, and has its own `use_depot` pilot input. It is release-candidate
-  validation, not a normal PR check.
+  SHA, and is release-candidate validation, not a normal PR check; a preflight
+  trust gate verifies that SHA is an ancestor of `origin/main` before the
+  Windows packaging job runs, so only reviewed commits on main can be packaged.
+  Its `use_depot` input is likewise a routing control; `store-msix.yml` is not
+  in the runner allowlist, so it runs on GitHub-hosted `windows-2022` until the
+  allowlist is deliberately extended.
 
-Depot's runner variables do not activate an account, purchase a plan, transfer
-the repository, or migrate secrets. Those remain explicit external operations.
+Depot's own CI product was rejected because it is Linux-only; the GitHub App
+managed runners are the adopted path. The runner variables do not activate an
+account, purchase a plan, transfer the repository, migrate secrets, or extend
+the runner allowlist. Those remain explicit external operations.
 See `plans/064-depot-runners-intel-legacy.md`.
 
 **Manual (local scripts):** the per-platform scripts below.
