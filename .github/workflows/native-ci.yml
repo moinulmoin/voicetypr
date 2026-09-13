@@ -54,7 +54,12 @@ jobs:
 
       - name: Select Swift 6 toolchain and configure Clang runtime
         run: |
-          xcode=$(ls -d /Applications/Xcode_1[6-9]*.app /Applications/Xcode_[2-9][0-9]*.app 2>/dev/null | sort -V | tail -1)
+          xcode=$(
+            find /Applications -maxdepth 1 \( -type d -o -type l \) \
+              \( -name 'Xcode_1[6-9]*.app' -o -name 'Xcode_[2-9][0-9]*.app' \) \
+              | sort -V \
+              | tail -1
+          )
           if [ -z "$xcode" ]; then echo "No Xcode >=16 (Swift 6) found on runner" >&2; exit 1; fi
           echo "Selecting $xcode"
           sudo xcode-select -s "$xcode"
