@@ -1,8 +1,8 @@
 # Plan 064 — Depot runners and Intel legacy support
 
-Status: CODE COMPLETE / EXTERNAL SETUP REQUIRED — local branch
-`feat/064-depot-runners`; no account, billing, repository ownership, branch
-protection, or release action is authorized here.
+Status: ROLLOUT IN PROGRESS — repository transfer complete; canonical URL
+cutover included on PR #140. Routine and release Depot variables remain disabled.
+No release action is authorized here.
 Base: `f032254a` (PR #140 follow-up head).
 Depends on: 042 (cache correctness), 062 (cheap-check gates and cancellation).
 
@@ -20,34 +20,42 @@ merge check. It remains a separate x86_64 artifact in the explicit release
 workflow and may be requested by a maintainer in a manual full CI dispatch.
 Do not remove `darwin-x86_64` from `latest.json` or strand installed Intel users.
 
-## Eligibility and rollout blockers
+## Rollout state and blockers
 
-The repository is currently owned by the personal GitHub account `moinulmoin`.
-Depot's managed GitHub Actions runners require an organization-owned repository.
-Missing repository variables therefore MUST preserve GitHub-hosted runners.
-Enabling Depot requires an explicit, external rollout after this code lands:
+The public repository now lives at `ideaplexa/voicetypr`. GitHub confirms the
+old repository path redirects, PR #140 and releases moved, and all nine Actions
+secrets remain associated. The local `origin` uses the canonical organization.
+Never recreate `moinulmoin/voicetypr`, which would permanently remove redirects.
 
-1. Decide/create the GitHub organization and transfer the repository separately.
-   Audit hard-coded repository URLs, GitHub App installations, branch settings,
-   signing secrets, release permissions, updater redirects, and the website
-   before transfer. Repository transfer is not part of this plan.
-   Pre-transfer audit: `ideaplexa/voicetypr` is available; the authenticated
-   user is an active organization admin; the public repository has no GitHub
-   Pages, repository webhooks, rulesets, or environments. Nine Actions secrets
-   remain associated by GitHub's transfer contract. Historical changelog links
-   may rely on redirects; runtime updater endpoints, Help links, badges, clone
-   URLs, and manual release scripts are prepared for the canonical new owner.
-   Never recreate `moinulmoin/voicetypr`, which would permanently remove the
-   redirect.
-2. Redeem/activate the Depot offer and choose a plan. Current Depot docs place
-   macOS runners on Startup/Business. The published PostHog offer covers plan and
-   usage for one year, then charges the card after credits are exhausted.
-3. Install the Depot GitHub App for the organization/repository and configure a
-   spend cap/alerts. No workflow may silently activate billing.
-4. Run a manual CI pilot with `use_depot=true`; only after it succeeds should
-   `DEPOT_RUNNERS_ENABLED=true` make trusted routine native jobs use Depot.
-5. Keep `DEPOT_RELEASE_RUNNERS_ENABLED` unset until an explicit dry-run release
-   proves signing, notarization, artifacts, updater signatures, and exact names.
+Transfer audit:
+
+- The authenticated user is an active `ideaplexa` admin. The destination had no
+  conflicting repository. The repository has no GitHub Pages, repository
+  webhooks, deploy keys, rulesets, or environments.
+- Vercel, Coolify and Depot GitHub Apps have organization-wide repository
+  access. Permission is not proof of an active provider project or deployment.
+  GitHub reports zero repository deployments. Vercel/Netlify/Railway/Cloudflare
+  check suites on the last pre-transfer head were queued with zero check runs.
+- Coolify is the intended deployment integration. Cloudflare remains the DNS
+  provider for `voicetypr.com`; the repository transfer does not modify DNS.
+- Historical changelog links may rely on redirects. Runtime updater endpoints,
+  Help links, badges, clone URLs, and manual release scripts use the canonical
+  new owner on PR #140 and must land before the next release.
+
+Remaining external rollout:
+
+1. Keep the separately hosted website repository and its Vercel project outside
+   desktop-repository provider changes. Do not change organization-wide Vercel
+   access because that could affect other repositories.
+2. Confirm the Depot offer/plan and configure spend caps or alerts. Current
+   Depot docs place macOS runners on Startup/Business, and the published PostHog
+   offer charges the card after credits expire.
+3. Run a separately approved non-release CI pilot with `use_depot=true`; only
+   after it succeeds should `DEPOT_RUNNERS_ENABLED=true` route trusted routine
+   native jobs to Depot.
+4. Keep `DEPOT_RELEASE_RUNNERS_ENABLED` unset until an explicit signed dry-run
+   release proves signing, notarization, artifacts, updater signatures and
+   exact filenames.
 
 ## Workflow contract
 
@@ -95,13 +103,20 @@ not simply delete `darwin-x86_64` from the shared updater manifest.
 - `pnpm build` passes and now runs in the cheap Ubuntu prerequisite, so
   frontend-only changes cannot skip production bundle validation.
 - Independent workflow review is clear after adding that production build.
-- After external Depot setup, pilot a non-release ARM/Windows run and compare
-  elapsed time, queue time, cache hit rate and billed usage. Only then consider
-  the separate release runner flag.
+- After the provider and spending checks, repeat the non-release ARM/Windows
+  pilot and compare elapsed time, queue time, cache hit rate and billed usage.
+  Only then consider the separate release runner flag.
 
 Local result: 19 workflow helper tests passed; Node syntax, actionlint,
-production frontend build and `git diff --check` passed. No Depot runner,
-Store package, native release, account or billing operation was executed.
+production frontend build and `git diff --check` passed. The canonical URL
+patch passes shell/JSON/Rust formatting checks and the focused updater-channel
+test. PowerShell syntax was not executed because `pwsh` is unavailable locally.
+
+The first manual Depot pilot was started before a separate point-of-spend
+confirmation and canceled. Workflow/frontend prerequisites passed; its ARM and
+Windows native jobs started and were canceled, so no native result is accepted.
+Some metered usage may have occurred. Routine/release Depot variables remain
+unset; Store and release workflows did not run.
 
 Remote GitHub fallback proof on PR #140 heads `27afadd1` and `c2af36ab`:
 Store and Intel stayed off and all five scheduled jobs passed. The first run
@@ -115,6 +130,6 @@ manual Store/Intel lanes—not from weakening current-head validation.
 
 ## Non-goals
 
-No Depot account mutation, plan purchase, credit redemption, repository transfer,
-secret migration, branch-protection mutation, release, beta publication, Intel
-artifact removal, updater endpoint change, or full Depot CI migration.
+No Depot account mutation, plan purchase, credit redemption, branch-protection
+mutation, release, beta publication, Intel artifact removal, legacy updater
+removal, or full Depot CI migration.

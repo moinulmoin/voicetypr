@@ -77,15 +77,16 @@ current-revision merge gate. See `062-ci-gating.md`.
 
 ## Plan 064 — Depot runners + Intel legacy support
 
-CODE COMPLETE / EXTERNAL SETUP REQUIRED — implemented on
-`feat/064-depot-runners`, based on PR #140 head `f032254a`. GitHub Actions
-remains the control plane; organization-gated Depot ARM macOS/Windows x64
-routing is prepared, Intel is manual/release-only, draft/frontend-only
-iteration is cheap, and Store packaging is an immutable manual candidate
-check. Nineteen workflow contract tests, actionlint and the production frontend
-build pass; independent review is clear. Repository transfer, billing
-activation, Depot App connection, pilot runs and runner enablement remain
-external approval gates. See `064-depot-runners-intel-legacy.md`.
+ROLLOUT IN PROGRESS — CI policy is published on PR #140; the repository is now
+`ideaplexa/voicetypr`. GitHub Actions remains the control plane; Depot ARM
+macOS/Windows x64 routing is prepared, Intel is manual/release-only,
+draft/frontend-only iteration is cheap, and Store packaging is an immutable
+manual candidate check. Nineteen workflow tests, actionlint and the production
+frontend build pass; independent review is clear. Canonical owner URLs are
+included on PR #140. Provider-project and Depot spend checks, a successful
+non-release pilot, routine runner enablement
+and a signed release dry run remain. See
+`064-depot-runners-intel-legacy.md`.
 
 ## Code-done, awaiting batched manual smoke (`plans/SMOKE.md`)
 

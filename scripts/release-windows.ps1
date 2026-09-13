@@ -262,6 +262,11 @@ if (-not $SkipBuild) {
         if (-not $latestJson.platforms) {
             $latestJson | Add-Member -NotePropertyName "platforms" -NotePropertyValue @{} -Force
         }
+        foreach ($platform in $latestJson.platforms.PSObject.Properties) {
+            if ($platform.Value.url -match '^https://github\.com/[^/]+/voicetypr/releases/download/') {
+                $platform.Value.url = $platform.Value.url -replace '^https://github\.com/[^/]+/voicetypr/', "https://github.com/$GitHubRepository/"
+            }
+        }
         $windowsPlatform = @{
             signature = $signature
             url = "https://github.com/$GitHubRepository/releases/download/$ReleaseTag/$InstallerName"
