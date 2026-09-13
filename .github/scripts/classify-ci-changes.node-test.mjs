@@ -3,6 +3,8 @@ import { describe, it } from 'node:test';
 
 import {
   classifyChangedFiles,
+  isFrontendOnlyPath,
+  macosValidationMatrix,
   isWorkflowOrDocumentationPath,
 } from './classify-ci-changes.mjs';
 
@@ -20,21 +22,44 @@ describe('CI change classification', () => {
     }
   });
 
-  it('requires application checks for product and build inputs', () => {
+  it('separates frontend-only paths from native and packaging inputs', () => {
     for (const filePath of [
       'src/App.tsx',
+      'public/logo.png',
+      'apps/site/src/app.tsx',
+      'vite.config.ts',
+    ]) {
+      assert.equal(isFrontendOnlyPath(filePath), true, filePath);
+      const result = classifyChangedFiles(['README.md', filePath]);
+      assert.equal(result.applicationRequired, true, filePath);
+      assert.equal(result.nativeRequired, false, filePath);
+    }
+
+    for (const filePath of [
       'src-tauri/src/lib.rs',
       'sidecar/parakeet-swift/Package.swift',
       'scripts/ensure-ffmpeg-sidecar.cjs',
       'package.json',
       'pnpm-lock.yaml',
     ]) {
-      assert.equal(
-        classifyChangedFiles(['.github/workflows/ci.yml', filePath]).applicationRequired,
-        true,
-        filePath,
-      );
+      const result = classifyChangedFiles(['.github/workflows/ci.yml', filePath]);
+      assert.equal(result.applicationRequired, true, filePath);
+      assert.equal(result.nativeRequired, true, filePath);
     }
+  });
+
+  it('keeps Intel manual while Apple Silicon remains automatic', () => {
+    const automatic = macosValidationMatrix('pull_request', false);
+    assert.deepEqual(automatic.include, [
+      { os: 'macos-14', arch: 'aarch64', timeout_minutes: 90 },
+    ]);
+
+    const manualDefault = macosValidationMatrix('workflow_dispatch', false);
+    assert.deepEqual(manualDefault, automatic);
+    assert.deepEqual(macosValidationMatrix('workflow_dispatch', true).include, [
+      { os: 'macos-14', arch: 'aarch64', timeout_minutes: 90 },
+      { os: 'macos-15-intel', arch: 'x86_64', timeout_minutes: 150 },
+    ]);
   });
 
   it('requires application checks for both sides of a source-to-docs rename', () => {
@@ -52,9 +77,12 @@ describe('CI change classification', () => {
     ]);
 
     assert.equal(result.applicationRequired, false);
+    assert.equal(result.nativeRequired, false);
   });
 
-  it('runs application checks conservatively when the diff is empty', () => {
-    assert.equal(classifyChangedFiles([]).applicationRequired, true);
+  it('runs application and native checks conservatively when the diff is empty', () => {
+    const result = classifyChangedFiles([]);
+    assert.equal(result.applicationRequired, true);
+    assert.equal(result.nativeRequired, true);
   });
 });

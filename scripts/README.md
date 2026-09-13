@@ -22,6 +22,34 @@
 files, publishes the tag, and opens a draft GitHub release with generated release notes. It does
 not regenerate `CHANGELOG.md`; released sections are curated by hand on main.
 
+
+### CI compute policy
+
+GitHub Actions remains the workflow and release control plane. Native CI may use
+Depot's managed GitHub Actions runners after the repository is organization-owned
+and the Depot GitHub App is configured:
+
+- A manual CI dispatch can set `use_depot=true` for the initial ARM
+  macOS/Windows pilot. After that succeeds, `DEPOT_RUNNERS_ENABLED=true` routes
+  trusted Apple Silicon macOS and Windows x64 CI jobs to `depot-macos-14` and
+  `depot-windows-2022`. Missing/false keeps GitHub-hosted runners; fork PRs never
+  consume Depot runners.
+- `DEPOT_RELEASE_RUNNERS_ENABLED=true` separately routes only the ARM macOS and
+  Windows release build jobs. Keep it unset until a signed `dry_run` proves the
+  complete artifact contract. Intel stays on `macos-15-intel`.
+- Regular PR CI omits Intel. Use the CI workflow's manual `include_intel` option
+  for an on-demand compatibility build; every release still produces the legacy
+  x86_64 artifact.
+- Draft PRs and frontend-only changes skip native runners. Commit locally as
+  needed, then push reviewed checkpoints. Superseded runs cancel.
+- Store MSIX packaging is manual-only, requires the exact 40-character commit
+  SHA, and has its own `use_depot` pilot input. It is release-candidate
+  validation, not a normal PR check.
+
+Depot's runner variables do not activate an account, purchase a plan, transfer
+the repository, or migrate secrets. Those remain explicit external operations.
+See `plans/064-depot-runners-intel-legacy.md`.
+
 **Manual (local scripts):** the per-platform scripts below.
 
 1. **macOS Release** (creates the initial release):

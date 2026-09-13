@@ -68,11 +68,15 @@ Diagnostics and product-analytics controls are available in Settings. See the [P
 
 ### macOS
 
-Requirements: macOS 14 or later, Apple Silicon or Intel, microphone permission, and Accessibility permission for cursor insertion.
+Requirements: macOS 14 or later, Apple Silicon (fully supported) or Intel (legacy/best-effort), microphone permission, and Accessibility permission for cursor insertion.
 
 1. Download the latest macOS package from [voicetypr.com/download](https://voicetypr.com/download) or [GitHub Releases](https://github.com/moinulmoin/voicetypr/releases/latest).
 2. Open the DMG and move Voicetypr to Applications.
 3. Launch the app, grant the requested permissions, and download a transcription model.
+
+Apple Silicon is the primary macOS target and supports Whisper plus Parakeet.
+Intel packages remain available as a legacy Whisper-only download while the
+project evaluates usage before a separately announced end-of-life.
 
 Release builds are signed and notarized by Apple.
 

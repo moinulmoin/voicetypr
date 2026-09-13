@@ -77,7 +77,8 @@ jobs:
   # ===========================================
   build-macos-aarch64:
     needs: prepare
-    runs-on: macos-14
+    runs-on: ${{ vars.DEPOT_RELEASE_RUNNERS_ENABLED == 'true' && 'depot-macos-14' || 'macos-14' }}
+    timeout-minutes: 180
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -272,6 +273,7 @@ jobs:
   build-macos-x86_64:
     needs: prepare
     runs-on: macos-15-intel
+    timeout-minutes: 180
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -456,7 +458,8 @@ jobs:
   # ===========================================
   build-windows:
     needs: prepare
-    runs-on: windows-2022
+    runs-on: ${{ vars.DEPOT_RELEASE_RUNNERS_ENABLED == 'true' && 'depot-windows-2022' || 'windows-2022' }}
+    timeout-minutes: 180
     env:
       # Short paths keep whisper.cpp/ggml and Tauri builds below Windows path limits.
       CARGO_TARGET_DIR: D:\b\app

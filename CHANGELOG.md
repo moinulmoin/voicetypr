@@ -7,6 +7,7 @@
 ### Improvements
 
 * **formatting:** explain that speech models infer punctuation, document Clean Dictation's AI correction role, and add privacy-safe decision diagnostics showing whether AI formatting ran or was skipped
+* **ci:** keep routine PR feedback cheap, route eligible ARM macOS and Windows x64 jobs through opt-in Depot runners, make Intel a manual/release-only legacy lane, and reserve Store packaging for immutable release-candidate commits
 
 ### Bug Fixes
 

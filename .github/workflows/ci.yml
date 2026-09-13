@@ -1,13 +1,25 @@
 name: CI
 
-# A manual dispatch validates the selected ref with the full matrix.
+# A manual dispatch validates the selected ref; Intel is an explicit legacy lane.
 
 on:
   push:
     branches: [main]
   pull_request:
     branches: [main]
+    types: [opened, synchronize, reopened, ready_for_review, converted_to_draft]
   workflow_dispatch:
+    inputs:
+      include_intel:
+        description: 'Include the legacy Intel macOS lane'
+        required: false
+        default: false
+        type: boolean
+      use_depot:
+        description: 'Use Depot for ARM macOS and Windows x64 (pilot)'
+        required: false
+        default: false
+        type: boolean
 
 permissions:
   contents: read
@@ -27,11 +39,27 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       application_required: ${{ steps.classify.outputs.application_required }}
+      native_required: ${{ steps.classify.outputs.native_required }}
+      macos_matrix: ${{ steps.macos-matrix.outputs.value }}
     steps:
       - uses: actions/checkout@v5
         with:
           persist-credentials: false
           fetch-depth: 0
+
+      - name: Configure macOS validation lanes
+        id: macos-matrix
+        env:
+          INCLUDE_INTEL: ${{ inputs.include_intel || false }}
+        run: |
+          value="$(node --input-type=module -e '
+            import { macosValidationMatrix } from "./.github/scripts/classify-ci-changes.mjs";
+            process.stdout.write(JSON.stringify(macosValidationMatrix(
+              process.env.GITHUB_EVENT_NAME,
+              process.env.INCLUDE_INTEL,
+            )));
+          ')"
+          echo "value=$value" >> "$GITHUB_OUTPUT"
 
       - name: Classify changed files
         id: classify
@@ -41,6 +69,7 @@ jobs:
         run: |
           if [[ -z "$BASE_SHA" || "$BASE_SHA" =~ ^0+$ ]]; then
             echo "application_required=true" >> "$GITHUB_OUTPUT"
+            echo "native_required=true" >> "$GITHUB_OUTPUT"
             echo "No usable base commit; running application checks conservatively."
           else
             changed_files="$RUNNER_TEMP/voicetypr-changed-files"
@@ -52,6 +81,7 @@ jobs:
               node .github/scripts/classify-ci-changes.mjs --null < "$changed_files"
             else
               echo "application_required=true" >> "$GITHUB_OUTPUT"
+              echo "native_required=true" >> "$GITHUB_OUTPUT"
               echo "Diff classification failed; running application checks conservatively."
             fi
           fi
@@ -114,8 +144,11 @@ jobs:
       - name: Run tests
         run: pnpm exec vitest run src
 
+      - name: Build frontend
+        run: pnpm build
+
   # ===========================================
-  # Build macOS (full build = catches all issues)
+  # Build macOS (Apple Silicon automatic; Intel manual legacy lane)
   # ===========================================
   build-macos:
     needs: [changes, workflow, frontend]
@@ -123,15 +156,21 @@ jobs:
       ${{ !cancelled() &&
       needs.workflow.result == 'success' &&
       needs.frontend.result == 'success' &&
-      (needs.changes.result != 'success' || needs.changes.outputs.application_required != 'false') }}
+      (github.event_name != 'pull_request' || !github.event.pull_request.draft) &&
+      (needs.changes.result != 'success' || needs.changes.outputs.native_required != 'false') }}
     strategy:
-      matrix:
-        include:
-          - os: macos-14
-            arch: aarch64
-          - os: macos-15-intel
-            arch: x86_64
-    runs-on: ${{ matrix.os }}
+      matrix: ${{ fromJSON(needs.changes.outputs.macos_matrix) }}
+    runs-on: >-
+      ${{
+      matrix.arch == 'aarch64' &&
+      (vars.DEPOT_RUNNERS_ENABLED == 'true' ||
+      (github.event_name == 'workflow_dispatch' && inputs.use_depot)) &&
+      (github.event_name != 'pull_request' ||
+      github.event.pull_request.head.repo.full_name == github.repository) &&
+      'depot-macos-14' ||
+      matrix.os
+      }}
+    timeout-minutes: ${{ matrix.timeout_minutes }}
     steps:
       - uses: actions/checkout@v5
         with:
@@ -217,8 +256,18 @@ jobs:
       ${{ !cancelled() &&
       needs.workflow.result == 'success' &&
       needs.frontend.result == 'success' &&
-      (needs.changes.result != 'success' || needs.changes.outputs.application_required != 'false') }}
-    runs-on: windows-2022
+      (github.event_name != 'pull_request' || !github.event.pull_request.draft) &&
+      (needs.changes.result != 'success' || needs.changes.outputs.native_required != 'false') }}
+    runs-on: >-
+      ${{
+      (vars.DEPOT_RUNNERS_ENABLED == 'true' ||
+      (github.event_name == 'workflow_dispatch' && inputs.use_depot)) &&
+      (github.event_name != 'pull_request' ||
+      github.event.pull_request.head.repo.full_name == github.repository) &&
+      'depot-windows-2022' ||
+      'windows-2022'
+      }}
+    timeout-minutes: 120
     env:
       # Keep Windows paths short to avoid MSBuild/FileTracker failures on deep dependency trees.
       CARGO_TARGET_DIR: D:\b\app
