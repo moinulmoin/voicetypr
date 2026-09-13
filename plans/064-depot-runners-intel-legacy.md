@@ -95,11 +95,15 @@ Local result: 19 workflow helper tests passed; Node syntax, actionlint,
 production frontend build and `git diff --check` passed. No Depot runner,
 Store package, native release, account or billing operation was executed.
 
-Remote GitHub fallback proof on PR #140 head `27afadd1`: Store and Intel stayed
-off and all five scheduled jobs passed. That run exposed `scripts/README.md` as
-an incorrectly native path, so the classifier now treats Markdown anywhere as
-documentation. A follow-up GitHub run must show only `changes` and `workflow`
-before the policy is accepted.
+Remote GitHub fallback proof on PR #140 heads `27afadd1` and `c2af36ab`:
+Store and Intel stayed off and all five scheduled jobs passed. The first run
+exposed `scripts/README.md` as an incorrectly native path, so Markdown anywhere
+now uses the documentation fast path. PR #140 still ran ARM/Windows because its
+cumulative diff contains application code. That is deliberate: classifying only
+the most recent push would let a new documentation commit cancel an unfinished
+native run for the preceding code commit. Savings therefore come from draft PRs,
+batched reviewed pushes, cancellation of superseded runs, frontend-only PRs, and
+manual Store/Intel lanes—not from weakening current-head validation.
 
 ## Non-goals
 
