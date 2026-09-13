@@ -180,9 +180,21 @@ jobs:
           swift --version
           # Xcode 16.4 emits availability checks in whisper.cpp's Metal objects,
           # but Rust's final link does not automatically include compiler-rt.
-          clang_runtime=$(xcrun --sdk macosx clang -print-libgcc-file-name)
-          if [ ! -f "$clang_runtime" ]; then echo "Clang runtime not found: $clang_runtime" >&2; exit 1; fi
-          echo "RUSTFLAGS=${RUSTFLAGS:+$RUSTFLAGS }-C link-arg=$clang_runtime" >> "$GITHUB_ENV"
+          # Older toolchains (e.g. GitHub-hosted Xcode 16.2) may not ship or
+          # require the archive, so discovery is bundle-local and optional:
+          # link libclang_rt.osx.a only when the selected Xcode actually has one.
+          clang_runtime=$(
+            find "$xcode/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/lib/clang" \
+              -type f -name 'libclang_rt.osx.a' 2>/dev/null \
+              | sort -V \
+              | tail -1
+          )
+          if [ -n "$clang_runtime" ]; then
+            echo "Linking compiler-rt archive: $clang_runtime"
+            echo "RUSTFLAGS=${RUSTFLAGS:+$RUSTFLAGS }-C link-arg=$clang_runtime" >> "$GITHUB_ENV"
+          else
+            echo "No libclang_rt.osx.a in $xcode; continuing without explicit compiler-rt."
+          fi
 
       - name: Cache verified Apple Silicon FFmpeg sidecars
         uses: actions/cache@v5
