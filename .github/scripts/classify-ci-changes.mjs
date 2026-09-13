@@ -23,17 +23,6 @@ export function isFrontendOnlyPath(filePath) {
     FRONTEND_ONLY_FILES.includes(normalized)
   );
 }
-export function macosValidationMatrix(eventName, includeIntel) {
-  const include = [{ os: 'macos-14', arch: 'aarch64', timeout_minutes: 90 }];
-  if (eventName === 'workflow_dispatch' && String(includeIntel) === 'true') {
-    include.push({
-      os: 'macos-15-intel',
-      arch: 'x86_64',
-      timeout_minutes: 150,
-    });
-  }
-  return { include };
-}
 
 export function isWorkflowOrDocumentationPath(filePath) {
   const normalized = filePath.replaceAll('\\', '/').replace(/^\.\//, '');

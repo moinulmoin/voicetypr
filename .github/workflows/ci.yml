@@ -40,26 +40,11 @@ jobs:
     outputs:
       application_required: ${{ steps.classify.outputs.application_required }}
       native_required: ${{ steps.classify.outputs.native_required }}
-      macos_matrix: ${{ steps.macos-matrix.outputs.value }}
     steps:
       - uses: actions/checkout@v5
         with:
           persist-credentials: false
           fetch-depth: 0
-
-      - name: Configure macOS validation lanes
-        id: macos-matrix
-        env:
-          INCLUDE_INTEL: ${{ inputs.include_intel || false }}
-        run: |
-          value="$(node --input-type=module -e '
-            import { macosValidationMatrix } from "./.github/scripts/classify-ci-changes.mjs";
-            process.stdout.write(JSON.stringify(macosValidationMatrix(
-              process.env.GITHUB_EVENT_NAME,
-              process.env.INCLUDE_INTEL,
-            )));
-          ')"
-          echo "value=$value" >> "$GITHUB_OUTPUT"
 
       - name: Classify changed files
         id: classify
@@ -148,9 +133,9 @@ jobs:
         run: pnpm build
 
   # ===========================================
-  # Build macOS (Apple Silicon automatic; Intel manual legacy lane)
+  # Native lanes (ARM macOS + Windows x64) via pinned trusted reusable workflow
   # ===========================================
-  build-macos:
+  native:
     needs: [changes, workflow, frontend]
     if: >-
       ${{ !cancelled() &&
@@ -158,19 +143,24 @@ jobs:
       needs.frontend.result == 'success' &&
       (github.event_name != 'pull_request' || !github.event.pull_request.draft) &&
       (needs.changes.result != 'success' || needs.changes.outputs.native_required != 'false') }}
-    strategy:
-      matrix: ${{ fromJSON(needs.changes.outputs.macos_matrix) }}
-    runs-on: >-
-      ${{
-      matrix.arch == 'aarch64' &&
-      (vars.DEPOT_RUNNERS_ENABLED == 'true' ||
-      (github.event_name == 'workflow_dispatch' && inputs.use_depot)) &&
-      (github.event_name != 'pull_request' ||
-      github.event.pull_request.head.repo.full_name == github.repository) &&
-      'depot-macos-14' ||
-      matrix.os
-      }}
-    timeout-minutes: ${{ matrix.timeout_minutes }}
+    uses: ideaplexa/voicetypr/.github/workflows/native-ci.yml@a3f659f7c760ea0ee108374c9abb9ab79141e136
+    with:
+      use_depot: ${{ github.event_name == 'workflow_dispatch' && inputs.use_depot }}
+
+  # ===========================================
+  # Legacy Intel macOS lane (manual dispatch only; GitHub-hosted, never Depot)
+  # ===========================================
+  build-macos-intel:
+    needs: [changes, workflow, frontend]
+    if: >-
+      ${{ github.event_name == 'workflow_dispatch' &&
+      inputs.include_intel == true &&
+      !cancelled() &&
+      needs.workflow.result == 'success' &&
+      needs.frontend.result == 'success' &&
+      (needs.changes.result != 'success' || needs.changes.outputs.native_required != 'false') }}
+    runs-on: macos-15-intel
+    timeout-minutes: 150
     steps:
       - uses: actions/checkout@v5
         with:
@@ -188,18 +178,6 @@ jobs:
           clang_runtime=$(xcrun --sdk macosx clang -print-libgcc-file-name)
           if [ ! -f "$clang_runtime" ]; then echo "Clang runtime not found: $clang_runtime" >&2; exit 1; fi
           echo "RUSTFLAGS=${RUSTFLAGS:+$RUSTFLAGS }-C link-arg=$clang_runtime" >> "$GITHUB_ENV"
-
-      - name: Capture Swift toolchain cache key
-        id: swift-toolchain
-        run: echo "hash=$(swift --version | shasum -a 256 | cut -d ' ' -f1)" >> "$GITHUB_OUTPUT"
-
-      - name: Cache Swift Parakeet build
-        uses: actions/cache@v5
-        with:
-          path: sidecar/parakeet-swift/.build
-          key: parakeet-swift-${{ runner.os }}-${{ runner.arch }}-${{ steps.swift-toolchain.outputs.hash }}-${{ hashFiles('sidecar/parakeet-swift/Package.swift', 'sidecar/parakeet-swift/Package.resolved', 'sidecar/parakeet-swift/build.sh', 'sidecar/parakeet-swift/Sources/**') }}
-          restore-keys: |
-            parakeet-swift-${{ runner.os }}-${{ runner.arch }}-${{ steps.swift-toolchain.outputs.hash }}-
 
       - name: Cache verified Apple Silicon FFmpeg sidecars
         uses: actions/cache@v5
@@ -249,133 +227,6 @@ jobs:
       - name: Upload preview artifact
         uses: actions/upload-artifact@v6
         with:
-          name: ci-macos-${{ matrix.arch }}-preview
+          name: ci-macos-x86_64-preview
           path: src-tauri/target/release/voicetypr
-          retention-days: 30
-
-  # Build Windows (CPU-safe app + Vulkan sidecar)
-  # ===========================================
-  build-windows:
-    needs: [changes, workflow, frontend]
-    if: >-
-      ${{ !cancelled() &&
-      needs.workflow.result == 'success' &&
-      needs.frontend.result == 'success' &&
-      (github.event_name != 'pull_request' || !github.event.pull_request.draft) &&
-      (needs.changes.result != 'success' || needs.changes.outputs.native_required != 'false') }}
-    runs-on: >-
-      ${{
-      (vars.DEPOT_RUNNERS_ENABLED == 'true' ||
-      (github.event_name == 'workflow_dispatch' && inputs.use_depot)) &&
-      (github.event_name != 'pull_request' ||
-      github.event.pull_request.head.repo.full_name == github.repository) &&
-      'depot-windows-2022-16' ||
-      'windows-2022'
-      }}
-    timeout-minutes: 120
-    env:
-      # Keep Windows paths short to avoid MSBuild/FileTracker failures on deep dependency trees.
-      CARGO_TARGET_DIR: D:\b\app
-      VULKAN_RUNTIME_VERSION: 1.3.290.0
-    steps:
-      - uses: actions/checkout@v5
-        with:
-          persist-credentials: false
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v5
-        with:
-          node-version: '22.19.0'
-          package-manager-cache: false
-
-      - name: Setup pnpm
-        run: |
-          corepack enable
-          corepack prepare pnpm@10.13.1 --activate
-          pnpm --version
-
-      - name: Prepare cargo target dir
-        shell: pwsh
-        run: New-Item -ItemType Directory -Force -Path $env:CARGO_TARGET_DIR | Out-Null
-
-      - name: Rust cache
-        uses: Swatinem/rust-cache@v2
-        with:
-          shared-key: windows-x64-build
-          key: vulkan-${{ env.VULKAN_RUNTIME_VERSION }}
-          workspaces: |
-            src-tauri -> ../../../../b/app
-            sidecar/whisper-vulkan -> ../../../../../b/vulkan
-
-      - name: Install Vulkan SDK
-        uses: jakoch/install-vulkan-sdk-action@v1
-        with:
-          vulkan_version: 1.3.290.0
-          install_runtime: true
-          cache: true
-
-      - name: Install dependencies
-        run: pnpm install --frozen-lockfile
-
-      - name: Ensure FFmpeg sidecar
-        run: pnpm run sidecar:ensure-ffmpeg
-
-      - name: Build Whisper Vulkan sidecar
-        shell: pwsh
-        env:
-          CARGO_TARGET_DIR: D:\b\vulkan
-          RUSTFLAGS: -C target-feature=+crt-static
-        run: |
-          cargo build --manifest-path sidecar/whisper-vulkan/Cargo.toml --release
-          if ($LASTEXITCODE -ne 0) {
-            throw "Whisper Vulkan sidecar build failed with exit code $LASTEXITCODE"
-          }
-          New-Item -ItemType Directory -Force -Path "sidecar/whisper-vulkan/dist" | Out-Null
-          $targetDir = $env:CARGO_TARGET_DIR
-          if ([string]::IsNullOrWhiteSpace($targetDir)) {
-            $targetDir = "sidecar/whisper-vulkan/target"
-          }
-          $sidecarExe = Join-Path $targetDir "release/whisper-vulkan-sidecar.exe"
-          if (-not (Test-Path $sidecarExe)) {
-            throw "Whisper Vulkan sidecar binary not found: $sidecarExe"
-          }
-          Copy-Item $sidecarExe "sidecar/whisper-vulkan/dist/whisper-vulkan-sidecar-x86_64-pc-windows-msvc.exe"
-
-      - name: Download Windows runtime installer resources
-        shell: pwsh
-        run: |
-          New-Item -ItemType Directory -Force -Path "src-tauri/windows/resources" | Out-Null
-          Invoke-WebRequest -Uri "https://aka.ms/vs/17/release/vc_redist.x64.exe" -OutFile "src-tauri/windows/resources/vc_redist.x64.exe"
-          $vulkanVersion = $env:VULKAN_RUNTIME_VERSION
-          if ([string]::IsNullOrWhiteSpace($vulkanVersion)) {
-            $vulkanVersion = $env:VULKAN_VERSION
-          }
-          if ([string]::IsNullOrWhiteSpace($vulkanVersion)) {
-            $vulkanVersion = Split-Path -Leaf $env:VULKAN_SDK
-          }
-          if ([string]::IsNullOrWhiteSpace($vulkanVersion)) {
-            throw "Cannot determine Vulkan version. Set VULKAN_RUNTIME_VERSION, VULKAN_VERSION, or VULKAN_SDK."
-          }
-          $vulkanRuntimeUrl = "https://sdk.lunarg.com/sdk/download/$vulkanVersion/windows/VulkanRT-$vulkanVersion-Installer.exe"
-          Invoke-WebRequest -Uri $vulkanRuntimeUrl -OutFile "src-tauri/windows/resources/VulkanRT-Installer.exe"
-
-      - name: Build frontend
-        run: pnpm build
-
-      - name: Rust tests (compile-only on Windows runner)
-        run: cd src-tauri && cargo test --no-run
-
-      - name: Build Tauri (release, CPU-safe main app)
-        run: cd src-tauri && cargo build --release
-
-      - name: Assert CPU build does not import vulkan-1.dll
-        shell: pwsh
-        run: |
-          & ./src-tauri/windows/assert-no-vulkan-import.ps1 -ExePath "$env:CARGO_TARGET_DIR/release/voicetypr.exe"
-
-      - name: Upload preview artifact
-        uses: actions/upload-artifact@v6
-        with:
-          name: ci-windows-x64-preview
-          path: D:/b/app/release/voicetypr.exe
           retention-days: 30

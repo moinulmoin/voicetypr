@@ -4,7 +4,6 @@ import { describe, it } from 'node:test';
 import {
   classifyChangedFiles,
   isFrontendOnlyPath,
-  macosValidationMatrix,
   isWorkflowOrDocumentationPath,
 } from './classify-ci-changes.mjs';
 
@@ -48,20 +47,6 @@ describe('CI change classification', () => {
       assert.equal(result.applicationRequired, true, filePath);
       assert.equal(result.nativeRequired, true, filePath);
     }
-  });
-
-  it('keeps Intel manual while Apple Silicon remains automatic', () => {
-    const automatic = macosValidationMatrix('pull_request', false);
-    assert.deepEqual(automatic.include, [
-      { os: 'macos-14', arch: 'aarch64', timeout_minutes: 90 },
-    ]);
-
-    const manualDefault = macosValidationMatrix('workflow_dispatch', false);
-    assert.deepEqual(manualDefault, automatic);
-    assert.deepEqual(macosValidationMatrix('workflow_dispatch', true).include, [
-      { os: 'macos-14', arch: 'aarch64', timeout_minutes: 90 },
-      { os: 'macos-15-intel', arch: 'x86_64', timeout_minutes: 150 },
-    ]);
   });
 
   it('requires application checks for both sides of a source-to-docs rename', () => {
