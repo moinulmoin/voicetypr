@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 
 const FAST_PATH_PREFIXES = ['.github/', 'docs/', 'plans/'];
-const ROOT_DOCUMENTATION = /^[^/]+\.md$/i;
+const MARKDOWN_DOCUMENTATION = /\.md$/i;
 const FRONTEND_ONLY_PREFIXES = ['apps/site/', 'public/', 'src/'];
 const FRONTEND_ONLY_FILES = [
   'components.json',
@@ -39,7 +39,7 @@ export function isWorkflowOrDocumentationPath(filePath) {
   const normalized = filePath.replaceAll('\\', '/').replace(/^\.\//, '');
   return (
     FAST_PATH_PREFIXES.some((prefix) => normalized.startsWith(prefix)) ||
-    ROOT_DOCUMENTATION.test(normalized)
+    MARKDOWN_DOCUMENTATION.test(normalized)
   );
 }
 

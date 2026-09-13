@@ -95,6 +95,12 @@ Local result: 19 workflow helper tests passed; Node syntax, actionlint,
 production frontend build and `git diff --check` passed. No Depot runner,
 Store package, native release, account or billing operation was executed.
 
+Remote GitHub fallback proof on PR #140 head `27afadd1`: Store and Intel stayed
+off and all five scheduled jobs passed. That run exposed `scripts/README.md` as
+an incorrectly native path, so the classifier now treats Markdown anywhere as
+documentation. A follow-up GitHub run must show only `changes` and `workflow`
+before the policy is accepted.
+
 ## Non-goals
 
 No Depot account mutation, plan purchase, credit redemption, repository transfer,

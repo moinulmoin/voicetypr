@@ -9,7 +9,7 @@ import {
 } from './classify-ci-changes.mjs';
 
 describe('CI change classification', () => {
-  it('recognizes workflow, plan, docs, and root documentation paths', () => {
+  it('recognizes workflow paths and Markdown documentation anywhere', () => {
     for (const filePath of [
       '.github/workflows/release.yml',
       '.github/scripts/release-tool.mjs',
@@ -17,6 +17,8 @@ describe('CI change classification', () => {
       'docs/release.md',
       'README.md',
       'CHANGELOG.md',
+      'scripts/README.md',
+      'sidecar/parakeet-swift/README.md',
     ]) {
       assert.equal(isWorkflowOrDocumentationPath(filePath), true, filePath);
     }
