@@ -1,28 +1,12 @@
 name: Native CI
 
-# Reusable native lanes for fork-safe callers. Callers must pin this file to an
-# immutable commit SHA. Every Depot-eligible job is defined here: callers
-# cannot inject a runner label, matrix, timeout, trust boolean, or checkout
-# ref. The original caller `github` context (event, ref, sha) is retained, so
-# checkout lands on the caller's revision and trust checks see the original
-# event.
-#
-# Depot eligibility (per job) is exactly:
-#   (same-repository pull_request, push to refs/heads/main, or
-#    workflow_dispatch)
-#   AND (DEPOT_RUNNERS_ENABLED == 'true' OR a manual pilot, where the
-#        use_depot input counts only for workflow_dispatch callers).
-# Fork pull_request events and every other caller resolve to literal
-# GitHub-hosted runners.
+# Reusable native lanes. Every job runs on a literal GitHub-hosted runner
+# label; callers cannot inject a runner label, matrix, timeout, or checkout
+# ref. The original caller `github` context (event, ref, sha) is retained,
+# so checkout lands on the caller's revision.
 
 on:
   workflow_call:
-    inputs:
-      use_depot:
-        description: 'Use Depot for ARM macOS and Windows x64 (pilot)'
-        required: false
-        default: false
-        type: boolean
 
 permissions:
   contents: read
@@ -35,17 +19,7 @@ jobs:
   # Build macOS (Apple Silicon)
   # ===========================================
   build-macos:
-    runs-on: >-
-      ${{
-      ((github.event_name == 'pull_request' &&
-      github.event.pull_request.head.repo.full_name == github.repository) ||
-      (github.event_name == 'push' && github.ref == 'refs/heads/main') ||
-      github.event_name == 'workflow_dispatch') &&
-      (vars.DEPOT_RUNNERS_ENABLED == 'true' ||
-      (github.event_name == 'workflow_dispatch' && inputs.use_depot)) &&
-      'depot-macos-14' ||
-      'macos-14'
-      }}
+    runs-on: macos-14
     timeout-minutes: 90
     steps:
       - uses: actions/checkout@v5
@@ -149,17 +123,7 @@ jobs:
   # Build Windows (CPU-safe app + Vulkan sidecar)
   # ===========================================
   build-windows:
-    runs-on: >-
-      ${{
-      ((github.event_name == 'pull_request' &&
-      github.event.pull_request.head.repo.full_name == github.repository) ||
-      (github.event_name == 'push' && github.ref == 'refs/heads/main') ||
-      github.event_name == 'workflow_dispatch') &&
-      (vars.DEPOT_RUNNERS_ENABLED == 'true' ||
-      (github.event_name == 'workflow_dispatch' && inputs.use_depot)) &&
-      'depot-windows-2022-16' ||
-      'windows-2022'
-      }}
+    runs-on: windows-2022
     timeout-minutes: 120
     env:
       # Keep Windows paths short to avoid MSBuild/FileTracker failures on deep dependency trees.

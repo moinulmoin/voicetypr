@@ -25,33 +25,14 @@ not regenerate `CHANGELOG.md`; released sections are curated by hand on main.
 
 ### CI compute policy
 
-GitHub Actions remains the workflow and release control plane. Admission to
-Depot's managed runners is enforced outside the workflow YAML: `ci.yml` calls
-the reusable `native-ci.yml` pinned to the immutable SHA
-`00e8006fb7efd9f7c6a8ffb2bcc9c30c8a298c52`, and only that exact workflow is
-allowlisted in the Default runner group's Selected workflows, with
-public-repository runner access enabled. Every Depot-eligible job is defined
-directly in that trusted callee with fixed macOS/Windows labels and timeouts
-— callers cannot inject a runner label, matrix, timeout, trust boolean, or
-checkout ref. The in-file predicates and rollout variables below are routing
-controls, not the admission boundary: fork PRs and other untrusted callers can
-only ever select literal GitHub-hosted runners because nothing else is
-allowlisted.
+GitHub Actions is the workflow and release control plane, and every workflow
+in this repository runs exclusively on GitHub-hosted standard runners.
+`ci.yml` calls the same repository's reusable `native-ci.yml` with no
+inputs; that callee pins Apple Silicon macOS to `macos-14` and Windows x64
+to `windows-2022` with fixed 90/120-minute timeouts, and callers cannot
+inject a runner label, matrix, timeout, trust boolean, or checkout ref.
+There are no runner-routing variables or dispatch inputs.
 
-- Routine CI: `DEPOT_RUNNERS_ENABLED=true` routes trusted Apple Silicon macOS
-  and Windows x64 jobs (90/120-minute timeouts) to `depot-macos-14` and
-  `depot-windows-2022-16`. The manual `use_depot=true` CI dispatch is a pilot
-  routing input on the same allowlist gate. The 16-core, 64 GB Windows tier is
-  deliberate: Depot's unsuffixed Windows label is only two-core/8 GB, while
-  GitHub's free public runner is already four-core/16 GB. The flag is still
-  unset pending explicit approval; the portable current-head pilot (run
-  `34785226804`) passed with Depot macOS in 17m00s and Windows-16 in 17m29s;
-  the same head also passed GitHub-hosted fallback.
-- Releases: `DEPOT_RELEASE_RUNNERS_ENABLED=true` separately routes only the
-  ARM macOS and Windows release build jobs. Keep it unset until a signed,
-  notarized `dry_run` — which builds artifacts while publish/tag/release stay
-  off — proves the complete artifact contract; `release.yml` is also not in
-  the runner allowlist yet. Intel stays on `macos-15-intel`, manual-only.
 - Regular PR CI omits Intel. Use the CI workflow's manual `include_intel`
   option for an on-demand compatibility build; every release still produces
   the legacy x86_64 artifact.
@@ -61,18 +42,14 @@ allowlisted.
   SHA, and is release-candidate validation, not a normal PR check; a preflight
   trust gate verifies that SHA is an ancestor of `origin/main` before the
   Windows packaging job runs, so only reviewed commits on main can be packaged.
-  Its `use_depot` input is likewise a routing control, but ordering matters:
-  the default `use_depot=false` selects GitHub-hosted `windows-2022`; setting
-  `use_depot=true` before `store-msix.yml` joins the runner allowlist leaves
-  the job unassigned or denied, since Depot runners are granted only to
-  allowlisted workflows. Allowlist the workflow first, then `use_depot`
-  routes the package build to `depot-windows-2022-16`.
+  Its single Windows job runs on GitHub-hosted `windows-2022`.
 
-Depot's own CI product was rejected because it is Linux-only; the GitHub App
-managed runners are the adopted path. The runner variables do not activate an
-account, purchase a plan, transfer the repository, migrate secrets, or extend
-the runner allowlist. Those remain explicit external operations.
-See `plans/064-depot-runners-intel-legacy.md`.
+Depot's managed runners were evaluated as an acceleration lane and rejected
+for routine use: warm GitHub CI achieves practical parity with the measured
+Depot pilots, and free standard runners are sufficient. Depot's own CI
+product was separately rejected because it is Linux-only. Depot remains an
+external service unused by this repository. See
+`plans/064-depot-runners-intel-legacy.md`.
 
 **Manual (local scripts):** the per-platform scripts below.
 

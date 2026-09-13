@@ -77,21 +77,22 @@ current-revision merge gate. See `062-ci-gating.md`.
 
 ## Plan 064 — Depot runners + Intel legacy support
 
-ROLLOUT IN PROGRESS — CI policy and canonical owner URLs are published on PR #140;
-the repository is now `ideaplexa/voicetypr`. GitHub Actions remains the
-control plane; Intel is a manual-only GitHub job and Store packaging is an
-immutable manual candidate check. The portable fork-safe pilot (run
-`34785226804` at head `e9a022fc94a4978fc41218b177af368389bc9cb7`) passed
-every scheduled job on the pinned `native-ci.yml`: workflow/front-end green,
-allowlisted Depot `depot-macos-14` in 17m00s and `depot-windows-2022-16` in
-17m29s on the expected Default runner group, Intel skipped. The same head
-passed GitHub-hosted fallback after bundle-local optional compiler-runtime
-discovery closed the Xcode 16.2/16.4 difference; full chronology lives in the
-plan file. Remaining gates: explicit approval before setting recurring
-`DEPOT_RUNNERS_ENABLED=true`; a separate signed/notarized no-publish release
-dry run before any `DEPOT_RELEASE_RUNNERS_ENABLED`; Store and release
-workflows stay outside the runner allowlist. No merge or release occurred.
-See `064-depot-runners-intel-legacy.md`.
+COMPLETE — Depot was evaluated and deliberately rejected for routine use:
+warm GitHub CI achieves practical parity with the measured Depot pilots and
+free standard runners are sufficient, so every workflow now runs exclusively
+on GitHub-hosted standard runners and Depot remains an external, unused
+service. CI policy and canonical owner URLs are published on PR #140; the
+repository is now `ideaplexa/voicetypr`. GitHub Actions remains the control
+plane; Intel is a manual-only GitHub job and Store packaging is an immutable
+manual candidate check. The evaluation record stands: the portable fork-safe
+pilot (run `34785226804` at head `e9a022fc94a4978fc41218b177af368389bc9cb7`)
+passed every scheduled job on the pinned `native-ci.yml` — Depot
+`depot-macos-14` in 17m00s and `depot-windows-2022-16` in 17m29s versus
+GitHub-hosted 35m29s and 22m35s on the same head, Intel skipped — proving
+the lanes worked without justifying metered routine use. No routing
+variables, dispatch inputs, or allowlist dependencies remain; workflows pin
+literal `macos-14`, `windows-2022`, and manual-only `macos-15-intel`. No
+release occurred. See `064-depot-runners-intel-legacy.md`.
 
 ## Code-done, awaiting batched manual smoke (`plans/SMOKE.md`)
 

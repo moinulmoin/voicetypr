@@ -15,11 +15,6 @@ on:
         required: false
         default: false
         type: boolean
-      use_depot:
-        description: 'Use Depot for ARM macOS and Windows x64 (pilot)'
-        required: false
-        default: false
-        type: boolean
 
 permissions:
   contents: read
@@ -133,7 +128,7 @@ jobs:
         run: pnpm build
 
   # ===========================================
-  # Native lanes (ARM macOS + Windows x64) via pinned trusted reusable workflow
+  # Native lanes (ARM macOS + Windows x64) via the same-repository reusable workflow
   # ===========================================
   native:
     needs: [changes, workflow, frontend]
@@ -143,12 +138,10 @@ jobs:
       needs.frontend.result == 'success' &&
       (github.event_name != 'pull_request' || !github.event.pull_request.draft) &&
       (needs.changes.result != 'success' || needs.changes.outputs.native_required != 'false') }}
-    uses: ideaplexa/voicetypr/.github/workflows/native-ci.yml@00e8006fb7efd9f7c6a8ffb2bcc9c30c8a298c52
-    with:
-      use_depot: ${{ github.event_name == 'workflow_dispatch' && inputs.use_depot }}
+    uses: ./.github/workflows/native-ci.yml
 
   # ===========================================
-  # Legacy Intel macOS lane (manual dispatch only; GitHub-hosted, never Depot)
+  # Legacy Intel macOS lane (manual dispatch only; GitHub-hosted)
   # ===========================================
   build-macos-intel:
     needs: [changes, workflow, frontend]

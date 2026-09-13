@@ -1,32 +1,42 @@
 # Plan 064 — Depot runners and Intel legacy support
 
-Status: PORTABLE SECURE PILOT COMPLETE — repository transfer and canonical URL
-cutover landed on PR #140, and current-head pilot `34785226804` proved the
-fork-safe admission design on Depot after the GitHub-hosted fallback passed.
-Routine and release Depot variables remain unset pending explicit
-routine-enablement approval, a signed no-publish release dry run, and release
-runner allowlisting. No release action is authorized here.
+Status: COMPLETE — Depot runners were evaluated end to end and deliberately
+rejected for routine use: warm GitHub CI achieved practical parity and the
+free standard runners are sufficient. Every workflow in this repository runs
+exclusively on GitHub-hosted standard runners; Depot remains an external,
+unused service. The repository transfer and canonical URL cutover landed on
+PR #140, and the chronology below records how the Depot lanes were proven —
+and why they were still not adopted. No release action is authorized here.
 Base: `e9a022fc` (portable pilot head `e9a022fc94a4978fc41218b177af368389bc9cb7`).
 Depends on: 042 (cache correctness), 062 (cheap-check gates and cancellation).
 
 ## Decision
 
-Keep GitHub Actions as the workflow, checks, artifact, signing, GitHub Release,
-and updater control plane. Depot CI itself is not a viable replacement for this
-native pipeline: its sandboxes are Linux-only and its compatibility matrix does
-not support `release` events, environments, or fork PR execution. Use Depot's
-GitHub Actions runners only for trusted Apple Silicon macOS and Windows x64 jobs.
-Keep Ubuntu control-plane jobs on GitHub's standard public-repository runners.
-Depot admission is enforced by a reusable workflow pinned to an immutable
-commit SHA plus the runner group's Selected workflows allowlist — never by
-caller YAML that a pull request can rewrite.
+Keep GitHub Actions as the workflow, checks, artifact, signing, GitHub
+Release, and updater control plane, and run every job on GitHub-hosted
+standard runners. Depot's managed GitHub Actions runners were evaluated as
+an acceleration lane for trusted Apple Silicon macOS and Windows x64 jobs,
+and the pilots below prove the lanes worked — but routine Depot is rejected:
+warm GitHub CI achieves practical parity with the measured Depot runs (same
+head `e9a022fc`: Depot 17m00s macOS / 17m29s Windows-16 versus GitHub-hosted
+35m29s / 22m35s), GitHub's free Windows runner already beat Depot's
+unsuffixed two-core tier, and free standard runners remove metered billing,
+allowlist maintenance, and cross-provider toolchain drift. Depot's own CI
+product also remains rejected: its sandboxes are Linux-only and its
+compatibility matrix does not support `release` events, environments, or
+fork PR execution. No workflow references Depot: there are no runner-routing
+variables, no dispatch trust inputs, and no runner-group allowlist
+dependency, and reintroducing any of them would require a new explicit
+decision. The durable hardening stays: runners, matrices, and timeouts are
+fixed in the trusted `native-ci.yml` callee, so a caller workflow can never
+inject a runner label, timeout, trust boolean, or checkout ref.
 
 Intel macOS becomes legacy/best-effort: no automatic PR lane and no required
 merge check. It remains a separate x86_64 artifact in the explicit release
 workflow and may be requested by a maintainer in a manual full CI dispatch.
 Do not remove `darwin-x86_64` from `latest.json` or strand installed Intel users.
 
-## Rollout state and blockers
+## Evaluation context (historical record)
 
 The public repository now lives at `ideaplexa/voicetypr`. GitHub confirms the
 old repository path redirects, PR #140 and releases moved, and all nine Actions
@@ -47,34 +57,24 @@ Transfer audit:
 - Historical changelog links may rely on redirects. Runtime updater endpoints,
   Help links, badges, clone URLs, and manual release scripts use the canonical
   new owner on PR #140 and must land before the next release.
-- Depot's Default runner group has public repository runner access ON, which
-  is required for this public repository. Public access alone is not the
-  isolation mechanism: the group's Selected workflows allowlist contains only
-  the pinned `native-ci.yml`, every Depot-eligible job is defined inside that
-  trusted callee with fixed labels and timeouts, and fork PRs can only select
-  literal GitHub-hosted runners with a read-only token and no retained
-  checkout credentials.
+- During the pilots, Depot's Default runner group had public repository
+  runner access enabled and a Selected workflows allowlist containing only
+  the pinned `native-ci.yml`; every Depot-eligible job was defined inside
+  that trusted callee with fixed labels and timeouts, and fork PRs could
+  only select literal GitHub-hosted runners with a read-only token and no
+  retained checkout credentials. That isolation design was validated, and
+  its durable core — routing fixed inside the trusted callee — survives the
+  GitHub-only decision.
 
-Provider controls confirmed with Depot: the Startup plan is active, and
-monthly caps are Container 5,000, GitHub Actions 20,000 billable minutes,
-Depot CI 20,000 minutes, and 25 GB each for the GitHub Actions cache and
-Depot Cache.
+Provider controls confirmed with Depot during the evaluation: the Startup
+plan was active, with monthly caps of Container 5,000, GitHub Actions 20,000
+billable minutes, Depot CI 20,000 minutes, and 25 GB each for the GitHub
+Actions cache and Depot Cache. This repository no longer uses any of it.
 
-Remaining external rollout:
-
-1. Routine enablement: `DEPOT_RUNNERS_ENABLED` stays unset until a maintainer
-   explicitly approves recurring Depot use for trusted routine native jobs.
-2. Release dry run: run a separate signed, notarized, no-publish release dry
-   run — `dry_run` builds signed and notarized artifacts while the version
-   commit, tag, publish, and GitHub release jobs stay off — before any
-   `DEPOT_RELEASE_RUNNERS_ENABLED` is considered.
-3. Release allowlisting: `store-msix.yml` and `release.yml` are not in the
-   Default runner group's Selected workflows allowlist. Keeping Store
-   `use_depot=false` and `DEPOT_RELEASE_RUNNERS_ENABLED` unset is what
-   selects GitHub-hosted runners — there is no automatic fallback. Enable in
-   order: first extend the allowlist with the intended immutable workflow
-   refs, then select Depot. If Depot is selected while the workflow is
-   disallowed, the job remains unassigned/denied.
+The rollout closed by decision rather than enablement: instead of extending
+the runner allowlist or setting routing variables, routine and release Depot
+use were rejected and every workflow was pinned to literal GitHub-hosted
+labels. No Depot variable, input, or allowlist step remains to perform.
 
 ## Workflow contract
 
@@ -89,41 +89,29 @@ Remaining external rollout:
 - Every PR keeps GitHub-hosted workflow/frontend prerequisites. Superseded runs
   cancel. Native jobs start only after those prerequisites pass, only for native
   or unknown build inputs, and not while the PR is draft.
-- CI calls the reusable `native-ci.yml` pinned to immutable SHA
-  `00e8006fb7efd9f7c6a8ffb2bcc9c30c8a298c52`; only that exact workflow is in
-  the Default runner group's Selected workflows allowlist. Every
-  Depot-eligible job is defined directly in the trusted callee with fixed
-  labels and admission logic; callers cannot inject a runner label, matrix,
-  timeout, trust boolean, or checkout ref. A manual dispatch may set
-  `use_depot=true` for a controlled pilot; that pilot has passed.
-- Depot admission is exactly: same-repository pull request, push to
-  `refs/heads/main`, or workflow dispatch, combined with
-  `DEPOT_RUNNERS_ENABLED=true` or the manual `use_depot` pilot input. Fork
-  pull_request events and every other caller resolve to literal
-  GitHub-hosted runners, so untrusted contributors cannot consume Depot
-  credit. Once enabled, trusted jobs use `depot-macos-14` and
-  `depot-windows-2022-16`; the 16-core, 64 GB Windows tier is intentional
-  because the unsuffixed Depot label is only two-core/8 GB and was slower
-  than GitHub's free public runner.
+- `ci.yml` calls the same repository's reusable `native-ci.yml` with no
+  inputs. The callee pins ARM macOS to literal `macos-14` and Windows x64 to
+  literal `windows-2022`; no runner-routing variable, dispatch trust input,
+  or allowlist dependency remains. Callers cannot inject a runner label,
+  matrix, timeout, trust boolean, or checkout ref, and fork pull_request
+  events resolve to the same GitHub-hosted runners as trusted calls, so
+  untrusted contributors and maintainers share identical infrastructure.
 - Automatic CI includes Apple Silicon and Windows x64 only. A manual CI
   dispatch exposes `include_intel`; true adds the existing `macos-15-intel`
-  lane. Intel is a direct manual-only GitHub job; it is never Depot-eligible.
+  lane. Intel is a direct manual-only GitHub job on `macos-15-intel`.
 - Store MSIX is manual-only and accepts only exact lowercase 40-character
   SHAs verified as ancestors of `origin/main` with full history before
-  packaging. Its Windows job selects GitHub-hosted runners only while
-  `use_depot` stays false; selecting the Depot label before the workflow is
-  allowlisted leaves the job unassigned/denied, so allowlist extension must
-  precede any Store Depot use. Store MSIX is not an updater/release asset.
-- Release remains manual and keeps Intel on GitHub. `dry_run` builds signed
-  and notarized artifacts while the version commit, tag, publish, and GitHub
-  release jobs stay off. A distinct `DEPOT_RELEASE_RUNNERS_ENABLED=true` may
-  move only the ARM Mac and Windows build jobs, and only after that
-  no-publish dry run passes. Prepare, publish, release assembly,
-  beta-channel publication, artifact names and updater manifests stay
-  unchanged.
+  packaging. Its single Windows job runs on literal `windows-2022`. Store
+  MSIX is not an updater/release asset.
+- Release remains manual and GitHub-hosted: the ARM macOS build job runs on
+  literal `macos-14`, Windows on literal `windows-2022`, and Intel stays on
+  `macos-15-intel`. `dry_run` builds signed and notarized artifacts while
+  the version commit, tag, publish, and GitHub release jobs stay off.
+  Prepare, publish, release assembly, beta-channel publication, artifact
+  names and updater manifests stay unchanged.
 - Native jobs have explicit timeout ceilings (macOS 90, Windows 120 minutes)
-  fixed in the trusted callee, so a stuck runner cannot consume unbounded
-  credit. Draft conversion cancels the previous PR run.
+  fixed in the trusted callee, so a stuck job cannot run unbounded. Draft
+  conversion cancels the previous PR run.
 
 ## Support contract
 
@@ -170,9 +158,9 @@ Rust's final link omitted `libclang_rt.osx.a`. CI and both macOS release lanes
 now discover and link Xcode's compiler runtime. Windows used the unsuffixed
 two-core/8 GB label, reached 100% CPU and 98% memory, and was canceled by the
 user after 57m50s; its compile-only Rust tests passed, but the release build did
-not complete. CI, Store and release routing were then switched to the
-deliberate 16-core, 64 GB `depot-windows-2022-16` tier. Routine/release
-Depot variables remain unset; Store and release workflows did not run.
+not complete. Routing was then switched to the deliberate 16-core, 64 GB
+`depot-windows-2022-16` tier for the remaining pilots. Store and release
+workflows did not run.
 
 Compatibility pilot `34773469966` passed with compiler-runtime linking and
 the 16-core Windows label, proving the native lanes run on Depot. It did not
@@ -193,8 +181,7 @@ workflow under the Selected workflows allowlist and passed all scheduled
 jobs: workflow/front-end passed, the allowlisted Depot macOS lane passed in
 8m19s, Windows-16 passed in 17m11s, and Intel was skipped. Depot labels and
 runner names were observed on the expected Default group. No Intel, Store,
-release, signing, or deployment workload ran in this pilot, and
-routine/release Depot variables remain unset.
+release, signing, or deployment workload ran in this pilot.
 
 The first automatic GitHub-hosted fallback on the pinned callee
 (`34778145500`) exposed a cross-Xcode regression: Xcode 16.2 reported a
@@ -208,7 +195,7 @@ Windows passed in 22m35s, and Intel was skipped.
 Final current-head Depot pilot `34785226804` then passed the same pinned
 portable workflow: macOS passed in 17m00s, Windows-16 passed in 17m29s, and
 Intel was skipped. No Intel, Store, release, signing, or deployment workload
-ran; routine/release Depot variables remain unset.
+ran.
 
 Remote GitHub fallback proof on PR #140 heads `27afadd1` and `c2af36ab`:
 Store and Intel stayed off and all five scheduled jobs passed. The first run
@@ -222,6 +209,7 @@ manual Store/Intel lanes—not from weakening current-head validation.
 
 ## Non-goals
 
-No branch-protection mutation, no `DEPOT_RUNNERS_ENABLED` or
-`DEPOT_RELEASE_RUNNERS_ENABLED` flip, no release, beta publication, Intel
-artifact removal, legacy updater removal, or full Depot CI migration.
+No branch-protection mutation, no release, beta publication, Intel artifact
+removal, or legacy updater removal. Re-enabling Depot in any form — routing
+variables, dispatch inputs, or runner-group allowlist changes — is a
+rejected direction, not a pending rollout step.
