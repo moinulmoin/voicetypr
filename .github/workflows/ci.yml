@@ -143,7 +143,7 @@ jobs:
       needs.frontend.result == 'success' &&
       (github.event_name != 'pull_request' || !github.event.pull_request.draft) &&
       (needs.changes.result != 'success' || needs.changes.outputs.native_required != 'false') }}
-    uses: ideaplexa/voicetypr/.github/workflows/native-ci.yml@a7cb868f0b7718633816aeab1bc454759d2cbd44
+    uses: ideaplexa/voicetypr/.github/workflows/native-ci.yml@00e8006fb7efd9f7c6a8ffb2bcc9c30c8a298c52
     with:
       use_depot: ${{ github.event_name == 'workflow_dispatch' && inputs.use_depot }}
 
