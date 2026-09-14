@@ -96,6 +96,27 @@ export function useOnboardingDesktop({
   const [previousSettings, setPreviousSettings] = useState(settings);
   const sourceChosenByUser = useRef(false);
 
+  // Hydrate persisted consent so a relaunched onboarding cannot silently
+  // overwrite a previously stored opt-out with the default-on state.
+  useEffect(() => {
+    let cancelled = false;
+    Promise.all([
+      invoke<{ enabled: boolean }>("get_telemetry_status"),
+      invoke<{ enabled: boolean }>("get_product_analytics_status"),
+    ])
+      .then(([telemetry, analytics]) => {
+        if (cancelled) return;
+        setTelemetryOptIn(telemetry.enabled);
+        setAnalyticsOptIn(analytics.enabled);
+      })
+      .catch((error) => {
+        log.error("Failed to read stored privacy choices:", error);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
   // Mirror a hotkey that arrives with settings during render rather than
   // synchronously updating state from the settings effect below.
   if (settings !== previousSettings) {
