@@ -142,7 +142,7 @@ This ensures the Tauri updater can successfully unpack and install updates on al
 
 ## Known CI Failure: Intel Artifact Upload ENOTFOUND
 
-The `build-macos (macos-15-intel, x86_64)` CI job can fail in its `Upload preview artifact`
+The manual `build-macos-intel` CI job (runner `macos-15-intel`) can fail in its `Upload preview artifact`
 step with `Failed to CreateArtifact: Unable to make request: ENOTFOUND`. That is a transient,
 runner-side DNS failure reaching GitHub's artifact storage; the build itself completed. Re-run
 the failed job. This is external network noise: do not change build or packaging code for it.
