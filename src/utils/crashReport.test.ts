@@ -22,6 +22,7 @@ const baseReport: ManualReportData = {
   logContent: "INFO redacted log line",
   logTruncated: false,
   logStatusNote: "",
+  debugRingContent: "",
 };
 
 const baseCrashReport: CrashReportData = {
@@ -39,6 +40,7 @@ const baseCrashReport: CrashReportData = {
   logContent: "INFO redacted log line",
   logTruncated: false,
   logStatusNote: "",
+  debugRingContent: "",
 };
 
 beforeEach(() => {
@@ -80,6 +82,7 @@ describe("buildReportBody", () => {
       logFileName: null,
       logContent: "",
       logStatusNote: "No log file found.",
+      debugRingContent: "",
     });
 
     expect(body).toContain("## Latest App Log");
@@ -124,7 +127,18 @@ describe("buildReportBody", () => {
     expect(body).toContain("| Tray Creation Error | status area unavailable |");
   });
 
-  it("omits the System section when systemSpecs are absent (collection failed)", () => {
+  it("shows a collection-failure note instead of silently omitting specs", () => {
+    const body = buildReportBody({
+      ...baseReport,
+      systemSpecsError: "command get_system_specs panicked | in sysinfo",
+    });
+    expect(body).toContain("## System");
+    expect(body).toContain(
+      "> System configuration could not be collected: command get_system_specs panicked in sysinfo",
+    );
+  });
+
+  it("omits the System section entirely when specs are absent with no error", () => {
     const body = buildReportBody(baseReport);
     expect(body).not.toContain("## System");
   });
@@ -148,6 +162,24 @@ describe("buildReportBody", () => {
   });
 });
 
+describe("debug ring section", () => {
+  it("attaches the in-memory ring when present", () => {
+    const body = buildReportBody({
+      ...baseReport,
+      debugRingContent: "DEBUG REC TIMING start=12ms\nDEBUG WHISPER_BACKEND cpu",
+    });
+
+    expect(body).toContain("## Debug (most recent, in-memory ring)");
+    expect(body).toContain("DEBUG WHISPER_BACKEND cpu");
+    expect(body.indexOf("## Debug")).toBeGreaterThan(body.indexOf("## Latest App Log"));
+  });
+
+  it("omits the ring section when the ring is empty", () => {
+    const body = buildReportBody(baseReport);
+    expect(body).not.toContain("## Debug");
+  });
+});
+
 describe("report submission payloads", () => {
   it("builds the manual report endpoint payload", () => {
     expect(buildManualReportPayload(baseReport)).toEqual({
@@ -167,8 +199,17 @@ describe("report submission payloads", () => {
         content: "INFO redacted log line",
         truncated: false,
         statusNote: "",
+        debugRing: "",
       },
     });
+  });
+
+  it("ships the debug ring in the submitted payload (not just the copy view)", () => {
+    const payload = buildManualReportPayload({
+      ...baseReport,
+      debugRingContent: "DEBUG WHISPER_BACKEND cpu",
+    });
+    expect(payload.latestLog.debugRing).toBe("DEBUG WHISPER_BACKEND cpu");
   });
 
   it("includes tray status in the support endpoint payload", () => {

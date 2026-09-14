@@ -187,10 +187,10 @@ fn should_retry(error: &AiProviderError) -> bool {
 
 fn validate_ai_output(output: &str, input: &str) -> Result<String, AiProviderError> {
     let cleaned = strip_wrapping_quotes(
-        strip_known_preamble(strip_wrapping_quotes(
-            strip_markdown_fence(output).trim(),
+        strip_known_preamble(
+            strip_wrapping_quotes(strip_markdown_fence(output).trim(), input),
             input,
-        )),
+        ),
         input,
     )
     .trim()
@@ -255,15 +255,41 @@ fn is_wrapped_in_quotes(text: &str) -> Option<(usize, usize)> {
     })
 }
 
-fn strip_known_preamble(output: &str) -> &str {
+/// Normalize a candidate first line for preamble handling: trim whitespace,
+/// strip wrapping quotes, drop trailing colons. Case-insensitive comparison
+/// is applied by the caller. Shared by the ownership guard and the known-list
+/// lookup so both agree on what "the same line" means.
+fn normalize_preamble_line(line: &str) -> &str {
+    line.trim()
+        .trim_matches(|ch: char| ch == '"' || ch == '\'' || ch.is_whitespace())
+        .trim_end_matches(':')
+        .trim()
+}
+
+fn strip_known_preamble<'a>(output: &'a str, input: &str) -> &'a str {
+    // Single-line output has no preamble; the common case returns before any
+    // guard work.
     let Some((first_line, rest)) = output.split_once('\n') else {
         return output;
     };
-    let normalized = first_line
-        .trim()
-        .trim_matches(|ch: char| ch == '"' || ch == '\'' || ch.is_whitespace())
-        .to_ascii_lowercase();
-    let normalized = normalized.trim_end_matches(':').trim();
+    // The first line is only a strip candidate if the input does not itself
+    // begin with that line. When it does, the line is user content even if
+    // the rest was polished ("Sure\nI will send it." -> "Sure:\nI'll send
+    // it."): stripping it would delete the user's words. Both sides go
+    // through the same borrowed normalizer as the known-list lookup below
+    // (whitespace, wrapping quotes, trailing colons, then ASCII
+    // case-insensitive compare), so a punctuation-fiddled echo still counts
+    // as user content.
+    let candidate = normalize_preamble_line(first_line);
+    let input_first_line = normalize_preamble_line(input.split('\n').next().unwrap_or(input));
+    if !candidate.is_empty() && candidate.eq_ignore_ascii_case(input_first_line) {
+        return output;
+    }
+    // NOTE: no bare "sure" entry. A standalone greeting/acknowledgement is
+    // plausibly the user's own dictated content ("Sure!\nI will send it
+    // tomorrow.", or reflowed to "Sure\nI'll send it tomorrow."), so
+    // stripping it deletes user words. Only an explicit "Here is the …"
+    // wrapper phrase counts as a removable preamble.
     let known = [
         "here is the fixed text",
         "here's the fixed text",
@@ -281,10 +307,11 @@ fn strip_known_preamble(output: &str) -> &str {
         "sure, here's the corrected text",
         "sure, here is the polished text",
         "sure, here's the polished text",
-        "sure",
     ];
-
-    if known.contains(&normalized) {
+    if known
+        .iter()
+        .any(|entry| entry.eq_ignore_ascii_case(candidate))
+    {
         rest.trim()
     } else {
         output
@@ -425,6 +452,86 @@ mod tests {
     fn validate_keeps_identity_output_unchanged() {
         let output = "Already clean.";
         assert_eq!(validate_ai_output(output, output).unwrap(), output);
+    }
+
+    #[test]
+    fn validate_preserves_identity_output_whose_first_line_looks_like_a_preamble() {
+        // Regression: an identity echo whose first line matches a known
+        // preamble ("Sure") used to have that line deleted — the model
+        // repeated the input verbatim, so "Sure" is user content, not a
+        // model wrapper.
+        let input = "Sure\nI will send it tomorrow.";
+        assert_eq!(validate_ai_output(input, input).unwrap(), input);
+    }
+
+    #[test]
+    fn validate_preserves_identity_echo_delivered_in_a_markdown_fence() {
+        let input = "Sure\nI will send it tomorrow.";
+        let output = "```\nSure\nI will send it tomorrow.\n```";
+        assert_eq!(validate_ai_output(output, input).unwrap(), input);
+    }
+
+    #[test]
+    fn validate_preserves_standalone_sure_despite_punctuation_variant() {
+        // Regression: input "Sure!\n…" echoed with different punctuation
+        // ("Sure:") used to normalize to the (since removed) bare "sure"
+        // preamble entry and delete the user's first line.
+        let input = "Sure!\nI will send it tomorrow.";
+        let output = "Sure:\nI\u{2019}ll send it tomorrow.";
+        assert_eq!(validate_ai_output(output, input).unwrap(), output);
+    }
+
+    #[test]
+    fn validate_preserves_sure_when_model_reflows_first_line_onto_newline() {
+        // Regression: the model moved "Sure," onto its own line while
+        // polishing the rest; stripping it deleted the user's opener.
+        let input = "Sure, I will send it tomorrow.";
+        let output = "Sure\nI\u{2019}ll send it tomorrow.";
+        assert_eq!(validate_ai_output(output, input).unwrap(), output);
+    }
+
+    #[test]
+    fn validate_strips_explicit_here_is_wrapper_when_output_is_not_the_input() {
+        // The preamble stripper still removes genuine explicit wrappers —
+        // with or without a "Sure," lead-in — on transformed payloads.
+        assert_eq!(
+            validate_ai_output("Here is the fixed text:\nMeet me at 4.", "meet me at four")
+                .unwrap(),
+            "Meet me at 4."
+        );
+        assert_eq!(
+            validate_ai_output(
+                "Sure, here is the polished text:\nMeet me at 4.",
+                "meet me at four"
+            )
+            .unwrap(),
+            "Meet me at 4."
+        );
+    }
+
+    #[test]
+    fn validate_identity_guard_does_not_bypass_refusal_check() {
+        let refusal = "I'm sorry, I can't help with that.";
+        let error = validate_ai_output(refusal, refusal).unwrap_err();
+        assert!(matches!(error, AiProviderError::BadResponse));
+    }
+
+    #[test]
+    fn validate_preserves_input_first_line_even_when_rest_is_polished() {
+        // Regression: the model echoed the input's literal first line ("Sure")
+        // and polished only the rest. Full-output identity equality missed
+        // this — the line is input content, so it must survive.
+        let input = "Sure\nI will send it tomorrow.";
+        let output = "Sure\nI\u{2019}ll send it tomorrow.";
+        assert_eq!(validate_ai_output(output, input).unwrap(), output);
+    }
+
+    #[test]
+    fn validate_first_line_guard_is_case_insensitive_on_echoed_preamble() {
+        // A case-fiddled echo of the input's first line is still user content.
+        let input = "SURE\nSend it tomorrow.";
+        let output = "sure\nSend it tomorrow.";
+        assert_eq!(validate_ai_output(output, input).unwrap(), output);
     }
 
     #[test]

@@ -20,7 +20,10 @@ interface SettingsContextType {
   isLoading: boolean;
   error: Error | null;
   refreshSettings: () => Promise<void>;
-  updateSettings: (updates: Partial<AppSettings>) => Promise<void>;
+  updateSettings: (
+    updates: Partial<AppSettings>,
+    options?: { publishAfterSave?: boolean },
+  ) => Promise<void>;
 }
 
 const SettingsContext = createContext<SettingsContextType | null>(null);
@@ -49,50 +52,68 @@ export function SettingsProvider({ children }: { children: ReactNode }) {
     }
   }, []);
 
-  const updateSettings = useCallback(async (updates: Partial<AppSettings>) => {
-    // Read the latest settings from the ref rather than the `settings` captured
-    // by this closure. The old `[settings]` dependency captured a snapshot at
-    // closure-creation time, so an in-flight call held a stale `previousSettings`
-    // and its failure-rollback could discard a concurrent update that landed in
-    // between (and a concurrent call would even compute its next state from that
-    // same stale base, overwriting the first call's optimistic write).
-    const prev = settingsRef.current;
-    if (!prev) {
-      return;
-    }
-
-    const nextSettings = { ...prev, ...updates };
-    settingsRef.current = nextSettings;
-    // Optimistic update - update state immediately so UI responds instantly.
-    setSettings(nextSettings);
-
-    try {
-      await invoke("save_settings", {
-        settings: nextSettings,
-        ...(Object.prototype.hasOwnProperty.call(updates, "update_channel")
-          ? { updateChannelExplicit: true }
-          : {}),
-      });
-    } catch (err) {
-      // Roll back only the keys this call touched, preserving any concurrent
-      // updates applied since (to other keys). This is the surgical revert the
-      // stale-closure version got wrong when it restored the whole snapshot.
-      // Spread the latest state, then restore only this call's touched keys to
-      // their pre-call values. Casts sidestep TS's union-index write narrowing
-      // (it would otherwise collapse the write target to `never`); the restored
-      // values come from `prev`, the snapshot taken before applying `updates`.
-      const reverted = { ...(settingsRef.current as object) } as Record<string, unknown>;
-      const prevValues = prev as unknown as Record<string, unknown>;
-      for (const key of Object.keys(updates)) {
-        reverted[key] = prevValues[key];
+  const updateSettings = useCallback(
+    async (updates: Partial<AppSettings>, options?: { publishAfterSave?: boolean }) => {
+      // Read the latest settings from the ref rather than the `settings` captured
+      // by this closure. The old `[settings]` dependency captured a snapshot at
+      // closure-creation time, so an in-flight call held a stale `previousSettings`
+      // and its failure-rollback could discard a concurrent update that landed in
+      // between (and a concurrent call would even compute its next state from that
+      // same stale base, overwriting the first call's optimistic write).
+      const prev = settingsRef.current;
+      if (!prev) {
+        return;
       }
-      const restored = reverted as unknown as AppSettings;
-      settingsRef.current = restored;
-      setSettings(restored);
-      log.error("[SettingsContext] Failed to update settings:", err);
-      throw err;
-    }
-  }, []);
+
+      const nextSettings = { ...prev, ...updates };
+      const publishAfterSave = options?.publishAfterSave === true;
+      if (!publishAfterSave) {
+        settingsRef.current = nextSettings;
+        // Optimistic update - update state immediately so UI responds instantly.
+        setSettings(nextSettings);
+      }
+
+      try {
+        await invoke("save_settings", {
+          settings: nextSettings,
+          ...(Object.prototype.hasOwnProperty.call(updates, "update_channel")
+            ? { updateChannelExplicit: true }
+            : {}),
+        });
+
+        if (publishAfterSave) {
+          // Onboarding completion controls which application tree is mounted.
+          // Publish it only after the backend confirms the durable save.
+          settingsRef.current = nextSettings;
+          setSettings(nextSettings);
+        }
+      } catch (err) {
+        if (publishAfterSave) {
+          log.error("[SettingsContext] Failed to update settings:", err);
+          throw err;
+        }
+
+        // Roll back only the keys this call touched, preserving any concurrent
+        // updates applied since (to other keys). This is the surgical revert the
+        // stale-closure version got wrong when it restored the whole snapshot.
+        // Spread the latest state, then restore only this call's touched keys to
+        // their pre-call values. Casts sidestep TS's union-index write narrowing
+        // (it would otherwise collapse the write target to `never`); the restored
+        // values come from `prev`, the snapshot taken before applying `updates`.
+        const reverted = { ...(settingsRef.current as object) } as Record<string, unknown>;
+        const prevValues = prev as unknown as Record<string, unknown>;
+        for (const key of Object.keys(updates)) {
+          reverted[key] = prevValues[key];
+        }
+        const restored = reverted as unknown as AppSettings;
+        settingsRef.current = restored;
+        setSettings(restored);
+        log.error("[SettingsContext] Failed to update settings:", err);
+        throw err;
+      }
+    },
+    [],
+  );
 
   // Load settings on mount
   useEffect(() => {

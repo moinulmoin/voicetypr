@@ -1,36 +1,55 @@
 name: Store MSIX
 
 on:
-  pull_request:
-    branches: [main]
-    paths:
-      - '.github/workflows/store-msix.yml'
-      - 'package.json'
-      - 'pnpm-lock.yaml'
-      - 'scripts/build-msix-store.ps1'
-      - 'scripts/ensure-ffmpeg-sidecar.cjs'
-      - 'src-tauri/**'
-      - 'sidecar/ffmpeg/**'
-      - 'sidecar/whisper-vulkan/**'
-      # Keep frontend changes in scope; Store package startup/updater behavior is UI-driven too.
-      - 'src/**'
   workflow_dispatch:
+    inputs:
+      commit_sha:
+        description: 'Exact 40-character commit SHA to package'
+        required: true
+        type: string
 
 permissions:
   contents: read
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  group: ${{ github.workflow }}-${{ inputs.commit_sha }}
   cancel-in-progress: true
 
 jobs:
   preflight:
     name: Frontend preflight
     runs-on: ubuntu-latest
+    outputs:
+      commit_sha: ${{ steps.verify.outputs.commit_sha }}
     steps:
       - uses: actions/checkout@v5
         with:
           persist-credentials: false
+          ref: ${{ inputs.commit_sha }}
+
+      - name: Verify immutable package revision
+        id: verify
+        env:
+          REQUESTED_SHA: ${{ inputs.commit_sha }}
+          GIT_TERMINAL_PROMPT: '0'
+        run: |
+          if [[ ! "$REQUESTED_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::commit_sha must be a full lowercase commit SHA"
+            exit 1
+          fi
+          if [[ "$(git rev-parse HEAD)" != "$REQUESTED_SHA" ]]; then
+            echo "::error::Checkout does not match requested commit"
+            exit 1
+          fi
+          # Trust gate: only revisions already merged into main may be packaged.
+          # Fetch the full history of main (no --depth) so the ancestry decision is
+          # deterministic; a bounded depth could false-reject older reviewed commits.
+          git fetch --no-tags origin '+refs/heads/main:refs/remotes/origin/main'
+          if ! git merge-base --is-ancestor "$REQUESTED_SHA" refs/remotes/origin/main; then
+            echo "::error::commit_sha $REQUESTED_SHA is not an ancestor of origin/main; only reviewed commits on main can be packaged"
+            exit 1
+          fi
+          echo "commit_sha=$REQUESTED_SHA" >> "$GITHUB_OUTPUT"
 
       - name: Setup Node.js
         uses: actions/setup-node@v5
@@ -59,7 +78,8 @@ jobs:
   build-store-msix:
     name: Build Store MSIX
     needs: preflight
-    runs-on: windows-latest
+    runs-on: windows-2022
+    timeout-minutes: 90
     env:
       CARGO_TERM_COLOR: always
       CARGO_TARGET_DIR: 'D:\b\app'
@@ -74,6 +94,7 @@ jobs:
         uses: actions/checkout@v5
         with:
           persist-credentials: false
+          ref: ${{ needs.preflight.outputs.commit_sha }}
 
       - name: Setup Node.js
         uses: actions/setup-node@v5
@@ -101,6 +122,12 @@ jobs:
           key: ${{ runner.os }}-pnpm-store-${{ hashFiles('pnpm-lock.yaml') }}
           restore-keys: |
             ${{ runner.os }}-pnpm-store-
+
+      - name: Cache verified FFmpeg sidecars
+        uses: actions/cache@v5
+        with:
+          path: sidecar/ffmpeg/dist
+          key: ffmpeg-sidecars-${{ runner.os }}-${{ hashFiles('scripts/ensure-ffmpeg-sidecar.cjs') }}
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable

@@ -7,11 +7,11 @@
 
   Speak in any app. Voicetypr transcribes your voice and places the result at your cursor.
 
-  [![Latest release](https://img.shields.io/github/v/release/moinulmoin/voicetypr?display_name=tag)](https://github.com/moinulmoin/voicetypr/releases/latest)
+  [![Latest release](https://img.shields.io/github/v/release/ideaplexa/voicetypr?display_name=tag)](https://github.com/ideaplexa/voicetypr/releases/latest)
   [![License: AGPL-3.0](https://img.shields.io/badge/license-AGPL--3.0-2563eb.svg)](LICENSE)
   [![macOS 14+](https://img.shields.io/badge/macOS-14%2B-111827)](https://voicetypr.com/download)
   [![Windows 10/11](https://img.shields.io/badge/Windows-10%2F11-0078D6)](https://voicetypr.com/download)
-  [![Downloads](https://img.shields.io/github/downloads/moinulmoin/voicetypr/total)](https://github.com/moinulmoin/voicetypr/releases)
+  [![Downloads](https://img.shields.io/github/downloads/ideaplexa/voicetypr/total)](https://github.com/ideaplexa/voicetypr/releases)
 
   [Website](https://voicetypr.com) · [Download](https://voicetypr.com/download) · [Changelog](https://voicetypr.com/changelog) · [Help](https://voicetypr.com/help)
 </div>
@@ -68,11 +68,15 @@ Diagnostics and product-analytics controls are available in Settings. See the [P
 
 ### macOS
 
-Requirements: macOS 14 or later, Apple Silicon or Intel, microphone permission, and Accessibility permission for cursor insertion.
+Requirements: macOS 14 or later, Apple Silicon (fully supported) or Intel (legacy/best-effort), microphone permission, and Accessibility permission for cursor insertion.
 
-1. Download the latest macOS package from [voicetypr.com/download](https://voicetypr.com/download) or [GitHub Releases](https://github.com/moinulmoin/voicetypr/releases/latest).
+1. Download the latest macOS package from [voicetypr.com/download](https://voicetypr.com/download) or [GitHub Releases](https://github.com/ideaplexa/voicetypr/releases/latest).
 2. Open the DMG and move Voicetypr to Applications.
 3. Launch the app, grant the requested permissions, and download a transcription model.
+
+Apple Silicon is the primary macOS target and supports Whisper plus Parakeet.
+Intel packages remain available as a legacy Whisper-only download while the
+project evaluates usage before a separately announced end-of-life.
 
 Release builds are signed and notarized by Apple.
 
@@ -116,7 +120,7 @@ Prerequisites:
 - Xcode command-line tools on macOS or Visual Studio Build Tools on Windows
 
 ```bash
-git clone https://github.com/moinulmoin/voicetypr.git
+git clone https://github.com/ideaplexa/voicetypr.git
 cd voicetypr
 pnpm install
 pnpm tauri:dev
@@ -136,7 +140,7 @@ See [`AGENTS.md`](AGENTS.md) and [`CLAUDE.md`](CLAUDE.md) for repository convent
 
 ## Contributing and support
 
-- Report reproducible bugs through [GitHub Issues](https://github.com/moinulmoin/voicetypr/issues).
+- Report reproducible bugs through [GitHub Issues](https://github.com/ideaplexa/voicetypr/issues).
 - Use the in-app **Report a problem** page when logs and system configuration would help diagnosis.
 - Review existing issues and pull requests before starting overlapping work.
 - Keep platform-specific behavior explicit and preserve the CPU-safe main-process invariant on Windows.

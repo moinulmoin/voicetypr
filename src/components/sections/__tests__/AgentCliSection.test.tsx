@@ -124,7 +124,7 @@ describe("AgentCliSection", () => {
     fireEvent.click(await screen.findByRole("button", { name: /copy agent prompt/i }));
 
     expect(writeTextMock).toHaveBeenCalledWith(
-      expect.stringContaining("voicetypr transcribe <file> --json"),
+      expect.stringContaining("voicetypr transcribe --file <file> --json"),
     );
     expect(screen.getByText(/Claude Code, Codex, OpenCode/)).toBeInTheDocument();
   });

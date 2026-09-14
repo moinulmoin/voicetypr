@@ -85,19 +85,14 @@ fn now_playing_snapshot_via_osascript() -> Option<NowPlayingSnapshot> {
     if !output.status.success() {
         if log::log_enabled!(log::Level::Debug) {
             let stderr = String::from_utf8_lossy(&output.stderr);
-            let stdout = String::from_utf8_lossy(&output.stdout);
-
-            let stderr = stderr.trim();
-            let stdout = stdout.trim();
-
-            let stderr_trunc: String = stderr.chars().take(400).collect();
-            let stdout_trunc: String = stdout.chars().take(400).collect();
-
+            // Never log process output verbatim: MediaRemote output can
+            // carry the user's now-playing title/artist/album (plan 044
+            // review). Lengths + exit status are enough to diagnose.
             log::debug!(
-                "osascript now playing query failed | status={:?} stdout={:?} stderr={:?}",
+                "osascript now playing query failed | status={:?} stdout_len={} stderr_len={}",
                 output.status,
-                stdout_trunc,
-                stderr_trunc
+                output.stdout.len(),
+                stderr.len()
             );
         }
         return None;
@@ -108,19 +103,12 @@ fn now_playing_snapshot_via_osascript() -> Option<NowPlayingSnapshot> {
         Err(err) => {
             if log::log_enabled!(log::Level::Debug) {
                 let stderr = String::from_utf8_lossy(&output.stderr);
-                let stdout = String::from_utf8_lossy(&output.stdout);
-
-                let stderr = stderr.trim();
-                let stdout = stdout.trim();
-
-                let stderr_trunc: String = stderr.chars().take(400).collect();
-                let stdout_trunc: String = stdout.chars().take(400).collect();
-
+                // Same privacy rule: lengths only, never raw JSON payloads.
                 log::debug!(
-                    "osascript now playing JSON parse failed | error={:?} stdout={:?} stderr={:?}",
+                    "osascript now playing JSON parse failed | error={:?} stdout_len={} stderr_len={}",
                     err,
-                    stdout_trunc,
-                    stderr_trunc
+                    output.stdout.len(),
+                    stderr.len()
                 );
             }
 

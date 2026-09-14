@@ -3,11 +3,12 @@ import { describe, it } from 'node:test';
 
 import {
   classifyChangedFiles,
+  isFrontendOnlyPath,
   isWorkflowOrDocumentationPath,
 } from './classify-ci-changes.mjs';
 
 describe('CI change classification', () => {
-  it('recognizes workflow, plan, docs, and root documentation paths', () => {
+  it('recognizes workflow paths and Markdown documentation anywhere', () => {
     for (const filePath of [
       '.github/workflows/release.yml',
       '.github/scripts/release-tool.mjs',
@@ -15,25 +16,36 @@ describe('CI change classification', () => {
       'docs/release.md',
       'README.md',
       'CHANGELOG.md',
+      'scripts/README.md',
+      'sidecar/parakeet-swift/README.md',
     ]) {
       assert.equal(isWorkflowOrDocumentationPath(filePath), true, filePath);
     }
   });
 
-  it('requires application checks for product and build inputs', () => {
+  it('separates frontend-only paths from native and packaging inputs', () => {
     for (const filePath of [
       'src/App.tsx',
+      'public/logo.png',
+      'apps/site/src/app.tsx',
+      'vite.config.ts',
+    ]) {
+      assert.equal(isFrontendOnlyPath(filePath), true, filePath);
+      const result = classifyChangedFiles(['README.md', filePath]);
+      assert.equal(result.applicationRequired, true, filePath);
+      assert.equal(result.nativeRequired, false, filePath);
+    }
+
+    for (const filePath of [
       'src-tauri/src/lib.rs',
       'sidecar/parakeet-swift/Package.swift',
       'scripts/ensure-ffmpeg-sidecar.cjs',
       'package.json',
       'pnpm-lock.yaml',
     ]) {
-      assert.equal(
-        classifyChangedFiles(['.github/workflows/ci.yml', filePath]).applicationRequired,
-        true,
-        filePath,
-      );
+      const result = classifyChangedFiles(['.github/workflows/ci.yml', filePath]);
+      assert.equal(result.applicationRequired, true, filePath);
+      assert.equal(result.nativeRequired, true, filePath);
     }
   });
 
@@ -52,9 +64,12 @@ describe('CI change classification', () => {
     ]);
 
     assert.equal(result.applicationRequired, false);
+    assert.equal(result.nativeRequired, false);
   });
 
-  it('runs application checks conservatively when the diff is empty', () => {
-    assert.equal(classifyChangedFiles([]).applicationRequired, true);
+  it('runs application and native checks conservatively when the diff is empty', () => {
+    const result = classifyChangedFiles([]);
+    assert.equal(result.applicationRequired, true);
+    assert.equal(result.nativeRequired, true);
   });
 });

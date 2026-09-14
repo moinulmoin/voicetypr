@@ -1692,10 +1692,8 @@ pub fn load_remote_settings(app: &AppHandle) -> RemoteSettings {
         remote_settings_connection_password_markers(raw_value.as_ref());
 
     let mut settings: RemoteSettings = raw_value
-        .and_then(|v| {
-            log::debug!("🔧 [REMOTE] Raw JSON: {:?}", v);
-            serde_json::from_value(v.clone()).ok()
-        })
+        // Legacy records can still contain plaintext passwords before migration.
+        .and_then(|v| serde_json::from_value(v).ok())
         .unwrap_or_default();
     let mut migrated_legacy_secret = false;
 

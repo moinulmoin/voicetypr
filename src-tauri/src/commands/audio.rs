@@ -215,109 +215,39 @@ impl Drop for StopInFlightGuard {
         self.0.store(false, AtomicOrdering::SeqCst);
     }
 }
-/// RAII guard that finishes a sampled transcription telemetry transaction on
-/// drop, guaranteeing every started transaction is closed on every
-/// success/error/cancel/early-return path. No-op when the inner transaction
-/// was moved out via [`take`](Self::take). Uses only the closed
-/// `crate::telemetry` API; carries no transcript/audio/path/model data.
-struct TransactionFinishGuard(Option<crate::telemetry::TelemetryTransaction>);
-
-impl TransactionFinishGuard {
-    fn new(txn: Option<crate::telemetry::TelemetryTransaction>) -> Self {
-        Self(txn)
-    }
-
-    /// Start a fixed child span on the wrapped transaction, if present.
-    fn start_span(
-        &self,
-        span: crate::telemetry::TranscriptionSpan,
-    ) -> Option<crate::telemetry::TelemetrySpan> {
-        self.0.as_ref().map(|t| t.start_span(span))
-    }
-
-    fn log_transcription(
-        &self,
-        phase: crate::telemetry::TranscriptionPhase,
-        duration_ms: Option<u64>,
-    ) {
-        crate::telemetry::log_transcription_for_transaction(self.0.as_ref(), phase, duration_ms);
-    }
-
-    /// Move the transaction out, defusing the guard so its drop is a no-op.
-    fn take(&mut self) -> Option<crate::telemetry::TelemetryTransaction> {
-        self.0.take()
-    }
-}
-
-impl Drop for TransactionFinishGuard {
-    fn drop(&mut self) {
-        if let Some(t) = self.0.take() {
-            t.finish();
-        }
-    }
-}
-
-/// RAII guard that closes a telemetry child span on every return path.
-struct SpanFinishGuard(Option<crate::telemetry::TelemetrySpan>);
-
-impl SpanFinishGuard {
-    fn new(span: Option<crate::telemetry::TelemetrySpan>) -> Self {
-        Self(span)
-    }
-}
-
-impl Drop for SpanFinishGuard {
-    fn drop(&mut self) {
-        if let Some(span) = self.0.take() {
-            span.finish();
-        }
-    }
-}
-
-/// Decode span + terminal outcome. Cancellation is the default so aborting the
-/// Tokio task during an await still emits a terminal lifecycle event.
-struct DecodeTelemetryGuard<'a> {
-    transaction: &'a TransactionFinishGuard,
-    _span: SpanFinishGuard,
+/// Decode journey (PostHog) + terminal outcome. The GlitchTip log-funnel
+/// transaction/span plumbing was removed (plan 060 pivot: logs never alerted);
+/// failure events now go through `telemetry::capture_transcription_failure`.
+/// Cancellation (None) is the default so aborting the Tokio task during an
+/// await still emits a terminal journey event.
+struct DecodeJourneyGuard {
     started: Instant,
-    outcome: crate::telemetry::TranscriptionPhase,
+    /// None = cancelled/aborted before a terminal outcome was recorded.
+    succeeded: Option<bool>,
     analytics_engine: crate::product_analytics::EngineKind,
 }
 
-impl<'a> DecodeTelemetryGuard<'a> {
-    fn new(
-        transaction: &'a TransactionFinishGuard,
-        analytics_engine: crate::product_analytics::EngineKind,
-    ) -> Self {
+impl DecodeJourneyGuard {
+    fn new(analytics_engine: crate::product_analytics::EngineKind) -> Self {
         Self {
-            transaction,
-            _span: SpanFinishGuard::new(
-                transaction.start_span(crate::telemetry::TranscriptionSpan::Decode),
-            ),
             started: Instant::now(),
-            outcome: crate::telemetry::TranscriptionPhase::DecodeCancelled,
+            succeeded: None,
             analytics_engine,
         }
     }
 
-    fn set_outcome(&mut self, outcome: crate::telemetry::TranscriptionPhase) {
-        self.outcome = outcome;
+    fn set_outcome(&mut self, succeeded: bool) {
+        self.succeeded = Some(succeeded);
     }
 }
 
-impl Drop for DecodeTelemetryGuard<'_> {
+impl Drop for DecodeJourneyGuard {
     fn drop(&mut self) {
         let duration_ms = self.started.elapsed().as_millis() as u64;
-        self.transaction
-            .log_transcription(self.outcome, Some(duration_ms));
-        let outcome = match self.outcome {
-            crate::telemetry::TranscriptionPhase::DecodeSucceeded => {
-                crate::product_analytics::JourneyOutcome::Succeeded
-            }
-            crate::telemetry::TranscriptionPhase::DecodeFailed => {
-                crate::product_analytics::JourneyOutcome::Failed
-            }
-            _ => crate::product_analytics::JourneyOutcome::Cancelled,
+        let outcome = match self.succeeded {
+            Some(true) => crate::product_analytics::JourneyOutcome::Succeeded,
+            Some(false) => crate::product_analytics::JourneyOutcome::Failed,
+            None => crate::product_analytics::JourneyOutcome::Cancelled,
         };
         crate::product_analytics::capture(crate::product_analytics::ProductEvent::StageFinished {
             stage: crate::product_analytics::JourneyStage::Decode,
@@ -328,54 +258,71 @@ impl Drop for DecodeTelemetryGuard<'_> {
     }
 }
 
-/// Delivery span + terminal outcome. Failure is the conservative default, so
-/// cancellation and every early return are recorded without duplicating the
-/// user's text or error details.
-struct DeliveryTelemetryGuard<'a> {
-    transaction: &'a TransactionFinishGuard,
-    _span: SpanFinishGuard,
+/// Delivery journey (PostHog). A task abandoned before delivery is cancelled;
+/// only an attempted paste or clipboard operation can succeed or fail.
+struct DeliveryJourneyGuard {
     started: Instant,
-    succeeded: bool,
+    succeeded: Option<bool>,
 }
 
-impl<'a> DeliveryTelemetryGuard<'a> {
-    fn new(transaction: &'a TransactionFinishGuard) -> Self {
+impl DeliveryJourneyGuard {
+    fn new() -> Self {
         Self {
-            transaction,
-            _span: SpanFinishGuard::new(
-                transaction.start_span(crate::telemetry::TranscriptionSpan::Delivery),
-            ),
             started: Instant::now(),
-            succeeded: false,
+            succeeded: None,
         }
     }
 
     fn mark_succeeded(&mut self) {
-        self.succeeded = true;
+        self.succeeded = Some(true);
+    }
+
+    fn mark_failed(&mut self) {
+        self.succeeded = Some(false);
+    }
+
+    fn outcome(&self) -> crate::product_analytics::JourneyOutcome {
+        match self.succeeded {
+            Some(true) => crate::product_analytics::JourneyOutcome::Succeeded,
+            Some(false) => crate::product_analytics::JourneyOutcome::Failed,
+            None => crate::product_analytics::JourneyOutcome::Cancelled,
+        }
     }
 }
 
-impl Drop for DeliveryTelemetryGuard<'_> {
+impl Drop for DeliveryJourneyGuard {
     fn drop(&mut self) {
         let duration_ms = self.started.elapsed().as_millis() as u64;
-        let (phase, outcome) = if self.succeeded {
-            (
-                crate::telemetry::TranscriptionPhase::DeliverySucceeded,
-                crate::product_analytics::JourneyOutcome::Succeeded,
-            )
-        } else {
-            (
-                crate::telemetry::TranscriptionPhase::DeliveryFailed,
-                crate::product_analytics::JourneyOutcome::Failed,
-            )
-        };
-        self.transaction.log_transcription(phase, Some(duration_ms));
         crate::product_analytics::capture(crate::product_analytics::ProductEvent::StageFinished {
             stage: crate::product_analytics::JourneyStage::Delivery,
-            outcome,
+            outcome: self.outcome(),
             duration_ms,
             engine: None,
         });
+    }
+}
+
+#[cfg(test)]
+mod delivery_journey_tests {
+    use super::DeliveryJourneyGuard;
+    use crate::product_analytics::JourneyOutcome;
+
+    #[test]
+    fn cancelled_or_stale_task_before_delivery_is_not_a_failure() {
+        assert_eq!(
+            DeliveryJourneyGuard::new().outcome(),
+            JourneyOutcome::Cancelled
+        );
+    }
+
+    #[test]
+    fn attempted_delivery_records_its_result_even_if_history_is_cancelled() {
+        let mut delivered = DeliveryJourneyGuard::new();
+        delivered.mark_succeeded();
+        assert_eq!(delivered.outcome(), JourneyOutcome::Succeeded);
+        let mut failed = DeliveryJourneyGuard::new();
+        failed.mark_failed();
+        assert_eq!(failed.outcome(), JourneyOutcome::Failed);
     }
 }
 
@@ -909,31 +856,115 @@ pub(crate) fn is_duplicate_transcription(
 
     same_text && same_model && within_window
 }
+/// Closed-vocabulary engine label for failure-event tags (plan 060).
+fn engine_kind_label(selection: &ActiveEngineSelection) -> &'static str {
+    match selection {
+        ActiveEngineSelection::Whisper { .. } => "whisper",
+        ActiveEngineSelection::Parakeet { .. } => "parakeet",
+        ActiveEngineSelection::Cloud { provider, .. } => provider.id(),
+        ActiveEngineSelection::Remote { .. } => "remote",
+    }
+}
+
+/// Model name for failure-event tags; empty for engines without one
+/// (remote servers carry user-chosen names — never sent).
+fn engine_model_label(selection: &ActiveEngineSelection) -> String {
+    match selection {
+        ActiveEngineSelection::Whisper { model_name, .. }
+        | ActiveEngineSelection::Parakeet { model_name, .. }
+        | ActiveEngineSelection::Cloud { model_name, .. } => model_name.clone(),
+        ActiveEngineSelection::Remote { .. } => String::new(),
+    }
+}
+
+/// Closed failure-class vocabulary driving `flow.transcription.failed.*`
+/// event names. Executor failures retain their typed code; legacy desktop
+/// failures still use the string marker fallback.
+fn transcription_failure_class(failure: &TranscriptionFailure) -> String {
+    let class = match failure {
+        TranscriptionFailure::Local {
+            code: Some(code), ..
+        } => match code {
+            TranscriptionErrorCode::Timeout => "timeout",
+            TranscriptionErrorCode::StorageLimitExceeded => "cloud_storage_limit",
+            TranscriptionErrorCode::TransportFailed => "transport",
+            TranscriptionErrorCode::Unauthorized => "auth",
+            TranscriptionErrorCode::ModelUnavailable
+            | TranscriptionErrorCode::EngineUnavailable => "model_unavailable",
+            _ => "engine_failed",
+        },
+        TranscriptionFailure::Local {
+            message,
+            code: None,
+        } => {
+            let lower = message.to_ascii_lowercase();
+            if lower.contains("timed out") {
+                "timeout"
+            } else if lower.contains("storage limit") {
+                "cloud_storage_limit"
+            } else if lower.contains("could not reach")
+                || lower.contains("rate limit")
+                || lower.contains("network")
+            {
+                "transport"
+            } else if lower.contains("invalid api key") || lower.contains("authentication") {
+                "auth"
+            } else if lower.contains("model") {
+                "model_unavailable"
+            } else {
+                "engine_failed"
+            }
+        }
+        TranscriptionFailure::Remote(err) => match err {
+            RemoteClientError::AuthFailed { .. } => "remote_auth",
+            RemoteClientError::Timeout { .. } => "remote_timeout",
+            RemoteClientError::ConnectFailed { .. } => "remote_connect",
+            RemoteClientError::HttpStatus { .. } => "remote_http",
+            RemoteClientError::ResponseDecode { .. } | RemoteClientError::ResponseSchema { .. } => {
+                "remote_response"
+            }
+            RemoteClientError::RequestBuild { .. } | RemoteClientError::JoinFailed { .. } => {
+                "remote_internal"
+            }
+        },
+    };
+    class.to_string()
+}
 
 #[derive(Debug, Clone)]
 pub(crate) enum TranscriptionFailure {
-    Local(String),
+    Local {
+        message: String,
+        code: Option<TranscriptionErrorCode>,
+    },
     Remote(RemoteClientError),
 }
 
 impl TranscriptionFailure {
+    fn local(message: String) -> Self {
+        Self::Local {
+            message,
+            code: None,
+        }
+    }
+
     fn message(&self) -> String {
         match self {
-            Self::Local(message) => message.clone(),
+            Self::Local { message, .. } => message.clone(),
             Self::Remote(error) => error.to_string(),
         }
     }
 
     fn error_kind(&self) -> &'static str {
         match self {
-            Self::Local(_) => "local",
+            Self::Local { .. } => "local",
             Self::Remote(error) => remote_client_error_kind(error),
         }
     }
 
     fn server_error_body(&self) -> Option<&str> {
         match self {
-            Self::Local(_) => None,
+            Self::Local { .. } => None,
             Self::Remote(error) => error.server_error_body(),
         }
     }
@@ -943,7 +974,7 @@ impl TranscriptionFailure {
     fn is_retryable_failure(&self) -> bool {
         match self {
             Self::Remote(_) => true,
-            Self::Local(message) => {
+            Self::Local { message, .. } => {
                 !message.contains("cancelled")
                     && !message.contains("Cancelled")
                     && !message.contains("too short")
@@ -1078,7 +1109,7 @@ fn build_desktop_transcription_request(
     audio_path: PathBuf,
 ) -> Result<TranscriptionRequest, TranscriptionFailure> {
     let engine = ProviderEngine::from_engine_str(active.engine_name()).ok_or_else(|| {
-        TranscriptionFailure::Local(format!(
+        TranscriptionFailure::local(format!(
             "Unknown transcription engine: {}",
             active.engine_name()
         ))
@@ -1126,7 +1157,10 @@ fn desktop_failure_from_transcription_error(
             _ => error.user_message,
         },
     };
-    TranscriptionFailure::Local(message)
+    TranscriptionFailure::Local {
+        message,
+        code: Some(error.code),
+    }
 }
 
 fn is_non_speech_transcript(raw: &str) -> bool {
@@ -1581,6 +1615,11 @@ where
         let should_try_gpu = mode == "gpu" || status.gpu_available != Some(false);
 
         if should_try_gpu {
+            // Plan 060.1: mark the ACTUAL attempt BEFORE the await. Success-only
+            // marking left the backend tag stale through the whole sidecar
+            // attempt, so a failure event (or a later read) could attribute this
+            // recording to whatever backend the PREVIOUS run used.
+            crate::whisper::transcriber::record_attempt_backend("sidecar");
             let gpu_result = gpu_client
                 .transcribe(
                     app,
@@ -1623,11 +1662,21 @@ where
         }
     }
 
+    // Plan 060.1: the CPU attempt's mark — placed BEFORE model init and the
+    // CPU transcription, so a failure anywhere below attributes "cpu" (or the
+    // sidecar above), never a previous recording's backend.
+    #[cfg(target_os = "windows")]
+    crate::whisper::transcriber::record_attempt_backend("cpu");
+
     let transcriber = {
         let cache_state = app.state::<AsyncMutex<TranscriberCache>>();
         let mut cache = cache_state.lock().await;
         cache.get_or_create(model_path)?
     };
+    // Plan 060.1: warm-cache attempts use the loaded instance's backend.
+    // Cold initialization records each selected backend before attempting it,
+    // so a failed initialization retains the final attempted backend as well.
+    crate::whisper::transcriber::record_attempt_backend(transcriber.backend());
 
     let audio_path = audio_path.to_path_buf();
     let language = language.map(str::to_owned);
@@ -2482,7 +2531,7 @@ mod tests {
     #[test]
     fn failed_history_row_supports_local_engine_failures() {
         let row = build_failed_transcription_row(
-            &TranscriptionFailure::Local("Transcription timed out".to_string()),
+            &TranscriptionFailure::local("Transcription timed out".to_string()),
             "base.en",
             "recordings/failure.wav",
         );
@@ -2499,16 +2548,16 @@ mod tests {
     #[test]
     fn is_retryable_failure_excludes_cancellation_and_too_short() {
         assert!(
-            TranscriptionFailure::Local("Transcription timed out".to_string())
+            TranscriptionFailure::local("Transcription timed out".to_string())
                 .is_retryable_failure()
         );
-        assert!(TranscriptionFailure::Local("OpenAI error: 500".to_string()).is_retryable_failure());
+        assert!(TranscriptionFailure::local("OpenAI error: 500".to_string()).is_retryable_failure());
         assert!(
-            !TranscriptionFailure::Local("Transcription cancelled".to_string())
+            !TranscriptionFailure::local("Transcription cancelled".to_string())
                 .is_retryable_failure()
         );
         assert!(
-            !TranscriptionFailure::Local("Recording too short".to_string()).is_retryable_failure()
+            !TranscriptionFailure::local("Recording too short".to_string()).is_retryable_failure()
         );
     }
 
@@ -2891,7 +2940,7 @@ mod tests {
         let app_state = Arc::new(AppState::new());
         let history_path = unique_side_effect_path("failed-history");
         let row = build_failed_transcription_row(
-            &TranscriptionFailure::Local("Transcription timed out".to_string()),
+            &TranscriptionFailure::local("Transcription timed out".to_string()),
             "base.en",
             "recording.wav",
         );
@@ -4603,10 +4652,6 @@ pub async fn start_recording(
 
     // Update state to recording
     update_recording_state(&app, RecordingState::Recording, None);
-    crate::telemetry::log_transcription(
-        crate::telemetry::TranscriptionPhase::RecordingStarted,
-        None,
-    );
     crate::product_analytics::capture(crate::product_analytics::ProductEvent::RecordingStarted);
 
     // If a stop was requested while starting (toggle or PTT), honor it immediately
@@ -4975,10 +5020,6 @@ pub async fn stop_recording(
             return Ok("".to_string());
         }
     }
-    crate::telemetry::log_transcription(
-        crate::telemetry::TranscriptionPhase::RecordingStopped,
-        capture_metrics.as_ref().map(|m| m.duration_ms),
-    );
     crate::product_analytics::capture(crate::product_analytics::ProductEvent::RecordingStopped {
         duration_ms: capture_metrics.as_ref().map(|metrics| metrics.duration_ms),
     });
@@ -5479,7 +5520,10 @@ pub async fn stop_recording(
     let speech_evidence_attempt_for_task = speech_evidence_attempt;
     // Spawn and track the transcription task
     let app_for_task = app.clone();
-    let task_handle = tokio::spawn(async move {
+    let task_handle = tokio::spawn(
+        crate::whisper::transcriber::ATTEMPT_BACKEND.scope(
+            std::cell::Cell::new(None),
+            async move {
         let mut speech_evidence_attempt = speech_evidence_attempt_for_task;
         log::debug!("Transcription task started");
 
@@ -5516,14 +5560,9 @@ pub async fn stop_recording(
             return;
         }
 
-        let mut telemetry_transaction =
-            TransactionFinishGuard::new(crate::telemetry::start_transcription_transaction());
-        let mut decode_telemetry = DecodeTelemetryGuard::new(
-            &telemetry_transaction,
-            engine_selection_for_task.analytics_kind(),
-        );
-        telemetry_transaction
-            .log_transcription(crate::telemetry::TranscriptionPhase::DecodeStarted, None);
+        let mut decode_journey =
+            DecodeJourneyGuard::new(engine_selection_for_task.analytics_kind());
+        let decode_started = Instant::now();
 
         let transcription_result: Result<TranscriptionResult, TranscriptionFailure> =
             match &engine_selection_for_task {
@@ -5564,7 +5603,7 @@ pub async fn stop_recording(
                         );
 
                         let audio_data = std::fs::read(&audio_path_clone).map_err(|e| {
-                            TranscriptionFailure::Local(format!("Failed to read audio file: {}", e))
+                            TranscriptionFailure::local(format!("Failed to read audio file: {}", e))
                         })?;
 
                         let audio_size_kb = audio_data.len() as f64 / 1024.0;
@@ -5627,17 +5666,41 @@ pub async fn stop_recording(
                     .await
                 }
             };
-        let decode_phase = match &transcription_result {
-            Ok(_) => crate::telemetry::TranscriptionPhase::DecodeSucceeded,
-            Err(TranscriptionFailure::Local(message))
-                if message.contains("cancelled") || message.contains("Cancelled") =>
-            {
-                crate::telemetry::TranscriptionPhase::DecodeCancelled
+        // Plan 060: terminal decode failures become alertable GlitchTip
+        // events (fixed class-suffixed message + closed-vocabulary tags).
+        // Cancelled dictations are user intent, not failures — never sent.
+        // The PostHog decode journey records success/failure/cancel.
+        {
+            let cancelled = match &transcription_result {
+                Err(TranscriptionFailure::Local { message, .. }) => {
+                    message.contains("cancelled") || message.contains("Cancelled")
+                }
+                _ => false,
+            };
+            if !cancelled {
+                decode_journey.set_outcome(transcription_result.is_ok());
             }
-            Err(_) => crate::telemetry::TranscriptionPhase::DecodeFailed,
-        };
-        decode_telemetry.set_outcome(decode_phase);
-        drop(decode_telemetry);
+            if let Err(failure) = &transcription_result {
+                if !cancelled {
+                    let backend = if matches!(
+                        engine_selection_for_task,
+                        ActiveEngineSelection::Whisper { .. }
+                    ) {
+                        crate::whisper::transcriber::attempt_backend()
+                    } else {
+                        None
+                    };
+                    crate::telemetry::capture_transcription_failure(
+                        engine_kind_label(&engine_selection_for_task),
+                        &engine_model_label(&engine_selection_for_task),
+                        backend,
+                        &transcription_failure_class(failure),
+                        Some(decode_started.elapsed().as_millis() as u64),
+                    );
+                }
+            }
+        }
+        drop(decode_journey);
 
         speech_evidence_attempt.set_outcome(if transcription_result.is_ok() {
             SpeechEvidenceOutcome::EngineSuccess
@@ -5776,16 +5839,9 @@ pub async fn stop_recording(
                 let transcription_for_process = transcription.clone();
                 let should_emit_enhancing_for_task = should_emit_enhancing;
                 let recording_file_for_task = recording_file.clone();
-                let telemetry_transaction_for_process = telemetry_transaction.take();
 
                 (async move {
-                    let telemetry_transaction =
-                        TransactionFinishGuard::new(telemetry_transaction_for_process);
                     let formatting_started = Instant::now();
-                    let formatting_span = SpanFinishGuard::new(
-                        telemetry_transaction
-                            .start_span(crate::telemetry::TranscriptionSpan::Formatting),
-                    );
 
                     // 1. Process the transcription and enhancement
                     let (final_text, mut writing_metadata, should_deliver, writing_succeeded) =
@@ -5960,27 +6016,17 @@ pub async fn stop_recording(
                                 (text_for_process.clone(), None, false, false)
                             }
                         };
-                    drop(formatting_span);
-                    telemetry_transaction.log_transcription(
-                        if writing_succeeded {
-                            crate::telemetry::TranscriptionPhase::FormattingSucceeded
+                    // PostHog formatting journey (telemetry funnel removed, plan 047).
+                    crate::product_analytics::capture(crate::product_analytics::ProductEvent::StageFinished {
+                        stage: crate::product_analytics::JourneyStage::Formatting,
+                        outcome: if writing_succeeded {
+                            crate::product_analytics::JourneyOutcome::Succeeded
                         } else {
-                            crate::telemetry::TranscriptionPhase::FormattingFailed
+                            crate::product_analytics::JourneyOutcome::Failed
                         },
-                        Some(formatting_started.elapsed().as_millis() as u64),
-                    );
-                    crate::product_analytics::capture(
-                        crate::product_analytics::ProductEvent::StageFinished {
-                            stage: crate::product_analytics::JourneyStage::Formatting,
-                            outcome: if writing_succeeded {
-                                crate::product_analytics::JourneyOutcome::Succeeded
-                            } else {
-                                crate::product_analytics::JourneyOutcome::Failed
-                            },
-                            duration_ms: formatting_started.elapsed().as_millis() as u64,
-                            engine: None,
-                        },
-                    );
+                        duration_ms: formatting_started.elapsed().as_millis() as u64,
+                        engine: None,
+                    });
 
                     // 2. Hide pill window first, then insert text with reduced delay
                     let app_state = app_for_process.state::<AppState>();
@@ -6031,8 +6077,7 @@ pub async fn stop_recording(
                         return;
                     }
 
-                    let mut delivery_telemetry =
-                        DeliveryTelemetryGuard::new(&telemetry_transaction);
+                    let mut delivery_journey = DeliveryJourneyGuard::new();
 
                     // Now handle text insertion or clipboard copy based on auto_paste_transcription.
                     // Missing setting keys default inside get_settings; actual settings-read failures fail closed
@@ -6101,11 +6146,14 @@ pub async fn stop_recording(
                         let insertion_start = Instant::now();
                         match insert_future.await {
                             Ok(_) => {
-                                delivery_telemetry.mark_succeeded();
+                                delivery_journey.mark_succeeded();
                                 log::debug!("Text inserted at cursor successfully");
                             }
                             Err(e) => {
+                                delivery_journey.mark_failed();
                                 log::error!("Failed to insert text: {}", e);
+                                crate::telemetry::capture_paste_failure("insert");
+
 
                                 // Check if it's an accessibility permission issue
                                 if e.contains("accessibility") || e.contains("permission") {
@@ -6158,12 +6206,14 @@ pub async fn stop_recording(
                         let insertion_start = Instant::now();
                         match copy_future.await {
                             Ok(_) => {
-                                delivery_telemetry.mark_succeeded();
+                                delivery_journey.mark_succeeded();
                                 log::debug!("Text copied to clipboard (auto-paste disabled)");
                                 pill_toast(&app_for_process, "Transcription copied", 1500);
                             }
                             Err(e) => {
+                                delivery_journey.mark_failed();
                                 log::error!("Failed to copy text to clipboard: {}", e);
+                                crate::telemetry::capture_paste_failure("clipboard");
                                 pill_toast(&app_for_process, "Copy failed", 1500);
                             }
                         }
@@ -6236,7 +6286,7 @@ pub async fn stop_recording(
             }
             Err(failure) => {
                 match &failure {
-                    TranscriptionFailure::Local(e)
+                    TranscriptionFailure::Local { message: e, .. }
                         if e.contains("cancelled") || e.contains("Cancelled") =>
                     {
                         log::info!("Handling transcription cancellation");
@@ -6254,7 +6304,7 @@ pub async fn stop_recording(
                         }
                         update_recording_state(&app_for_task, RecordingState::Idle, None);
                     }
-                    TranscriptionFailure::Local(e) if e.contains("too short") => {
+                    TranscriptionFailure::Local { message: e, .. } if e.contains("too short") => {
                         // Handle "too short" errors with specific user feedback
                         log::info!("Recording was too short: {}", e);
 
@@ -6350,7 +6400,7 @@ pub async fn stop_recording(
                             update_recording_state(&app_for_reset, RecordingState::Idle, None);
                         });
                     }
-                    TranscriptionFailure::Local(e) => {
+                    TranscriptionFailure::Local { message: e, .. } => {
                         // Genuine local/cloud failure. If the recording was preserved
                         // (save_recordings on), write a retryable failed row so the user
                         // can re-transcribe from History instead of losing the dictation.
@@ -6445,7 +6495,9 @@ pub async fn stop_recording(
                 }
             }
         }
-    });
+            },
+        ),
+    );
 
     // Track the transcription task
     let app_state = app.state::<AppState>();
@@ -7468,46 +7520,46 @@ pub async fn cancel_recording(app: AppHandle) -> Result<(), String> {
     }
 
     // Stop recording if active
+    //
+    // Plan 060.1 — restoration before propagation: the stop outcome is
+    // COLLECTED, not propagated with `?`. Every cancellation cleanup below
+    // (media resume, ESC state, pill, state transitions) must run even when
+    // the recorder stop fails, and the error is surfaced only AFTER the
+    // user's paused media is restored — a failed ESC-cancel must never
+    // strand a paused track or a stuck recording state.
     let recorder_state = app.state::<RecorderState>();
-    let is_recording = {
-        let guard = recorder_state
+    let stop_error: Option<String> = (|| -> Result<(), String> {
+        let mut guard = recorder_state
             .inner()
             .0
             .lock()
             .map_err(|e| format!("Failed to acquire recorder lock: {}", e))?;
-        guard.is_recording()
-    };
-
-    if is_recording {
+        if !guard.is_recording() {
+            return Ok(());
+        }
         log::info!("Stopping recorder");
-        // Just stop the recorder, don't do full stop_recording flow
-        {
-            let mut recorder = recorder_state
-                .inner()
-                .0
-                .lock()
-                .map_err(|e| format!("Failed to acquire recorder lock: {}", e))?;
-            let _ = recorder.stop_recording()?;
-        }
+        // Just stop the recorder, don't do full stop_recording flow.
+        // A stop error keeps the WAV on disk for the orphan cleanup when the
+        // worker never finalized (same policy as stop_unfinalized); only a
+        // clean stop may delete the cancelled recording.
+        match guard.stop_recording() {
+            Ok(_) => {
+                // Clean up audio file if it exists
+                if let Ok(path_guard) = app_state.current_recording_path.lock() {
+                    if let Some(audio_path) = path_guard.as_ref() {
+                        log::info!("Removing cancelled recording file");
 
-        // Clean up audio file if it exists
-        if let Ok(path_guard) = app_state.current_recording_path.lock() {
-            if let Some(audio_path) = path_guard.as_ref() {
-                log::info!("Removing cancelled recording file");
-
-                if let Err(e) = std::fs::remove_file(audio_path) {
-                    log::warn!("Failed to remove cancelled recording: {}", e);
+                        if let Err(e) = std::fs::remove_file(audio_path) {
+                            log::warn!("Failed to remove cancelled recording: {}", e);
+                        }
+                    }
                 }
+                Ok(())
             }
+            Err(e) => Err(e),
         }
-    }
-
-    if matches!(current_state, RecordingState::Recording) {
-        crate::telemetry::log_transcription(
-            crate::telemetry::TranscriptionPhase::RecordingCancelled,
-            None,
-        );
-    }
+    })()
+    .err();
 
     // Resume system media if we paused it
     MEDIA_CONTROLLER.resume_if_we_paused();
@@ -7560,6 +7612,13 @@ pub async fn cancel_recording(app: AppHandle) -> Result<(), String> {
         }
     }
     crate::trigger::engine_host::rebuild_engine_bindings(&app);
+
+    // Plan 060.1: restoration is complete (media resumed, ESC state cleared,
+    // state machine landed on Idle/Error) — NOW surface the stop failure.
+    if let Some(e) = stop_error {
+        log::error!("Cancellation stop failed after cleanup: {}", e);
+        return Err(e);
+    }
 
     log::info!("=== CANCEL RECORDING COMPLETED ===");
     Ok(())
@@ -7967,5 +8026,90 @@ mod diarization_tests {
         ];
         let result = group_words_into_speaker_text(&words);
         assert_eq!(result, "Speaker 0: Hello there.\n\nSpeaker 1: How are you?");
+    }
+}
+
+#[cfg(test)]
+mod failure_class_tests {
+    use super::*;
+
+    #[test]
+    fn typed_failure_class_is_independent_of_display_text_and_detail() {
+        use crate::transcription::error::TranscriptionError;
+        for (code, class) in [
+            (TranscriptionErrorCode::Unauthorized, "auth"),
+            (TranscriptionErrorCode::TransportFailed, "transport"),
+            (
+                TranscriptionErrorCode::StorageLimitExceeded,
+                "cloud_storage_limit",
+            ),
+            (
+                TranscriptionErrorCode::ModelUnavailable,
+                "model_unavailable",
+            ),
+            (
+                TranscriptionErrorCode::EngineUnavailable,
+                "model_unavailable",
+            ),
+            (TranscriptionErrorCode::Timeout, "timeout"),
+            (TranscriptionErrorCode::EngineFailed, "engine_failed"),
+        ] {
+            let error = TranscriptionError::new(
+                code,
+                TranscriptionSource::DesktopRecording,
+                "Display copy changed",
+            )
+            .with_detail("network model authentication timed out");
+            let failure = desktop_failure_from_transcription_error(error);
+            assert_eq!(transcription_failure_class(&failure), class);
+        }
+    }
+
+    #[test]
+    fn typed_failure_keeps_desktop_cancellation_and_history_messages() {
+        use crate::transcription::error::TranscriptionError;
+        for (code, message, retryable) in [
+            (
+                TranscriptionErrorCode::Cancelled,
+                "Transcription cancelled",
+                false,
+            ),
+            (
+                TranscriptionErrorCode::Timeout,
+                "Transcription timed out",
+                true,
+            ),
+            (
+                TranscriptionErrorCode::Unauthorized,
+                "Display copy: provider detail",
+                true,
+            ),
+        ] {
+            let failure = desktop_failure_from_transcription_error(
+                TranscriptionError::new(
+                    code,
+                    TranscriptionSource::DesktopRecording,
+                    "Display copy",
+                )
+                .with_detail("provider detail"),
+            );
+            assert_eq!(failure.message(), message);
+            assert_eq!(failure.is_retryable_failure(), retryable);
+            assert_eq!(failure.error_kind(), "local");
+        }
+    }
+
+    #[test]
+    fn legacy_failures_keep_string_classification() {
+        assert_eq!(
+            transcription_failure_class(&TranscriptionFailure::local(
+                "Transcription timed out".into()
+            )),
+            "timeout"
+        );
+        assert_eq!(
+            transcription_failure_class(&TranscriptionFailure::local("network error".into())),
+            "transport"
+        );
     }
 }

@@ -25,7 +25,7 @@ on:
         required: false
         type: string
       dry_run:
-        description: 'Dry run (build artifacts only, no version bump or release)'
+        description: 'Dry run (build signed and notarized artifacts only; no version commit, no tag, no GitHub release)'
         required: false
         default: false
         type: boolean
@@ -78,19 +78,37 @@ jobs:
   build-macos-aarch64:
     needs: prepare
     runs-on: macos-14
+    timeout-minutes: 180
     steps:
       - name: Checkout
         uses: actions/checkout@v4
         with:
           ref: ${{ needs.prepare.outputs.base_sha }}
 
-      - name: Select Swift 6 toolchain (Parakeet sidecar needs Xcode 16+)
+      - name: Select Swift 6 toolchain and configure Clang runtime
         run: |
-          xcode=$(ls -d /Applications/Xcode_1[6-9]*.app /Applications/Xcode_[2-9][0-9]*.app 2>/dev/null | sort -V | tail -1)
+          xcode=$(find /Applications -maxdepth 1 \( -type d -o -type l \) \( -name 'Xcode_1[6-9]*.app' -o -name 'Xcode_[2-9][0-9]*.app' \) | sort -V | tail -1)
           if [ -z "$xcode" ]; then echo "No Xcode >=16 (Swift 6) found on runner" >&2; exit 1; fi
           echo "Selecting $xcode"
           sudo xcode-select -s "$xcode"
           swift --version
+          # Xcode 16.4 emits availability checks in whisper.cpp's Metal objects,
+          # but Rust's final link does not automatically include compiler-rt.
+          # Older toolchains (e.g. GitHub-hosted Xcode 16.2) may not ship or
+          # require the archive, so discovery is bundle-local and optional:
+          # link libclang_rt.osx.a only when the selected Xcode actually has one.
+          clang_runtime=$(
+            find "$xcode/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/lib/clang" \
+              -type f -name 'libclang_rt.osx.a' 2>/dev/null \
+              | sort -V \
+              | tail -1
+          )
+          if [ -n "$clang_runtime" ]; then
+            echo "Linking compiler-rt archive: $clang_runtime"
+            echo "RUSTFLAGS=${RUSTFLAGS:+$RUSTFLAGS }-C link-arg=$clang_runtime" >> "$GITHUB_ENV"
+          else
+            echo "No libclang_rt.osx.a in $xcode; continuing without explicit compiler-rt."
+          fi
 
       - name: Capture Swift toolchain cache key
         id: swift-toolchain
@@ -175,9 +193,6 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_KEY_PASSWORD }}
         run: |
-          if [[ "${{ inputs.dry_run }}" == "true" ]]; then
-            unset APPLE_ID APPLE_PASSWORD APPLE_TEAM_ID
-          fi
           TAURI_CONFIG_OVERRIDE=$(jq -nc --arg identity "$APPLE_SIGNING_IDENTITY" '{bundle:{macOS:{signingIdentity:$identity}}}')
           pnpm tauri build --target aarch64-apple-darwin --bundles app,dmg --config src-tauri/tauri.macos.conf.json --config "$TAURI_CONFIG_OVERRIDE" --ci --verbose
 
@@ -272,19 +287,37 @@ jobs:
   build-macos-x86_64:
     needs: prepare
     runs-on: macos-15-intel
+    timeout-minutes: 180
     steps:
       - name: Checkout
         uses: actions/checkout@v4
         with:
           ref: ${{ needs.prepare.outputs.base_sha }}
 
-      - name: Select Swift 6 toolchain (Parakeet sidecar needs Xcode 16+)
+      - name: Select Swift 6 toolchain and configure Clang runtime
         run: |
-          xcode=$(ls -d /Applications/Xcode_1[6-9]*.app /Applications/Xcode_[2-9][0-9]*.app 2>/dev/null | sort -V | tail -1)
+          xcode=$(find /Applications -maxdepth 1 \( -type d -o -type l \) \( -name 'Xcode_1[6-9]*.app' -o -name 'Xcode_[2-9][0-9]*.app' \) | sort -V | tail -1)
           if [ -z "$xcode" ]; then echo "No Xcode >=16 (Swift 6) found on runner" >&2; exit 1; fi
           echo "Selecting $xcode"
           sudo xcode-select -s "$xcode"
           swift --version
+          # Xcode 16.4 emits availability checks in whisper.cpp's Metal objects,
+          # but Rust's final link does not automatically include compiler-rt.
+          # Older toolchains (e.g. GitHub-hosted Xcode 16.2) may not ship or
+          # require the archive, so discovery is bundle-local and optional:
+          # link libclang_rt.osx.a only when the selected Xcode actually has one.
+          clang_runtime=$(
+            find "$xcode/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/lib/clang" \
+              -type f -name 'libclang_rt.osx.a' 2>/dev/null \
+              | sort -V \
+              | tail -1
+          )
+          if [ -n "$clang_runtime" ]; then
+            echo "Linking compiler-rt archive: $clang_runtime"
+            echo "RUSTFLAGS=${RUSTFLAGS:+$RUSTFLAGS }-C link-arg=$clang_runtime" >> "$GITHUB_ENV"
+          else
+            echo "No libclang_rt.osx.a in $xcode; continuing without explicit compiler-rt."
+          fi
 
       - name: Capture Swift toolchain cache key
         id: swift-toolchain
@@ -360,9 +393,6 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_KEY_PASSWORD }}
         run: |
-          if [[ "${{ inputs.dry_run }}" == "true" ]]; then
-            unset APPLE_ID APPLE_PASSWORD APPLE_TEAM_ID
-          fi
           TAURI_CONFIG_OVERRIDE=$(jq -nc --arg identity "$APPLE_SIGNING_IDENTITY" '{bundle:{macOS:{signingIdentity:$identity}}}')
           pnpm tauri build --target x86_64-apple-darwin --bundles app,dmg --config src-tauri/tauri.macos.conf.json --config "$TAURI_CONFIG_OVERRIDE" --ci --verbose
 
@@ -457,6 +487,7 @@ jobs:
   build-windows:
     needs: prepare
     runs-on: windows-2022
+    timeout-minutes: 180
     env:
       # Short paths keep whisper.cpp/ggml and Tauri builds below Windows path limits.
       CARGO_TARGET_DIR: D:\b\app

@@ -52,6 +52,7 @@ const reportData = {
   logContent: "INFO log line",
   logTruncated: false,
   logStatusNote: "",
+  debugRingContent: "",
 };
 
 async function fillRequiredReportFields(

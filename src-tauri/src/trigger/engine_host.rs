@@ -372,6 +372,10 @@ pub fn start_engine(app: &AppHandle) {
         .start(move |ev| super::dispatch::on_engine_event(&handle, ev))
     {
         Ok(()) => log::info!("keytrigger: native trigger engine started"),
+        // Two authorized checks can race before either observes `is_running`.
+        // TriggerEngine serializes startup internally, so this is the expected
+        // idempotent outcome rather than a failed permission retry.
+        Err(keytrigger::EngineError::AlreadyRunning) => {}
         Err(error) => log::warn!(
             "keytrigger: trigger engine not started ({}); will retry on permission grant",
             error

@@ -1,4 +1,5 @@
 import { ApiKeyModal } from "@/components/ApiKeyModal";
+import { SonioxStorageCard } from "@/components/SonioxStorageCard";
 import { SettingsCard } from "@/components/settings/settings-ui";
 import { Cloud } from "lucide-react";
 import { CloudModelCard } from "./CloudModelCard";
@@ -74,6 +75,7 @@ export function CloudProvidersBlock({ readyCloudModels, ...bindings }: CloudProv
           />
         ))}
       </div>
+      {readyCloudModels.some(([name]) => name === "soniox") && <SonioxStorageCard />}
     </SettingsCard>
   );
 }

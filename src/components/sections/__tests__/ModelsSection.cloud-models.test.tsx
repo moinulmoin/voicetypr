@@ -1,10 +1,12 @@
+import { useState } from "react";
+import type { SourceFilter } from "../models/types";
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { ModelsSection } from "../ModelsSection";
-import type { CloudModelInfo } from "@/types";
+import type { CloudModelInfo, LocalModelInfo } from "@/types";
 
 const updateSettings = vi.fn();
 const refreshSettings = vi.fn();
@@ -63,6 +65,50 @@ const soniox: CloudModelInfo = {
   available_models: [{ id: "stt-async-v5", display_name: "Soniox v5" }],
 };
 
+const whisper: LocalModelInfo = {
+  name: "tiny",
+  display_name: "Whisper Tiny",
+  engine: "whisper",
+  kind: "local",
+  recommended: false,
+  downloaded: true,
+  requires_setup: false,
+  size: 0,
+  url: "",
+  sha256: "",
+  speed_score: 9,
+  accuracy_score: 5,
+};
+
+function ControlledSources({
+  currentModel,
+  initialFilter,
+}: {
+  currentModel: string;
+  initialFilter?: SourceFilter;
+}) {
+  const [filter, setFilter] = useState<SourceFilter | undefined>(initialFilter);
+  return (
+    <ModelsSection
+      models={[
+        ["tiny", whisper],
+        ["openai", openai],
+        ["soniox", soniox],
+      ]}
+      currentModel={currentModel}
+      sourceFilter={filter}
+      onSourceFilterChange={setFilter}
+      downloadProgress={{}}
+      verifyingModels={new Set()}
+      onDownload={vi.fn()}
+      onDelete={vi.fn()}
+      onCancelDownload={vi.fn()}
+      onSelect={vi.fn()}
+      refreshModels={vi.fn().mockResolvedValue(undefined)}
+    />
+  );
+}
+
 function renderModels(overrides: Partial<Parameters<typeof ModelsSection>[0]> = {}) {
   const props: Parameters<typeof ModelsSection>[0] = {
     models: [
@@ -95,6 +141,48 @@ describe("ModelsSection cloud model labels", () => {
       if (command === "get_active_remote_server") return Promise.resolve(null);
       return Promise.resolve(undefined);
     });
+  });
+
+  it("opens the active Cloud source on ordinary first navigation without an explicit destination", async () => {
+    const user = userEvent.setup();
+    render(<ControlledSources currentModel="openai" />);
+    expect(await screen.findByRole("heading", { name: "Soniox v5" })).toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: /Cloud/ })).toHaveAttribute("aria-selected", "true");
+    await user.click(screen.getByRole("tab", { name: /Local/ }));
+    expect(screen.getByRole("tab", { name: /Local/ })).toHaveAttribute("aria-selected", "true");
+  });
+
+  it("preserves a controlled Cloud destination with a local active model without render-phase parent updates", async () => {
+    const errorSpy = vi.spyOn(console, "error");
+    try {
+      render(<ControlledSources currentModel="tiny" initialFilter="cloud" />);
+      expect(await screen.findByRole("heading", { name: "Soniox v5" })).toBeInTheDocument();
+      expect(screen.getByRole("tab", { name: /Cloud/ })).toHaveAttribute("aria-selected", "true");
+      expect(
+        errorSpy.mock.calls.some((args) =>
+          args.some((arg) => typeof arg === "string" && arg.includes("Cannot update a component")),
+        ),
+      ).toBe(false);
+    } finally {
+      errorSpy.mockRestore();
+    }
+  });
+
+  it("follows later source changes once while preserving user browsing across unrelated renders", async () => {
+    const user = userEvent.setup();
+    const { rerender } = render(<ControlledSources currentModel="tiny" />);
+    await user.click(screen.getByRole("tab", { name: /Remote/ }));
+    rerender(<ControlledSources currentModel="tiny" />);
+    expect(screen.getByRole("tab", { name: /Remote/ })).toHaveAttribute("aria-selected", "true");
+
+    rerender(<ControlledSources currentModel="openai" />);
+    expect(screen.getByRole("tab", { name: /Cloud/ })).toHaveAttribute("aria-selected", "true");
+    await user.click(screen.getByRole("tab", { name: /Remote/ }));
+    rerender(<ControlledSources currentModel="soniox" />);
+    expect(screen.getByRole("tab", { name: /Remote/ })).toHaveAttribute("aria-selected", "true");
+
+    rerender(<ControlledSources currentModel="tiny" />);
+    expect(screen.getByRole("tab", { name: /Local/ })).toHaveAttribute("aria-selected", "true");
   });
 
   it("shows curated labels and omits a redundant selector for one-model providers", async () => {

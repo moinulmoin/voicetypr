@@ -96,6 +96,27 @@ export function useOnboardingDesktop({
   const [previousSettings, setPreviousSettings] = useState(settings);
   const sourceChosenByUser = useRef(false);
 
+  // Hydrate persisted consent so a relaunched onboarding cannot silently
+  // overwrite a previously stored opt-out with the default-on state.
+  useEffect(() => {
+    let cancelled = false;
+    Promise.all([
+      invoke<{ enabled: boolean }>("get_telemetry_status"),
+      invoke<{ enabled: boolean }>("get_product_analytics_status"),
+    ])
+      .then(([telemetry, analytics]) => {
+        if (cancelled) return;
+        setTelemetryOptIn(telemetry.enabled);
+        setAnalyticsOptIn(analytics.enabled);
+      })
+      .catch((error) => {
+        log.error("Failed to read stored privacy choices:", error);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
   // Mirror a hotkey that arrives with settings during render rather than
   // synchronously updating state from the settings effect below.
   if (settings !== previousSettings) {
@@ -532,17 +553,23 @@ export function useOnboardingDesktop({
     setIsSavingCompletion(true);
     onCompletionStart?.();
     try {
-      await updateSettings({ onboarding_completed: true });
-      // Save diagnostics first; analytics consent and its acknowledgement are
-      // persisted atomically by the second command.
+      // Persist privacy choices before publishing onboarding completion. The
+      // settings context updates optimistically, so setting onboarding_completed
+      // first would mount the main app's consent dialog while these writes were
+      // still pending. That dialog would then retain the old default-on state.
+      await invoke("set_telemetry_consent", { enabled: telemetryOptIn });
+      await invoke("set_product_analytics_consent", {
+        enabled: analyticsOptIn,
+      });
+
+      await updateSettings({ onboarding_completed: true }, { publishAfterSave: true });
+
       try {
-        await invoke("set_telemetry_consent", { enabled: telemetryOptIn });
-        await invoke("set_product_analytics_consent", {
-          enabled: analyticsOptIn,
-        });
         await invoke("record_onboarding_completed");
-      } catch (privacyError) {
-        log.error("Failed to persist privacy choices:", privacyError);
+      } catch (analyticsError) {
+        // Capturing the acknowledgement event is best-effort. The consent
+        // choices themselves have already been persisted successfully.
+        log.error("Failed to record onboarding completion:", analyticsError);
       }
       onComplete();
     } catch (error) {

@@ -84,15 +84,15 @@ jobs:
             exit 1
           fi
 
-          jq -e --arg tag "$RELEASE_TAG" '
+          jq -e --arg tag "$RELEASE_TAG" --arg repository "$REPOSITORY" '
             (.platforms | type == "object") and
             (.platforms | length > 0) and
             all(.platforms[];
-              (.url | contains("/releases/download/\($tag)/")) and
+              (.url | startswith("https://github.com/\($repository)/releases/download/\($tag)/")) and
               (.signature | type == "string" and length > 0)
             )
           ' candidate/latest.json >/dev/null || {
-            echo "::error::Manifest must reference immutable version-tagged assets with signatures"
+            echo "::error::Manifest must reference canonical immutable version-tagged assets with signatures"
             exit 1
           }
 

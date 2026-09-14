@@ -5,7 +5,7 @@ import { useSettings } from "@/contexts/SettingsContext";
 import { getModelDisplayName } from "@/lib/model-display";
 import { isCloudModel, isLocalModel } from "@/types";
 import { Download } from "lucide-react";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { createLogger } from "@/lib/logger";
 import {
   CloudApiKeyModal,
@@ -17,7 +17,7 @@ import { ModelsEmptyStates } from "./models/ModelsEmptyStates";
 import { ModelsLanguageRow } from "./models/ModelsLanguageRow";
 import { ModelsSourcesHeader } from "./models/ModelsSourcesHeader";
 import { RemoteServersBlock } from "./models/RemoteServersBlock";
-import type { ModelsSectionProps } from "./models/types";
+import type { ModelsSectionProps, SourceFilter } from "./models/types";
 import { useCloudProviders } from "./models/useCloudProviders";
 import { useRemoteServers } from "./models/useRemoteServers";
 import { useSpokenLanguage } from "./models/useSpokenLanguage";
@@ -25,6 +25,8 @@ import { useSpokenLanguage } from "./models/useSpokenLanguage";
 const log = createLogger("models");
 
 export function ModelsSection({
+  sourceFilter: controlledSourceFilter,
+  onSourceFilterChange,
   models,
   downloadProgress,
   downloadPhases = {},
@@ -47,7 +49,12 @@ export function ModelsSection({
     refreshModels,
     clearActiveRemote: remotes.clearActiveRemote,
   });
-  const [sourceFilter, setSourceFilter] = useState<"local" | "cloud" | "remote">("local");
+  const selectedModel = models.find(([name]) => name === currentModel)?.[1];
+  const selectedSourceType = selectedModel && isCloudModel(selectedModel) ? "cloud" : "local";
+  const trackedSource = remotes.activeRemoteServer ? "remote" : selectedSourceType;
+  const [localSourceFilter, setLocalSourceFilter] = useState<SourceFilter>(trackedSource);
+  const sourceFilter = controlledSourceFilter ?? localSourceFilter;
+  const setSourceFilter = onSourceFilterChange ?? setLocalSourceFilter;
 
   const { availableToUse, availableToSetup } = useMemo(() => {
     const useList: typeof models = [];
@@ -92,8 +99,6 @@ export function ModelsSection({
   const showCloud = sourceFilter === "cloud";
   const showRemote = sourceFilter === "remote";
 
-  const selectedModel = models.find(([name]) => name === currentModel)?.[1];
-  const selectedSourceType = selectedModel && isCloudModel(selectedModel) ? "cloud" : "local";
   const activeRemote = remotes.remoteServers.find(
     (server) => server.id === remotes.activeRemoteServer,
   );
@@ -107,15 +112,15 @@ export function ModelsSection({
       (activeRemote ? `${activeRemote.host}:${activeRemote.port}` : "Remote Voicetypr")
     : getModelDisplayName(currentModel) || "No source selected";
 
-  // Keep the tab honest when the active source changes underneath (tray or
-  // model switch) — adjust during render instead of a flashing effect. The
-  // user can still switch tabs freely until the next external change.
-  const trackedSource = remotes.activeRemoteServer ? "remote" : selectedSourceType;
-  const [lastTrackedSource, setLastTrackedSource] = useState<string | null>(null);
-  if (trackedSource !== lastTrackedSource) {
-    setLastTrackedSource(trackedSource);
-    setSourceFilter(trackedSource);
-  }
+  // Preserve an explicit navigation destination on mount. Only a later source
+  // change should override the filter the user is browsing.
+  const lastTrackedSource = useRef(trackedSource);
+  useEffect(() => {
+    if (trackedSource !== lastTrackedSource.current) {
+      lastTrackedSource.current = trackedSource;
+      setSourceFilter(trackedSource);
+    }
+  }, [trackedSource, setSourceFilter]);
 
   useTauriEvent<{ model: string; engine: string }>("model-changed", (payload) => {
     log.debug("[ModelsSection] model-changed event received:", payload);

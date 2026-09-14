@@ -12,6 +12,8 @@ import { useEventCoordinator } from "@/hooks/useEventCoordinator";
 import { updateService } from "@/services/updateService";
 import { createLogger } from "@/lib/logger";
 
+import type { SourceFilter } from "../sections/models/types";
+
 const log = createLogger("app");
 
 interface ErrorEventPayload {
@@ -28,6 +30,7 @@ interface ErrorEventPayload {
 interface UseAppEventsOptions {
   checkModels: () => Promise<{ hasModels: boolean | null }>;
   setActiveSection: Dispatch<SetStateAction<ScreenId>>;
+  setSourceFilter: (filter: SourceFilter) => void;
   setForceShowOnboarding: Dispatch<SetStateAction<boolean>>;
   forceOnboardingNeedsFreshAvailabilityRef: MutableRefObject<boolean>;
 }
@@ -35,6 +38,7 @@ interface UseAppEventsOptions {
 export function useAppEvents({
   checkModels,
   setActiveSection,
+  setSourceFilter,
   setForceShowOnboarding,
   forceOnboardingNeedsFreshAvailabilityRef,
 }: UseAppEventsOptions) {
@@ -155,6 +159,24 @@ export function useAppEvents({
           },
         );
 
+        await register<{ title?: string; message?: string; autoHealed?: boolean }>(
+          "soniox-storage-limit",
+          (data) => {
+            log.info("Soniox storage limit event received");
+            // Same escalation as license-required: the backend already
+            // focused the main window; land on the page with the Soniox
+            // stored-files card and explain inline.
+            setSourceFilter("cloud");
+            setActiveSection("models");
+            toast.error(data.title || "Soniox storage limit reached", {
+              description:
+                data.message ||
+                "Automatic cleanup could not free enough space. Delete stored files and try again.",
+              duration: 8000,
+            });
+          },
+        );
+
         await register<ErrorEventPayload>("no-models-error", async (data) => {
           log.error("No models available:", data);
           setForceShowOnboarding(true);
@@ -191,6 +213,7 @@ export function useAppEvents({
     registerEvent,
     checkModels,
     setActiveSection,
+    setSourceFilter,
     setForceShowOnboarding,
     forceOnboardingNeedsFreshAvailabilityRef,
   ]);
